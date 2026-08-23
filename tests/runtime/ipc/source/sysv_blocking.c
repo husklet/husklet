@@ -142,7 +142,7 @@ int main(void) {
     int sem_remove = semaphore_remove();
     int sem_timeout = semaphore_timeout();
     int msg_eintr = message_interrupt();
-    printf("sysv_blocking msg_wake=%d msg_remove=%d sem_wake=%d sem_remove=%d timeout=%d eintr=%d\n",
-        msg_wake, msg_remove, sem_wake, sem_remove, sem_timeout, msg_eintr);
+    printf("sysv_blocking msg_wake=%d msg_remove=%d sem_wake=%d sem_remove=%d timeout=%d eintr=%d\n", msg_wake,
+           msg_remove, sem_wake, sem_remove, sem_timeout, msg_eintr);
     return msg_wake && msg_remove && sem_wake && sem_remove && sem_timeout && msg_eintr ? 0 : 1;
 }

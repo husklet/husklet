@@ -299,10 +299,10 @@ static int readlink_empty_path(struct cpu *c, int fd, const char *path, char *bu
             G_RET(c) = (uint64_t)(int64_t)(-ENOSYS);
             return 1;
         }
-        hl_host_result linked = g_host_services->file->readlink(
-            g_host_services->context, snapshot.host_handle, (hl_host_bytes){.data = buf, .size = size});
-        G_RET(c) = linked.status == HL_STATUS_OK ? linked.value
-                                                 : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
+        hl_host_result linked = g_host_services->file->readlink(g_host_services->context, snapshot.host_handle,
+                                                                (hl_host_bytes){.data = buf, .size = size});
+        G_RET(c) =
+            linked.status == HL_STATUS_OK ? linked.value : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
         return 1;
     }
     char fd_path[4200];

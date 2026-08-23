@@ -359,11 +359,12 @@ async fn checkpoint_restore_replaces_stdin_authority_before_the_new_process_star
     restored.write(b"restored-generation\n".to_vec()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(25)).await;
 
-    let inputs = runtime.inputs.lock().unwrap();
-    assert!(inputs.iter().any(|(_, bytes)| bytes == b"before-checkpoint\n"));
-    assert!(inputs.iter().any(|(_, bytes)| bytes == b"restored-generation\n"));
-    assert!(!inputs.iter().any(|(_, bytes)| bytes == b"stale-after-checkpoint\n"));
-    drop(inputs);
+    {
+        let inputs = runtime.inputs.lock().unwrap();
+        assert!(inputs.iter().any(|(_, bytes)| bytes == b"before-checkpoint\n"));
+        assert!(inputs.iter().any(|(_, bytes)| bytes == b"restored-generation\n"));
+        assert!(!inputs.iter().any(|(_, bytes)| bytes == b"stale-after-checkpoint\n"));
+    }
     containers.remove_force("generation-input").await.unwrap();
 }
 
@@ -599,10 +600,11 @@ async fn failed_restore_terminates_its_reserved_session_and_retry_gets_a_fresh_o
     containers.start("restore-session-retry").await.unwrap();
     retry.write(b"retry\n".to_vec()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(25)).await;
-    let inputs = runtime.inputs.lock().unwrap();
-    assert!(inputs.iter().any(|(_, bytes)| bytes == b"retry\n"));
-    assert!(!inputs.iter().any(|(_, bytes)| bytes == b"orphaned\n"));
-    drop(inputs);
+    {
+        let inputs = runtime.inputs.lock().unwrap();
+        assert!(inputs.iter().any(|(_, bytes)| bytes == b"retry\n"));
+        assert!(!inputs.iter().any(|(_, bytes)| bytes == b"orphaned\n"));
+    }
     containers.remove_force("restore-session-retry").await.unwrap();
 }
 

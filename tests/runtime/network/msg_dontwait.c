@@ -4,14 +4,17 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
 int main(void) {
-    int sv[2]; socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+    int sv[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
     char buf[8];
     ssize_t n = recv(sv[1], buf, 8, MSG_DONTWAIT);
     int eagain = (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
     write(sv[0], "hi", 2);
     ssize_t m = recv(sv[1], buf, 8, MSG_DONTWAIT);
-    close(sv[0]); close(sv[1]);
+    close(sv[0]);
+    close(sv[1]);
     printf("msg_dontwait eagain=%d then=%ld\n", eagain, (long)m); // 1 2
     return 0;
 }

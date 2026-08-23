@@ -45,8 +45,10 @@ int main(void) {
     printf("many_segs over32=%d allmapped=%d dataok=%d\n", created > 32, mapped == created && mapped > 32, dataok);
 
     // free all but segment 0 (kept attached for the cross-fork test)
-    for (int i = 1; i < mapped; i++) shmdt(maps[i]);
-    for (int i = 1; i < created; i++) shmctl(ids[i], IPC_RMID, 0);
+    for (int i = 1; i < mapped; i++)
+        shmdt(maps[i]);
+    for (int i = 1; i < created; i++)
+        shmctl(ids[i], IPC_RMID, 0);
 
     int seg = ids[0];
     int *shared = maps[0];
@@ -71,10 +73,12 @@ int main(void) {
         }
         struct sembuf up = {0, +1, 0};
         semop(sid, &up, 1); // V: unblocks the parent's P below
+
         struct {
             long mtype;
             char b[16];
         } m;
+
         m.mtype = 7;
         strcpy(m.b, "from-child");
         msgsnd(qid, &m, 11, 0);
@@ -86,11 +90,13 @@ int main(void) {
     int sop = semop(sid, &down, 1);
     // the child wrote the segment before posting, so its write is now visible in the parent's mapping
     int shm_shared = (shared[0] == 0xABCD && shared[1] == 0x1234);
+
     // parent: BLOCK in msgrcv on the (initially empty) queue until the child sends -> cross-process msg
     struct {
         long mtype;
         char b[16];
     } r;
+
     memset(&r, 0, sizeof r);
     long rn = msgrcv(qid, &r, 16, 7, 0);
     int msg_ok = (rn == 11 && strcmp(r.b, "from-child") == 0);

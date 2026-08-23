@@ -7,7 +7,10 @@ int main(void) {
     char path[64];
     snprintf(path, sizeof path, "/tmp/hl_pc_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR, 0644);
-    if (fd < 0) { printf("pathconft open=0\n"); return 0; }
+    if (fd < 0) {
+        printf("pathconft open=0\n");
+        return 0;
+    }
 
     long namemax = pathconf(path, _PC_NAME_MAX);
     long pathmax = pathconf(path, _PC_PATH_MAX);
@@ -16,12 +19,11 @@ int main(void) {
 
     long argmax = sysconf(_SC_ARG_MAX);
 
-    int ok = namemax >= 255 && pathmax >= 255 && links >= 1 &&
-             fnamemax == namemax && argmax > 0;
+    int ok = namemax >= 255 && pathmax >= 255 && links >= 1 && fnamemax == namemax && argmax > 0;
 
     close(fd);
     unlink(path);
-    printf("pathconft namemax=%d pathmax=%d links=%d match=%d limits=%d\n",
-           namemax >= 255, pathmax >= 255, links >= 1, fnamemax == namemax, ok);
+    printf("pathconft namemax=%d pathmax=%d links=%d match=%d limits=%d\n", namemax >= 255, pathmax >= 255, links >= 1,
+           fnamemax == namemax, ok);
     return 0;
 }

@@ -25,7 +25,6 @@ int main(void) {
 
     int post_epoch = a.tv_sec > 946684800;
 
-    printf("timespecget base=%d agree=%d advances=%d post_epoch=%d\n", base_ok, agree, advances,
-           post_epoch);
+    printf("timespecget base=%d agree=%d advances=%d post_epoch=%d\n", base_ok, agree, advances, post_epoch);
     return 0;
 }

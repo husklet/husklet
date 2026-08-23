@@ -19,7 +19,10 @@ int main(void) {
     char root[64];
     ssize_t r = readlink("/proc/self/root", root, sizeof root - 1);
     int root_ok = 0;
-    if (r > 0) { root[r] = 0; root_ok = strcmp(root, "/") == 0; }
+    if (r > 0) {
+        root[r] = 0;
+        root_ok = strcmp(root, "/") == 0;
+    }
     // /proc/<getpid()> is the same identity reached the long way; its status Pid must match.
     int ok = self_ok && root_ok;
     printf("selflink ok=%d\n", ok);

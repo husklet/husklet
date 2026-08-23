@@ -10,12 +10,21 @@
 #include <sys/syscall.h>
 #include <linux/aio_abi.h>
 
-static int io_setup_(unsigned n, aio_context_t *c) { return (int)syscall(SYS_io_setup, n, c); }
-static int io_submit_(aio_context_t c, long n, struct iocb **p) { return (int)syscall(SYS_io_submit, c, n, p); }
+static int io_setup_(unsigned n, aio_context_t *c) {
+    return (int)syscall(SYS_io_setup, n, c);
+}
+
+static int io_submit_(aio_context_t c, long n, struct iocb **p) {
+    return (int)syscall(SYS_io_submit, c, n, p);
+}
+
 static int io_getevents_(aio_context_t c, long mn, long n, struct io_event *e, struct timespec *t) {
     return (int)syscall(SYS_io_getevents, c, mn, n, e, t);
 }
-static int io_destroy_(aio_context_t c) { return (int)syscall(SYS_io_destroy, c); }
+
+static int io_destroy_(aio_context_t c) {
+    return (int)syscall(SYS_io_destroy, c);
+}
 
 int main(void) {
     const char *path = "/tmp/hl_aio_test.bin";
@@ -23,11 +32,20 @@ int main(void) {
     size_t plen = sizeof payload - 1;
 
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) { printf("open fail\n"); return 1; }
-    if (write(fd, payload, plen) != (ssize_t)plen) { printf("write fail\n"); return 1; }
+    if (fd < 0) {
+        printf("open fail\n");
+        return 1;
+    }
+    if (write(fd, payload, plen) != (ssize_t)plen) {
+        printf("write fail\n");
+        return 1;
+    }
 
     aio_context_t ctx = 0;
-    if (io_setup_(8, &ctx) < 0) { printf("io_setup fail\n"); return 1; }
+    if (io_setup_(8, &ctx) < 0) {
+        printf("io_setup fail\n");
+        return 1;
+    }
 
     char buf[16];
     memset(buf, 0, sizeof buf);
@@ -45,12 +63,18 @@ int main(void) {
 
     struct iocb *cbs[1] = {&cb};
     int s = io_submit_(ctx, 1, cbs);
-    if (s != 1) { printf("io_submit=%d\n", s); return 1; }
+    if (s != 1) {
+        printf("io_submit=%d\n", s);
+        return 1;
+    }
 
     struct io_event ev[1];
     memset(ev, 0, sizeof ev);
     int g = io_getevents_(ctx, 1, 1, ev, NULL);
-    if (g != 1) { printf("io_getevents=%d\n", g); return 1; }
+    if (g != 1) {
+        printf("io_getevents=%d\n", g);
+        return 1;
+    }
 
     buf[nb] = 0;
     printf("aio res=%lld data=%llx buf=%s\n", (long long)ev[0].res, (unsigned long long)ev[0].data, buf);

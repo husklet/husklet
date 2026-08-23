@@ -16,7 +16,7 @@ int main(void) {
     char *mid = base + ps;
     char *got = mmap(mid, ps, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
     int placed = got == mid;
-    int zeroed = placed && got[0] == 0 && got[ps - 1] == 0;   // fresh anon => zero
+    int zeroed = placed && got[0] == 0 && got[ps - 1] == 0; // fresh anon => zero
     memset(got, 0x22, ps);
     int wrote = (unsigned char)got[0] == 0x22;
     // neighbouring pages untouched by the MAP_FIXED replacement
@@ -26,12 +26,11 @@ int main(void) {
     len = (size_t)ps * 8;
     base = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     memset(base, 0x33, len);
-    got = mmap(base + ps, (size_t)ps * 4, PROT_READ | PROT_WRITE,
-               MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+    got = mmap(base + ps, (size_t)ps * 4, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
     int crossed = got == base + ps && got[0] == 0 && got[ps * 4 - 1] == 0;
     int cross_neighbours = (unsigned char)base[0] == 0x33 && (unsigned char)base[ps * 7] == 0x33;
     munmap(base, len);
-    printf("mapfixed placed=%d zeroed=%d wrote=%d neighbours=%d crossed=%d cross-neighbours=%d\n", placed,
-           zeroed, wrote, neighbours, crossed, cross_neighbours);
+    printf("mapfixed placed=%d zeroed=%d wrote=%d neighbours=%d crossed=%d cross-neighbours=%d\n", placed, zeroed,
+           wrote, neighbours, crossed, cross_neighbours);
     return 0;
 }

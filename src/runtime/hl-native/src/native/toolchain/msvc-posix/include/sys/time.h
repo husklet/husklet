@@ -33,6 +33,7 @@
 
 #if !defined(_TIMEVAL_DEFINED) && !defined(_WINSOCKAPI_) && !defined(_WINSOCK2API_)
 #define _TIMEVAL_DEFINED
+
 struct timeval {
     long tv_sec;
     long tv_usec;
@@ -41,6 +42,7 @@ struct timeval {
 
 #ifndef _TIMEZONE_DEFINED
 #define _TIMEZONE_DEFINED
+
 struct timezone {
     int tz_minuteswest;
     int tz_dsttime;

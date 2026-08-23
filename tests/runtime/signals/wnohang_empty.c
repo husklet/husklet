@@ -12,7 +12,10 @@ int main(void) {
     int echild = none == -1 && errno == ECHILD;
 
     pid_t pid = fork();
-    if (pid == 0) { usleep(150 * 1000); _exit(4); }
+    if (pid == 0) {
+        usleep(150 * 1000);
+        _exit(4);
+    }
 
     usleep(30 * 1000);
     pid_t not_yet = waitpid(pid, NULL, WNOHANG); // child still alive -> 0

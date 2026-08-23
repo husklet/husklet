@@ -41,7 +41,10 @@ int main(void) {
 
     int seen[256] = {0}, distinct = 0;
     for (size_t i = 0; i < sizeof a; i++)
-        if (!seen[a[i]]) { seen[a[i]] = 1; distinct++; }
+        if (!seen[a[i]]) {
+            seen[a[i]] = 1;
+            distinct++;
+        }
     int distinct_ok = distinct >= 100;
 
     // A large 64 KiB read fully returns.
@@ -56,7 +59,7 @@ int main(void) {
     close(rf);
 
     printf("uchr=%d urdev=%d rchr=%d rrdev=%d\n", uchr, urdev, rchr, rrdev);
-    printf("got_a=%d got_b=%d differ=%d distinct_ok=%d got_big=%d got_random=%d\n", got_a, got_b, differ,
-           distinct_ok, got_big, got_r);
+    printf("got_a=%d got_b=%d differ=%d distinct_ok=%d got_big=%d got_random=%d\n", got_a, got_b, differ, distinct_ok,
+           got_big, got_r);
     return 0;
 }

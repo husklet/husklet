@@ -1,6 +1,9 @@
-//! Projection from validated application configuration to runtime inputs.
+//! Projection from validated application configuration to runtime inputs, and the host
+//! preconditions the projected plan states but cannot itself satisfy.
 
 use crate::config::{LaunchConfig, PortPublication};
+#[cfg(unix)]
+use crate::engine::EngineError;
 use crate::options::{OptionError, Options};
 
 const NETWORK_HOST: u32 = 2;
@@ -32,6 +35,76 @@ pub enum PlanError {
 }
 
 impl RuntimePlan {
+    /// The writable root this plan will materialize guest state into, if it has one.
+    ///
+    /// An overlay upper layer, when the launch configures one, is where every guest write lands and the
+    /// lower layers are read-only by construction -- so a root-owned lower layer is legitimate and must
+    /// not be refused. Without an overlay the rootfs itself is the writable root, unless the launch
+    /// asked for `HL_ROOTFS_RO`, in which case nothing is written and any owner works.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn writable_root(&self) -> Option<&[u8]> {
+        if let Some(upper) = self.options.get_bytes("HL_OVERLAY_UPPER") {
+            return Some(upper);
+        }
+        if self.options.get_bytes("HL_ROOTFS_RO").is_some() {
+            return None;
+        }
+        self.rootfs.as_deref()
+    }
+
+    /// Refuses a launch whose writable root belongs to a host user the engine cannot act as.
+    ///
+    /// The engine runs as an unprivileged host uid and never acquires host privilege: guest ownership
+    /// lives in its own owner overlay (`container/owner.h`, `HL_FILE_OWNERS`), which is why a guest can
+    /// report `id -u` = 0 while every write to a host-root-owned tree returns `EACCES`. Granting the
+    /// access is not merely refused by the engine, it is unimplementable -- `chmod(2)` refuses for a
+    /// non-owner without `CAP_FOWNER` -- so the contract has to be stated at launch instead.
+    ///
+    /// Only the root directory is examined. Walking the tree would be unbounded work at launch, and a
+    /// root-owned subtree below a writable root is a legitimate shape: shared read-only layers and host
+    /// bind mounts both produce it, and the guest can still do everything the host user could. A root
+    /// the engine does not own is different in kind -- nothing in the workspace is writable, so the
+    /// failure is total, and refusing is kinder than letting a developer find it through a failing
+    /// `git checkout`.
+    ///
+    /// A path that cannot be stat'd is not refused here: the existing launch path already owns "the
+    /// rootfs is not there", and an ownership cause for a missing directory is a worse diagnostic than
+    /// the one it would replace. Running as host root refuses nothing, because then every owner is
+    /// writable.
+    #[cfg(unix)]
+    // The engine's own effective uid is the only thing this needs from the host and libc's
+    // `geteuid` is its only spelling; std exposes no safe equivalent. The call takes no argument,
+    // reads no caller memory and cannot fail, so the block has nothing else to justify.
+    #[allow(unsafe_code)]
+    pub(crate) fn refuse_unownable_root(&self) -> Result<(), EngineError> {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+        let Some(root) = self.writable_root() else {
+            return Ok(());
+        };
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(root));
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return Ok(());
+        };
+        // SAFETY: `geteuid` takes no arguments, reads no caller memory, and is documented never to fail.
+        let engine_uid = unsafe { libc::geteuid() };
+        let rootfs_uid = metadata.uid();
+        if !root_is_unownable(engine_uid, rootfs_uid) {
+            return Ok(());
+        }
+        hl_log::hl_error!(
+            hl_log::tag::EXEC,
+            "refusing launch: the writable root {} is owned by host uid {rootfs_uid}, but the engine runs \
+             as host uid {engine_uid} and never acquires host privilege, so no guest write can succeed \
+             however the guest reports its own id. Re-materialize the rootfs as uid {engine_uid} -- unpack \
+             it without sudo, or `chown -R {engine_uid} {}` -- or launch it read-only with HL_ROOTFS_RO.",
+            path.display(),
+            path.display()
+        );
+        Err(EngineError::RootfsNotOwnedByEngine { rootfs_uid, engine_uid })
+    }
+
     pub fn project(config: &LaunchConfig, diagnostics: DiagnosticsMode) -> Result<Self, PlanError> {
         let mut options = Options::default();
         Self::set_number(&mut options, "HL_MEM_MAX", config.memory_limit)?;
@@ -177,6 +250,11 @@ impl RuntimePlan {
         }
         Ok(records.into_bytes())
     }
+}
+
+#[cfg(unix)]
+const fn root_is_unownable(engine_uid: u32, rootfs_uid: u32) -> bool {
+    engine_uid != 0 && rootfs_uid != engine_uid
 }
 
 impl From<OptionError> for PlanError {

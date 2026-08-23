@@ -39,19 +39,22 @@ int main(void) {
     dbt_flush(code, code_sz);
 
     pthread_t th[NT];
-    for (long i = 0; i < NT; i++) pthread_create(&th[i], NULL, reader, (void *)i);
+    for (long i = 0; i < NT; i++)
+        pthread_create(&th[i], NULL, reader, (void *)i);
 
     for (int r = 0; r < ROUNDS; r++) {
         expected = (r * 13 + 1) & 0x7fff;
         dbt_emit_ret_imm(code, expected); // writer patches BEFORE the barrier release
         dbt_flush(code, code_sz);
-        pthread_barrier_wait(&before);    // readers now run the new code
-        pthread_barrier_wait(&after);     // wait until all readers done this round
+        pthread_barrier_wait(&before); // readers now run the new code
+        pthread_barrier_wait(&after);  // wait until all readers done this round
     }
-    for (int i = 0; i < NT; i++) pthread_join(th[i], NULL);
+    for (int i = 0; i < NT; i++)
+        pthread_join(th[i], NULL);
 
     uint64_t acc = 0;
-    for (int i = 0; i < NT; i++) acc = acc * 1000003ULL + sums[i];
+    for (int i = 0; i < NT; i++)
+        acc = acc * 1000003ULL + sums[i];
     printf("conc-patch acc=%llu mismatch=%d\n", (unsigned long long)acc, mismatch);
     return 0;
 }

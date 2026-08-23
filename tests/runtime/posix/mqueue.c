@@ -17,7 +17,10 @@ int main(void) {
     attr.mq_maxmsg = 4;
     attr.mq_msgsize = 32;
     mqd_t q = mq_open(name, O_CREAT | O_RDWR, 0600, &attr);
-    if (q == (mqd_t)-1) { printf("mqueue open=0\n"); return 0; }
+    if (q == (mqd_t)-1) {
+        printf("mqueue open=0\n");
+        return 0;
+    }
 
     struct mq_attr got = {0};
     mq_getattr(q, &got);
@@ -47,7 +50,7 @@ int main(void) {
 
     mq_close(q);
     int unlinked = mq_unlink(name) == 0;
-    printf("mqueue attr=%d high_first=%d mid_second=%d timeout=%d unlink=%d\n",
-           attr_ok, first_high, second_mid, timeout, unlinked);
+    printf("mqueue attr=%d high_first=%d mid_second=%d timeout=%d unlink=%d\n", attr_ok, first_high, second_mid,
+           timeout, unlinked);
     return 0;
 }

@@ -17,10 +17,19 @@ int main(void) {
     int d4 = p != NULL && p[big - 1] == 0xAB; // preserved on grow
     free(p);
     // Many small allocations grow the main arena via brk.
-    void *v[512]; int ok = 1;
-    for (int i = 0; i < 512; i++) { v[i] = malloc(128); if (!v[i]) ok = 0; memset(v[i], i & 0xff, 128); }
-    for (int i = 0; i < 512; i++) { unsigned char *b = v[i]; if (b[0] != (i & 0xff)) ok = 0; }
-    for (int i = 0; i < 512; i++) free(v[i]);
+    void *v[512];
+    int ok = 1;
+    for (int i = 0; i < 512; i++) {
+        v[i] = malloc(128);
+        if (!v[i]) ok = 0;
+        memset(v[i], i & 0xff, 128);
+    }
+    for (int i = 0; i < 512; i++) {
+        unsigned char *b = v[i];
+        if (b[0] != (i & 0xff)) ok = 0;
+    }
+    for (int i = 0; i < 512; i++)
+        free(v[i]);
     malloc_trim(0); // must not crash; return value not asserted
     printf("malloc_big mo=%d d1=%d d2=%d d3=%d d4=%d small=%d\n", mo, d1, d2, d3, d4, ok);
     return 0;

@@ -7,7 +7,11 @@
 #include <time.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     struct sigaction sa = {0};
@@ -26,7 +30,6 @@ int main(void) {
     // fired at ~50ms into a 2s sleep, so the remainder is ~1.95s: positive and below 2s
     int rem_ok = rem.tv_sec < 2;
     int rem_pos = (rem.tv_sec > 0 || rem.tv_nsec > 0);
-    printf("eintr_nanosleep handler=%d eintr=%d rem_less=%d rem_positive=%d\n",
-           ran == 1, eintr, rem_ok, rem_pos);
+    printf("eintr_nanosleep handler=%d eintr=%d rem_less=%d rem_positive=%d\n", ran == 1, eintr, rem_ok, rem_pos);
     return 0;
 }

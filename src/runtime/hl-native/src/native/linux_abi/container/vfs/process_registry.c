@@ -189,7 +189,8 @@ static int proc_fdinfo_dir_open(const char *guestpath) {
         }
         free(open_fds);
     } else {
-        for (int fd = 0; fd < HL_NFD; fd++) proc_fdinfo_entry_place(tmpl, fd);
+        for (int fd = 0; fd < HL_NFD; fd++)
+            proc_fdinfo_entry_place(tmpl, fd);
     }
     int d = open(tmpl, O_RDONLY | O_DIRECTORY);
     if (d < 0) {
@@ -1057,4 +1058,3 @@ static int proc_fd_dir_pid_open(int guest, int host) {
 // ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a engine-specific divergence
 // (a peer pid already reports a live resident size through host process stats; self must not read 0). Floor the tracked
 // charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
-

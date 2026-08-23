@@ -35,10 +35,15 @@ static void *waiter(void *_) {
 
 int main(void) {
     pthread_t t[WAITERS];
-    for (int i = 0; i < WAITERS; i++) pthread_create(&t[i], 0, waiter, 0);
+    for (int i = 0; i < WAITERS; i++)
+        pthread_create(&t[i], 0, waiter, 0);
     // wait until all six are parked on A
-    while (atomic_load(&parked) < WAITERS) { struct timespec ts = {0, 200000}; nanosleep(&ts, 0); }
-    struct timespec ts = {0, 20 * 1000000}; nanosleep(&ts, 0); // ensure they are blocked in FUTEX_WAIT
+    while (atomic_load(&parked) < WAITERS) {
+        struct timespec ts = {0, 200000};
+        nanosleep(&ts, 0);
+    }
+    struct timespec ts = {0, 20 * 1000000};
+    nanosleep(&ts, 0); // ensure they are blocked in FUTEX_WAIT
 
     // Set B's condition, then CMP_REQUEUE: wake up to 1 on A, requeue the rest onto B.
     atomic_store((atomic_int *)&fb, 1);
@@ -48,7 +53,8 @@ int main(void) {
     futex(&fb, FUTEX_WAKE, WAITERS, NULL, NULL, 0);
     futex(&fa, FUTEX_WAKE, WAITERS, NULL, NULL, 0);
 
-    for (int i = 0; i < WAITERS; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < WAITERS; i++)
+        pthread_join(t[i], 0);
     printf("futex_requeue requeue_ok=%d returned=%d\n", requeue_ok, atomic_load(&returned));
     return 0;
 }

@@ -30,19 +30,20 @@ static int is_closed(int descriptor) {
 static void *child(void *opaque) {
     struct result *result = opaque;
     atomic_store(&result->child_ready, 1);
-    while (!atomic_load(&result->child_go)) sched_yield();
+    while (!atomic_load(&result->child_go))
+        sched_yield();
     result->child_closed = is_closed(result->descriptor);
     return NULL;
 }
 
 static void *owner(void *opaque) {
     struct result *result = opaque;
-    if (syscall(SYS_close_range, (unsigned)result->descriptor, (unsigned)result->descriptor,
-                CLOSE_RANGE_UNSHARE) != 0)
+    if (syscall(SYS_close_range, (unsigned)result->descriptor, (unsigned)result->descriptor, CLOSE_RANGE_UNSHARE) != 0)
         return NULL;
     result->owner_closed = is_closed(result->descriptor);
     if (pthread_create(&result->child_thread, NULL, child, result) != 0) return NULL;
-    while (!atomic_load(&result->child_ready)) sched_yield();
+    while (!atomic_load(&result->child_ready))
+        sched_yield();
     return NULL;
 }
 
@@ -60,7 +61,7 @@ int main(void) {
     if (pthread_join(result.child_thread, NULL) != 0) return 13;
     int main_alive = fcntl(descriptor, F_GETFD) >= 0;
     int main_close = close(descriptor) == 0;
-    printf("close_range_inherit owner_closed=%d child_closed=%d main_alive=%d main_close=%d\n",
-           result.owner_closed, result.child_closed, main_alive, main_close);
+    printf("close_range_inherit owner_closed=%d child_closed=%d main_alive=%d main_close=%d\n", result.owner_closed,
+           result.child_closed, main_alive, main_close);
     return result.owner_closed && result.child_closed && main_alive && main_close ? 0 : 1;
 }

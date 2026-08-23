@@ -299,7 +299,7 @@ static inline int kqueue(void) {
 }
 
 static inline int hl_native_kevent_wait(int descriptor, struct kevent *events, int event_count,
-                                       const struct timespec *timeout) {
+                                        const struct timespec *timeout) {
     struct epoll_event native_events[256];
     int timeout_ms = -1;
     if (event_count > 256) event_count = 256;
@@ -327,7 +327,11 @@ static inline int hl_native_kevent_wait(int descriptor, struct kevent *events, i
                     continue;
                 }
                 events[delivered] = (struct kevent){(uintptr_t)(entry->target < 0 ? descriptor : entry->target),
-                                                    EVFILT_TIMER, 0, 0, (intptr_t)expirations, entry->udata};
+                                                    EVFILT_TIMER,
+                                                    0,
+                                                    0,
+                                                    (intptr_t)expirations,
+                                                    entry->udata};
                 delivered++;
                 pthread_mutex_unlock(&hl_native_klock);
                 continue;

@@ -18,13 +18,12 @@
 //!   hashing them proves nothing.
 
 use super::{evidence::Measurement, identity::artifact_identity};
-use crate::suite::Error;
+use crate::{platform::HostProcess, suite::Error};
 use clap::Args;
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 /// Arms are ordered base-first; the schedule rotates and reverses them per round.
@@ -63,7 +62,7 @@ impl Arm {
 }
 
 #[derive(Args)]
-pub(crate) struct Options {
+pub(crate) struct FloorOptions {
     /// Result directory. It must not already exist: a reused path is how a run silently
     /// replays cached rows instead of measuring.
     #[arg(long)]
@@ -82,7 +81,7 @@ pub(crate) struct Options {
     /// image, which the static driver does not, so the exec path does strictly more work for it.
     #[arg(long)]
     dynamic_victim: Option<String>,
-    /// Static guest driver built from `tests/bench/floor/main.c`.
+    /// Static guest driver built from `tests/bench/floor.c`.
     #[arg(long)]
     guest: PathBuf,
     /// Directory used as the guest root. The driver is staged at `bin/floor` inside it.
@@ -130,7 +129,7 @@ impl Samples {
     }
 
     /// Measures every phase once for one arm, keeping the minimum per phase.
-    fn measure_phases(&mut self, arm: Arm, options: &Options) -> Result<(), Error> {
+    fn measure_phases(&mut self, arm: Arm, options: &FloorOptions) -> Result<(), Error> {
         for (phase, arguments) in phases(options) {
             let micros = measure(arm, options, &arguments)?;
             self.record(arm, phase, micros);
@@ -146,7 +145,7 @@ impl Samples {
     }
 }
 
-pub(crate) fn run(options: Options) -> Result<(), Error> {
+pub(crate) fn run(options: FloorOptions) -> Result<(), Error> {
     if options.results.exists() {
         return Err(format!(
             "floor benchmark refuses to reuse {}: give every run a fresh results path",
@@ -207,7 +206,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 /// Rotate the arm order by the round, and reverse it on odd rounds. A fixed order
 /// survives pinning, minima and per-arm verification, and still inflates whichever arm
 /// runs last by about 4% on this box.
-fn arms(options: &Options) -> Vec<Arm> {
+fn arms(options: &FloorOptions) -> Vec<Arm> {
     if options.engine_candidate.is_some() {
         CANDIDATE_ARMS.to_vec()
     } else {
@@ -231,7 +230,7 @@ fn schedule(round: u64, arms: &[Arm]) -> Vec<Arm> {
 }
 
 /// Every phase this harness knows how to run. All of them are reported, always.
-fn phases(options: &Options) -> Vec<(&'static str, Vec<String>)> {
+fn phases(options: &FloorOptions) -> Vec<(&'static str, Vec<String>)> {
     let mut rows = vec![
         // Fixed per-process cost: fork + execve + wait of a static guest whose child
         // issues no syscalls at all beyond its own exit.
@@ -253,10 +252,10 @@ fn phases(options: &Options) -> Vec<(&'static str, Vec<String>)> {
     rows
 }
 
-fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Error> {
+fn measure(arm: Arm, options: &FloorOptions, arguments: &[String]) -> Result<u64, Error> {
     let mut command = match arm {
         Arm::Native => {
-            let mut command = Command::new(options.rootfs.join("bin/floor"));
+            let mut command = HostProcess::standard(options.rootfs.join("bin/floor"));
             command.args(arguments);
             command
         }
@@ -269,7 +268,7 @@ fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Err
             } else {
                 &options.engine
             };
-            let mut command = Command::new(worker);
+            let mut command = HostProcess::standard(worker);
             command
                 .arg("--rootfs")
                 .arg(&options.rootfs)
@@ -343,7 +342,7 @@ fn load_average() -> Result<String, Error> {
 }
 
 #[expect(clippy::cast_precision_loss, reason = "microsecond counts are far below 2^53")]
-fn report(options: &Options, samples: &Samples, identity: &str, lock: &str, load: &str) -> Result<String, Error> {
+fn report(options: &FloorOptions, samples: &Samples, identity: &str, lock: &str, load: &str) -> Result<String, Error> {
     let execs = options.execs as f64;
     let crossings = execs * options.syscalls as f64;
     let mut text = String::new();

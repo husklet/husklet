@@ -8,7 +8,10 @@
 
 int main(void) {
     int fds[2];
-    if (pipe(fds) < 0) { perror("pipe"); return 1; }
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 1;
+    }
     write(fds[1], "data", 4);
 
     struct pollfd pfd = {.fd = fds[0], .events = POLLIN};

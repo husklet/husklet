@@ -15,6 +15,7 @@ static uint64_t even(uint64_t a, unsigned d) {
     r = odd(r + d, d - 1);                  // call site B (distinct return point)
     return r ^ (a << 1);
 }
+
 static uint64_t odd(uint64_t a, unsigned d) {
     a = a * 0x2545f4914f6cdd1dULL + 0xd;
     if (d == 0) return a;
@@ -24,7 +25,8 @@ static uint64_t odd(uint64_t a, unsigned d) {
 
 int main(void) {
     uint64_t acc = 0;
-    for (unsigned s = 0; s < 4000; s++) acc = acc * 31 + even(0x9e3779b9ULL + s, 22);
+    for (unsigned s = 0; s < 4000; s++)
+        acc = acc * 31 + even(0x9e3779b9ULL + s, 22);
     printf("ret-predict acc=%llu\n", (unsigned long long)acc);
     return 0;
 }

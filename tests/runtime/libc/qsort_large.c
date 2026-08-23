@@ -9,10 +9,14 @@ static int cmp(const void *a, const void *b) {
 
 int main(void) {
     enum { N = 512 };
+
     int v[N];
-    for (int i = 0; i < N; i++) v[i] = N - i; // 512..1
+    for (int i = 0; i < N; i++)
+        v[i] = N - i; // 512..1
     qsort(v, N, sizeof v[0], cmp);
-    int sorted = 1; for (int i = 1; i < N; i++) if (v[i - 1] > v[i]) sorted = 0;
+    int sorted = 1;
+    for (int i = 1; i < N; i++)
+        if (v[i - 1] > v[i]) sorted = 0;
     int d1 = sorted && v[0] == 1 && v[N - 1] == N;
     int key = 300;
     int *hit = bsearch(&key, v, N, sizeof v[0], cmp);

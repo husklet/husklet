@@ -195,7 +195,6 @@ int64_t hl_linux_pwritev(hl_linux_abi *linux_abi, hl_linux_fd fd, const hl_host_
     return hl_linux_vector(linux_abi, fd, vectors, count, offset, 3);
 }
 
-
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 #include "../bridge/host.h"
 
@@ -225,8 +224,7 @@ static int setfl_append_test_install(struct setfl_append_test_box *fixture, int 
                                      uint32_t status_flags) {
     hl_host_result imported = hl_c_bridge_host_import_file(fixture->host, native_fd, HL_HOST_FILE_WRITE);
     if (imported.status != HL_STATUS_OK) return -1;
-    if (hl_linux_fd_install_at(&fixture->box, (hl_linux_fd)guest_fd, imported.value, status_flags, 0) !=
-        HL_STATUS_OK) {
+    if (hl_linux_fd_install_at(&fixture->box, (hl_linux_fd)guest_fd, imported.value, status_flags, 0) != HL_STATUS_OK) {
         (void)fixture->services.file->close(fixture->services.context, imported.value);
         return -1;
     }
@@ -348,6 +346,7 @@ release:
  * target has neither spelling, and the loader still resolves every exported test symbol, so the hook
  * must exist and refuse rather than vanish into a MissingBridge at load time. */
 HL_API int hl_c_backend_setfl_append_write_test(uint32_t scenario);
+
 HL_API int hl_c_backend_setfl_append_write_test(uint32_t scenario) {
     (void)scenario;
     errno = ENOTSUP;

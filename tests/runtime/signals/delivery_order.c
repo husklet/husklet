@@ -20,20 +20,26 @@ int main(void) {
     struct sigaction sa = {0};
     sa.sa_handler = h;
     sigemptyset(&sa.sa_mask);
-    for (int i = 0; i < 3; i++) sigaction(sigs[i], &sa, NULL);
+    for (int i = 0; i < 3; i++)
+        sigaction(sigs[i], &sa, NULL);
 
     sigset_t block, old;
     sigemptyset(&block);
-    for (int i = 0; i < 3; i++) sigaddset(&block, sigs[i]);
+    for (int i = 0; i < 3; i++)
+        sigaddset(&block, sigs[i]);
     sigprocmask(SIG_BLOCK, &block, &old);
 
-    for (int i = 0; i < 3; i++) { raise(sigs[i]); raise(sigs[i]); } // twice each -> coalesce
+    for (int i = 0; i < 3; i++) {
+        raise(sigs[i]);
+        raise(sigs[i]);
+    } // twice each -> coalesce
 
     sigprocmask(SIG_SETMASK, &old, NULL);
 
     int coalesced = counts[SIGUSR1] == 1 && counts[SIGUSR2] == 1 && counts[SIGTERM] == 1;
     printf("blocked_order count=%d seq=", (int)idx);
-    for (int i = 0; i < idx; i++) printf("%s%d", i ? "," : "", order[i]);
+    for (int i = 0; i < idx; i++)
+        printf("%s%d", i ? "," : "", order[i]);
     printf(" coalesced=%d\n", coalesced);
     return 0;
 }

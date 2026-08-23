@@ -859,12 +859,10 @@ static int proc_network_device_text(const char *file, int islo, char *buf, size_
         if (islo) return snprintf(buf, cap, "00:00:00:00:00:00\n");
         uint8_t mac[6];
         netif_eth0_mac(mac);
-        return snprintf(buf, cap, "%02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4],
-                        mac[5]);
+        return snprintf(buf, cap, "%02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
     if (!strcmp(file, "addr_len")) return snprintf(buf, cap, "6\n");
-    if (!strcmp(file, "broadcast"))
-        return snprintf(buf, cap, islo ? "00:00:00:00:00:00\n" : "ff:ff:ff:ff:ff:ff\n");
+    if (!strcmp(file, "broadcast")) return snprintf(buf, cap, islo ? "00:00:00:00:00:00\n" : "ff:ff:ff:ff:ff:ff\n");
     if (!strcmp(file, "flags")) return snprintf(buf, cap, islo ? "0x9\n" : "0x1003\n");
     if (!strcmp(file, "mtu")) return snprintf(buf, cap, islo ? "65536\n" : "1500\n");
     if (!strcmp(file, "operstate")) return snprintf(buf, cap, islo ? "unknown\n" : "up\n");
@@ -966,9 +964,7 @@ static int proc_open_cgroup_local(const char *rp) {
         n = 0;
         buf[0] = 0; // a leaf cgroup delegates nothing downward -> empty (matches runc)
     }
-    if (n < 0 && !strcmp(rp, "/sys/fs/cgroup/cgroup.type")) {
-        n = snprintf(buf, sizeof buf, "domain\n");
-    }
+    if (n < 0 && !strcmp(rp, "/sys/fs/cgroup/cgroup.type")) { n = snprintf(buf, sizeof buf, "domain\n"); }
     if (n < 0) return INT_MIN;
     return proc_text_fd(buf, n);
 }

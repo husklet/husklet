@@ -39,7 +39,7 @@ int main(void) {
     close(fd);
     unlink(path);
     rmdir(dir);
-    printf("statx-probe ok=%d size=%d type=%d mode=%d nlink=%d blksize=%d empty-path=%d\n",
-           ok, size_ok, type_ok, mode_ok, nlink_ok, block_ok, empty_ok);
+    printf("statx-probe ok=%d size=%d type=%d mode=%d nlink=%d blksize=%d empty-path=%d\n", ok, size_ok, type_ok,
+           mode_ok, nlink_ok, block_ok, empty_ok);
     return 0;
 }

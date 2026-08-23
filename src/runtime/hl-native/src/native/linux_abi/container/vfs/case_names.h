@@ -76,11 +76,13 @@ static int hl_case_true_name(int dirfd, const char *dirpath, const char *name, c
     memset(&request, 0, sizeof request);
     request.bitmapcount = ATTR_BIT_MAP_COUNT;
     request.commonattr = ATTR_CMN_NAME;
+
     struct {
         uint32_t length;
         attrreference_t name;
         char storage[1024];
     } reply;
+
     memset(&reply, 0, sizeof reply);
     int rc;
     if (dirfd >= 0) {
@@ -111,8 +113,7 @@ static int hl_case_scan(int dirfd, const char *dirpath, const char *guest, char 
         struct dirent *entry;
         while ((entry = readdir(entries)) != NULL) {
             char decoded[256];
-            const char *visible =
-                hl_case_name_decode(entry->d_name, decoded, sizeof decoded) ? decoded : entry->d_name;
+            const char *visible = hl_case_name_decode(entry->d_name, decoded, sizeof decoded) ? decoded : entry->d_name;
             if (strcmp(visible, guest) == 0) {
                 int stored = hl_case_store(physical, capacity, entry->d_name);
                 closedir(entries);

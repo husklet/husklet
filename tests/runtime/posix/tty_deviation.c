@@ -21,10 +21,25 @@ static int bg_case(int slave, int op) {
     pid_t bg = fork();
     if (bg == 0) {
         setpgid(0, 0);
-        if (op == 1) { sigset_t s; sigemptyset(&s); sigaddset(&s, SIGTTIN); sigprocmask(SIG_BLOCK,&s,0); }
-        long r; int e; errno = 0;
-        if (op == 0) { struct termios t; tcgetattr(slave,&t); r = tcsetattr(slave, TCSANOW, &t); e = errno; }
-        else { char b[4]; r = read(slave, b, 1); e = errno; }
+        if (op == 1) {
+            sigset_t s;
+            sigemptyset(&s);
+            sigaddset(&s, SIGTTIN);
+            sigprocmask(SIG_BLOCK, &s, 0);
+        }
+        long r;
+        int e;
+        errno = 0;
+        if (op == 0) {
+            struct termios t;
+            tcgetattr(slave, &t);
+            r = tcsetattr(slave, TCSANOW, &t);
+            e = errno;
+        } else {
+            char b[4];
+            r = read(slave, b, 1);
+            e = errno;
+        }
         _exit((r < 0 && e == EIO) ? 77 : (r >= 0 ? 66 : 55));
     }
     setpgid(bg, bg);
@@ -42,28 +57,37 @@ static int bg_case(int slave, int op) {
 static void leader(int reportfd) {
     setsid();
     int s = open(name, O_RDWR);
-    if (s < 0) { int v[2] = {0,0}; write(reportfd, v, sizeof v); _exit(0); }
+    if (s < 0) {
+        int v[2] = {0, 0};
+        write(reportfd, v, sizeof v);
+        _exit(0);
+    }
     ioctl(s, TIOCSCTTY, 0);
     tcsetpgrp(s, getpgrp());
-    int v[2] = { bg_case(s, 0), bg_case(s, 1) };
+    int v[2] = {bg_case(s, 0), bg_case(s, 1)};
     write(reportfd, v, sizeof v);
     _exit(0);
 }
 
 int main(void) {
     int m = posix_openpt(O_RDWR | O_NOCTTY);
-    grantpt(m); unlockpt(m);
+    grantpt(m);
+    unlockpt(m);
     char *sn = ptsname(m);
     strncpy(name, sn ? sn : "", sizeof name - 1);
-    int p[2]; if (pipe(p) < 0) return 1;
+    int p[2];
+    if (pipe(p) < 0) return 1;
     pid_t sl = fork();
-    if (sl == 0) { close(p[0]); leader(p[1]); }
+    if (sl == 0) {
+        close(p[0]);
+        leader(p[1]);
+    }
     close(p[1]);
-    int v[2] = {0,0};
+    int v[2] = {0, 0};
     read(p[0], v, sizeof v);
-    int st; waitpid(sl, &st, 0);
-    printf("bgdev tcset_sigttou=%d blk_eio=%d\n",
-           v[0] == (1000 + SIGTTOU), v[1] == 77);
+    int st;
+    waitpid(sl, &st, 0);
+    printf("bgdev tcset_sigttou=%d blk_eio=%d\n", v[0] == (1000 + SIGTTOU), v[1] == 77);
     close(m);
     return 0;
 }

@@ -10,8 +10,8 @@ static void h(int s) {
     (void)s;
     sigset_t cur;
     sigprocmask(SIG_BLOCK, NULL, &cur);
-    if (sigismember(&cur, SIGUSR1)) self_blocked = 1;    // triggering signal auto-masked
-    if (sigismember(&cur, SIGUSR2)) extra_blocked = 1;   // sa_mask member
+    if (sigismember(&cur, SIGUSR1)) self_blocked = 1;  // triggering signal auto-masked
+    if (sigismember(&cur, SIGUSR2)) extra_blocked = 1; // sa_mask member
 }
 
 int main(void) {
@@ -28,7 +28,6 @@ int main(void) {
     sigprocmask(SIG_BLOCK, NULL, &after);
     int restored = !sigismember(&after, SIGUSR1) && !sigismember(&after, SIGUSR2);
 
-    printf("mask_in_handler self_blocked=%d extra_blocked=%d restored=%d\n",
-           self_blocked, extra_blocked, restored);
+    printf("mask_in_handler self_blocked=%d extra_blocked=%d restored=%d\n", self_blocked, extra_blocked, restored);
     return 0;
 }

@@ -24,8 +24,11 @@ static void *producer(void *arg) {
     for (int i = 0; i < PER_PRODUCER; i++) {
         int val = (int)(base * 1000 + i);
         pthread_mutex_lock(&m);
-        while (count == CAP) pthread_cond_wait(&not_full, &m);
-        ring[tail] = val; tail = (tail + 1) % CAP; count++;
+        while (count == CAP)
+            pthread_cond_wait(&not_full, &m);
+        ring[tail] = val;
+        tail = (tail + 1) % CAP;
+        count++;
         produced_sum += val;
         pthread_cond_signal(&not_empty);
         pthread_mutex_unlock(&m);
@@ -41,9 +44,15 @@ static void *consumer(void *arg) {
             if (producers_done && count == 0) break;
             pthread_cond_wait(&not_empty, &m);
         }
-        if (count == 0 && producers_done) { pthread_mutex_unlock(&m); break; }
-        int val = ring[head]; head = (head + 1) % CAP; count--;
-        consumed_sum += val; consumed_n++;
+        if (count == 0 && producers_done) {
+            pthread_mutex_unlock(&m);
+            break;
+        }
+        int val = ring[head];
+        head = (head + 1) % CAP;
+        count--;
+        consumed_sum += val;
+        consumed_n++;
         pthread_cond_signal(&not_full);
         pthread_mutex_unlock(&m);
     }
@@ -52,15 +61,18 @@ static void *consumer(void *arg) {
 
 int main(void) {
     pthread_t p[PRODUCERS], c[CONSUMERS];
-    for (long i = 0; i < CONSUMERS; i++) pthread_create(&c[i], 0, consumer, (void *)i);
-    for (long i = 0; i < PRODUCERS; i++) pthread_create(&p[i], 0, producer, (void *)(i + 1));
-    for (int i = 0; i < PRODUCERS; i++) pthread_join(p[i], 0);
+    for (long i = 0; i < CONSUMERS; i++)
+        pthread_create(&c[i], 0, consumer, (void *)i);
+    for (long i = 0; i < PRODUCERS; i++)
+        pthread_create(&p[i], 0, producer, (void *)(i + 1));
+    for (int i = 0; i < PRODUCERS; i++)
+        pthread_join(p[i], 0);
     pthread_mutex_lock(&m);
     producers_done = 1;
-    pthread_cond_broadcast(&not_empty);   // wake consumers to observe drain-complete
+    pthread_cond_broadcast(&not_empty); // wake consumers to observe drain-complete
     pthread_mutex_unlock(&m);
-    for (int i = 0; i < CONSUMERS; i++) pthread_join(c[i], 0);
-    printf("prodcons n=%ld sums_equal=%d total_ok=%d\n",
-           consumed_n, produced_sum == consumed_sum, consumed_n == TOTAL);
+    for (int i = 0; i < CONSUMERS; i++)
+        pthread_join(c[i], 0);
+    printf("prodcons n=%ld sums_equal=%d total_ok=%d\n", consumed_n, produced_sum == consumed_sum, consumed_n == TOTAL);
     return 0;
 }

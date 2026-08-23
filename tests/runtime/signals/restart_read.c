@@ -7,11 +7,18 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     int p[2];
-    if (pipe(p) != 0) { printf("eintr_restart_read pipe_fail\n"); return 1; }
+    if (pipe(p) != 0) {
+        printf("eintr_restart_read pipe_fail\n");
+        return 1;
+    }
 
     struct sigaction sa = {0};
     sa.sa_handler = h;
@@ -24,7 +31,7 @@ int main(void) {
     if (pid == 0) {
         close(p[0]);
         usleep(50 * 1000);
-        kill(parent, SIGUSR1);   // interrupts the read -> restarted
+        kill(parent, SIGUSR1); // interrupts the read -> restarted
         usleep(50 * 1000);
         (void)!write(p[1], "X", 1);
         _exit(0);

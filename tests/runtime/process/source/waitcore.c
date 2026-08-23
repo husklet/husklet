@@ -29,11 +29,13 @@ static void run_sig(const char *name, int sig, int expect_core) {
         _exit(0); // unreached for fatal signals
     }
     int st = 0;
-    if (waitpid(p, &st, 0) != p) { printf("%s WAITFAIL\n", name); return; }
+    if (waitpid(p, &st, 0) != p) {
+        printf("%s WAITFAIL\n", name);
+        return;
+    }
     int core = WIFSIGNALED(st) ? (WCOREDUMP(st) ? 1 : 0) : 0;
-    printf("%s signaled=%d term=%d core=%d expect=%d %s\n", name,
-           WIFSIGNALED(st) ? 1 : 0, WIFSIGNALED(st) ? WTERMSIG(st) : -1,
-           core, expect_core, core == expect_core ? "OK" : "MISMATCH");
+    printf("%s signaled=%d term=%d core=%d expect=%d %s\n", name, WIFSIGNALED(st) ? 1 : 0,
+           WIFSIGNALED(st) ? WTERMSIG(st) : -1, core, expect_core, core == expect_core ? "OK" : "MISMATCH");
     (void)expect_core;
 }
 
@@ -62,7 +64,10 @@ static void cleanup(void) {
 
 int main(void) {
     strcpy(g_dir, "/tmp/waitcoreXXXXXX");
-    if (!mkdtemp(g_dir)) { printf("mkdtemp failed\n"); return 1; }
+    if (!mkdtemp(g_dir)) {
+        printf("mkdtemp failed\n");
+        return 1;
+    }
 
     // Phase 1: cores disabled (soft limit 0) -> even a core-dumping signal must NOT set WCOREDUMP.
     set_core(0);
@@ -73,22 +78,22 @@ int main(void) {
     run_sig("quit", SIGQUIT, 1);
     run_sig("abrt", SIGABRT, 1);
     run_sig("segv", SIGSEGV, 1);
-    run_sig("fpe",  SIGFPE,  1);
-    run_sig("ill",  SIGILL,  1);
-    run_sig("bus",  SIGBUS,  1);
+    run_sig("fpe", SIGFPE, 1);
+    run_sig("ill", SIGILL, 1);
+    run_sig("bus", SIGBUS, 1);
     run_sig("trap", SIGTRAP, 1);
-    run_sig("sys",  SIGSYS,  1);
+    run_sig("sys", SIGSYS, 1);
     run_sig("kill", SIGKILL, 0); // not a core-dumping signal
     run_sig("term", SIGTERM, 0);
-    run_sig("int",  SIGINT,  0);
+    run_sig("int", SIGINT, 0);
 
     // Normal exit: WIFEXITED with the exact code, no signal/core bits.
     pid_t p = fork();
     if (p == 0) _exit(7);
     int st = 0;
     waitpid(p, &st, 0);
-    printf("exit exited=%d code=%d signaled=%d\n",
-           WIFEXITED(st) ? 1 : 0, WIFEXITED(st) ? WEXITSTATUS(st) : -1, WIFSIGNALED(st) ? 1 : 0);
+    printf("exit exited=%d code=%d signaled=%d\n", WIFEXITED(st) ? 1 : 0, WIFEXITED(st) ? WEXITSTATUS(st) : -1,
+           WIFSIGNALED(st) ? 1 : 0);
 
     cleanup();
     printf("waitcore done\n");

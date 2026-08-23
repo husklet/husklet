@@ -11,27 +11,43 @@
 
 static sigjmp_buf jump;
 static volatile sig_atomic_t armed;
-static void fault(int s) { (void)s; if (armed) siglongjmp(jump, 1); }
+
+static void fault(int s) {
+    (void)s;
+    if (armed) siglongjmp(jump, 1);
+}
+
 static int touch(volatile unsigned char *p) {
     armed = 1;
-    if (sigsetjmp(jump, 1) == 0) { volatile unsigned char v = *p; (void)v; armed = 0; return 0; }
-    armed = 0; return 1;
+    if (sigsetjmp(jump, 1) == 0) {
+        volatile unsigned char v = *p;
+        (void)v;
+        armed = 0;
+        return 0;
+    }
+    armed = 0;
+    return 1;
 }
 
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     struct sigaction sa = {0};
-    sa.sa_handler = fault; sigemptyset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+    sa.sa_handler = fault;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
 
     unsigned char *m = mmap(NULL, ps * 4, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { printf("map fail\n"); return 2; }
+    if (m == MAP_FAILED) {
+        printf("map fail\n");
+        return 2;
+    }
     memset(m, 0x3c, ps * 4);
 
     void *r = mremap(m, ps * 4, ps, 0);
     int stayed = r == m;
     int prefix_ok = stayed && ((unsigned char *)r)[0] == 0x3c && ((unsigned char *)r)[ps - 1] == 0x3c;
-    int tail_faults = touch((unsigned char *)m + ps) == 1;   // released page no longer mapped
+    int tail_faults = touch((unsigned char *)m + ps) == 1; // released page no longer mapped
 
     void *g = mremap(r, ps, ps * 4, MREMAP_MAYMOVE);
     int grew = g != MAP_FAILED;

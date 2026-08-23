@@ -33,7 +33,8 @@ static void escape(const void *p) {
 // is invisible through a float read and visible the moment the register is read as a D or a Q.
 static int dup_scalar(uint64_t *seen) {
     uint8_t bytes[16];
-    for (int i = 0; i < 16; i++) bytes[i] = (uint8_t)(0x11u * (unsigned)(i + 1));
+    for (int i = 0; i < 16; i++)
+        bytes[i] = (uint8_t)(0x11u * (unsigned)(i + 1));
     escape(bytes);
     uint8x16_t v = vld1q_u8(bytes);
     int ok = 1;
@@ -159,7 +160,8 @@ static int rshrn_carry(uint64_t *seen) {
 
     // 16-bit sources, where the same add cannot carry: the arm that must not change.
     uint16_t s16[8];
-    for (int i = 0; i < 8; i++) s16[i] = (uint16_t)(0xFF00u + (unsigned)i * 37u);
+    for (int i = 0; i < 8; i++)
+        s16[i] = (uint16_t)(0xFF00u + (unsigned)i * 37u);
     escape(s16);
     uint16x8_t w = vld1q_u16(s16);
     uint8x8_t b = vdup_n_u8(0);
@@ -265,7 +267,8 @@ static int misc_twoop(int64_t *sum) {
     int ok = 1;
     uint64_t status;
     int8_t src[16];
-    for (int i = 0; i < 16; i++) src[i] = (int8_t)(i * 17 - 128);
+    for (int i = 0; i < 16; i++)
+        src[i] = (int8_t)(i * 17 - 128);
     escape(src);
     int8x16_t v = vld1q_s8(src);
     int8_t out[16];
@@ -273,14 +276,16 @@ static int misc_twoop(int64_t *sum) {
     vst1q_s8(out, vclsq_s8(v));
     for (int i = 0; i < 16; i++) {
         unsigned x = (uint8_t)src[i], n = 0;
-        while (n < 7 && (((x >> (7 - n)) ^ (x >> (6 - n))) & 1u) == 0) n++;
+        while (n < 7 && (((x >> (7 - n)) ^ (x >> (6 - n))) & 1u) == 0)
+            n++;
         if (out[i] != (int8_t)n) ok = 0;
         *sum += out[i];
     }
     vst1q_u8((uint8_t *)out, vclzq_u8(vreinterpretq_u8_s8(v)));
     for (int i = 0; i < 16; i++) {
         unsigned x = (uint8_t)src[i], n = 0;
-        while (n < 8 && ((x >> (7 - n)) & 1u) == 0) n++;
+        while (n < 8 && ((x >> (7 - n)) & 1u) == 0)
+            n++;
         if ((uint8_t)out[i] != n) ok = 0;
         *sum += (uint8_t)out[i];
     }

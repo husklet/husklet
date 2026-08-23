@@ -19,16 +19,15 @@ int main(void) {
     prog[62] = OP_JMPBACK;
     prog[63] = OP_HALT;
 
-    static void *dispatch[NOPS] = {&&do_add, &&do_xor,     &&do_mul, &&do_rot,
-                                   &&do_load, &&do_jmpback, &&do_halt};
+    static void *dispatch[NOPS] = {&&do_add, &&do_xor, &&do_mul, &&do_rot, &&do_load, &&do_jmpback, &&do_halt};
     uint64_t acc = 0x9e3779b9ULL, aux = 0xdeadbeefULL;
     uint64_t steps = 0, budget = 20000000ULL;
     const unsigned char *pc = prog;
 
-#define NEXT()                                                                 \
-    do {                                                                       \
-        if (steps++ >= budget) goto done;                                      \
-        goto *dispatch[*pc++];                                                 \
+#define NEXT()                                                                                                         \
+    do {                                                                                                               \
+        if (steps++ >= budget) goto done;                                                                              \
+        goto *dispatch[*pc++];                                                                                         \
     } while (0)
 
     NEXT();

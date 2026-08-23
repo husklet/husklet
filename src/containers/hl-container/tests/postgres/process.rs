@@ -217,7 +217,7 @@ impl Fixture {
             } else {
                 false
             };
-            if newly_distinct || attempt % 50 == 0 {
+            if newly_distinct || attempt.is_multiple_of(50) {
                 eprintln!(
                     "postgres-readiness attempt={attempt} elapsed_ms={} error={last:?}",
                     elapsed.as_millis()
@@ -260,11 +260,11 @@ impl Fixture {
 
     pub(super) async fn cleanup(&self) -> Result<(), Error> {
         let first = tokio::time::timeout(CLEANUP, self.containers.remove_force(CONTAINER)).await;
-        if !matches!(first, Ok(Ok(_)) | Ok(Err(hl_container::Error::NotFound(_)))) {
+        if !matches!(first, Ok(Ok(_) | Err(hl_container::Error::NotFound(_)))) {
             let signal = tokio::time::timeout(PROBE, self.containers.signal(CONTAINER, Signal::KILL)).await;
             let wait = tokio::time::timeout(PROBE, self.containers.wait(CONTAINER)).await;
             match tokio::time::timeout(CLEANUP, self.containers.remove_force(CONTAINER)).await {
-                Ok(Ok(_)) | Ok(Err(hl_container::Error::NotFound(_))) => {}
+                Ok(Ok(_) | Err(hl_container::Error::NotFound(_))) => {}
                 Ok(Err(error)) => return Err(format!(
                     "cleanup escalation failed: initial={first:?}, signal={signal:?}, wait={wait:?}, removal={error}"
                 )

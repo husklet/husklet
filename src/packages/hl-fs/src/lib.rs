@@ -341,7 +341,7 @@ impl<P: Into<PathBuf>> From<P> for Directory {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateError, Creation, Directory, File};
+    use super::{Directory, File};
 
     #[test]
     fn replacement_never_exposes_a_partial_value() {
@@ -387,9 +387,16 @@ mod tests {
         );
     }
 
+    // `Creation` and `CreateError` are named only here, and `File::create`'s only real
+    // implementation is `#[cfg(target_os = "linux")]`. Importing them at the module head
+    // made the import wider than its single consumer, so every non-Linux build of this
+    // test target -- which is what `--target x86_64-pc-windows-gnu` compiles -- reported
+    // them unused. The local `use` matches the gate on the one function that needs them,
+    // exactly as the `symlink` line below already does.
     #[cfg(target_os = "linux")]
     #[test]
     fn create_contract() {
+        use super::{CreateError, Creation};
         use std::os::unix::fs::symlink;
 
         let temporary = tempfile::tempdir().unwrap();

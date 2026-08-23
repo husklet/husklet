@@ -27,15 +27,18 @@ int main(void) {
     shared_pid = getpid();
     pid_t main_tid = (pid_t)syscall(SYS_gettid);
     pthread_t t[N];
-    for (long i = 0; i < N; i++) pthread_create(&t[i], 0, w, (void *)i);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (long i = 0; i < N; i++)
+        pthread_create(&t[i], 0, w, (void *)i);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
 
     int distinct = 1;
     for (int i = 0; i < N; i++) {
         if (tids[i] == main_tid) distinct = 0;
-        for (int j = i + 1; j < N; j++) if (tids[i] == tids[j]) distinct = 0;
+        for (int j = i + 1; j < N; j++)
+            if (tids[i] == tids[j]) distinct = 0;
     }
-    printf("gettid_distinct distinct=%d stable=%d same_pid=%d\n",
-           distinct, atomic_load(&stable) == N, atomic_load(&same_pid) == N);
+    printf("gettid_distinct distinct=%d stable=%d same_pid=%d\n", distinct, atomic_load(&stable) == N,
+           atomic_load(&same_pid) == N);
     return 0;
 }

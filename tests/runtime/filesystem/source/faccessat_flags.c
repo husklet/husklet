@@ -52,10 +52,8 @@ static struct identity_checks check_identities(int dfd, int denied_dfd, const ch
         if (setresuid(1000, 0, 0) == 0) {
             (void)setfsuid(1234);
             errno = 0;
-            child_checks.real_id_denied =
-                syscall(__NR_faccessat2, dfd, "owner-only", R_OK, 0) == -1 && errno == EACCES;
-            child_checks.effective_id_allowed =
-                syscall(__NR_faccessat2, dfd, "owner-only", R_OK, AT_EACCESS) == 0;
+            child_checks.real_id_denied = syscall(__NR_faccessat2, dfd, "owner-only", R_OK, 0) == -1 && errno == EACCES;
+            child_checks.effective_id_allowed = syscall(__NR_faccessat2, dfd, "owner-only", R_OK, AT_EACCESS) == 0;
         }
         (void)write(results[1], &child_checks, sizeof child_checks);
         _exit(0);
@@ -77,21 +75,17 @@ static struct identity_checks check_identities(int dfd, int denied_dfd, const ch
             child_checks.execute_only_executes = faccessat(dfd, "execute-only", X_OK, 0) == 0;
             child_checks.execute_only_directory = faccessat(dfd, "search-only/inside", F_OK, 0) == 0;
             errno = 0;
-            child_checks.denied_directory =
-                faccessat(dfd, "denied/inside", F_OK, 0) == -1 && errno == EACCES;
+            child_checks.denied_directory = faccessat(dfd, "denied/inside", F_OK, 0) == -1 && errno == EACCES;
             errno = 0;
-            child_checks.denied_missing =
-                faccessat(dfd, "denied/missing", F_OK, 0) == -1 && errno == EACCES;
+            child_checks.denied_missing = faccessat(dfd, "denied/missing", F_OK, 0) == -1 && errno == EACCES;
             errno = 0;
             child_checks.denied_trailing = faccessat(dfd, "denied/", F_OK, 0) == -1 && errno == EACCES;
             errno = 0;
-            child_checks.denied_symlink =
-                faccessat(dfd, "denied-link/inside", F_OK, 0) == -1 && errno == EACCES;
+            child_checks.denied_symlink = faccessat(dfd, "denied-link/inside", F_OK, 0) == -1 && errno == EACCES;
             errno = 0;
             child_checks.denied_absolute = access(absolute_denied, F_OK) == -1 && errno == EACCES;
             errno = 0;
-            child_checks.denied_start =
-                faccessat(denied_dfd, "inside", F_OK, 0) == -1 && errno == EACCES;
+            child_checks.denied_start = faccessat(denied_dfd, "inside", F_OK, 0) == -1 && errno == EACCES;
             errno = 0;
             child_checks.dev_console_denied = access("/dev/console", R_OK) == -1 && errno == EACCES;
             errno = 0;
@@ -105,27 +99,25 @@ static struct identity_checks check_identities(int dfd, int denied_dfd, const ch
                 devfd >= 0 && faccessat(devfd, "null/", F_OK, 0) == -1 && errno == ENOTDIR;
             if (devfd >= 0) close(devfd);
             errno = 0;
-            child_checks.dev_trailing_not_directory = child_checks.dev_trailing_not_directory &&
-                                                      access("/dev/null/", F_OK) == -1 && errno == ENOTDIR;
+            child_checks.dev_trailing_not_directory =
+                child_checks.dev_trailing_not_directory && access("/dev/null/", F_OK) == -1 && errno == ENOTDIR;
+            errno = 0;
+            child_checks.dev_aliases_noexec = faccessat(dfd, "dev-absolute", X_OK, 0) == -1 && errno == EACCES;
             errno = 0;
             child_checks.dev_aliases_noexec =
-                faccessat(dfd, "dev-absolute", X_OK, 0) == -1 && errno == EACCES;
-            errno = 0;
-            child_checks.dev_aliases_noexec = child_checks.dev_aliases_noexec &&
-                                                 faccessat(dfd, "dev-chain", X_OK, 0) == -1 && errno == EACCES;
+                child_checks.dev_aliases_noexec && faccessat(dfd, "dev-chain", X_OK, 0) == -1 && errno == EACCES;
             child_checks.dev_alias_nofollow =
                 syscall(__NR_faccessat2, dfd, "dev-absolute", X_OK, AT_SYMLINK_NOFOLLOW) == 0;
             child_checks.proc_exe_allowed = access("/proc/self/exe", X_OK) == 0;
-            child_checks.proc_aliases_allowed = faccessat(dfd, "proc-absolute", X_OK, 0) == 0 &&
-                                                 faccessat(dfd, "proc-chain", X_OK, 0) == 0;
+            child_checks.proc_aliases_allowed =
+                faccessat(dfd, "proc-absolute", X_OK, 0) == 0 && faccessat(dfd, "proc-chain", X_OK, 0) == 0;
             errno = 0;
             child_checks.trailing_nofollow =
                 syscall(__NR_faccessat2, dfd, "search-link/", F_OK, AT_SYMLINK_NOFOLLOW) == 0;
             errno = 0;
-            child_checks.trailing_nofollow = child_checks.trailing_nofollow &&
-                                                syscall(__NR_faccessat2, dfd, "proc-absolute/", F_OK,
-                                                        AT_SYMLINK_NOFOLLOW) == -1 &&
-                                                errno == ENOTDIR;
+            child_checks.trailing_nofollow =
+                child_checks.trailing_nofollow &&
+                syscall(__NR_faccessat2, dfd, "proc-absolute/", F_OK, AT_SYMLINK_NOFOLLOW) == -1 && errno == ENOTDIR;
             errno = 0;
             child_checks.keepcaps_denied = faccessat(dfd, "mode-zero", R_OK, 0) == -1 && errno == EACCES;
         }
@@ -159,7 +151,7 @@ int main(int argc, char **argv) {
 
     int fd = openat(dfd, "rx", O_CREAT | O_WRONLY, 0644);
     close(fd);
-    fchmodat(dfd, "rx", 0555, 0);   // read+execute, no write
+    fchmodat(dfd, "rx", 0555, 0); // read+execute, no write
 
     int exists = faccessat(dfd, "rx", F_OK, 0) == 0;
     int readable = faccessat(dfd, "rx", R_OK, 0) == 0;
@@ -299,20 +291,15 @@ int main(int argc, char **argv) {
            identities.dev_console_denied, identities.dev_noexec_denied, identities.dev_relative_noexec_denied,
            identities.dev_trailing_not_directory, identities.dev_aliases_noexec, identities.dev_alias_nofollow,
            identities.proc_exe_allowed, identities.proc_aliases_allowed, identities.trailing_nofollow,
-           identities.proc_exe_unlinked_allowed,
-           root_override_allowed,
-           identities.real_id_denied, identities.effective_id_allowed, identities.keepcaps_denied, invalid_flags,
-           noexec_denied);
+           identities.proc_exe_unlinked_allowed, root_override_allowed, identities.real_id_denied,
+           identities.effective_id_allowed, identities.keepcaps_denied, invalid_flags, noexec_denied);
     return !(exists && readable && executable && enoent && dangling_enoent && nofollow_exists && faccessat2_ok &&
              identities.mode_zero_exists && identities.execute_only_executes && identities.execute_only_directory &&
              identities.denied_directory && identities.denied_missing && identities.denied_trailing &&
              identities.denied_symlink && identities.denied_absolute && identities.denied_start &&
              identities.dev_console_denied && identities.dev_noexec_denied && identities.dev_relative_noexec_denied &&
-             identities.dev_trailing_not_directory && identities.dev_aliases_noexec &&
-             identities.dev_alias_nofollow && identities.proc_exe_allowed && identities.proc_aliases_allowed &&
-             identities.trailing_nofollow &&
-             identities.proc_exe_unlinked_allowed &&
-             root_override_allowed &&
-             identities.real_id_denied && identities.effective_id_allowed && identities.keepcaps_denied &&
-             invalid_flags && noexec_denied);
+             identities.dev_trailing_not_directory && identities.dev_aliases_noexec && identities.dev_alias_nofollow &&
+             identities.proc_exe_allowed && identities.proc_aliases_allowed && identities.trailing_nofollow &&
+             identities.proc_exe_unlinked_allowed && root_override_allowed && identities.real_id_denied &&
+             identities.effective_id_allowed && identities.keepcaps_denied && invalid_flags && noexec_denied);
 }

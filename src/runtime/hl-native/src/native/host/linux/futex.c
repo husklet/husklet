@@ -87,4 +87,3 @@ static hl_host_result hl_linux_fork_child(void *context) {
         result = hl_linux_result(HL_STATUS_PLATFORM_FAILURE, 0, 0);
     return result;
 }
-

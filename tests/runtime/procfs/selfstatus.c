@@ -35,7 +35,8 @@ int main(void) {
     // Uid: line has 4 whitespace-separated ids
     int uid_cols = 0;
     if (pf_line_val(b, "Uid:", v, sizeof v))
-        for (char *t = strtok(v, " \t"); t; t = strtok(NULL, " \t")) uid_cols++;
+        for (char *t = strtok(v, " \t"); t; t = strtok(NULL, " \t"))
+            uid_cols++;
     int vmrss_kb = pf_line_val(b, "VmRSS:", v, sizeof v) && strstr(v, "kB");
     int vmsize_kb = pf_line_val(b, "VmSize:", v, sizeof v) && strstr(v, "kB");
     int has_sig = pf_has(b, "SigPnd:") && pf_has(b, "SigBlk:") && pf_has(b, "SigCgt:");
@@ -45,10 +46,9 @@ int main(void) {
     cpu_set_t aff;
     int naff = (sched_getaffinity(0, sizeof aff, &aff) == 0) ? CPU_COUNT(&aff) : -1;
     int cpus_ok = 0;
-    if (pf_line_val(b, "Cpus_allowed_list:", v, sizeof v))
-        cpus_ok = (naff > 0) && (cpulist_count(v) == naff);
-    int ok = n > 0 && has_name && has_state && pid_ok && has_ppid && has_threads && uid_cols == 4 &&
-             vmrss_kb && vmsize_kb && has_sig && cpus_ok;
+    if (pf_line_val(b, "Cpus_allowed_list:", v, sizeof v)) cpus_ok = (naff > 0) && (cpulist_count(v) == naff);
+    int ok = n > 0 && has_name && has_state && pid_ok && has_ppid && has_threads && uid_cols == 4 && vmrss_kb &&
+             vmsize_kb && has_sig && cpus_ok;
     printf("selfstatus ok=%d\n", ok);
     return 0;
 }

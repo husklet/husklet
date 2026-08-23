@@ -39,7 +39,6 @@ int main(void) {
     // pending on the thread.
     sigset_t pending;
     sigpending(&pending);
-    printf("read_signo=%d only_one=%d usr2_still_pending=%d\n",
-           first, drained, sigismember(&pending, SIGUSR2));
+    printf("read_signo=%d only_one=%d usr2_still_pending=%d\n", first, drained, sigismember(&pending, SIGUSR2));
     return 0;
 }

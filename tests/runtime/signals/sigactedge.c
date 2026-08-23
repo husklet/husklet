@@ -9,7 +9,7 @@
 #include <errno.h>
 #include <signal.h>
 #ifndef _NSIG
-#define _NSIG 65   /* macOS libc omits _NSIG; Linux value for the guest range check */
+#define _NSIG 65 /* macOS libc omits _NSIG; Linux value for the guest range check */
 #endif
 #include <stdio.h>
 #include <string.h>
@@ -18,7 +18,10 @@
 
 static volatile sig_atomic_t hits, depth, max_depth;
 
-static void h(int s) { (void)s; hits++; }
+static void h(int s) {
+    (void)s;
+    hits++;
+}
 
 static void nodefer_h(int s) {
     depth++;
@@ -72,7 +75,7 @@ int main(void) {
     sigemptyset(&rr.sa_mask);
     sigaction(SIGUSR2, &rr, NULL);
     hits = 0;
-    raise(SIGUSR2);            // handler runs once, then disposition -> SIG_DFL
+    raise(SIGUSR2); // handler runs once, then disposition -> SIG_DFL
     sigaction(SIGUSR2, NULL, &old);
     int reset_ran = hits == 1;
     int reset_to_dfl = old.sa_handler == SIG_DFL;
@@ -91,7 +94,6 @@ int main(void) {
 
     printf("sigact kill_einval=%d stop_einval=%d range_einval=%d kill_kills=%d old_reports=%d "
            "reset_ran=%d reset_dfl=%d nodefer_nested=%d\n",
-           kill_einval, stop_einval, range_einval, kill_kills, old_reports, reset_ran, reset_to_dfl,
-           nodefer_nested);
+           kill_einval, stop_einval, range_einval, kill_kills, old_reports, reset_ran, reset_to_dfl, nodefer_nested);
     return 0;
 }

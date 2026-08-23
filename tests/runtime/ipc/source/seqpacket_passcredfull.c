@@ -82,9 +82,9 @@ int main(void) {
     waitpid(child, &st, 0);
     int no_trunc = (mh.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) == 0;
     int child_ok = WIFEXITED(st) && WEXITSTATUS(st) == 0;
-    int ok = n == 5 && strcmp(data, "mojo!") == 0 && no_trunc && rights && fdbyte == 'R' && cred && cred_pid && child_ok;
-    printf("seqpass_full n=%ld data=%s trunc=%d ctrunc=%d rights=%d fdbyte=%c cred=%d credpid=%d child=%d\n",
-           (long)n, data, !!(mh.msg_flags & MSG_TRUNC), !!(mh.msg_flags & MSG_CTRUNC), rights, fdbyte, cred,
-           cred_pid, child_ok);
+    int ok =
+        n == 5 && strcmp(data, "mojo!") == 0 && no_trunc && rights && fdbyte == 'R' && cred && cred_pid && child_ok;
+    printf("seqpass_full n=%ld data=%s trunc=%d ctrunc=%d rights=%d fdbyte=%c cred=%d credpid=%d child=%d\n", (long)n,
+           data, !!(mh.msg_flags & MSG_TRUNC), !!(mh.msg_flags & MSG_CTRUNC), rights, fdbyte, cred, cred_pid, child_ok);
     return ok ? 0 : 1;
 }

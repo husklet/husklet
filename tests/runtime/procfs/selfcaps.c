@@ -17,8 +17,15 @@
 #define DOCKER_CAP 0x00000000a80425fbULL // the 14-cap default bounding/permitted/effective set
 
 // capget(2) directly — libcap/capsh use this, and it MUST agree with /proc/self/status.
-struct chdr { unsigned version; int pid; };
-struct cdata { unsigned eff, prm, inh; };
+struct chdr {
+    unsigned version;
+    int pid;
+};
+
+struct cdata {
+    unsigned eff, prm, inh;
+};
+
 static unsigned long long capget_field(int which /*0=eff 1=prm 2=inh*/) {
     struct chdr h = {0x20080522u, 0}; // _LINUX_CAPABILITY_VERSION_3
     struct cdata d[2];
@@ -56,8 +63,8 @@ int main(void) {
 
     int p_seccomp = prctl(PR_GET_SECCOMP, 0, 0, 0, 0);
 
-    int status_ok = n > 0 && s_inh == 0 && s_prm == DOCKER_CAP && s_eff == DOCKER_CAP &&
-                    s_bnd == DOCKER_CAP && s_amb == 0 && s_nnp == 0 && s_sec == 2 && s_secf == 1;
+    int status_ok = n > 0 && s_inh == 0 && s_prm == DOCKER_CAP && s_eff == DOCKER_CAP && s_bnd == DOCKER_CAP &&
+                    s_amb == 0 && s_nnp == 0 && s_sec == 2 && s_secf == 1;
     int capget_ok = g_eff == DOCKER_CAP && g_prm == DOCKER_CAP && g_inh == 0;
     int capbset_ok = bset == DOCKER_CAP && p_seccomp == 2;
     // The three sources MUST be internally consistent (this is the invariant real software relies on).
@@ -67,12 +74,12 @@ int main(void) {
     if (ok) {
         printf("selfcaps ok=1\n");
     } else {
-        printf("selfcaps ok=0 status=%d capget=%d capbset=%d consistent=%d\n", status_ok, capget_ok,
-               capbset_ok, consistent);
-        printf("  status inh=%016llx prm=%016llx eff=%016llx bnd=%016llx amb=%016llx nnp=%d sec=%d secf=%d\n",
-               s_inh, s_prm, s_eff, s_bnd, s_amb, s_nnp, s_sec, s_secf);
-        printf("  capget eff=%016llx prm=%016llx inh=%016llx | capbset=%016llx seccomp=%d\n", g_eff, g_prm,
-               g_inh, bset, p_seccomp);
+        printf("selfcaps ok=0 status=%d capget=%d capbset=%d consistent=%d\n", status_ok, capget_ok, capbset_ok,
+               consistent);
+        printf("  status inh=%016llx prm=%016llx eff=%016llx bnd=%016llx amb=%016llx nnp=%d sec=%d secf=%d\n", s_inh,
+               s_prm, s_eff, s_bnd, s_amb, s_nnp, s_sec, s_secf);
+        printf("  capget eff=%016llx prm=%016llx inh=%016llx | capbset=%016llx seccomp=%d\n", g_eff, g_prm, g_inh, bset,
+               p_seccomp);
     }
     return 0;
 }

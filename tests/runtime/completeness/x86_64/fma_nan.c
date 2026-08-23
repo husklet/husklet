@@ -51,14 +51,14 @@ static uint8_t Vo[32] __attribute__((aligned(32)));
 // aarch64 host -- the operand arrives in a scratch vreg any NaN gate has to include, and at 256 bits
 // its high half comes from mem+16 instead of cpu->vhi.
 #define BODY(insn, reg)                                                                                                \
-    __asm__ volatile("ldmxcsr %1\n\tvmovdqu (%2)," reg "0\n\tvmovdqu (%3)," reg "1\n\tvmovdqu (%4)," reg "2\n\t" insn   \
-                         " " reg "2," reg "1," reg "0\n\tvmovdqu " reg "0,(%5)\n\tstmxcsr %0"                           \
+    __asm__ volatile("ldmxcsr %1\n\tvmovdqu (%2)," reg "0\n\tvmovdqu (%3)," reg "1\n\tvmovdqu (%4)," reg "2\n\t" insn  \
+                     " " reg "2," reg "1," reg "0\n\tvmovdqu " reg "0,(%5)\n\tstmxcsr %0"                              \
                      : "=m"(mx)                                                                                        \
                      : "m"(mxcsr_in), "r"(Vd), "r"(Vv), "r"(Vm), "r"(Vo)                                               \
                      : "ymm0", "ymm1", "ymm2", "memory")
 #define BODYM(insn, reg)                                                                                               \
-    __asm__ volatile("ldmxcsr %1\n\tvmovdqu (%2)," reg "0\n\tvmovdqu (%3)," reg "1\n\t" insn " (%4)," reg "1," reg      \
-                         "0\n\tvmovdqu " reg "0,(%5)\n\tstmxcsr %0"                                                    \
+    __asm__ volatile("ldmxcsr %1\n\tvmovdqu (%2)," reg "0\n\tvmovdqu (%3)," reg "1\n\t" insn " (%4)," reg "1," reg     \
+                     "0\n\tvmovdqu " reg "0,(%5)\n\tstmxcsr %0"                                                        \
                      : "=m"(mx)                                                                                        \
                      : "m"(mxcsr_in), "r"(Vd), "r"(Vv), "r"(Vm), "r"(Vo)                                               \
                      : "ymm0", "ymm1", "ymm2", "memory")
@@ -68,15 +68,21 @@ static uint8_t Vo[32] __attribute__((aligned(32)));
 #define XP(mn, fo, ty)                                                                                                 \
     case OP_##mn##fo##ty:                                                                                              \
         if (mem) {                                                                                                     \
-            if (w256) BODYM("v" #mn #fo #ty, "%%ymm");                                                                 \
-            else BODYM("v" #mn #fo #ty, "%%xmm");                                                                      \
-        } else if (w256) BODY("v" #mn #fo #ty, "%%ymm");                                                               \
-        else BODY("v" #mn #fo #ty, "%%xmm");                                                                           \
+            if (w256)                                                                                                  \
+                BODYM("v" #mn #fo #ty, "%%ymm");                                                                       \
+            else                                                                                                       \
+                BODYM("v" #mn #fo #ty, "%%xmm");                                                                       \
+        } else if (w256)                                                                                               \
+            BODY("v" #mn #fo #ty, "%%ymm");                                                                            \
+        else                                                                                                           \
+            BODY("v" #mn #fo #ty, "%%xmm");                                                                            \
         break;
 #define XS(mn, fo, ty)                                                                                                 \
     case OP_##mn##fo##ty:                                                                                              \
-        if (mem) BODYM("v" #mn #fo #ty, "%%xmm");                                                                      \
-        else BODY("v" #mn #fo #ty, "%%xmm");                                                                           \
+        if (mem)                                                                                                       \
+            BODYM("v" #mn #fo #ty, "%%xmm");                                                                           \
+        else                                                                                                           \
+            BODY("v" #mn #fo #ty, "%%xmm");                                                                            \
         break;
 
 #define FORMS(M, mn, ty) M(mn, 132, ty) M(mn, 213, ty) M(mn, 231, ty)
@@ -86,7 +92,9 @@ static uint8_t Vo[32] __attribute__((aligned(32)));
 #define ALL(M) ALL2(M, M)
 
 #define ENUMX(mn, fo, ty) OP_##mn##fo##ty,
+
 enum { ALL(ENUMX) OP_N };
+
 #define NAMEX(mn, fo, ty) "v" #mn #fo #ty,
 static const char *OPNAME[OP_N] = {ALL(NAMEX)};
 
@@ -115,10 +123,17 @@ static int mnem_is(const char *nm, const char *m) {
 // begin with '2', so the second digit decides -- keying on the first alone silently relabels 231.
 static void roles(const char *nm, int *ia, int *ib, int *ic) {
     const char *p = nm;
-    while (*p < '0' || *p > '9') p++;
-    if (*p == '1') { *ia = 0, *ib = 2, *ic = 1; }        // 132: dst*rm + vvvv
-    else if (p[1] == '1') { *ia = 1, *ib = 0, *ic = 2; } // 213: vvvv*dst + rm
-    else { *ia = 1, *ib = 2, *ic = 0; }                  // 231: vvvv*rm + dst
+    while (*p < '0' || *p > '9')
+        p++;
+    if (*p == '1') {
+        *ia = 0, *ib = 2, *ic = 1;
+    } // 132: dst*rm + vvvv
+    else if (p[1] == '1') {
+        *ia = 1, *ib = 0, *ic = 2;
+    } // 213: vvvv*dst + rm
+    else {
+        *ia = 1, *ib = 2, *ic = 0;
+    } // 231: vvvv*rm + dst
 }
 
 // Place one (a, b, c) triple BY ROLE, so a printed case means the same thing for all three forms and
@@ -135,14 +150,17 @@ static void lanes(const char *nm, int a, int b, int c, int nb) {
     memset(Vm, 0x5a, 32);
     for (int s = 0; s < 3; s++)
         for (int l = 0; l < lim; l += es) {
-            if (es == 8) memcpy(slot[s] + l, &K64[idx[s]], 8);
-            else memcpy(slot[s] + l, &K32[idx[s]], 4);
+            if (es == 8)
+                memcpy(slot[s] + l, &K64[idx[s]], 8);
+            else
+                memcpy(slot[s] + l, &K32[idx[s]], 4);
         }
 }
 
 static void show(const char *tag, const char *nm, const char *arg, unsigned mx, int nb) {
     printf("%-5s %-14s %-9s ", tag, nm, arg);
-    for (int l = nb - 1; l >= 0; l--) printf("%02x", Vo[l]);
+    for (int l = nb - 1; l >= 0; l--)
+        printf("%02x", Vo[l]);
     printf(" %04x\n", mx);
 }
 
@@ -170,7 +188,7 @@ int main(void) {
     // SNaN b, where a wins and #I is still raised), 3, the 0*inf-with-QNaN-addend case x86
     // propagates silently, and the two generated NaNs that carry no NaN operand at all.
     static const int A[8][3] = {
-        {0, 8, 8},  {8, 0, 8},  {8, 8, 2}, // one SNaN: a, b, then the addend alone
+        {0, 8, 8},   {8, 0, 8}, {8, 8, 2}, // one SNaN: a, b, then the addend alone
         {5, 0, 8},                         // QNaN a beside SNaN b: a wins, #I raised anyway
         {4, 8, 1},                         // a + c
         {2, 5, 4},                         // all three, each quieting to a DIFFERENT value
@@ -190,8 +208,8 @@ int main(void) {
     // per-lane gate is exercised rather than an all-or-nothing one, and so the addsub/subadd lane
     // parity is visible. Both element sizes; the fmaddsub pair is included because it is the only
     // family whose even and odd lanes differ.
-    static const int Wq[8][3] = {{0, 8, 8}, {8, 5, 2}, {9, 10, 6}, {8, 8, 3},
-                                 {1, 4, 8}, {8, 11, 8}, {7, 0, 5}, {10, 9, 8}};
+    static const int Wq[8][3] = {{0, 8, 8}, {8, 5, 2},  {9, 10, 6}, {8, 8, 3},
+                                 {1, 4, 8}, {8, 11, 8}, {7, 0, 5},  {10, 9, 8}};
     for (int sel = 0; sel < OP_N; sel++) {
         const char *nm = OPNAME[sel];
         // vfmadd in all three forms (the 256-bit high half picks its operand roles separately), plus
@@ -212,8 +230,10 @@ int main(void) {
                 for (int l = 0, n = 0; l < nb; l += es, n++)
                     for (int s = 0; s < 3; s++) {
                         int v = Wq[n & 7][rr[s]];
-                        if (es == 8) memcpy(slot[s] + l, &K64[v], 8);
-                        else memcpy(slot[s] + l, &K32[v], 4);
+                        if (es == 8)
+                            memcpy(slot[s] + l, &K64[v], 8);
+                        else
+                            memcpy(slot[s] + l, &K32[v], 4);
                     }
                 snprintf(arg, sizeof arg, "w%d m%d", nb * 8, mem);
                 show("wide", nm, arg, run(sel, w256, mem), nb);

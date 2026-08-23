@@ -33,10 +33,17 @@ static int igmp_ifaces_consistent(const char *igmp, const char *dev) {
             const char *t = strchr(p, '\t');
             if (t) {
                 t++;
-                char name[64]; int i = 0;
-                while (t[i] && t[i] != ' ' && t[i] != '\t' && t[i] != ':' && i < 63) { name[i] = t[i]; i++; }
+                char name[64];
+                int i = 0;
+                while (t[i] && t[i] != ' ' && t[i] != '\t' && t[i] != ':' && i < 63) {
+                    name[i] = t[i];
+                    i++;
+                }
                 name[i] = 0;
-                if (name[0] && !dev_has_iface(dev, name)) { printf("  igmp iface %s not in dev\n", name); ok = 0; }
+                if (name[0] && !dev_has_iface(dev, name)) {
+                    printf("  igmp iface %s not in dev\n", name);
+                    ok = 0;
+                }
             }
         }
         p = strchr(p, '\n');
@@ -49,13 +56,21 @@ static int devmcast_ifaces_consistent(const char *mc, const char *dev) {
     int ok = 1;
     const char *p = mc;
     while (p && *p) {
-        while (*p == ' ' || *p == '\t') p++;
-        while (*p >= '0' && *p <= '9') p++;       // idx
-        while (*p == ' ' || *p == '\t') p++;
-        char name[64]; int i = 0;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && i < 63) name[i++] = *p++;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        while (*p >= '0' && *p <= '9')
+            p++; // idx
+        while (*p == ' ' || *p == '\t')
+            p++;
+        char name[64];
+        int i = 0;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && i < 63)
+            name[i++] = *p++;
         name[i] = 0;
-        if (name[0] && !dev_has_iface(dev, name)) { printf("  dev_mcast iface %s not in dev\n", name); ok = 0; }
+        if (name[0] && !dev_has_iface(dev, name)) {
+            printf("  dev_mcast iface %s not in dev\n", name);
+            ok = 0;
+        }
         p = strchr(p, '\n');
         if (p) p++;
     }

@@ -33,7 +33,8 @@ int main(void) {
     struct epoll_event out[8];
     int nr = epoll_wait(ep, out, 8, 1000);
     int rd = (nr == 1) && (out[0].events & EPOLLIN) && out[0].data.fd == a[0];
-    ev.events = EPOLLOUT; ev.data.fd = b[1];
+    ev.events = EPOLLOUT;
+    ev.data.fd = b[1];
     epoll_ctl(ep, EPOLL_CTL_ADD, b[1], &ev);
     // now both a[0] (readable) and b[1] (writable) are armed
     nr = epoll_wait(ep, out, 8, 1000);
@@ -41,7 +42,8 @@ int main(void) {
     // 0-timeout on a not-ready-only set: remove the ready ones, keep b[0] (never readable)
     epoll_ctl(ep, EPOLL_CTL_DEL, a[0], &ev);
     epoll_ctl(ep, EPOLL_CTL_DEL, b[1], &ev);
-    ev.events = EPOLLIN; ev.data.fd = b[0];
+    ev.events = EPOLLIN;
+    ev.data.fd = b[0];
     epoll_ctl(ep, EPOLL_CTL_ADD, b[0], &ev);
     int to0 = (epoll_wait(ep, out, 8, 0) == 0);
     int to = (epoll_wait(ep, out, 8, 30) == 0);
@@ -68,18 +70,25 @@ int main(void) {
     errno = 0;
     int noent = epoll_ctl(ep3, EPOLL_CTL_MOD, a[1], &e2) < 0 && errno == ENOENT; // a[1] not registered
     errno = 0;
-    int self = epoll_ctl(ep3, EPOLL_CTL_ADD, ep3, &e2) < 0 && errno == EINVAL;   // can't watch itself
+    int self = epoll_ctl(ep3, EPOLL_CTL_ADD, ep3, &e2) < 0 && errno == EINVAL; // can't watch itself
     char tmpl[] = "/tmp/hl_epoll_XXXXXX";
     int rf = mkstemp(tmpl);
     errno = 0;
-    int perm = epoll_ctl(ep3, EPOLL_CTL_ADD, rf, &e2) < 0 && errno == EPERM;      // regular file -> EPERM
-    if (rf >= 0) { close(rf); unlink(tmpl); }
+    int perm = epoll_ctl(ep3, EPOLL_CTL_ADD, rf, &e2) < 0 && errno == EPERM; // regular file -> EPERM
+    if (rf >= 0) {
+        close(rf);
+        unlink(tmpl);
+    }
     int delok = epoll_ctl(ep3, EPOLL_CTL_DEL, a[0], &e2) == 0;
     errno = 0;
-    int delno = epoll_ctl(ep3, EPOLL_CTL_DEL, a[0], &e2) < 0 && errno == ENOENT;  // now gone -> ENOENT
-    printf("ctl add=%d exist=%d noent=%d self=%d perm=%d del=%d delno=%d\n",
-           add1, exist, noent, self, perm, delok, delno);
-    close(ep3); close(ep);
-    close(a[0]); close(a[1]); close(b[0]); close(b[1]);
+    int delno = epoll_ctl(ep3, EPOLL_CTL_DEL, a[0], &e2) < 0 && errno == ENOENT; // now gone -> ENOENT
+    printf("ctl add=%d exist=%d noent=%d self=%d perm=%d del=%d delno=%d\n", add1, exist, noent, self, perm, delok,
+           delno);
+    close(ep3);
+    close(ep);
+    close(a[0]);
+    close(a[1]);
+    close(b[0]);
+    close(b[1]);
     return 0;
 }

@@ -36,21 +36,19 @@ static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int 
 
 static int ckpt_restore_record_replaces_typed_fd(int kind) {
     switch (kind) {
-        case CKF_FILE:
-        case CKF_PIPE:
-        case CKF_BLOB:
-        case CKF_MEMFD:
-        case CKF_EVENTFD:
-        case CKF_TIMERFD:
-        case CKF_INOTIFY:
-        case CKF_EPOLL:
-        case CKF_SOCKETPAIR:
-        case CKF_SOCKET:
-        case CKF_SIGNALFD:
-        case CKF_DEVICE:
-            return 1;
-        default:
-            return 0;
+    case CKF_FILE:
+    case CKF_PIPE:
+    case CKF_BLOB:
+    case CKF_MEMFD:
+    case CKF_EVENTFD:
+    case CKF_TIMERFD:
+    case CKF_INOTIFY:
+    case CKF_EPOLL:
+    case CKF_SOCKETPAIR:
+    case CKF_SOCKET:
+    case CKF_SIGNALFD:
+    case CKF_DEVICE: return 1;
+    default: return 0;
     }
 }
 
@@ -823,8 +821,8 @@ static int ckpt_validate_proc_tree(const struct ckpt_manifest *man) {
     // This table is copied into the fixed-capacity guest/host pid map after fork. Refuse an image which
     // cannot fit before creating even the first child; silently truncating it would make wait/kill target
     // unrelated host identities after restore.
-    if (man->n_procs == 0 || man->n_procs > HL_LINUX_PIDMAP_CAPACITY ||
-        (uint64_t)g_nrprocs != man->n_procs || man->root_gpid != 1)
+    if (man->n_procs == 0 || man->n_procs > HL_LINUX_PIDMAP_CAPACITY || (uint64_t)g_nrprocs != man->n_procs ||
+        man->root_gpid != 1)
         return -1;
 
     int *relations = malloc((size_t)g_nrprocs * 3 * sizeof *relations);
@@ -1300,8 +1298,8 @@ static int ckpt_restore_preflight(int policy) {
             struct ckpt_proc *session = ckpt_proc_find(process->sid);
             int group_viable = 0;
             for (int j = 0; j < g_nrprocs; ++j)
-                group_viable |= g_rprocs[j].viable && g_rprocs[j].pgid == process->pgid &&
-                                g_rprocs[j].sid == process->sid;
+                group_viable |=
+                    g_rprocs[j].viable && g_rprocs[j].pgid == process->pgid && g_rprocs[j].sid == process->sid;
             if (!group_viable) {
                 ckpt_process_stop(process, "process group is not recoverable");
                 changed = 1;

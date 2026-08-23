@@ -15,7 +15,8 @@ static long long ns(clockid_t c) {
 
 static void burn(long iters) {
     volatile double x = 1.0;
-    for (long i = 1; i <= iters; i++) x = x * 1.0000001 + 1.0;
+    for (long i = 1; i <= iters; i++)
+        x = x * 1.0000001 + 1.0;
     (void)x;
 }
 
@@ -36,7 +37,6 @@ int main(void) {
 
     // Values are non-negative.
     int nonneg = p1 >= 0 && t1 >= 0;
-    printf("cputime proc_adv=%d thr_adv=%d sleep_cheap=%d nonneg=%d\n", proc_adv, thr_adv, sleep_cheap,
-           nonneg);
+    printf("cputime proc_adv=%d thr_adv=%d sleep_cheap=%d nonneg=%d\n", proc_adv, thr_adv, sleep_cheap, nonneg);
     return 0;
 }

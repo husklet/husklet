@@ -13,7 +13,8 @@ int main(void) {
     // empty + nonblocking read -> EAGAIN
     char c;
     int eagain = read(fds[0], &c, 1) < 0 && errno == EAGAIN;
-    close(fds[0]); close(fds[1]);
+    close(fds[0]);
+    close(fds[1]);
     printf("pipe2 rc=%d nonblock=%d cloexec=%d eagain=%d\n", rc, nb, ce, eagain);
     return 0;
 }

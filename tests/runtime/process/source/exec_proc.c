@@ -26,7 +26,8 @@
 #include <unistd.h>
 
 static void fill(unsigned char *buf) {
-    for (int i = 0; i < 256; i++) buf[i] = (unsigned char)(i * 7 + 3);
+    for (int i = 0; i < 256; i++)
+        buf[i] = (unsigned char)(i * 7 + 3);
 }
 
 static int write_all(int fd, const unsigned char *buf, size_t len) {
@@ -85,7 +86,8 @@ static int child_main(const char *argv0) {
     if (pread(mfd, back, sizeof back, 0) != (ssize_t)sizeof back) return 24;
     close(mfd);
     unsigned sum = 0;
-    for (int i = 0; i < 256; i++) sum += back[i];
+    for (int i = 0; i < 256; i++)
+        sum += back[i];
     printf("memfd-sum %u\n", sum);
     // pipe + splice into a file + read-back: splice carries TWO guest descriptors and must forward.
     char path[64];
@@ -115,7 +117,8 @@ static int child_main(const char *argv0) {
     close(in);
     unlink(path);
     sum = 0;
-    for (int i = 0; i < 256; i++) sum += back[i];
+    for (int i = 0; i < 256; i++)
+        sum += back[i];
     printf("splice-sum %u\n", sum);
     return 0;
 }

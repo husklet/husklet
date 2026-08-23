@@ -1,8 +1,13 @@
 /* Included by event.c: unity-build access with bounded syscall handlers. */
 
-static int svc_epoll_pwait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_epoll_pwait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 22: {
         int maxev = (int)a2;
@@ -40,9 +45,14 @@ static int svc_epoll_pwait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
     return svc_done_host(c);
 }
 
-static int svc_epoll_pwait2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_epoll_pwait2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                            uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 441: {
         // Same as epoll_pwait (case 22) except the timeout is a NANOSECOND-resolution struct timespec at

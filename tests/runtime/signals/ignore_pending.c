@@ -4,7 +4,11 @@
 #include <stdio.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     signal(SIGUSR1, h);
@@ -25,7 +29,6 @@ int main(void) {
     sigprocmask(SIG_SETMASK, &old, NULL);
     int no_handler = ran == 0;
 
-    printf("ignore_discards was_pending=%d cleared=%d no_handler=%d\n",
-           was_pending, cleared, no_handler);
+    printf("ignore_discards was_pending=%d cleared=%d no_handler=%d\n", was_pending, cleared, no_handler);
     return 0;
 }

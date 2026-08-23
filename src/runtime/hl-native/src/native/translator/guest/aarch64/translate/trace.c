@@ -73,8 +73,7 @@ static void aarch64_smc_copyout(uint64_t first, uint64_t last) {
  * prefix, and refuse outright when the access being retried does not fit
  * inside it.  Returns 1 when the entry is published, 0 for a guest fault.
  */
-static int aarch64_soft_tlb_install(struct cpu *c, uint64_t first, uint64_t last, uint64_t delta,
-                                    uint64_t protection) {
+static int aarch64_soft_tlb_install(struct cpu *c, uint64_t first, uint64_t last, uint64_t delta, uint64_t protection) {
     if (last > first && c->soft_ea >= first && c->soft_ea < last) {
         /* Measure the accessible prefix from the ACCESSED page, not from the
            view's start: a hole earlier in a wide view must narrow the grant,
@@ -338,7 +337,7 @@ static int smc_commit(struct cpu *c) {
      * and untouched until the ordinary capacity rotation retires them; no
      * executing host PC is invalidated.  Subsequent entries translate the
      * modified guest bytes on demand.
-    */
+     */
 #if HL_ENABLE_LOGGING
     uint32_t removed;
 #endif

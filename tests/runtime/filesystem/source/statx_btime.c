@@ -39,12 +39,12 @@ int main(void) {
     memset(&sf, 0, sizeof sf);
     long rf = syscall(__NR_statx, fd, "", AT_EMPTY_PATH, STATX_ALL, &sf);
     int fd_btime_mask = (sf.stx_mask & STATX_BTIME) != 0;
-    int btime_consistent = rf == 0 && sf.stx_btime.tv_sec == sp.stx_btime.tv_sec &&
-                           sf.stx_btime.tv_nsec == sp.stx_btime.tv_nsec;
+    int btime_consistent =
+        rf == 0 && sf.stx_btime.tv_sec == sp.stx_btime.tv_sec && sf.stx_btime.tv_nsec == sp.stx_btime.tv_nsec;
 
     printf("tmp-statx-ok=%d\n", rp == 0 && rf == 0);
-    printf("tmp-btime-mask=%d btime-nonzero=%d fd-btime-mask=%d btime-consistent=%d\n",
-           btime_mask, btime_nonzero, fd_btime_mask, btime_consistent);
+    printf("tmp-btime-mask=%d btime-nonzero=%d fd-btime-mask=%d btime-consistent=%d\n", btime_mask, btime_nonzero,
+           fd_btime_mask, btime_consistent);
 
     // procfs does not track birth time -> STATX_BTIME must stay clear.
     struct statx spr;
@@ -61,8 +61,8 @@ int main(void) {
     int mnt_unasked = (su.stx_mask & STATX_MNT_ID) != 0;
     int mnt_asked = (sr.stx_mask & STATX_MNT_ID) != 0;
     int mnt_consistent = mnt_unasked && mnt_asked && su.stx_mnt_id == sr.stx_mnt_id;
-    printf("mnt-id-mask-unasked=%d mnt-id-mask-asked=%d mnt-id-consistent=%d\n",
-           mnt_unasked, mnt_asked, mnt_consistent);
+    printf("mnt-id-mask-unasked=%d mnt-id-mask-asked=%d mnt-id-consistent=%d\n", mnt_unasked, mnt_asked,
+           mnt_consistent);
 
     close(fd);
     unlink(path);

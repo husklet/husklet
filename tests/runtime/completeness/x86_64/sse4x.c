@@ -23,21 +23,38 @@
 #include <wmmintrin.h>
 
 static void ph(const char *t, __m128i v) {
-    uint8_t b[16]; _mm_storeu_si128((__m128i *)b, v);
-    printf("%s ", t); for (int i = 0; i < 16; i++) printf("%02x", b[i]); printf("\n");
+    uint8_t b[16];
+    _mm_storeu_si128((__m128i *)b, v);
+    printf("%s ", t);
+    for (int i = 0; i < 16; i++)
+        printf("%02x", b[i]);
+    printf("\n");
 }
-static void pq(const char *t, unsigned long long v) { printf("%s %016llx\n", t, v); }
+
+static void pq(const char *t, unsigned long long v) {
+    printf("%s %016llx\n", t, v);
+}
 
 static const uint64_t vv[][2] = {
-    {0, 0}, {~0ULL, ~0ULL}, {0x1122334455667788ULL, 0x99aabbccddeeff00ULL},
-    {0x8000000000000000ULL, 0x0000000000000001ULL}, {0xdeadbeefcafebabeULL, 0x0123456789abcdefULL},
+    {0, 0},
+    {~0ULL, ~0ULL},
+    {0x1122334455667788ULL, 0x99aabbccddeeff00ULL},
+    {0x8000000000000000ULL, 0x0000000000000001ULL},
+    {0xdeadbeefcafebabeULL, 0x0123456789abcdefULL},
     {0x807f017e02fd0380ULL, 0x00ff8081097f7e00ULL},
 };
 #define NV ((int)(sizeof(vv) / sizeof(vv[0])))
 
 __attribute__((target("movbe"))) static void t_movbe(void) {
-    struct { uint16_t w; uint32_t l; uint64_t q; } m;
-    m.w = 0x1122; m.l = 0x11223344; m.q = 0x1122334455667788ULL;
+    struct {
+        uint16_t w;
+        uint32_t l;
+        uint64_t q;
+    } m;
+
+    m.w = 0x1122;
+    m.l = 0x11223344;
+    m.q = 0x1122334455667788ULL;
     // loads: 16-bit dest MERGES into the low 16 of the 64-bit GPR (upper 48 preserved)
     uint64_t r = 0xa5a5a5a5a5a5a5a5ULL;
     __asm__("movbew %1, %w0" : "+r"(r) : "m"(m.w));
@@ -48,13 +65,22 @@ __attribute__((target("movbe"))) static void t_movbe(void) {
     uint64_t r64 = 0;
     __asm__("movbeq %1, %0" : "+r"(r64) : "m"(m.q));
     pq("movbe.ld64", r64);
+
     // stores
-    struct { uint16_t w; uint32_t l; uint64_t q; } o; memset(&o, 0x77, sizeof o);
+    struct {
+        uint16_t w;
+        uint32_t l;
+        uint64_t q;
+    } o;
+
+    memset(&o, 0x77, sizeof o);
     uint64_t s = 0xfedcba9876543210ULL;
     __asm__("movbew %w1, %0" : "=m"(o.w) : "r"(s));
     __asm__("movbel %k1, %0" : "=m"(o.l) : "r"(s));
     __asm__("movbeq %1, %0" : "=m"(o.q) : "r"(s));
-    pq("movbe.st16", o.w); pq("movbe.st32", o.l); pq("movbe.st64", o.q);
+    pq("movbe.st16", o.w);
+    pq("movbe.st32", o.l);
+    pq("movbe.st64", o.q);
 }
 
 __attribute__((target("sse4.2"))) static void t_crc32(void) {
@@ -67,7 +93,10 @@ __attribute__((target("sse4.2"))) static void t_crc32(void) {
     }
     pq("crc32.chain", c);
     // memory sources (all widths)
-    uint64_t q = 0x123456789abcdef0ULL; uint32_t l = 0xcafebabe; uint16_t w = 0xbeef; uint8_t b = 0x5a;
+    uint64_t q = 0x123456789abcdef0ULL;
+    uint32_t l = 0xcafebabe;
+    uint16_t w = 0xbeef;
+    uint8_t b = 0x5a;
     uint64_t cq = 0xffffffff;
     __asm__("crc32b %1, %k0" : "+r"(cq) : "m"(b));
     __asm__("crc32w %1, %k0" : "+r"(cq) : "m"(w));
@@ -91,8 +120,17 @@ __attribute__((target("sse4.1"))) static void t_pextr_pinsr(void) {
         r += (uint64_t)(uint32_t)_mm_extract_epi32(a, 0) + (uint64_t)(uint32_t)_mm_extract_epi32(a, 3);
         r += (uint64_t)_mm_extract_epi64(a, 0) + (uint64_t)_mm_extract_epi64(a, 1);
         pq("pextr.reg", r);
+
         // PEXTR memory dest (asm: the m8/m16/m32/m64 encodings)
-        struct { uint8_t b; uint16_t w; uint32_t l; uint64_t q; uint32_t x; } o; memset(&o, 0xee, sizeof o);
+        struct {
+            uint8_t b;
+            uint16_t w;
+            uint32_t l;
+            uint64_t q;
+            uint32_t x;
+        } o;
+
+        memset(&o, 0xee, sizeof o);
         __asm__("pextrb $9, %1, %0" : "=m"(o.b) : "x"(a));
         __asm__("pextrw $5, %1, %0" : "=m"(o.w) : "x"(a));
         __asm__("pextrd $2, %1, %0" : "=m"(o.l) : "x"(a));
@@ -100,16 +138,21 @@ __attribute__((target("sse4.1"))) static void t_pextr_pinsr(void) {
         __asm__("extractps $3, %1, %0" : "=m"(o.x) : "x"(a));
         printf("pextr.mem %02x %04x %08x %016llx %08x\n", o.b, o.w, o.l, (unsigned long long)o.q, o.x);
         // EXTRACTPS to a GPR
-        uint32_t xp; __asm__("extractps $1, %1, %0" : "=r"(xp) : "x"(a));
+        uint32_t xp;
+        __asm__("extractps $1, %1, %0" : "=r"(xp) : "x"(a));
         pq("extractps.reg", xp);
         // PINSR from reg, every width, first/last lanes
         __m128i p = a;
-        p = _mm_insert_epi8(p, 0x5a, 0); p = _mm_insert_epi8(p, (char)0x80, 15);
-        p = _mm_insert_epi32(p, 0x13579bdf, 1); p = _mm_insert_epi32(p, (int)0xfeed0001, 3);
+        p = _mm_insert_epi8(p, 0x5a, 0);
+        p = _mm_insert_epi8(p, (char)0x80, 15);
+        p = _mm_insert_epi32(p, 0x13579bdf, 1);
+        p = _mm_insert_epi32(p, (int)0xfeed0001, 3);
         p = _mm_insert_epi64(p, 0x0102030405060708LL, 0);
         ph("pinsr.reg", p);
         // PINSR from memory (asm m8/m32/m64 forms)
-        uint8_t mb = 0xc3; uint32_t ml = 0x76543210; uint64_t mq = 0xf00dfacecafed00dULL;
+        uint8_t mb = 0xc3;
+        uint32_t ml = 0x76543210;
+        uint64_t mq = 0xf00dfacecafed00dULL;
         __m128i q2 = a;
         __asm__("pinsrb $3, %1, %0" : "+x"(q2) : "m"(mb));
         __asm__("pinsrd $2, %1, %0" : "+x"(q2) : "m"(ml));
@@ -130,7 +173,8 @@ __attribute__((target("sse4.1"))) static void t_insertps(void) {
         ph("insertps.dz", _mm_castps_si128(_mm_insert_ps(a, b, 0x14)));   // b[0] -> a[1], zmask hits OTHER lane 2
         ph("insertps.dzd", _mm_castps_si128(_mm_insert_ps(a, b, 0x12)));  // dst lane 1 itself in zmask -> zero wins
         // memory-operand form (m32 scalar; countS ignored)
-        float mf; memcpy(&mf, &vv[i][0], 4);
+        float mf;
+        memcpy(&mf, &vv[i][0], 4);
         __m128 c = a;
         __asm__("insertps $0x20, %1, %0" : "+x"(c) : "m"(mf)); // m32 -> lane 2
         ph("insertps.mem", _mm_castps_si128(c));
@@ -206,7 +250,8 @@ __attribute__((target("sse2"))) static void t_bshift(void) {
         __m128i z1 = a, z2 = a;
         __asm__("psrldq $16, %0" : "+x"(z1));
         __asm__("pslldq $17, %0" : "+x"(z2));
-        ph("psrldq.16", z1); ph("pslldq.17", z2);
+        ph("psrldq.16", z1);
+        ph("pslldq.17", z2);
     }
 }
 
@@ -221,10 +266,13 @@ __attribute__((target("aes,ssse3,sha,sse4.1"))) static void t_aes_runs(void) {
         __m128i k2 = _mm_set_epi64x((long long)vv[(i + 4) % NV][0], (long long)vv[(i + 3) % NV][1]);
         // back-to-back run (claim hoisted after the first)
         __m128i r = s;
-        r = _mm_aesenc_si128(r, k1); r = _mm_aesenc_si128(r, k2);
-        r = _mm_aesenc_si128(r, k1); r = _mm_aesenclast_si128(r, k2);
+        r = _mm_aesenc_si128(r, k1);
+        r = _mm_aesenc_si128(r, k2);
+        r = _mm_aesenc_si128(r, k1);
+        r = _mm_aesenclast_si128(r, k2);
         ph("aesrun.enc", r);
-        r = _mm_aesdec_si128(r, k2); r = _mm_aesdec_si128(r, k1);
+        r = _mm_aesdec_si128(r, k2);
+        r = _mm_aesdec_si128(r, k1);
         r = _mm_aesdeclast_si128(r, k2);
         ph("aesrun.dec", r);
         ph("aesrun.alias", _mm_aesenc_si128(s, s)); // state==key alias path

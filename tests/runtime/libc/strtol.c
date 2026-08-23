@@ -18,7 +18,6 @@ int main(void) {
     long g = strtol("99999999999999999999999", NULL, 10);
     int d7 = g == LONG_MAX && errno == ERANGE;
     int d8 = strtol("+42", NULL, 10) == 42;
-    printf("strtol d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d d7=%d d8=%d\n",
-           d1, d2, d3, d4, d5, d6, d7, d8);
+    printf("strtol d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d d7=%d d8=%d\n", d1, d2, d3, d4, d5, d6, d7, d8);
     return 0;
 }

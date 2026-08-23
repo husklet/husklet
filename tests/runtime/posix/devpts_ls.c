@@ -16,11 +16,16 @@
 #define TIOCGPTN 0x80045430
 #endif
 
-static int cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static int cmp(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
 
 int main(void) {
     int m = open("/dev/ptmx", O_RDWR | O_NOCTTY);
-    if (m < 0) { printf("ls ptmx=0\n"); return 0; }
+    if (m < 0) {
+        printf("ls ptmx=0\n");
+        return 0;
+    }
     grantpt(m);
     unlockpt(m);
     int n = -1;
@@ -56,8 +61,7 @@ int main(void) {
     int ptmx_meta = stat("/dev/pts/ptmx", &ptmx_st) == 0 && S_ISCHR(ptmx_st.st_mode) &&
                     (ptmx_st.st_mode & 07777) == 0666 && ptmx_st.st_uid == 0 && ptmx_st.st_gid == 0;
     struct stat alias_st = {0};
-    int alias = stat("/dev/ptmx", &alias_st) == 0 && S_ISCHR(alias_st.st_mode) &&
-                alias_st.st_rdev == ptmx_st.st_rdev;
+    int alias = stat("/dev/ptmx", &alias_st) == 0 && S_ISCHR(alias_st.st_mode) && alias_st.st_rdev == ptmx_st.st_rdev;
     printf("ls live=%d ptmx=%d slave_meta=%d ptmx_meta=%d alias=%d\n", live, ptmx, slave_meta, ptmx_meta, alias);
     if (s >= 0) close(s);
     close(m);

@@ -21,7 +21,7 @@ int main(void) {
     long long ua = a.tv_sec * 1000000LL + a.tv_usec;
     long long ub = b.tv_sec * 1000000LL + b.tv_usec;
     int monotonic = ub >= ua;
-    int positive = a.tv_sec > 1000000000L;      // clearly a real wall-clock epoch
+    int positive = a.tv_sec > 1000000000L; // clearly a real wall-clock epoch
     printf("gettimeofday usec=%d agrees=%d mono=%d positive=%d\n", usec_ok, agrees, monotonic, positive);
     return 0;
 }

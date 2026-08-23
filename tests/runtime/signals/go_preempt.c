@@ -13,8 +13,8 @@
 // Go linker build-info blob: 14-byte magic, ptrSize byte, flags byte (0 == no inline strings -> the loader's
 // detector matches on the magic alone). Marked used+volatile-referenced so it survives into the loaded image.
 __attribute__((used)) static const unsigned char go_buildinfo[] = {
-    0xff, ' ', 'G', 'o', ' ', 'b', 'u', 'i', 'l', 'd', 'i', 'n', 'f', ':', // magic
-    0x08, 0x00,                                                            // ptrSize=8, flags=0
+    0xff, ' ',  'G', 'o', ' ', 'b', 'u', 'i', 'l', 'd', 'i', 'n', 'f', ':', // magic
+    0x08, 0x00,                                                             // ptrSize=8, flags=0
 };
 
 static volatile sig_atomic_t g_hits = 0;
@@ -35,8 +35,7 @@ static void *hammer(void *arg) {
     int pid = getpid();
     while (__atomic_load_n(&g_run, __ATOMIC_RELAXED) && !__atomic_load_n(&g_hits, __ATOMIC_RELAXED)) {
         syscall(SYS_tgkill, pid, g_target_tid, SIGURG); // thread-directed async preempt at the main thread
-        for (volatile int k = 0; k < 64; k++) {
-        }
+        for (volatile int k = 0; k < 64; k++) {}
     }
     return NULL;
 }

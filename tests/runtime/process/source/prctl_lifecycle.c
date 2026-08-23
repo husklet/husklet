@@ -6,7 +6,10 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t died;
-static void death(int signal) { died = signal == SIGUSR1; }
+
+static void death(int signal) {
+    died = signal == SIGUSR1;
+}
 
 static int parent_death(void) {
     int ready[2], result[2];
@@ -15,27 +18,32 @@ static int parent_death(void) {
     if (middle == 0) {
         pid_t leaf = fork();
         if (leaf == 0) {
-            close(ready[0]); close(result[0]);
+            close(ready[0]);
+            close(result[0]);
             struct sigaction action = {.sa_handler = death};
             sigemptyset(&action.sa_mask);
-            if (sigaction(SIGUSR1, &action, 0)
-                || prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0)) _exit(3);
+            if (sigaction(SIGUSR1, &action, 0) || prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0)) _exit(3);
             char byte = 'R';
             if (write(ready[1], &byte, 1) != 1) _exit(4);
-            while (!died) pause();
+            while (!died)
+                pause();
             byte = died ? 'D' : 'F';
             write(result[1], &byte, 1);
             _exit(died ? 0 : 5);
         }
-        close(ready[1]); close(result[0]); close(result[1]);
+        close(ready[1]);
+        close(result[0]);
+        close(result[1]);
         char byte;
         if (read(ready[0], &byte, 1) != 1) _exit(6);
         _exit(0);
     }
-    close(ready[0]); close(ready[1]); close(result[1]);
-    int status = 0; char byte = 0;
-    int ok = middle > 0 && waitpid(middle, &status, 0) == middle
-        && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    close(ready[0]);
+    close(ready[1]);
+    close(result[1]);
+    int status = 0;
+    char byte = 0;
+    int ok = middle > 0 && waitpid(middle, &status, 0) == middle && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     ok &= read(result[0], &byte, 1) == 1 && byte == 'D';
     return ok;
 }

@@ -27,7 +27,10 @@ int main(void) {
         return 0;
     }
     char *p = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (p != MAP_FAILED) { p[0] = 'x'; munmap(p, 4096); }
+    if (p != MAP_FAILED) {
+        p[0] = 'x';
+        munmap(p, 4096);
+    }
     close(fd);
 
     // (1) the segment is listed as a regular file in /dev/shm
@@ -36,7 +39,10 @@ int main(void) {
     if (d) {
         struct dirent *e;
         while ((e = readdir(d)))
-            if (!strcmp(e->d_name, base)) { listed = 1; break; }
+            if (!strcmp(e->d_name, base)) {
+                listed = 1;
+                break;
+            }
         closedir(d);
     }
     // (2) /dev/shm/<name> stats as a regular file

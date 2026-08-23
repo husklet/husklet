@@ -29,8 +29,14 @@
 #define FS_MASK (0x1fULL | (1ULL << 9) | (1ULL << 27) | (1ULL << 32) | (1ULL << 33))
 #define CAP_FOWNER_BIT (1ULL << 3)
 
-struct chdr { unsigned version; int pid; };
-struct cdata { unsigned eff, prm, inh; };
+struct chdr {
+    unsigned version;
+    int pid;
+};
+
+struct cdata {
+    unsigned eff, prm, inh;
+};
 
 static int capget_sets(unsigned long long *eff, unsigned long long *prm) {
     struct chdr h = {0x20080522u, 0};
@@ -57,16 +63,21 @@ static int status_line(const char *key, char *out, int n) {
     char b[8192];
     int fd = open("/proc/self/status", O_RDONLY), o = 0, r;
     if (fd < 0) return 0;
-    while (o < (int)sizeof b - 1 && (r = (int)read(fd, b + o, sizeof b - 1 - o)) > 0) o += r;
+    while (o < (int)sizeof b - 1 && (r = (int)read(fd, b + o, sizeof b - 1 - o)) > 0)
+        o += r;
     close(fd);
     b[o] = 0;
     size_t kl = strlen(key);
     for (char *p = b; p && *p;) {
         if (!strncmp(p, key, kl)) {
             char *v = p + kl;
-            while (*v == ' ' || *v == '\t') v++;
+            while (*v == ' ' || *v == '\t')
+                v++;
             int i = 0;
-            while (v[i] && v[i] != '\n' && i < n - 1) { out[i] = v[i]; i++; }
+            while (v[i] && v[i] != '\n' && i < n - 1) {
+                out[i] = v[i];
+                i++;
+            }
             out[i] = 0;
             return 1;
         }
@@ -85,7 +96,8 @@ static int status_ids(const char *key, long id[4]) {
     char v[128];
     if (!status_line(key, v, sizeof v)) return 0;
     int i = 0;
-    for (char *t = strtok(v, " \t"); t && i < 4; t = strtok(NULL, " \t")) id[i++] = strtol(t, 0, 10);
+    for (char *t = strtok(v, " \t"); t && i < 4; t = strtok(NULL, " \t"))
+        id[i++] = strtol(t, 0, 10);
     return i == 4;
 }
 

@@ -37,7 +37,7 @@ int main(void) {
     unlinkat(dfd, "sub", AT_REMOVEDIR);
     close(dfd);
     rmdir(dir);
-    printf("linkat sym=%d readlink=%d link=%d nlink2=%d rename=%d oldgone=%d newhas=%d mkdir=%d isdir=%d\n",
-           sym, readlink_ok, ln, nlink2, ren, oldgone, newhas, md, isdir);
+    printf("linkat sym=%d readlink=%d link=%d nlink2=%d rename=%d oldgone=%d newhas=%d mkdir=%d isdir=%d\n", sym,
+           readlink_ok, ln, nlink2, ren, oldgone, newhas, md, isdir);
     return 0;
 }

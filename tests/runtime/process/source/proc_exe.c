@@ -37,12 +37,14 @@ static int rl(const char *p, char *out, size_t n) { // readlink + NUL-terminate;
     out[r] = 0;
     return (int)r;
 }
+
 static int rlat(int dfd, const char *p, char *out, size_t n) {
     ssize_t r = readlinkat(dfd, p, out, n - 1);
     if (r < 0) return -1;
     out[r] = 0;
     return (int)r;
 }
+
 static void read_comm(char *out, size_t n) {
     out[0] = 0;
     int f = open("/proc/self/comm", O_RDONLY);
@@ -54,6 +56,7 @@ static void read_comm(char *out, size_t n) {
     char *nl = strchr(out, '\n');
     if (nl) *nl = 0;
 }
+
 // child stage: assert /proc/self/exe == $HL_T_EXP (absolute canonical), or print comm
 static int stage(const char *tag) {
     const char *name = tag + (tag[2] == ':' ? 3 : 4);
@@ -69,6 +72,7 @@ static int stage(const char *tag) {
     printf("stage %s exe=%d\n", name, ok);
     return 0;
 }
+
 // fork + exec one stage; parent waits so output order is deterministic. kind: 0=execv(path),
 // 1=chdir(dir-of-self)+execv(./base), 2=execveat(AT_FDCWD, path, 0), 3=execveat(dirfd-of-self, base, 0),
 // 4=execveat(open(self), "", AT_EMPTY_PATH)
@@ -77,7 +81,8 @@ static void run_stage(int kind, const char *path, const char *self, const char *
     pid_t p = fork();
     if (p == 0) {
         char *na[] = {"x", (char *)tag, NULL};
-        if (kind == 0) execv(path, na);
+        if (kind == 0)
+            execv(path, na);
         else if (kind == 1) {
             char dir[PATH_MAX];
             snprintf(dir, sizeof dir, "%s", self);
@@ -245,8 +250,8 @@ int main(int argc, char **argv) {
     int einval = rl("/proc/self/status", b, sizeof b) < 0 && errno == EINVAL;
     int eproc = rl("/proc", b, sizeof b) < 0 && errno == EINVAL;
     int zerobuf = readlink("/proc/self/exe", b, 0) < 0 && errno == EINVAL;
-    printf("magic cwd=%d root=%d mounts=%d ns=%d einval=%d eproc=%d zerobuf=%d\n", cwd_ok, root_ok,
-           mounts, ns_ok, einval, eproc, zerobuf);
+    printf("magic cwd=%d root=%d mounts=%d ns=%d einval=%d eproc=%d zerobuf=%d\n", cwd_ok, root_ok, mounts, ns_ok,
+           einval, eproc, zerobuf);
 
     // ---- 4. real symlinks: readlink vs readlinkat byte-exact, truncation, error cases ----
     // all created inside tdr; cwd moves around to prove dirfd/cwd independence (#317)

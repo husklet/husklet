@@ -23,8 +23,7 @@ int main(void) {
     off_t inpos = lseek(in, 0, SEEK_CUR);
     char buf[16] = {0};
     read(p[0], buf, n > 0 ? n : 0);
-    printf("sendfile n=%zd off=%ld inpos=%ld data=[%.*s]\n", n, (long)off, (long)inpos,
-           (int)(n > 0 ? n : 0), buf);
+    printf("sendfile n=%zd off=%ld inpos=%ld data=[%.*s]\n", n, (long)off, (long)inpos, (int)(n > 0 ? n : 0), buf);
 
     // count > remaining file: clamps to EOF.
     off_t off2 = 8;

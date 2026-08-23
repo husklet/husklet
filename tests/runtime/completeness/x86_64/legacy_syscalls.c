@@ -82,7 +82,8 @@ int main(void) {
     ok &= check("eventfd", efd);
     if (efd >= 0) {
         unsigned long long counter = 0;
-        ok &= step("eventfd-count", read((int)efd, &counter, sizeof counter) == (ssize_t)sizeof counter && counter == 7);
+        ok &=
+            step("eventfd-count", read((int)efd, &counter, sizeof counter) == (ssize_t)sizeof counter && counter == 7);
         close((int)efd);
     }
 

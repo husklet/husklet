@@ -31,8 +31,15 @@ __attribute__((noinline)) static struct plain_movsb_state plain_movsb(unsigned c
     asm volatile("movsb" : "+D"(destination), "+S"(source), "+c"(count) : : "memory", "cc");
     return (struct plain_movsb_state){destination, source, count};
 }
-static void set_df(void) { asm volatile("std" : : : "memory", "cc"); }
-static void clr_df(void) { asm volatile("cld" : : : "memory", "cc"); }
+
+static void set_df(void) {
+    asm volatile("std" : : : "memory", "cc");
+}
+
+static void clr_df(void) {
+    asm volatile("cld" : : : "memory", "cc");
+}
+
 // Set DF via popfq (bit10) -- exercises the popfq DF-restore path specifically.
 static void set_df_popf(void) {
     asm volatile("pushfq\n\t"
@@ -45,7 +52,8 @@ static void set_df_popf(void) {
 
 static void dump(const char *tag, const unsigned char *p, int n) {
     printf("%s", tag);
-    for (int i = 0; i < n; i++) printf("%02x", p[i]);
+    for (int i = 0; i < n; i++)
+        printf("%02x", p[i]);
     printf("\n");
 }
 
@@ -54,8 +62,8 @@ int main(void) {
     {
         unsigned char src[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
         unsigned char dst[8] = {0};
-        set_df();                          // DF=1 (backward) -- in THIS block
-        rep_movsb(dst + 7, src + 7, 8);    // rep runs in a LATER block; must copy backward
+        set_df();                       // DF=1 (backward) -- in THIS block
+        rep_movsb(dst + 7, src + 7, 8); // rep runs in a LATER block; must copy backward
         clr_df();
         dump("movsb-bwd ", dst, 8); // expect 11 22 33 44 55 66 77 88 (same bytes, backward-walked)
     }
@@ -71,7 +79,7 @@ int main(void) {
     {
         unsigned char src[5] = {0xde, 0xad, 0xbe, 0xef, 0x99};
         unsigned char dst[5] = {0};
-        set_df_popf();                 // DF=1 through popfq
+        set_df_popf(); // DF=1 through popfq
         rep_movsb(dst + 4, src + 4, 5);
         clr_df();
         dump("movsb-popf", dst, 5); // expect de ad be ef 99

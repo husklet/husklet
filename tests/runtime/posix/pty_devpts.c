@@ -25,13 +25,17 @@
 #define TIOCGPTPEER 0x5441
 #endif
 
-static int is_pts(const char *p) { return p && !strncmp(p, "/dev/pts/", 9); }
+static int is_pts(const char *p) {
+    return p && !strncmp(p, "/dev/pts/", 9);
+}
+
 static int is_hostleak(const char *p) {
     return !p || !strncmp(p, "/dev/ttys", 9) || strstr(p, "/dev/pts/ptmx") != NULL;
 }
+
 // Verify a slave fd's whole /dev/pts/N surface. Writes one boolean group; returns nothing.
 static void check_slave(const char *tag, int m, int s, const char *want) {
-    int open_ok = s >= 0;                                  // #227: slave open succeeded
+    int open_ok = s >= 0; // #227: slave open succeeded
     int ttyname_ok = 0, link_ok = 0, chr_ok = 0, idmatch = 0, agree = 0, noleak = 0;
     char link[128] = "";
     char *tn = NULL, *pn = ptsname(m);
@@ -41,7 +45,10 @@ static void check_slave(const char *tag, int m, int s, const char *want) {
         char proc[64];
         snprintf(proc, sizeof proc, "/proc/self/fd/%d", s);
         ssize_t l = readlink(proc, link, sizeof link - 1);
-        if (l > 0) { link[l] = 0; link_ok = is_pts(link); }
+        if (l > 0) {
+            link[l] = 0;
+            link_ok = is_pts(link);
+        }
         struct stat st, fst;
         if (stat(want, &st) == 0) chr_ok = S_ISCHR(st.st_mode);
         if (fstat(s, &fst) == 0 && stat(want, &st) == 0)
@@ -49,14 +56,17 @@ static void check_slave(const char *tag, int m, int s, const char *want) {
         agree = pn && tn && !strcmp(pn, want) && !strcmp(tn, want) && !strcmp(link, want);
         noleak = !is_hostleak(pn) && !is_hostleak(tn) && !is_hostleak(link);
     }
-    printf("%s open=%d ptsname=%d ttyname=%d link=%d chr=%d idmatch=%d agree=%d noleak=%d\n", tag, open_ok,
-           is_pts(pn), ttyname_ok, link_ok, chr_ok, idmatch, agree, noleak);
+    printf("%s open=%d ptsname=%d ttyname=%d link=%d chr=%d idmatch=%d agree=%d noleak=%d\n", tag, open_ok, is_pts(pn),
+           ttyname_ok, link_ok, chr_ok, idmatch, agree, noleak);
 }
 
 int main(void) {
     // ---- (A) musl-style: /dev/ptmx + TIOCGPTN + open("/dev/pts/N") ----
     int m = open("/dev/ptmx", O_RDWR | O_NOCTTY);
-    if (m < 0) { printf("A ptmx=0\nB openpty=0\n"); return 0; }
+    if (m < 0) {
+        printf("A ptmx=0\nB openpty=0\n");
+        return 0;
+    }
     grantpt(m);
     unlockpt(m);
     int n = -1;
@@ -70,7 +80,10 @@ int main(void) {
 
     // ---- (B) glibc-openpty-style: ioctl(master, TIOCGPTPEER) opens the slave in one call ----
     int bm = open("/dev/ptmx", O_RDWR | O_NOCTTY);
-    if (bm < 0) { printf("B ptmx=0\n"); return 0; }
+    if (bm < 0) {
+        printf("B ptmx=0\n");
+        return 0;
+    }
     grantpt(bm);
     unlockpt(bm);
     int bn = -1;

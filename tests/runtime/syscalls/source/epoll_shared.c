@@ -8,14 +8,26 @@
 
 int main(void) {
     int fds[2];
-    if (pipe(fds) < 0) { perror("pipe"); return 1; }
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 1;
+    }
     int ep = epoll_create1(0);
-    if (ep < 0) { perror("epoll_create1"); return 1; }
+    if (ep < 0) {
+        perror("epoll_create1");
+        return 1;
+    }
     struct epoll_event ev = {.events = EPOLLIN, .data.fd = fds[0]};
-    if (epoll_ctl(ep, EPOLL_CTL_ADD, fds[0], &ev) < 0) { perror("epoll_ctl"); return 1; }
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, fds[0], &ev) < 0) {
+        perror("epoll_ctl");
+        return 1;
+    }
 
     for (int i = 0; i < 5; i++)
-        if (write(fds[1], "xyz", 3) != 3) { perror("write"); return 1; }
+        if (write(fds[1], "xyz", 3) != 3) {
+            perror("write");
+            return 1;
+        }
     close(fds[1]);
 
     long total = 0;

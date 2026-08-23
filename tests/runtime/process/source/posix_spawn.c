@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addopen(&fa, 1, out, O_CREAT | O_WRONLY | O_TRUNC, 0644);
 
-    char *cargv[] = { argv[0], (char *)"child", NULL };
+    char *cargv[] = {argv[0], (char *)"child", NULL};
     pid_t pid = 0;
     int rc = posix_spawn(&pid, argv[0], &fa, NULL, cargv, environ);
     int spawned = rc == 0 && pid > 0;

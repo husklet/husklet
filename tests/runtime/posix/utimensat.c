@@ -11,7 +11,8 @@ int main(void) {
     close(fd);
     struct timespec ts[2] = {{1000000000, 0}, {1234567890, 0}}; // atime, mtime
     int u = utimensat(AT_FDCWD, path, ts, 0) == 0;
-    struct stat st; stat(path, &st);
+    struct stat st;
+    stat(path, &st);
     int mtime_ok = st.st_mtime == 1234567890;
     int atime_ok = st.st_atime == 1000000000;
     // futimens via an fd

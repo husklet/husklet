@@ -31,12 +31,12 @@ int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "child") == 0) return child_main(argc, argv);
 
     char *self = argv[0];
-    char *cenv[] = { (char *)"EXEC_MARK=magic42", NULL };
+    char *cenv[] = {(char *)"EXEC_MARK=magic42", NULL};
 
     // 1. plain execve
     pid_t a = fork();
     if (a == 0) {
-        char *cargv[] = { self, (char *)"child", (char *)"execve", NULL };
+        char *cargv[] = {self, (char *)"child", (char *)"execve", NULL};
         execve(self, cargv, cenv);
         _exit(100);
     }
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     // 2. execveat by path (AT_FDCWD)
     pid_t b = fork();
     if (b == 0) {
-        char *cargv[] = { self, (char *)"child", (char *)"execveat", NULL };
+        char *cargv[] = {self, (char *)"child", (char *)"execveat", NULL};
         syscall(SYS_execveat, AT_FDCWD, self, cargv, cenv, 0);
         _exit(101);
     }
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     if (c == 0) {
         int fd = open(self, O_RDONLY | O_CLOEXEC);
         if (fd < 0) _exit(102);
-        char *cargv[] = { self, (char *)"child", (char *)"fexecve", NULL };
+        char *cargv[] = {self, (char *)"child", (char *)"fexecve", NULL};
         fexecve(fd, cargv, cenv);
         _exit(103);
     }

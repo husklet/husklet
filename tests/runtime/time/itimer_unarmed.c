@@ -11,8 +11,7 @@ static int is_zero(int which) {
     struct itimerval v;
     memset(&v, 0xff, sizeof v);
     if (getitimer(which, &v) != 0) return 0;
-    return v.it_value.tv_sec == 0 && v.it_value.tv_usec == 0 && v.it_interval.tv_sec == 0 &&
-           v.it_interval.tv_usec == 0;
+    return v.it_value.tv_sec == 0 && v.it_value.tv_usec == 0 && v.it_interval.tv_sec == 0 && v.it_interval.tv_usec == 0;
 }
 
 int main(void) {
@@ -38,7 +37,7 @@ int main(void) {
     setitimer(ITIMER_REAL, &off, NULL);
     int rearmed_zero = is_zero(ITIMER_REAL);
 
-    printf("itimerunarmed real=%d virt=%d prof=%d get_bad=%d set_bad=%d rezero=%d\n", real0, virt0,
-           prof0, get_bad, set_bad, rearmed_zero);
+    printf("itimerunarmed real=%d virt=%d prof=%d get_bad=%d set_bad=%d rezero=%d\n", real0, virt0, prof0, get_bad,
+           set_bad, rearmed_zero);
     return 0;
 }

@@ -8,7 +8,9 @@
 #include <sys/time.h>
 #include <time.h>
 
-static void noop(int s) { (void)s; }
+static void noop(int s) {
+    (void)s;
+}
 
 int main(void) {
     // Basic full sleep of 50ms completes with return 0.

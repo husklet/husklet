@@ -1,4 +1,5 @@
-static int bound_route_platform(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
+static int bound_route_platform(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
     int64_t result;
 #if defined(_WIN32)
     if (!g_bound_source_native && bound_socket_route(c, nr, a0, a1, a2, a3)) return 1;
@@ -76,7 +77,9 @@ static int bound_route_platform(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     (void)a4;
     return 0;
 }
-static int bound_route_inotify(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
+
+static int bound_route_inotify(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                               uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
     int64_t result;
     if (nr == 26 && g_linux_box != NULL) {
         bound_inotify_provider *provider;
@@ -191,7 +194,8 @@ static int bound_route_inotify(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
     return 0;
 }
 
-static int bound_route_memory_poll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
+static int bound_route_memory_poll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                   uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
     int64_t result;
     if (nr == 73 && bound_poll_references(a0, a1)) {
         G_RET(c) = (uint64_t)bound_ppoll(c, a0, a1, a2, a3);
@@ -263,7 +267,8 @@ static int bound_route_memory_poll(struct cpu *c, uint64_t nr, uint64_t a0, uint
     return 0;
 }
 
-static int bound_route_transfer(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
+static int bound_route_transfer(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
     int64_t result;
     if (nr == 71) {
         hl_linux_fd_snapshot second;
@@ -287,9 +292,8 @@ static int bound_route_transfer(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         hl_linux_fd_snapshot second;
         int second_bound = !g_bound_second_native && bound_snapshot(a2, &second);
         if (source_bound || second_bound) {
-            G_RET(c) = (uint64_t)bound_copy_file_range(
-                source_bound ? &source : NULL, (int)a0, a1, second_bound ? &second : NULL, (int)a2, a3, G_A4(c),
-                G_A5(c));
+            G_RET(c) = (uint64_t)bound_copy_file_range(source_bound ? &source : NULL, (int)a0, a1,
+                                                       second_bound ? &second : NULL, (int)a2, a3, G_A4(c), G_A5(c));
             return 1;
         }
     }
@@ -309,7 +313,8 @@ static int bound_route_transfer(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     return 0;
 }
 
-static int bound_route_paths(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
+static int bound_route_paths(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                             uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
     int64_t result;
     if (nr == 36) {
         hl_linux_fd_snapshot directory;
@@ -477,8 +482,7 @@ static int bound_route_epoll_watched(struct cpu *c, uint64_t a0, uint64_t a1, ui
                 epoll_result = -ENOENT;
             else {
                 ep_provider_watch *previous = watch;
-                ep_provider_watch *replacement =
-                    ep_provider_alloc(g_ep_provider_watches, EP_PROVIDER_WATCH_LIMIT);
+                ep_provider_watch *replacement = ep_provider_alloc(g_ep_provider_watches, EP_PROVIDER_WATCH_LIMIT);
                 if (replacement == NULL) {
                     G_RET(c) = (uint64_t)(int64_t)-ENOSPC;
                     return 1;
@@ -486,15 +490,14 @@ static int bound_route_epoll_watched(struct cpu *c, uint64_t a0, uint64_t a1, ui
                 uint32_t serial = g_ep_provider_serial = ep_provider_next(g_ep_provider_serial);
                 uint32_t interests =
                     ((events & 1u) ? HL_LINUX_READY_READ : 0u) | ((events & 4u) ? HL_LINUX_READY_WRITE : 0u);
-                ep_provider_activate(replacement, registry_ep, epoll_generation, (int)a2,
-                                     watched.descriptor_generation, serial, watched.host_handle, events,
-                                     interests, data);
+                ep_provider_activate(replacement, registry_ep, epoll_generation, (int)a2, watched.descriptor_generation,
+                                     serial, watched.host_handle, events, interests, data);
                 ep_wake_arm((int)a0);
-                epoll_result = hl_provider_files_subscribe(replacement->handle, replacement->interests,
-                                                           bound_epoll_provider_ready, replacement,
-                                                           atomic_load(&replacement->serial)) == 0
-                                   ? 0
-                                   : -EIO;
+                epoll_result =
+                    hl_provider_files_subscribe(replacement->handle, replacement->interests, bound_epoll_provider_ready,
+                                                replacement, atomic_load(&replacement->serial)) == 0
+                        ? 0
+                        : -EIO;
                 if (epoll_result != 0)
                     ep_provider_retire(replacement);
                 else if (previous != NULL)
@@ -544,8 +547,8 @@ static int bound_route_epoll_watched(struct cpu *c, uint64_t a0, uint64_t a1, ui
                 else if (a1 == HL_LINUX_EPOLL_MODIFY && watch == NULL)
                     epoll_result = -ENOENT;
                 else {
-                    uint32_t interests = ((events & 0x1u) ? HL_LINUX_READY_READ : 0u) |
-                                         ((events & 0x4u) ? HL_LINUX_READY_WRITE : 0u);
+                    uint32_t interests =
+                        ((events & 0x1u) ? HL_LINUX_READY_READ : 0u) | ((events & 0x4u) ? HL_LINUX_READY_WRITE : 0u);
                     if (watch == NULL) {
                         watch = ep_object_alloc();
                         if (watch == NULL) {
@@ -584,8 +587,7 @@ static int bound_route_epoll_watched(struct cpu *c, uint64_t a0, uint64_t a1, ui
 }
 
 static int bound_route_descriptor_special(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
-                                          uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source,
-                                          int source_bound) {
+                                          uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source, int source_bound) {
     hl_linux_fd_snapshot watched;
     (void)a4;
     (void)source;
@@ -594,7 +596,8 @@ static int bound_route_descriptor_special(struct cpu *c, uint64_t nr, uint64_t a
     return bound_route_epoll_watched(c, a0, a1, a2, a3, watched);
 }
 
-static int bound_route_attributes(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_attributes(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 7:    /* fsetxattr */
@@ -773,7 +776,8 @@ static int bound_route_attributes(struct cpu *c, uint64_t nr, uint64_t a0, uint6
     return 1;
 }
 
-static int bound_route_paths_bound(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_paths_bound(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                   uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 79: {

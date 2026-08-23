@@ -82,7 +82,7 @@ int main(void) {
     errno = 0;
     int cenoent = (chroot("/no-such-dir-xyzzy") == -1 && errno == ENOENT);
 
-    printf("wf=%d stable=%d inomatch=%d peer=%d ebadf=%d unshare0=%d chroot_enoent=%d\n", wf, stable, inomatch,
-           peer_ok, ebadf, unshare0, cenoent);
+    printf("wf=%d stable=%d inomatch=%d peer=%d ebadf=%d unshare0=%d chroot_enoent=%d\n", wf, stable, inomatch, peer_ok,
+           ebadf, unshare0, cenoent);
     return 0;
 }

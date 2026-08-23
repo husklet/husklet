@@ -14,7 +14,7 @@ int main(void) {
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
 
     int fd = openat(dfd, "target", O_CREAT | O_RDWR, 0644);
-    write(fd, "0123456789", 10);   // 10-byte target
+    write(fd, "0123456789", 10); // 10-byte target
     symlinkat("target", dfd, "link");
 
     // Following the link reports the target (regular, size 10).
@@ -37,7 +37,6 @@ int main(void) {
     unlinkat(dfd, "target", 0);
     close(dfd);
     rmdir(dir);
-    printf("fstatat-flags follow=%d nofollow=%d empty-path=%d\n",
-           follow_ok, nofollow_ok, empty_ok);
+    printf("fstatat-flags follow=%d nofollow=%d empty-path=%d\n", follow_ok, nofollow_ok, empty_ok);
     return 0;
 }

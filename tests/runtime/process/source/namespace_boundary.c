@@ -7,6 +7,7 @@ static inline long call(long number, long first, long second, long third) {
     __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
     return x0;
 }
+
 #define SYS_WRITE 64
 #define SYS_EXIT 93
 #define SYS_OPENAT 56
@@ -19,10 +20,10 @@ static inline long call(long number, long first, long second, long third) {
     register long rdi __asm__("rdi") = first;
     register long rsi __asm__("rsi") = second;
     register long rdx __asm__("rdx") = third;
-    __asm__ volatile("syscall" : "+r"(rax) : "r"(rdi), "r"(rsi), "r"(rdx)
-                     : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "+r"(rax) : "r"(rdi), "r"(rsi), "r"(rdx) : "rcx", "r11", "memory");
     return rax;
 }
+
 #define SYS_WRITE 1
 #define SYS_EXIT 60
 #define SYS_OPENAT 257

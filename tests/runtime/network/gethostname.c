@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+
 int main(void) {
     char h[256] = {0};
     int r = gethostname(h, sizeof h);

@@ -21,8 +21,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TOTAL   (64L * 1024 * 1024) // bytes to stream through a deliberately small socket buffer
-#define CHUNK   4096
+#define TOTAL (64L * 1024 * 1024) // bytes to stream through a deliberately small socket buffer
+#define CHUNK 4096
 
 static int sv[2];
 static _Atomic long g_sent = 0, g_recv = 0;
@@ -65,7 +65,10 @@ static void *watchdog_fn(void *arg) {
 }
 
 int main(void) {
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { perror("socketpair"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        perror("socketpair");
+        return 1;
+    }
     // small buffers so the sender blocks often -> the EPOLLOUT re-arm path is exercised thousands of times
     int bs = 8192;
     setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &bs, sizeof bs);
@@ -91,13 +94,17 @@ int main(void) {
             continue;
         }
         if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            // would block: arm EPOLLOUT|EPOLLET and wait for the writable edge (multi-process application's channel write watch)
+            // would block: arm EPOLLOUT|EPOLLET and wait for the writable edge (multi-process application's channel
+            // write watch)
             if (!armed) {
                 if (epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &we) != 0) return 2;
                 armed = 1;
             }
             int n = epoll_wait(ep, out, 4, 4000);
-            if (n <= 0) { fprintf(stderr, "EPOLLOUT wait n=%d sent=%ld\n", n, atomic_load(&g_sent)); return 3; }
+            if (n <= 0) {
+                fprintf(stderr, "EPOLLOUT wait n=%d sent=%ld\n", n, atomic_load(&g_sent));
+                return 3;
+            }
             // edge consumed; disarm and retry the write (matches Channel's write-watch lifecycle)
             epoll_ctl(ep, EPOLL_CTL_DEL, sv[0], &we);
             armed = 0;

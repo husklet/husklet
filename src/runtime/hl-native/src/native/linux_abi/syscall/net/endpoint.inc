@@ -1003,13 +1003,29 @@
                 G_RET(c) = (uint64_t)(-ENETUNREACH);
                 break;
             }
+            int identity_prepared = 0;
+            if (hl == (socklen_t)-1 && (int)a0 >= 0 && (int)a0 < HL_NFD &&
+                g_sock_fam[(int)a0] == AF_UNIX) {
+                if (sock_internal_connect_prepare((int)a0, 1) != 0) {
+                    G_RET(c) = (uint64_t)(-errno);
+                    break;
+                }
+                identity_prepared = 1;
+            }
             int cr;
             do {
                 cr = (hl != (socklen_t)-1) ? connect((int)a0, (struct sockaddr *)&ss, hl)
                                            : connect((int)a0, (void *)a1, (socklen_t)a2);
             } while (cr < 0 && SVC_EINTR_RESTART(c));
-            G_RET(c) = cr < 0 ? (uint64_t)(-errno) : 0;
-            if ((cr == 0 || errno == EINPROGRESS) && (int)a0 >= 0 && (int)a0 < HL_NFD) {
+            int connect_error = cr < 0 ? errno : 0;
+            G_RET(c) = cr < 0 ? (uint64_t)(-connect_error) : 0;
+            if (identity_prepared) {
+                if (cr == 0 || connect_error == EINPROGRESS)
+                    sock_internal_connect_observed((int)a0, cr < 0 ? EINPROGRESS : 0);
+                else
+                    sock_internal_connect_failed((int)a0);
+            }
+            if ((cr == 0 || connect_error == EINPROGRESS) && (int)a0 >= 0 && (int)a0 < HL_NFD) {
                 g_sock_conn[(int)a0] = cr == 0;
                 g_sock_connecting[(int)a0] = cr < 0;
             }

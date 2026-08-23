@@ -9,7 +9,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t fires;
-static void h(int s) { (void)s; fires++; }
+
+static void h(int s) {
+    (void)s;
+    fires++;
+}
 
 int main(void) {
     struct sigaction sa;
@@ -26,7 +30,8 @@ int main(void) {
     it.it_interval.tv_usec = 20 * 1000;
     fires = 0;
     setitimer(ITIMER_REAL, &it, NULL);
-    for (int i = 0; i < 200 && fires < 3; i++) usleep(5000);
+    for (int i = 0; i < 200 && fires < 3; i++)
+        usleep(5000);
     int fired_n = fires >= 3;
 
     // getitimer remaining is within (0, interval].
@@ -55,7 +60,6 @@ int main(void) {
     int decreasing = nb < na;
     setitimer(ITIMER_REAL, &off, NULL);
 
-    printf("itimerreal fired=%d rem_sane=%d disarmed=%d decreasing=%d\n", fired_n, rem_sane, disarmed,
-           decreasing);
+    printf("itimerreal fired=%d rem_sane=%d disarmed=%d decreasing=%d\n", fired_n, rem_sane, disarmed, decreasing);
     return 0;
 }

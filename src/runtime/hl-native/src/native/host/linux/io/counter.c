@@ -298,4 +298,3 @@ typedef struct hl_linux_transfer_wire {
     uint32_t rights[HL_HOST_TRANSFER_MAX_ATTACHMENTS];
     uint8_t data[HL_HOST_TRANSFER_MAX_DATA];
 } hl_linux_transfer_wire;
-

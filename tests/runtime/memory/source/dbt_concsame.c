@@ -29,13 +29,17 @@ static void *worker(void *arg) {
 
 int main(void) {
     pthread_t th[NT];
-    for (long i = 0; i < NT; i++) pthread_create(&th[i], NULL, worker, (void *)i);
-    for (int i = 0; i < NT; i++) pthread_join(th[i], NULL);
+    for (long i = 0; i < NT; i++)
+        pthread_create(&th[i], NULL, worker, (void *)i);
+    for (int i = 0; i < NT; i++)
+        pthread_join(th[i], NULL);
     uint64_t acc = 0;
-    for (int i = 0; i < NT; i++) acc = acc * 1000003ULL + results[i];
+    for (int i = 0; i < NT; i++)
+        acc = acc * 1000003ULL + results[i];
     // Cross-check against a single-threaded recompute (must match regardless of concurrency).
     uint64_t chk = 0;
-    for (int i = 0; i < NT; i++) chk = chk * 1000003ULL + hot(0x9e3779b97f4a7c15ULL + (uint64_t)i);
+    for (int i = 0; i < NT; i++)
+        chk = chk * 1000003ULL + hot(0x9e3779b97f4a7c15ULL + (uint64_t)i);
     printf("conc-same acc=%llu match=%d\n", (unsigned long long)acc, acc == chk);
     return 0;
 }

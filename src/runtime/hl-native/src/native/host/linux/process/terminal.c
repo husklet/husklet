@@ -141,4 +141,3 @@ static hl_host_result hl_linux_terminal_size_change_event(void *context, hl_host
     if (hl_linux_terminal_descriptor(host, handle) < 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     return hl_linux_result(HL_STATUS_NOT_SUPPORTED, 0, 0);
 }
-

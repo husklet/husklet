@@ -35,37 +35,36 @@ static void on_sigurg(int s) {
 // inline asm so the register residency + the live RA are guaranteed regardless of the optimizer.
 static int __attribute__((noinline)) regs_survive(long iters) {
     long bad = 1;
-    __asm__ __volatile__(
-        "movz x19, #0x1119\n movz x20, #0x2220\n movz x21, #0x3321\n movz x22, #0x4422\n"
-        "movz x23, #0x5523\n movz x24, #0x6624\n movz x25, #0x7725\n movz x26, #0x8826\n"
-        "movz x27, #0x9927\n movz x28, #0xAA28\n"
-        "mov  x9, %[iters]\n"
-        "1:\n"
-        "  bl   2f\n"    // leaf call: LR now points at the following insn; must survive an async signal
-        "  b    3f\n"    // (leaf returns here)
-        "2:\n"
-        "  add  x10, x10, #1\n"
-        "  ret\n"        // return via x30 -- a clobbered LR here jumps to garbage
-        "3:\n"
-        "  subs x9, x9, #1\n"
-        "  b.ne 1b\n"
-        // verify each callee-saved sentinel is intact
-        "  movz x11, #0x1119\n cmp x19, x11\n b.ne 9f\n"
-        "  movz x11, #0x2220\n cmp x20, x11\n b.ne 9f\n"
-        "  movz x11, #0x3321\n cmp x21, x11\n b.ne 9f\n"
-        "  movz x11, #0x4422\n cmp x22, x11\n b.ne 9f\n"
-        "  movz x11, #0x5523\n cmp x23, x11\n b.ne 9f\n"
-        "  movz x11, #0x6624\n cmp x24, x11\n b.ne 9f\n"
-        "  movz x11, #0x7725\n cmp x25, x11\n b.ne 9f\n"
-        "  movz x11, #0x8826\n cmp x26, x11\n b.ne 9f\n"
-        "  movz x11, #0x9927\n cmp x27, x11\n b.ne 9f\n"
-        "  movz x11, #0xAA28\n cmp x28, x11\n b.ne 9f\n"
-        "  mov  %[bad], #0\n"
-        "9:\n"
-        : [bad] "=&r"(bad)
-        : [iters] "r"(iters)
-        : "x9", "x10", "x11", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x30",
-          "cc", "memory");
+    __asm__ __volatile__("movz x19, #0x1119\n movz x20, #0x2220\n movz x21, #0x3321\n movz x22, #0x4422\n"
+                         "movz x23, #0x5523\n movz x24, #0x6624\n movz x25, #0x7725\n movz x26, #0x8826\n"
+                         "movz x27, #0x9927\n movz x28, #0xAA28\n"
+                         "mov  x9, %[iters]\n"
+                         "1:\n"
+                         "  bl   2f\n" // leaf call: LR now points at the following insn; must survive an async signal
+                         "  b    3f\n" // (leaf returns here)
+                         "2:\n"
+                         "  add  x10, x10, #1\n"
+                         "  ret\n" // return via x30 -- a clobbered LR here jumps to garbage
+                         "3:\n"
+                         "  subs x9, x9, #1\n"
+                         "  b.ne 1b\n"
+                         // verify each callee-saved sentinel is intact
+                         "  movz x11, #0x1119\n cmp x19, x11\n b.ne 9f\n"
+                         "  movz x11, #0x2220\n cmp x20, x11\n b.ne 9f\n"
+                         "  movz x11, #0x3321\n cmp x21, x11\n b.ne 9f\n"
+                         "  movz x11, #0x4422\n cmp x22, x11\n b.ne 9f\n"
+                         "  movz x11, #0x5523\n cmp x23, x11\n b.ne 9f\n"
+                         "  movz x11, #0x6624\n cmp x24, x11\n b.ne 9f\n"
+                         "  movz x11, #0x7725\n cmp x25, x11\n b.ne 9f\n"
+                         "  movz x11, #0x8826\n cmp x26, x11\n b.ne 9f\n"
+                         "  movz x11, #0x9927\n cmp x27, x11\n b.ne 9f\n"
+                         "  movz x11, #0xAA28\n cmp x28, x11\n b.ne 9f\n"
+                         "  mov  %[bad], #0\n"
+                         "9:\n"
+                         : [bad] "=&r"(bad)
+                         : [iters] "r"(iters)
+                         : "x9", "x10", "x11", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28",
+                           "x30", "cc", "memory");
     return bad == 0;
 }
 
@@ -74,6 +73,7 @@ static int __attribute__((noinline)) regs_survive(long iters) {
 static uint64_t __attribute__((noinline)) mix(uint64_t a, uint64_t b) {
     return (a ^ (a >> 27)) * 0x9E3779B97F4A7C15ull + b + 0x100000001B3ull;
 }
+
 static uint64_t __attribute__((noinline)) checksum_loop(uint64_t iters) {
     uint64_t acc = 0xCAFEF00DBAADF00Dull;
     for (uint64_t i = 0; i < iters; i++)
@@ -115,8 +115,7 @@ int main(void) {
             ok = 0;
             break;
         }
-        if (round >= 200 && g_hits >= 40)
-            break;
+        if (round >= 200 && g_hits >= 40) break;
     }
 
     g_run = 0;

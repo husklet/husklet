@@ -25,13 +25,12 @@ int main(void) {
     bind(t, (struct sockaddr *)&a, sizeof a);
     listen(t, 4);
     int acc_after = geti(t, SO_ACCEPTCONN);
-    printf("tcp type=%d domain=%d proto_stream=%d accept_before=%d accept_after=%d\n",
-           geti(t, SO_TYPE) == SOCK_STREAM, geti(t, SO_DOMAIN) == AF_INET,
-           geti(t, SO_PROTOCOL) == IPPROTO_TCP, acc_before, acc_after);
+    printf("tcp type=%d domain=%d proto_stream=%d accept_before=%d accept_after=%d\n", geti(t, SO_TYPE) == SOCK_STREAM,
+           geti(t, SO_DOMAIN) == AF_INET, geti(t, SO_PROTOCOL) == IPPROTO_TCP, acc_before, acc_after);
 
     int u = socket(AF_INET, SOCK_DGRAM, 0);
-    printf("udp type=%d proto_udp=%d accept=%d\n", geti(u, SO_TYPE) == SOCK_DGRAM,
-           geti(u, SO_PROTOCOL) == IPPROTO_UDP, geti(u, SO_ACCEPTCONN));
+    printf("udp type=%d proto_udp=%d accept=%d\n", geti(u, SO_TYPE) == SOCK_DGRAM, geti(u, SO_PROTOCOL) == IPPROTO_UDP,
+           geti(u, SO_ACCEPTCONN));
     close(t);
     close(u);
     return 0;

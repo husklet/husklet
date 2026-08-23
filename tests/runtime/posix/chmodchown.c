@@ -13,7 +13,8 @@ int main(void) {
     int fd = open(path, O_CREAT | O_WRONLY, 0644);
     close(fd);
     int c1 = chmod(path, 0600) == 0;
-    struct stat st; stat(path, &st);
+    struct stat st;
+    stat(path, &st);
     int is600 = (st.st_mode & 0777) == 0600;
     fd = open(path, O_RDONLY);
     int c2 = fchmod(fd, 0755) == 0;
@@ -31,8 +32,8 @@ int main(void) {
     snprintf(hard, sizeof hard, "%s.link", path);
     int hard_owner = link(path, hard) == 0 && stat(hard, &st) == 0 && st.st_uid == 123 && st.st_gid == 456;
     struct statx sx;
-    int statx_owner = syscall(SYS_statx, AT_FDCWD, hard, 0, STATX_UID | STATX_GID, &sx) == 0 &&
-                      sx.stx_uid == 123 && sx.stx_gid == 456;
+    int statx_owner = syscall(SYS_statx, AT_FDCWD, hard, 0, STATX_UID | STATX_GID, &sx) == 0 && sx.stx_uid == 123 &&
+                      sx.stx_gid == 456;
     pid_t child = fork();
     if (child == 0) {
         struct stat cs;
@@ -44,7 +45,8 @@ int main(void) {
     close(fd);
     unlink(hard);
     unlink(path);
-    printf("chmodchown chmod=%d m600=%d fchmod=%d m755=%d chown=%d fchown=%d fstat=%d reopen=%d hard=%d statx=%d fork=%d\n",
+    printf("chmodchown chmod=%d m600=%d fchmod=%d m755=%d chown=%d fchown=%d fstat=%d reopen=%d hard=%d statx=%d "
+           "fork=%d\n",
            c1, is600, c2, is755, ch, fch, fstat_owner, reopen_owner, hard_owner, statx_owner, fork_owner);
     return 0;
 }

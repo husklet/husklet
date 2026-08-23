@@ -21,7 +21,10 @@
 static long fwait(int *addr, int expected, const struct timespec *to) {
     return syscall(SYS_futex, addr, FUTEX_WAIT, expected, to, NULL, 0);
 }
-static long fwake(int *addr, int n) { return syscall(SYS_futex, addr, FUTEX_WAKE, n, NULL, NULL, 0); }
+
+static long fwake(int *addr, int n) {
+    return syscall(SYS_futex, addr, FUTEX_WAKE, n, NULL, NULL, 0);
+}
 
 // Block until the shared word leaves 0, re-checking on every (possibly spurious) wakeup.
 static void wait_until_set(int *w) {
@@ -36,9 +39,9 @@ int main(void) {
         printf("xproc-futex mmap-failed\n");
         return 1;
     }
-    int *wa = &sh[0];              // A: parent -> child
-    int *wb = &sh[1];              // B: child -> parent
-    int *wd = &sh[2];              // D: parent -> N children
+    int *wa = &sh[0];                          // A: parent -> child
+    int *wb = &sh[1];                          // B: child -> parent
+    int *wd = &sh[2];                          // D: parent -> N children
     _Atomic int *woke = (_Atomic int *)&sh[3]; // D: waiters that returned
     *wa = *wb = *wd = 0;
     atomic_store(woke, 0);
@@ -88,13 +91,14 @@ int main(void) {
         }
     }
     struct timespec longer = {0, 250 * 1000 * 1000};
-    nanosleep(&longer, NULL);          // let all N park
+    nanosleep(&longer, NULL); // let all N park
     // WAKE with no waiter on a different word must report 0.
     int none = 0;
     long zero_rc = fwake(&none, INT_MAX);
     atomic_store((_Atomic int *)wd, 1);
-    long d_rc = fwake(wd, INT_MAX);    // one WAKE releases all N -> returns N
-    for (int i = 0; i < N; i++) waitpid(kids[i], &st, 0);
+    long d_rc = fwake(wd, INT_MAX); // one WAKE releases all N -> returns N
+    for (int i = 0; i < N; i++)
+        waitpid(kids[i], &st, 0);
     int nwake = atomic_load(woke) == N && d_rc == N && zero_rc == 0;
 
     printf("xproc-futex a_wake=%d b_wake=%d timeout=%d nwake=%d\n", a_wake, b_wake, timeout_ok, nwake);

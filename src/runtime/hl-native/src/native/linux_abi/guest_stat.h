@@ -31,7 +31,8 @@ static int fill_linux_stat(uint8_t *destination, const struct stat *status, cons
             struct namespace_transaction_read read;
             if (namespace_transaction_read_begin(&read) != 0) return -errno;
             if ((descriptor >= 0 ? fstat(descriptor, &refreshed)
-                                 : nofollow ? lstat(host_path, &refreshed) : stat(host_path, &refreshed)) != 0)
+                 : nofollow      ? lstat(host_path, &refreshed)
+                                 : stat(host_path, &refreshed)) != 0)
                 return -errno;
             stat_virt_ids_raw(&refreshed, host_path, descriptor, &user, &group);
             mode = stat_virt_mode_raw(&refreshed, host_path, descriptor);

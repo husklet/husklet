@@ -42,8 +42,7 @@ int main(void) {
 
     sa.sa_sigaction = on_trap;
     sigaction(SIGTRAP, &sa, NULL);
-    if (sigsetjmp(jb, 1) == 0)
-        __asm__ volatile("int3");
+    if (sigsetjmp(jb, 1) == 0) __asm__ volatile("int3");
     printf("int3 trap=%d\n", trap_seen);
 
     sa.sa_sigaction = on_ill;

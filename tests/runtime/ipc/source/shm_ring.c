@@ -1,5 +1,5 @@
-// multi-process application out-of-process service command-buffer transport, faithfully modeled at multi-process application's regime — the Wall-7
-// "multi-proc content white" reproducer.
+// multi-process application out-of-process service command-buffer transport, faithfully modeled at multi-process
+// application's regime — the Wall-7 "multi-proc content white" reproducer.
 //
 // WHY THIS GATE EXISTS. Multi-process multi-process application content is white because the worker's queued
 // command stream never executes in the service process RasterDecoder (executor trace: 1913/1913 frames bind
@@ -24,8 +24,8 @@
 //   * exit 7 (watchdog)   — the producer advanced put + signaled, but the consumer never woke (a lost
 //                           cross-process eventfd wakeup = command-channel pump dormancy).
 //   * "shm_ring ok"    — all N commands crossed coherently and every flush woke the consumer: the
-//                           engine's command-buffer transport is correct; the live wall is multi-process application-internal
-//                           command-buffer scheduling, not a hl primitive.
+//                           engine's command-buffer transport is correct; the live wall is multi-process
+//                           application-internal command-buffer scheduling, not a hl primitive.
 //
 // FIX LOCUS if it reproduces: hl-jit-darwin/src/runtime/os/linux/syscall/mem.c (MAP_SHARED memfd host
 // mapping / partial 16 KB-vs-4 KB page coherence) for the *-incoherence verdicts, or event.c/eventfd
@@ -49,17 +49,18 @@
 
 // memfd_create is glibc >= 2.27; call the syscall directly to avoid a musl/glibc header gap.
 #include <sys/syscall.h>
+
 static int memfd_create_(const char *name, unsigned flags) {
     return (int)syscall(SYS_memfd_create, name, flags);
 }
 
 #define CMD_MAGIC 0xC0DEu
-#define CMD_WORDS 32u              // 128-byte command record (magic, seq, + 30 payload words)
-#define CMD_SIZE (CMD_WORDS * 4u)  // 128 bytes
-#define RING_BYTES 65536u          // small ring -> wraps ~N*CMD_SIZE/RING_BYTES times (forces wrap)
+#define CMD_WORDS 32u             // 128-byte command record (magic, seq, + 30 payload words)
+#define CMD_SIZE (CMD_WORDS * 4u) // 128 bytes
+#define RING_BYTES 65536u         // small ring -> wraps ~N*CMD_SIZE/RING_BYTES times (forces wrap)
 #define RING_SLOTS (RING_BYTES / CMD_SIZE)
-#define N_CMDS 200000u             // ~390 ring wraps; thousands of flush/wake cycles
-#define IDLE_FDS 1500              // >1024: multi-process application's high-fd interest-set regime
+#define N_CMDS 200000u // ~390 ring wraps; thousands of flush/wake cycles
+#define IDLE_FDS 1500  // >1024: multi-process application's high-fd interest-set regime
 
 // The command-buffer SHARED STATE: put/get offsets in COMMAND units (not bytes). Deliberately tiny so the
 // memfd is far smaller than one 16 KB host page — the partial-page coherence case.
@@ -70,8 +71,9 @@ struct cbstate {
 
 static volatile int g_done = 0;
 _Atomic unsigned g_spurious_eagain = 0; // spurious EAGAIN on the blocking eventfd (cross-proc O_NONBLOCK race)
-static _Atomic uint32_t g_next = 0;  // consumer progress (commands consumed so far)
-static _Atomic uint32_t g_wakes = 0; // eventfd reads that returned (AsyncFlush wakes received)
+static _Atomic uint32_t g_next = 0;     // consumer progress (commands consumed so far)
+static _Atomic uint32_t g_wakes = 0;    // eventfd reads that returned (AsyncFlush wakes received)
+
 static void *watchdog(void *arg) {
     (void)arg;
     // Generous bound: 200k commands is trivial work; anything past this is a real stall.
@@ -114,6 +116,7 @@ static int send_fds(int sock, int fds[3]) {
     memcpy(CMSG_DATA(cm), fds, sizeof(int) * 3);
     return sendmsg(sock, &msg, 0) < 0 ? -1 : 0;
 }
+
 static int recv_fds(int sock, int fds[3]) {
     char dummy;
     struct iovec io = {&dummy, 1};
@@ -147,9 +150,10 @@ static int run_producer(struct cbstate *st, uint32_t *ring, int flush_efd) {
         // Write payload first, header LAST — but the consumer gates on the STATE put offset (release),
         // so ordering across the ring is provided by that single release/acquire, exactly like a real
         // command buffer (put is the publish point).
-        for (uint32_t w = 2; w < CMD_WORDS; w++) rec[w] = seq * 2654435761u + w;
-        rec[1] = seq;                        // seq
-        rec[0] = CMD_MAGIC;                  // magic (header)
+        for (uint32_t w = 2; w < CMD_WORDS; w++)
+            rec[w] = seq * 2654435761u + w;
+        rec[1] = seq;                                                   // seq
+        rec[0] = CMD_MAGIC;                                             // magic (header)
         atomic_store_explicit(&st->put, seq + 1, memory_order_release); // publish (put advance)
         // AsyncFlush: signal the service process. Coalescing is fine (eventfd counter), like IPC.
         uint64_t one = 1;
@@ -209,11 +213,13 @@ static int run_consumer(struct cbstate *st, uint32_t *ring, int flush_efd, char 
 }
 
 int main(void) {
-    // multi-process application's regime: a large fd interest set. Burn >1024 fds so any fd-count-sensitive path is exercised.
+    // multi-process application's regime: a large fd interest set. Burn >1024 fds so any fd-count-sensitive path is
+    // exercised.
     for (int i = 0; i < IDLE_FDS; i++)
         if (dup(2) < 0) break;
 
-    // Create the two shared regions as memfds (exactly like multi-process application's base::UnsafeSharedMemoryRegion).
+    // Create the two shared regions as memfds (exactly like multi-process application's
+    // base::UnsafeSharedMemoryRegion).
     int state_fd = memfd_create_("cbstate", 0);
     int ring_fd = memfd_create_("cbring", 0);
     if (state_fd < 0 || ring_fd < 0) {
@@ -242,8 +248,8 @@ int main(void) {
         return 1;
     }
     if (pid == 0) {
-        // Child = WORKER (producer). Receives the fds over SCM_RIGHTS (multi-process application transfers the memfds via
-        // IPC/SCM_RIGHTS; the child maps the RECEIVED fds, not the fork-inherited ones — the faithful path).
+        // Child = WORKER (producer). Receives the fds over SCM_RIGHTS (multi-process application transfers the memfds
+        // via IPC/SCM_RIGHTS; the child maps the RECEIVED fds, not the fork-inherited ones — the faithful path).
         close(sv[0]);
         int fds[3];
         if (recv_fds(sv[1], fds) != 0) _exit(11);

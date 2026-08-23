@@ -15,7 +15,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && strncmp(argv[1], "child", 5) == 0) {
         int idx = atoi(argv[1] + 5);
         volatile unsigned long h = 5381;
-        for (int i = 0; i < 100000; i++) h = h * 31 + (unsigned)i;
+        for (int i = 0; i < 100000; i++)
+            h = h * 31 + (unsigned)i;
         (void)h;
         _exit(10 + idx); // deterministic, index-derived
     }
@@ -39,8 +40,10 @@ int main(int argc, char **argv) {
         pid_t r = wait(&st);
         if (r < 0) break;
         reaped++;
-        if (WIFEXITED(st)) sum += WEXITSTATUS(st);
-        else bad++;
+        if (WIFEXITED(st))
+            sum += WEXITSTATUS(st);
+        else
+            bad++;
     }
     // sum of 10..10+n-1 = 10n + n(n-1)/2 = 75 for n=6
     printf("pcache selfexec reaped=%d sum=%ld bad=%d\n", reaped, sum, bad);

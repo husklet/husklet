@@ -12,7 +12,10 @@ int main(void) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
     int fd = signalfd(-1, &mask, 0);
-    if (fd < 0) { perror("signalfd"); return 1; }
+    if (fd < 0) {
+        perror("signalfd");
+        return 1;
+    }
     raise(SIGUSR1);
 
     struct signalfd_siginfo si;

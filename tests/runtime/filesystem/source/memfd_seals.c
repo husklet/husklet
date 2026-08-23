@@ -36,7 +36,8 @@ int main(void) {
     int a4 = fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL);
     int a5 = fcntl(fd, F_ADD_SEALS, F_SEAL_GROW);
     int ea5 = (a5 == -1) ? errno : 0;
-    printf("s0=%d addplain=%d eaddplain=%d s1=%d t0=%d a1=%d s2=%d shrink=%d eshrink=%d grow=%d a2=%d ea2=%d a3=%d w=%zd ew=%d a4=%d a5=%d ea5=%d\n",
+    printf("s0=%d addplain=%d eaddplain=%d s1=%d t0=%d a1=%d s2=%d shrink=%d eshrink=%d grow=%d a2=%d ea2=%d a3=%d "
+           "w=%zd ew=%d a4=%d a5=%d ea5=%d\n",
            s0, addplain, eaddplain, s1, t0, a1, s2, shrink, eshrink, grow, a2, ea2, a3, w, ew, a4, a5, ea5);
     return 0;
 }

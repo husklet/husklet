@@ -132,8 +132,8 @@ static inline hl_exec_credential_result hl_exec_credential_transition(hl_exec_cr
     /* bprm secure-exec is about the post-exec effective identity differing
        from the task's real identity, not whether exec changed the old euid. */
     int identity_mismatch = result.state.euid != current.ruid || result.state.egid != current.rgid;
-    result.secure_exec = !current.no_new_privileges &&
-                         (identity_mismatch || (file.present && (permitted != 0 || file.effective)));
+    result.secure_exec =
+        !current.no_new_privileges && (identity_mismatch || (file.present && (permitted != 0 || file.effective)));
     result.dumpable = result.secure_exec ? HL_EXEC_SUID_DUMP_ROOT : HL_EXEC_SUID_DUMP_USER;
     return result;
 }

@@ -90,10 +90,8 @@ int main(void) {
     (void)xf;
     printf("setxattr_badpath=%d\n", probe(SYS_setxattr, BAD, (long)"user.x", (long)"v", 1, 0));
     printf("setxattr_badname=%d\n", probe(SYS_setxattr, (long)"/tmp/.efault_xattr_probe", BAD, (long)"v", 1, 0));
-    printf("setxattr_badval=%d\n",
-           probe(SYS_setxattr, (long)"/tmp/.efault_xattr_probe", (long)"user.x", BAD, 4, 0));
-    printf("getxattr_badname=%d\n",
-           probe(SYS_getxattr, (long)"/tmp/.efault_xattr_probe", BAD, (long)"v", 4, 0));
+    printf("setxattr_badval=%d\n", probe(SYS_setxattr, (long)"/tmp/.efault_xattr_probe", (long)"user.x", BAD, 4, 0));
+    printf("getxattr_badname=%d\n", probe(SYS_getxattr, (long)"/tmp/.efault_xattr_probe", BAD, (long)"v", 4, 0));
     printf("removexattr_badname=%d\n", probe(SYS_removexattr, (long)"/tmp/.efault_xattr_probe", BAD, 0, 0, 0));
     // sendmsg/recvmsg with a NULL or wild msghdr pointer: on a real socket fd the kernel reaches the
     // copy_from_user of the msghdr and returns EFAULT. A handler that dereferences the msghdr struct

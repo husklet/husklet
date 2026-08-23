@@ -21,7 +21,8 @@ int main(void) {
     int inf_ok = isinf(inf) && inf > 0;
 
     long acc = 0;
-    for (int i = 0; i < 1000; i++) acc += (long)(strtod("2.5", NULL) * 4); // 10 each
+    for (int i = 0; i < 1000; i++)
+        acc += (long)(strtod("2.5", NULL) * 4); // 10 each
     printf("strtod pi=%d sci=%d hex=%d inf=%d acc=%ld\n", pi_ok, sci_ok, hex_ok, inf_ok, acc);
     return 0;
 }

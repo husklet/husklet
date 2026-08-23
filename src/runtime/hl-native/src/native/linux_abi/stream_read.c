@@ -86,4 +86,3 @@ static int64_t hl_linux_write_owned(hl_linux_abi *linux_abi, hl_linux_ofd_entry 
     if (result.value > size || result.value > (uint64_t)INT64_MAX) return -HL_LINUX_EIO;
     return (int64_t)result.value;
 }
-

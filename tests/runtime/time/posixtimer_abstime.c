@@ -10,7 +10,13 @@
 
 #define SIGNO SIGRTMIN
 static volatile sig_atomic_t fired;
-static void h(int s, siginfo_t *si, void *u) { (void)s; (void)si; (void)u; fired++; }
+
+static void h(int s, siginfo_t *si, void *u) {
+    (void)s;
+    (void)si;
+    (void)u;
+    fired++;
+}
 
 static int abs_fires(clockid_t clk, long ahead_ns) {
     struct sigaction sa;
@@ -33,10 +39,17 @@ static int abs_fires(clockid_t clk, long ahead_ns) {
     memset(&its, 0, sizeof its);
     its.it_value = now;
     its.it_value.tv_nsec += ahead_ns;
-    while (its.it_value.tv_nsec >= 1000000000L) { its.it_value.tv_nsec -= 1000000000L; its.it_value.tv_sec++; }
+    while (its.it_value.tv_nsec >= 1000000000L) {
+        its.it_value.tv_nsec -= 1000000000L;
+        its.it_value.tv_sec++;
+    }
     fired = 0;
-    if (timer_settime(t, TIMER_ABSTIME, &its, NULL) != 0) { timer_delete(t); return 0; }
-    for (int i = 0; i < 500 && !fired; i++) usleep(2000);
+    if (timer_settime(t, TIMER_ABSTIME, &its, NULL) != 0) {
+        timer_delete(t);
+        return 0;
+    }
+    for (int i = 0; i < 500 && !fired; i++)
+        usleep(2000);
     int ok = fired == 1;
     timer_delete(t);
     return ok;

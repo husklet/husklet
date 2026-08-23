@@ -11,6 +11,7 @@ int main(void) {
         uint64_t type;
         uint64_t value;
     } entry;
+
     unsigned long pagesz = getauxval(AT_PAGESZ);
     unsigned long proc_pagesz = 0;
     long libc_pagesz = sysconf(_SC_PAGESIZE);

@@ -22,8 +22,8 @@ int main(void) {
     int r2 = setsockopt(s, SOL_SOCKET, SO_SNDBUF, &want, sizeof want);
     int rcv = getbuf(s, SO_RCVBUF);
     int snd = getbuf(s, SO_SNDBUF);
-    printf("set_ok=%d rcv_at_least=%d snd_at_least=%d rcv_positive=%d\n", (r1 | r2) == 0,
-           rcv >= want, snd >= want, rcv > 0);
+    printf("set_ok=%d rcv_at_least=%d snd_at_least=%d rcv_positive=%d\n", (r1 | r2) == 0, rcv >= want, snd >= want,
+           rcv > 0);
     close(s);
     return 0;
 }

@@ -10,10 +10,12 @@
 #define __NR_io_uring_setup 425
 #endif
 
-struct io_uring_params { unsigned pad[30]; };  /* 120 bytes; kernel writes back into it */
+struct io_uring_params {
+    unsigned pad[30];
+}; /* 120 bytes; kernel writes back into it */
 
 static int canonical(long rc) {
-    if (rc >= 0) return 1;                       /* success: got a ring fd */
+    if (rc >= 0) return 1; /* success: got a ring fd */
     return errno == ENOSYS || errno == EPERM || errno == EINVAL || errno == EACCES;
 }
 

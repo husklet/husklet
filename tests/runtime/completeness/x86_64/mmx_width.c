@@ -16,7 +16,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static void show(const char *name, uint64_t r) { printf("%-12s %016llx\n", name, (unsigned long long)r); }
+static void show(const char *name, uint64_t r) {
+    printf("%-12s %016llx\n", name, (unsigned long long)r);
+}
 
 // ---- part 1: a 64-bit MMX store must not touch the 8 bytes that follow ----
 static void part1_store_width(void) {

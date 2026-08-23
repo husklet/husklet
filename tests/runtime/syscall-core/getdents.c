@@ -36,7 +36,8 @@ int main(void) {
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         count++;
-        for (const char *c = e->d_name; *c; c++) namechk += (unsigned char)*c; // order-independent
+        for (const char *c = e->d_name; *c; c++)
+            namechk += (unsigned char)*c; // order-independent
     }
     closedir(d);
     int raw = open(dir, O_RDONLY | O_DIRECTORY);
@@ -49,8 +50,7 @@ int main(void) {
         while (at < n) {
             struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf + at);
             size_t names = strnlen(entry->name, entry->reclen > 19 ? entry->reclen - 19 : 0);
-            if (entry->reclen < 24 || (entry->reclen & 7) != 0 || at + entry->reclen > n || names == 0)
-                layout = 0;
+            if (entry->reclen < 24 || (entry->reclen & 7) != 0 || at + entry->reclen > n || names == 0) layout = 0;
             if (strcmp(entry->name, ".") && strcmp(entry->name, "..") && entry->type != DT_REG) typed = 0;
             raw_count++;
             at += entry->reclen;
@@ -82,8 +82,7 @@ int main(void) {
         if (child == 0) {
             char child_name[32] = {0};
             long child_read = syscall(SYS_getdents64, fork_fd, buf, sizeof buf);
-            if (child_read > 0)
-                snprintf(child_name, sizeof child_name, "%s", ((struct linux_dirent64 *)buf)->name);
+            if (child_read > 0) snprintf(child_name, sizeof child_name, "%s", ((struct linux_dirent64 *)buf)->name);
             close(fork_fd);
             close(channel[0]);
             ssize_t sent = write(channel[1], child_name, sizeof child_name);
@@ -108,7 +107,8 @@ int main(void) {
         unlink(p);
     }
     rmdir(dir);
-    printf("getdents count=%d namechk=%ld raw=%d layout=%d type=%d eof=%d rewind=%d shared=%d alias_rewind=%d fork_shared=%d close_safe=%d\n",
+    printf("getdents count=%d namechk=%ld raw=%d layout=%d type=%d eof=%d rewind=%d shared=%d alias_rewind=%d "
+           "fork_shared=%d close_safe=%d\n",
            count, namechk, raw_count, layout, typed, eof, rewind_ok, shared, alias_rewind, fork_shared, close_safe);
     return 0;
 }

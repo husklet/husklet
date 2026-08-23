@@ -6,8 +6,14 @@
 
 int main(void) {
     static const uint64_t v[] = {
-        0x1u, 0x80000000u, 0x8000000000000000ull, 0xFFFFFFFFFFFFFFFFull,
-        0x0000000100000000ull, 0xF0F0F0F0F0F0F0F0ull, 0x123456789ABCDEF0ull, 0x00000000000FF000ull,
+        0x1u,
+        0x80000000u,
+        0x8000000000000000ull,
+        0xFFFFFFFFFFFFFFFFull,
+        0x0000000100000000ull,
+        0xF0F0F0F0F0F0F0F0ull,
+        0x123456789ABCDEF0ull,
+        0x00000000000FF000ull,
     };
     unsigned long acc = 1469598103u;
     for (unsigned i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
@@ -20,8 +26,8 @@ int main(void) {
         int pop = __builtin_popcountll(x);
         int par = __builtin_parityll(x);
         int ffs = __builtin_ffsll((long long)x);
-        printf("i=%u clz32=%d ctz32=%d clz64=%d ctz64=%d pop=%d par=%d ffs=%d\n",
-               i, clz32, ctz32, clz64, ctz64, pop, par, ffs);
+        printf("i=%u clz32=%d ctz32=%d clz64=%d ctz64=%d pop=%d par=%d ffs=%d\n", i, clz32, ctz32, clz64, ctz64, pop,
+               par, ffs);
         acc = (acc ^ (unsigned long)(clz64 + ctz64 * 7 + pop * 31 + par * 3 + ffs)) * 16777619u;
     }
     printf("acc=%08lx\n", acc & 0xFFFFFFFFul);

@@ -28,16 +28,15 @@ static int wait_for(int epoll, uint32_t events, uint64_t data, int timeout) {
     struct epoll_event event = {0};
     int count = epoll_wait(epoll, &event, 1, timeout);
     if (count == 1 && (event.events & events) == events && event.data.u64 == data) return 0;
-    dprintf(2, "provider-loopback wait ep=%d count=%d events=%x/%x data=%llu/%llu errno=%d\n", epoll,
-            count, event.events, events, (unsigned long long)event.data.u64, (unsigned long long)data, errno);
+    dprintf(2, "provider-loopback wait ep=%d count=%d events=%x/%x data=%llu/%llu errno=%d\n", epoll, count,
+            event.events, events, (unsigned long long)event.data.u64, (unsigned long long)data, errno);
     return -1;
 }
 
 static void *close_private(void *opaque) {
     int descriptor = *(int *)opaque;
-    return (void *)(intptr_t)(
-        syscall(SYS_close_range, (unsigned)descriptor, (unsigned)descriptor,
-                CLOSE_RANGE_UNSHARE) == 0);
+    return (void *)(intptr_t)(syscall(SYS_close_range, (unsigned)descriptor, (unsigned)descriptor,
+                                      CLOSE_RANGE_UNSHARE) == 0);
 }
 
 static int epoll_matrix(int descriptor) {
@@ -55,19 +54,18 @@ static int epoll_matrix(int descriptor) {
 
     /* MOD and ONESHOT rearm only the selected epoll membership. */
     interest = (struct epoll_event){.events = EPOLLOUT | EPOLLONESHOT, .data.u64 = 33};
-    if (epoll_ctl(first, EPOLL_CTL_MOD, descriptor, &interest) != 0 ||
-        wait_for(first, EPOLLOUT, 33, 2000) != 0 || epoll_wait(first, &interest, 1, 0) != 0)
+    if (epoll_ctl(first, EPOLL_CTL_MOD, descriptor, &interest) != 0 || wait_for(first, EPOLLOUT, 33, 2000) != 0 ||
+        epoll_wait(first, &interest, 1, 0) != 0)
         return 35;
     if (epoll_ctl(first, EPOLL_CTL_DEL, descriptor, NULL) != 0) return 36;
 
     /* Rearm the other membership as level-triggered.  It must remain ready
      * without another provider edge until the condition changes. */
     interest = (struct epoll_event){.events = EPOLLIN, .data.u64 = 44};
-    if (epoll_ctl(second, EPOLL_CTL_MOD, descriptor, &interest) != 0 ||
-        wait_for(second, EPOLLIN, 44, 2000) != 0 || wait_for(second, EPOLLIN, 44, 0) != 0)
+    if (epoll_ctl(second, EPOLL_CTL_MOD, descriptor, &interest) != 0 || wait_for(second, EPOLLIN, 44, 2000) != 0 ||
+        wait_for(second, EPOLLIN, 44, 0) != 0)
         return 37;
-    if (epoll_ctl(second, EPOLL_CTL_DEL, descriptor, NULL) != 0 || epoll_wait(second, &interest, 1, 0) != 0)
-        return 38;
+    if (epoll_ctl(second, EPOLL_CTL_DEL, descriptor, NULL) != 0 || epoll_wait(second, &interest, 1, 0) != 0) return 38;
 
     /* A registration inherited across fork remains usable in the child. */
     interest = (struct epoll_event){.events = EPOLLIN | EPOLLET, .data.u64 = 55};
@@ -127,8 +125,8 @@ int main(int argc, char **argv) {
         pthread_t private_thread;
         if (pthread_create(&private_thread, NULL, close_private, &duplicate) != 0) return fail(61);
         void *private_result = NULL;
-        if (pthread_join(private_thread, &private_result) != 0 ||
-            !(int)(intptr_t)private_result || fcntl(duplicate, F_GETFD) < 0)
+        if (pthread_join(private_thread, &private_result) != 0 || !(int)(intptr_t)private_result ||
+            fcntl(duplicate, F_GETFD) < 0)
             return fail(62);
 
         child = fork();
@@ -137,9 +135,7 @@ int main(int argc, char **argv) {
             char one = 0;
             _exit(pread(descriptor, &one, 1, 0) == 1 && one == 'h' ? 0 : 64);
         }
-        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
-            WEXITSTATUS(status) != 0)
-            return fail(65);
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return fail(65);
 
         int aliases[1100], aliases_count = 0;
         while (aliases_count < (int)(sizeof aliases / sizeof aliases[0])) {
@@ -162,9 +158,7 @@ int main(int argc, char **argv) {
             execl("/provider-loopback", "/provider-loopback", "check-cloexec", number, NULL);
             _exit(71);
         }
-        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
-            WEXITSTATUS(status) != 0)
-            return fail(72);
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return fail(72);
         if (close(duplicate) != 0 || close(descriptor) != 0) return fail(73);
         puts("provider-loopback ok");
         return 0;

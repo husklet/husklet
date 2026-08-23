@@ -24,7 +24,7 @@ int main(void) {
     sigprocmask(SIG_BLOCK, NULL, &cur);
     int replaced = !sigismember(&cur, SIGUSR1) && sigismember(&cur, SIGUSR2);
 
-    printf("sigprocmask_return old_empty=%d now_blocked=%d old2_usr1=%d replaced=%d\n",
-           old_empty, now_blocked, replaced_old_had_usr1, replaced);
+    printf("sigprocmask_return old_empty=%d now_blocked=%d old2_usr1=%d replaced=%d\n", old_empty, now_blocked,
+           replaced_old_had_usr1, replaced);
     return 0;
 }

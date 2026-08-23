@@ -3,6 +3,7 @@
 // ---------------- ARM64 instruction emitters ----------------
 #include "encoding.h"
 #include "../../../host/cpu.h" // HL_HOST_CPU_*: the host-feature probes here are AArch64-only
+
 // (the same-ISA-independent half: these emit HOST code, copied from jit.c +
 //  a few width-typed loads/stores the x86 front-end needs.)
 
@@ -882,8 +883,8 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     /* x9 addresses the direct-mapped entry for the whole probe, x16 is the
        scratch.  Both the tag test and the end test use only those two, so the
        NZCV save/restore the single-entry lowering needed is gone as well. */
-    emit32(0xD3400000u | (12u << 16) | ((12u + SOFT_TLB_INDEX_BITS - 1u) << 10) |
-           ((unsigned)address_register << 5) | 16u); /* ubfx x16,addr,#12,#BITS */
+    emit32(0xD3400000u | (12u << 16) | ((12u + SOFT_TLB_INDEX_BITS - 1u) << 10) | ((unsigned)address_register << 5) |
+           16u);                                                      /* ubfx x16,addr,#12,#BITS */
     emit32(0x8B000000u | (16u << 16) | (5u << 10) | (28u << 5) | 9u); /* add x9,x28,x16,lsl #5 */
     /* Page tag: addr ^ tag has bits >= 12 clear exactly when the slot holds
        this page.  SOFT_TLB_TAG_INVALID never matches a guest address. */
@@ -1030,8 +1031,7 @@ static void emit_direct_store_span_guard(int address_register, uint64_t size, ui
     uint8_t *resume = g_cp;
     *same_page = 0xB4000000u | (((uint32_t)((resume - (uint8_t *)same_page) / 4) & 0x7ffffu) << 5) | 16u;
     *invalid = 0xB4000000u | (((uint32_t)((miss - (uint8_t *)invalid) / 4) & 0x7ffffu) << 5) | 16u;
-    *wrong_address =
-        0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_address) / 4) & 0x7ffffu) << 5) | 16u;
+    *wrong_address = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_address) / 4) & 0x7ffffu) << 5) | 16u;
     *wrong_width = 0x54000001u | (((uint32_t)((miss - (uint8_t *)wrong_width) / 4) & 0x7ffffu) << 5);
     *wrong_access = 0x54000001u | (((uint32_t)((miss - (uint8_t *)wrong_access) / 4) & 0x7ffffu) << 5);
     *wrong_page = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_page) / 4) & 0x7ffffu) << 5) | 16u;
@@ -1619,8 +1619,8 @@ void emit_chain_exit(uint64_t target) {
 // keeps nzcv live, so the cached body is entered exactly like a chained block.
 void emit_ibranch(void) {
     // Probe the two-way set-associative IBTC; the miss tail is patched after both ways.
-    uint32_t *p_miss;                                     // cbnz x20 -> Lmiss patch site (last way)
-    emit32(0xD3423800u | (16 << 5) | 17);                 // ubfx x17, x16, #2, #13  ((tgt>>2)&0x1FFF)
+    uint32_t *p_miss;                     // cbnz x20 -> Lmiss patch site (last way)
+    emit32(0xD3423800u | (16 << 5) | 17); // ubfx x17, x16, #2, #13  ((tgt>>2)&0x1FFF)
     e_ldr(19, 28, OFF_IBTC);
     emit32(0x8B000000u | (17 << 16) | (5 << 10) | (19 << 5) | 19);
     e_ldr(20, 19, 0);

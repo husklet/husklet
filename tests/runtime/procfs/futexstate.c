@@ -31,7 +31,8 @@ static char stat_state(int pid) {
     char *rp = strrchr(b, ')');
     if (!rp) return '?';
     char *s = rp + 1;
-    while (*s == ' ') s++;
+    while (*s == ' ')
+        s++;
     return *s;
 }
 
@@ -48,7 +49,8 @@ static char status_state(int pid) {
     char *p = strstr(b, "State:");
     if (!p) return '?';
     p += 6;
-    while (*p == ' ' || *p == '\t') p++;
+    while (*p == ' ' || *p == '\t')
+        p++;
     return *p;
 }
 

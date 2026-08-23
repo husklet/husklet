@@ -39,8 +39,7 @@ int main(void) {
     struct sockaddr_storage local = {0}, peer = {0};
     socklen_t local_length = sizeof local, peer_length = sizeof peer;
     int local_inet = getsockname(cs, (struct sockaddr *)&local, &local_length) == 0 && local.ss_family == AF_INET;
-    int peer_inet =
-        getpeername(as, (struct sockaddr *)&peer, &peer_length) == 0 && peer.ss_family == AF_INET;
+    int peer_inet = getpeername(as, (struct sockaddr *)&peer, &peer_length) == 0 && peer.ss_family == AF_INET;
     send(cs, "ok", 2, 0);
     char b[8] = {0};
     ssize_t n = recv(as, b, sizeof b - 1, 0);

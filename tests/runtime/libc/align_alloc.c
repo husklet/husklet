@@ -4,7 +4,9 @@
 #include <malloc.h>
 #include <stdint.h>
 
-static int aligned(void *p, size_t a) { return p != NULL && ((uintptr_t)p % a) == 0; }
+static int aligned(void *p, size_t a) {
+    return p != NULL && ((uintptr_t)p % a) == 0;
+}
 
 int main(void) {
     void *p = NULL;

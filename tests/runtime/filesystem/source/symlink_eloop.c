@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 int main(void) {
-    alarm(20);   // outer timeout: a hang must not pass
+    alarm(20); // outer timeout: a hang must not pass
 
     char dir[128];
     snprintf(dir, sizeof dir, "/tmp/hl_eloop_%d", (int)getpid());
@@ -59,13 +59,21 @@ int main(void) {
     if (nofollow >= 0) close(nofollow);
 
     // Cleanup.
-    for (int i = 0; i < 8; i++) { char n[16]; snprintf(n, sizeof n, "s%d", i); unlinkat(dfd, n, 0); }
-    for (int i = 0; i < 60; i++) { char n[16]; snprintf(n, sizeof n, "L%d", i); unlinkat(dfd, n, 0); }
+    for (int i = 0; i < 8; i++) {
+        char n[16];
+        snprintf(n, sizeof n, "s%d", i);
+        unlinkat(dfd, n, 0);
+    }
+    for (int i = 0; i < 60; i++) {
+        char n[16];
+        snprintf(n, sizeof n, "L%d", i);
+        unlinkat(dfd, n, 0);
+    }
     unlinkat(dfd, "self", 0);
     unlinkat(dfd, "end", 0);
     close(dfd);
     rmdir(dir);
-    printf("symlink-chain-eloop short=%d deep-eloop=%d self-eloop=%d nofollow-eloop=%d\n",
-           short_ok, deep_eloop, self_eloop, nofollow_eloop);
+    printf("symlink-chain-eloop short=%d deep-eloop=%d self-eloop=%d nofollow-eloop=%d\n", short_ok, deep_eloop,
+           self_eloop, nofollow_eloop);
     return 0;
 }

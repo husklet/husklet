@@ -5,7 +5,8 @@
 //      own: a later recvmsg on the retained end must still deliver the child's real record (the bug injected
 //      a zero-length "EOF" datagram into the parent's own end -> recv returned 0 -> "did not receive ping").
 //   2. SCM_RIGHTS fd passing over SEQPACKET (not just STREAM): the received fd reads back the sent bytes.
-//   3. SO_PASSCRED -> a synthesized SCM_CREDENTIALS record on recvmsg whose ucred.uid == getuid() (multi-process application
+//   3. SO_PASSCRED -> a synthesized SCM_CREDENTIALS record on recvmsg whose ucred.uid == getuid() (multi-process
+//   application
 //      aborts "missing credentials" without it). Record boundary: a 5-byte send arrives as one 5-byte read.
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -17,7 +18,10 @@
 
 int main(void) {
     int sv[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) < 0) { printf("seqcred socketpair_failed\n"); return 0; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) < 0) {
+        printf("seqcred socketpair_failed\n");
+        return 0;
+    }
     const char *path = "/tmp/hl_seqcred_payload";
     pid_t pid = fork();
     if (pid == 0) {
@@ -29,10 +33,14 @@ int main(void) {
         memset(cbuf, 0, sizeof cbuf);
         struct iovec io = {(void *)"hello", 5};
         struct msghdr mh = {0};
-        mh.msg_iov = &io; mh.msg_iovlen = 1;
-        mh.msg_control = cbuf; mh.msg_controllen = sizeof cbuf;
+        mh.msg_iov = &io;
+        mh.msg_iovlen = 1;
+        mh.msg_control = cbuf;
+        mh.msg_controllen = sizeof cbuf;
         struct cmsghdr *c = CMSG_FIRSTHDR(&mh);
-        c->cmsg_level = SOL_SOCKET; c->cmsg_type = SCM_RIGHTS; c->cmsg_len = CMSG_LEN(sizeof(int));
+        c->cmsg_level = SOL_SOCKET;
+        c->cmsg_type = SCM_RIGHTS;
+        c->cmsg_len = CMSG_LEN(sizeof(int));
         memcpy(CMSG_DATA(c), &fd, sizeof(int));
         sendmsg(sv[1], &mh, 0); // one record: "hello" + the fd
         close(fd);
@@ -46,8 +54,10 @@ int main(void) {
     memset(cbuf, 0, sizeof cbuf);
     struct iovec io = {data, sizeof data};
     struct msghdr mh = {0};
-    mh.msg_iov = &io; mh.msg_iovlen = 1;
-    mh.msg_control = cbuf; mh.msg_controllen = sizeof cbuf;
+    mh.msg_iov = &io;
+    mh.msg_iovlen = 1;
+    mh.msg_control = cbuf;
+    mh.msg_controllen = sizeof cbuf;
     ssize_t n = recvmsg(sv[0], &mh, 0); // blocks until the child's record arrives (live peer)
     int rfd = -1, have_cred = 0, uid_match = 0;
     for (struct cmsghdr *c = CMSG_FIRSTHDR(&mh); c; c = CMSG_NXTHDR(&mh, c)) {

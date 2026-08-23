@@ -101,18 +101,10 @@ int main(void) {
 
     // Non-vacuity: the two children really became different, unprivileged, distinct uids, and the
     // file the second was refused really belongs to the first.
-    unsigned distinct = owner.live_uid == OWNER_UID && other.live_uid == OTHER_UID
-                        && owner.live_uid != other.live_uid && (unsigned)getuid() == 0
-                        && owner.file_uid == OWNER_UID;
+    unsigned distinct = owner.live_uid == OWNER_UID && other.live_uid == OTHER_UID &&
+                        owner.live_uid != other.live_uid && (unsigned)getuid() == 0 && owner.file_uid == OWNER_UID;
 
-    printf(
-        "sticky-dir made=%u unlink=%u rename=%u plain=%u own=%u root=%u distinct=%u\n",
-        owner.made,
-        other.unlink_denied,
-        other.rename_denied,
-        other.plain_unlink,
-        other.own_unlink,
-        root_unlink,
-        distinct);
+    printf("sticky-dir made=%u unlink=%u rename=%u plain=%u own=%u root=%u distinct=%u\n", owner.made,
+           other.unlink_denied, other.rename_denied, other.plain_unlink, other.own_unlink, root_unlink, distinct);
     return 0;
 }

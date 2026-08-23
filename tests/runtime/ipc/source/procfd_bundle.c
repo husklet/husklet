@@ -13,7 +13,7 @@
 
 static int send_fds(int sock, const int *fds, int nfds) {
     char byte = 'F';
-    struct iovec iov = { .iov_base = &byte, .iov_len = 1 };
+    struct iovec iov = {.iov_base = &byte, .iov_len = 1};
     char cbuf[CMSG_SPACE(sizeof(int) * 3)];
     memset(cbuf, 0, sizeof cbuf);
     struct msghdr msg = {0};
@@ -34,7 +34,7 @@ static int send_fds(int sock, const int *fds, int nfds) {
 
 static int recv_fds(int sock, int *fds, int maxfds) {
     char byte = 0;
-    struct iovec iov = { .iov_base = &byte, .iov_len = 1 };
+    struct iovec iov = {.iov_base = &byte, .iov_len = 1};
     char cbuf[CMSG_SPACE(sizeof(int) * 3)];
     memset(cbuf, 0, sizeof cbuf);
     struct msghdr msg = {0};
@@ -77,10 +77,12 @@ static int valid_statm(const char *s) {
     int fields = 0;
     const char *p = s;
     while (*p) {
-        while (isspace((unsigned char)*p)) p++;
+        while (isspace((unsigned char)*p))
+            p++;
         if (!*p) break;
         if (!isdigit((unsigned char)*p)) return 0;
-        while (isdigit((unsigned char)*p)) p++;
+        while (isdigit((unsigned char)*p))
+            p++;
         fields++;
     }
     return fields == 7;
@@ -113,15 +115,11 @@ int main(void) {
         int maps_ok = n == 3;
         for (int i = 0; i < 64 && status_ok && statm_ok && maps_ok; i++) {
             char status[4096], statm[256], maps[8192];
-            status_ok = lseek(fds[0], 0, SEEK_SET) == 0 &&
-                        read_all(fds[0], status, sizeof status) > 0 &&
+            status_ok = lseek(fds[0], 0, SEEK_SET) == 0 && read_all(fds[0], status, sizeof status) > 0 &&
                         valid_status(status, getpid());
-            statm_ok = lseek(fds[1], 0, SEEK_SET) == 0 &&
-                       read_all(fds[1], statm, sizeof statm) > 0 &&
-                       valid_statm(statm);
-            maps_ok = lseek(fds[2], 0, SEEK_SET) == 0 &&
-                      read_all(fds[2], maps, sizeof maps) > 0 &&
-                      valid_maps(maps);
+            statm_ok =
+                lseek(fds[1], 0, SEEK_SET) == 0 && read_all(fds[1], statm, sizeof statm) > 0 && valid_statm(statm);
+            maps_ok = lseek(fds[2], 0, SEEK_SET) == 0 && read_all(fds[2], maps, sizeof maps) > 0 && valid_maps(maps);
             char ping = (char)i;
             char ack = 0;
             if (write(sv[1], &ping, 1) != 1 || read(sv[1], &ack, 1) != 1 || ack != ping) {
@@ -172,7 +170,7 @@ int main(void) {
     int nrecv = 0, status_ok = 0, statm_ok = 0, maps_ok = 0;
     sscanf(reply, "%d %d %d %d", &nrecv, &status_ok, &statm_ok, &maps_ok);
     int child_ok = WIFEXITED(st) && WEXITSTATUS(st) == 0;
-    printf("procfd_bundle open=%d send=%d recv=%d status=%d statm=%d maps=%d child=%d\n",
-           open_ok, send_ok, nrecv, status_ok, statm_ok, maps_ok, child_ok);
+    printf("procfd_bundle open=%d send=%d recv=%d status=%d statm=%d maps=%d child=%d\n", open_ok, send_ok, nrecv,
+           status_ok, statm_ok, maps_ok, child_ok);
     return open_ok && send_ok && nrecv == 3 && status_ok && statm_ok && maps_ok && child_ok ? 0 : 1;
 }

@@ -3,10 +3,11 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <errno.h>
+
 int main(void) {
     pthread_rwlock_t lk = PTHREAD_RWLOCK_INITIALIZER;
     pthread_rwlock_rdlock(&lk);
-    int rd_ok = pthread_rwlock_tryrdlock(&lk) == 0;     // shared read allowed
+    int rd_ok = pthread_rwlock_tryrdlock(&lk) == 0; // shared read allowed
     if (rd_ok) pthread_rwlock_unlock(&lk);
     int wr_busy = pthread_rwlock_trywrlock(&lk) == EBUSY; // writer must wait
     pthread_rwlock_unlock(&lk);

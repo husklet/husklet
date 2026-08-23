@@ -32,13 +32,13 @@ static uint64_t fpcr, status;
 // Operands arrive through memory so nothing folds; v0 is preloaded so FCVTXN2 sees its own destination.
 // FPCR goes back to zero inside the block, so a mode cannot leak into the C between cases.
 #define RUN1(text)                                                                                                     \
-    __asm__ __volatile__("msr fpcr, %3\n\tmsr fpsr, xzr\n\tldr q1, [%1]\n\tldr q0, [%2]\n\t" text                       \
+    __asm__ __volatile__("msr fpcr, %3\n\tmsr fpsr, xzr\n\tldr q1, [%1]\n\tldr q0, [%2]\n\t" text                      \
                          "\n\tmrs %0, fpsr\n\tstr q0, [%2]\n\tmsr fpcr, xzr"                                           \
                          : "=&r"(status)                                                                               \
                          : "r"(&in), "r"(&out), "r"(fpcr)                                                              \
                          : "v0", "v1", "memory")
 #define RUN2(text)                                                                                                     \
-    __asm__ __volatile__("msr fpcr, %4\n\tmsr fpsr, xzr\n\tldr q1, [%1]\n\tldr q2, [%2]\n\tldr q0, [%3]\n\t" text       \
+    __asm__ __volatile__("msr fpcr, %4\n\tmsr fpsr, xzr\n\tldr q1, [%1]\n\tldr q2, [%2]\n\tldr q0, [%3]\n\t" text      \
                          "\n\tmrs %0, fpsr\n\tstr q0, [%3]\n\tmsr fpcr, xzr"                                           \
                          : "=&r"(status)                                                                               \
                          : "r"(&in), "r"(&in2), "r"(&out), "r"(fpcr)                                                   \
@@ -56,7 +56,8 @@ static unsigned RecipEstimate(unsigned a) {
 static unsigned RecipSqrtEstimate(unsigned a) {
     a = a < 256u ? a * 2u + 1u : (((a >> 1) << 1) + 1u) * 2u;
     uint64_t b = 512;
-    while ((uint64_t)a * (b + 1u) * (b + 1u) < (UINT64_C(1) << 28)) b++;
+    while ((uint64_t)a * (b + 1u) * (b + 1u) < (UINT64_C(1) << 28))
+        b++;
     return (unsigned)((b + 1u) / 2u);
 }
 
@@ -228,8 +229,8 @@ static int model_step_special(uint64_t a, uint64_t b, int f, int sqrt_form, unsi
         return 1;
     }
     if ((ca == 3u && cb == 0u) || (ca == 0u && cb == 3u)) {
-        *res = sqrt_form ? (((uint64_t)BIAS(f) << MANT(f)) | (UINT64_C(1) << (MANT(f) - 1u)))  // 1.5
-                         : ((uint64_t)(BIAS(f) + 1) << MANT(f));                               // 2.0
+        *res = sqrt_form ? (((uint64_t)BIAS(f) << MANT(f)) | (UINT64_C(1) << (MANT(f) - 1u))) // 1.5
+                         : ((uint64_t)(BIAS(f) + 1) << MANT(f));                              // 2.0
         return 1;
     }
     if (ca == 3u || cb == 3u) {
@@ -354,7 +355,7 @@ static int tables(void) {
                     uint64_t w = modelfn(lane(&in, (width), l), (fmt), &want_fpsr);                                    \
                     if (lane(&out, (width), l) != w) good = 0;                                                         \
                 }                                                                                                      \
-                if ((status & FPSR_MASK) != want_fpsr) good = 0;                                                        \
+                if ((status & FPSR_MASK) != want_fpsr) good = 0;                                                       \
                 if (!good) ok = 0;                                                                                     \
                 note(good, out.lo ^ out.hi, status);                                                                   \
             }                                                                                                          \
@@ -374,8 +375,8 @@ static int tables(void) {
                 RUN1(text);                                                                                            \
                 unsigned want_fpsr = 0;                                                                                \
                 uint64_t w = modelfn(lane(&in, (width), 0), (fmt), &want_fpsr);                                        \
-                int good = lane(&out, (width), 0) == w && upper_clear(&out, (width)) &&                                \
-                           (status & FPSR_MASK) == want_fpsr;                                                          \
+                int good =                                                                                             \
+                    lane(&out, (width), 0) == w && upper_clear(&out, (width)) && (status & FPSR_MASK) == want_fpsr;    \
                 if (!good) ok = 0;                                                                                     \
                 note(good, out.lo ^ out.hi, status);                                                                   \
             }                                                                                                          \
@@ -461,7 +462,7 @@ static int uint_estimates(void) {
                         }                                                                                              \
                     }                                                                                                  \
                     if (all_special && (got_status & FPSR_MASK) != want_fpsr) good = 0;                                \
-                    if (!all_special) good &= step_fmadd_agrees(fmadd, (width), (fmt), (sqrt_form), per, &got);         \
+                    if (!all_special) good &= step_fmadd_agrees(fmadd, (width), (fmt), (sqrt_form), per, &got);        \
                     if (!good) ok = 0;                                                                                 \
                     note(good, got.lo ^ got.hi, got_status);                                                           \
                 }                                                                                                      \
@@ -498,17 +499,24 @@ static int step_fmadd_agrees(int which, unsigned width, int fmt, int sqrt_form, 
     case 0:
         __asm__ __volatile__("msr fpcr, %4\n\tmsr fpsr, xzr\n\tldr q1,[%1]\n\tldr q2,[%2]\n\tldr q0,[%3]\n\t"
                              "fmla v0.4s, v1.4s, v2.4s\n\tmrs %0, fpsr\n\tstr q0,[%3]\n\tmsr fpcr, xzr"
-                             : "=&r"(st) : "r"(&alt), "r"(&in2), "r"(&res), "r"(fpcr) : "v0", "v1", "v2", "memory");
+                             : "=&r"(st)
+                             : "r"(&alt), "r"(&in2), "r"(&res), "r"(fpcr)
+                             : "v0", "v1", "v2", "memory");
         break;
     case 1:
         __asm__ __volatile__("msr fpcr, %4\n\tmsr fpsr, xzr\n\tldr q1,[%1]\n\tldr q2,[%2]\n\tldr q0,[%3]\n\t"
                              "fmla v0.2d, v1.2d, v2.2d\n\tmrs %0, fpsr\n\tstr q0,[%3]\n\tmsr fpcr, xzr"
-                             : "=&r"(st) : "r"(&alt), "r"(&in2), "r"(&res), "r"(fpcr) : "v0", "v1", "v2", "memory");
+                             : "=&r"(st)
+                             : "r"(&alt), "r"(&in2), "r"(&res), "r"(fpcr)
+                             : "v0", "v1", "v2", "memory");
         break;
     default:
-        __asm__ __volatile__("msr fpcr, %4\n\tmsr fpsr, xzr\n\tldr q1,[%1]\n\tldr q2,[%2]\n\tldr q0,[%3]\n\t"
-                             ".inst 0x4e420c20\n\tmrs %0, fpsr\n\tstr q0,[%3]\n\tmsr fpcr, xzr" // fmla v0.8h,v1.8h,v2.8h
-                             : "=&r"(st) : "r"(&alt), "r"(&in2), "r"(&res), "r"(fpcr) : "v0", "v1", "v2", "memory");
+        __asm__ __volatile__(
+            "msr fpcr, %4\n\tmsr fpsr, xzr\n\tldr q1,[%1]\n\tldr q2,[%2]\n\tldr q0,[%3]\n\t"
+            ".inst 0x4e420c20\n\tmrs %0, fpsr\n\tstr q0,[%3]\n\tmsr fpcr, xzr" // fmla v0.8h,v1.8h,v2.8h
+            : "=&r"(st)
+            : "r"(&alt), "r"(&in2), "r"(&res), "r"(fpcr)
+            : "v0", "v1", "v2", "memory");
         break;
     }
     (void)st;

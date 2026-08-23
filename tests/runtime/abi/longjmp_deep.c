@@ -9,10 +9,18 @@ static int depth_reached;
 
 static void level3(int x) {
     depth_reached = 3;
-    longjmp(env, x);           /* jump value 0 must arrive as 1 */
+    longjmp(env, x); /* jump value 0 must arrive as 1 */
 }
-static void level2(int x) { depth_reached = 2; level3(x); }
-static void level1(int x) { depth_reached = 1; level2(x); }
+
+static void level2(int x) {
+    depth_reached = 2;
+    level3(x);
+}
+
+static void level1(int x) {
+    depth_reached = 1;
+    level2(x);
+}
 
 int main(void) {
     for (int req = 0; req <= 3; req++) {

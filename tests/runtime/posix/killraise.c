@@ -4,7 +4,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t last = 0, count = 0;
-static void h(int s) { last = s; count++; }
+
+static void h(int s) {
+    last = s;
+    count++;
+}
 
 int main(void) {
     signal(SIGUSR1, h);

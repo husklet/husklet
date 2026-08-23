@@ -11,7 +11,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t hits;
-static void onalrm(int s) { (void)s; hits++; }
+
+static void onalrm(int s) {
+    (void)s;
+    hits++;
+}
 
 static void arm(int restart) {
     struct sigaction sa;
@@ -74,7 +78,7 @@ int main(void) {
     int remsane = (rem.tv_sec >= 4 && rem.tv_sec <= 5);
     int h3 = hits;
     waitpid(p3, &st, 0);
-    printf("r1=%zd e1=%d h1=%d r2=%zd e2=%d h2=%d d=%zd n=%d en=%d remsane=%d h3=%d\n",
-           r1, e1, h1, r2, e2, h2, d, n, en, remsane, h3);
+    printf("r1=%zd e1=%d h1=%d r2=%zd e2=%d h2=%d d=%zd n=%d en=%d remsane=%d h3=%d\n", r1, e1, h1, r2, e2, h2, d, n,
+           en, remsane, h3);
     return 0;
 }

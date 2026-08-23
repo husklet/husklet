@@ -43,7 +43,6 @@ int main(void) {
     unlinkat(dfd, "file", 0);
     close(dfd);
     rmdir(dir);
-    printf("chmod-bits setuid=%d setgid=%d sticky=%d all-special=%d\n",
-           setuid_ok, setgid_ok, sticky_ok, all_ok);
+    printf("chmod-bits setuid=%d setgid=%d sticky=%d all-special=%d\n", setuid_ok, setgid_ok, sticky_ok, all_ok);
     return 0;
 }

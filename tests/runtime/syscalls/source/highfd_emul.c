@@ -81,7 +81,7 @@ int main(void) {
     long pwritev2_ret = syscall(SYS_pwritev2, fd_pwritev2, &iov, 1, 0, 0, 0);
     int deny_pwritev2 = fd_pwritev2 >= 1024 && pwritev2_ret < 0 && errno == EPERM;
 
-    printf("highfd base=%d event=%d timer=%d seals=%d%d%d%d\n",
-           high_base, event_ok, timer_ok, deny_writev, deny_pwrite, deny_pwritev, deny_pwritev2);
+    printf("highfd base=%d event=%d timer=%d seals=%d%d%d%d\n", high_base, event_ok, timer_ok, deny_writev, deny_pwrite,
+           deny_pwritev, deny_pwritev2);
     return 0;
 }

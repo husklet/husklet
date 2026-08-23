@@ -532,9 +532,17 @@ static void pcmpistri_forms(void) {
                          : "xmm0", "xmm1", "rcx", "cc", "memory");                                                     \
         break;
                     PIS(0x00)
-                    PIS(0x04) PIS(0x08) PIS(0x0c) PIS(0x1c) PIS(0x3c) PIS(0x5c) PIS(0x7c) PIS(0x0d) PIS(0x1d)
+                    PIS(0x04)
+                    PIS(0x08)
+                    PIS(0x0c)
+                    PIS(0x1c)
+                    PIS(0x3c)
+                    PIS(0x5c)
+                    PIS(0x7c)
+                    PIS(0x0d)
+                    PIS(0x1d)
 #undef PIS
-                        default : break;
+                default: break;
                 }
                 printf("pcmpistri %02x %d%d %2lu %04lx\n", IMM[k], ia, ib, rcx, fl & 0x8d5UL);
             }

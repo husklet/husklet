@@ -8,7 +8,10 @@
 
 int main(void) {
     int fds[2];
-    if (pipe(fds) < 0) { perror("pipe"); return 1; }
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 1;
+    }
     int rfd = fds[0], wfd = fds[1];
     int rdup = dup(rfd); // a 2nd fd referring to the SAME open file description
 
@@ -17,7 +20,10 @@ int main(void) {
     epoll_ctl(ep, EPOLL_CTL_ADD, rfd, &ev);
 
     close(rfd); // the watched fd NUMBER is gone, but rdup keeps the OFD (pipe) open
-    if (write(wfd, "Q", 1) < 0) { perror("write"); return 1; }
+    if (write(wfd, "Q", 1) < 0) {
+        perror("write");
+        return 1;
+    }
 
     struct epoll_event out[4];
     int n = epoll_wait(ep, out, 4, 1000);

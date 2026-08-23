@@ -33,8 +33,8 @@ int main(void) {
     int matched = 0;
     for (int i = 0; want && i < len; i += (int)strlen(b + i) + 1) {
         const char *e = b + i, *eq = strchr(e, '=');
-        if (eq && (size_t)(eq - e) == strlen("HUSKLET_SELFENVIRON")
-            && !memcmp(e, "HUSKLET_SELFENVIRON", strlen("HUSKLET_SELFENVIRON")) && !strcmp(eq + 1, want))
+        if (eq && (size_t)(eq - e) == strlen("HUSKLET_SELFENVIRON") &&
+            !memcmp(e, "HUSKLET_SELFENVIRON", strlen("HUSKLET_SELFENVIRON")) && !strcmp(eq + 1, want))
             matched = 1;
     }
     int ok = nul_term && entries > 0 && all_have_eq && matched;
