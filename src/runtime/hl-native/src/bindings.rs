@@ -333,15 +333,9 @@ mod tests {
         // Windows cannot stage a zombie and the C hook explicitly refuses this arm there rather than
         // pretending it ran. Keep the unsupported host visible at the call site, as scenario 7 does.
         #[cfg(not(windows))]
-        for scenario in [11] {
-            assert!(
-                fdvis_path_publication_test(1, scenario),
-                "arm64 reservation scenario {scenario}"
-            );
-            assert!(
-                fdvis_path_publication_test(2, scenario),
-                "x86 reservation scenario {scenario}"
-            );
+        {
+            assert!(fdvis_path_publication_test(1, 11), "arm64 reservation scenario 11");
+            assert!(fdvis_path_publication_test(2, 11), "x86 reservation scenario 11");
         }
         // Scenario 7's second half forks and rendezvouses through a MAP_SHARED page, which the
         // Windows arm of path_runtime.c refuses. Naming the host here rather than dropping the
