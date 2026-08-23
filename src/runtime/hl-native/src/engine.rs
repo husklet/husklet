@@ -895,31 +895,55 @@ mod tests {
     #[test]
     fn requesting_stop_after_native_finish_is_idempotent() {
         for isa in [1, 2] {
-            let mut executable = tempfile::tempfile().unwrap();
-            executable.write_all(&exiting_interpreter(isa)).unwrap();
-            executable.seek(SeekFrom::Start(0)).unwrap();
-            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
-            let config = EngineConfig {
-                isa,
-                rootfs: None,
-                executable_host: None,
-                executable_fd: executable.as_raw_fd(),
-                option_names: &[],
-                option_values: &[],
-                standard_fds: [standard.as_raw_fd(); 3],
-                provider_fd: -1,
+            let create = || {
+                let mut executable = tempfile::tempfile().unwrap();
+                executable.write_all(&exiting_interpreter(isa)).unwrap();
+                executable.seek(SeekFrom::Start(0)).unwrap();
+                let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+                let config = EngineConfig {
+                    isa,
+                    rootfs: None,
+                    executable_host: None,
+                    executable_fd: executable.as_raw_fd(),
+                    option_names: &[],
+                    option_values: &[],
+                    standard_fds: [standard.as_raw_fd(); 3],
+                    provider_fd: -1,
+                };
+                // SAFETY: all borrowed descriptors remain live until engine construction returns.
+                unsafe { Engine::create(config) }.unwrap()
             };
-            // SAFETY: all borrowed descriptors remain live until engine construction returns.
-            let engine = unsafe { Engine::create(config) }.unwrap();
+            let engine = create();
+            let bystander = create();
             let api = crate::loader::tests().unwrap();
-            // SAFETY: these test-only calls operate on one process-global phase owned by this test.
-            unsafe { (api.engine_finish_test_arm)() };
+            // SAFETY: the backend remains live until the run and all phase operations finish.
+            unsafe { (api.engine_finish_test_arm)(engine.0.as_ptr()) };
             let argument = CString::new("guest").unwrap();
             std::thread::scope(|scope| {
+                let (finished, completion) = std::sync::mpsc::channel();
+                scope.spawn(move || {
+                    let bystander_argument = CString::new("guest").unwrap();
+                    finished.send(bystander.run(&[bystander_argument.as_ptr()])).unwrap();
+                });
+                let bystander_result = completion.recv_timeout(std::time::Duration::from_millis(250));
+                // SAFETY: reads the phase associated with `engine`, retaining no pointer.
+                let after_bystander = unsafe { (api.engine_finish_test_phase)(engine.0.as_ptr()) };
+                if bystander_result.is_err() {
+                    // If a regression let the bystander consume the arm, release it before failing so
+                    // the scoped thread can join instead of turning one assertion into a suite hang.
+                    // SAFETY: `engine` remains live through this scope and is the hook's armed target.
+                    unsafe { (api.engine_finish_test_release)(engine.0.as_ptr()) };
+                }
+                assert_eq!(bystander_result.unwrap(), Ok(()));
+                assert_eq!(
+                    after_bystander, 1,
+                    "ISA {isa} bystander consumed another engine's finish arm"
+                );
+
                 let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 // SAFETY: the phase query reads one atomic and retains nothing.
-                while unsafe { (api.engine_finish_test_phase)() } != 2 {
+                while unsafe { (api.engine_finish_test_phase)(engine.0.as_ptr()) } != 2 {
                     assert!(
                         std::time::Instant::now() < deadline,
                         "ISA {isa} did not reach native FINISHED"
@@ -928,7 +952,7 @@ mod tests {
                 }
                 let stopped = engine.request(2, 0);
                 // SAFETY: releases the run thread parked by this test's arm above.
-                unsafe { (api.engine_finish_test_release)() };
+                unsafe { (api.engine_finish_test_release)(engine.0.as_ptr()) };
                 assert_eq!(stopped, Ok(()), "ISA {isa} terminal stop was not idempotent");
                 assert_eq!(running.join().unwrap(), Ok(()));
             });

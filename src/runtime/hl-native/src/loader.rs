@@ -65,7 +65,9 @@ type UnaryStatus = unsafe extern "C" fn(c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 type BinaryStatus = unsafe extern "C" fn(c_uint, c_uint) -> c_int;
 #[cfg(test)]
-type TestPhase = unsafe extern "C" fn() -> c_uint;
+type TestPhase = unsafe extern "C" fn(*mut Backend) -> c_uint;
+#[cfg(test)]
+type TestPhaseRelease = unsafe extern "C" fn(*mut Backend);
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type TermiosInstallTest = unsafe extern "C" fn(c_int, *const u8);
 #[cfg(feature = "native-test-hooks")]
@@ -220,7 +222,7 @@ pub(crate) struct TestApi {
     #[cfg(test)]
     pub(crate) engine_finish_test_phase: TestPhase,
     #[cfg(test)]
-    pub(crate) engine_finish_test_release: unsafe extern "C" fn(),
+    pub(crate) engine_finish_test_release: TestPhaseRelease,
     #[cfg(test)]
     pub(crate) engine_request_state_test: ScenarioTest,
     #[cfg(all(test, unix))]
@@ -610,7 +612,7 @@ impl TestApi {
             #[cfg(test)]
             engine_finish_test_phase: symbol!("hl_c_backend_engine_finish_test_phase", TestPhase),
             #[cfg(test)]
-            engine_finish_test_release: symbol!("hl_c_backend_engine_finish_test_release", unsafe extern "C" fn()),
+            engine_finish_test_release: symbol!("hl_c_backend_engine_finish_test_release", TestPhaseRelease),
             #[cfg(test)]
             engine_request_state_test: symbol!("hl_c_backend_engine_request_state_test", ScenarioTest),
             #[cfg(all(test, unix))]

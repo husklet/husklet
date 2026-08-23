@@ -32,21 +32,23 @@ static const hl_engine_backend *production_backends[HL_GUEST_ISA_X86_64 + 1];
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 static atomic_uint engine_finish_test_phase;
-HL_API uint32_t hl_c_backend_engine_finish_test_arm(void);
-HL_API uint32_t hl_c_backend_engine_finish_test_phase(void);
-HL_API void hl_c_backend_engine_finish_test_release(void);
 HL_API int hl_c_backend_engine_request_state_test(uint32_t scenario);
 
-HL_API uint32_t hl_c_backend_engine_finish_test_arm(void) {
+static atomic_uintptr_t engine_finish_test_target;
+
+uint32_t hl_engine_finish_test_arm(hl_engine *engine) {
+    atomic_store_explicit(&engine_finish_test_target, (uintptr_t)engine, memory_order_relaxed);
     atomic_store_explicit(&engine_finish_test_phase, 1, memory_order_release);
     return 1;
 }
 
-HL_API uint32_t hl_c_backend_engine_finish_test_phase(void) {
+uint32_t hl_engine_finish_test_phase(hl_engine *engine) {
+    if (atomic_load_explicit(&engine_finish_test_target, memory_order_acquire) != (uintptr_t)engine) return 0;
     return atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire);
 }
 
-HL_API void hl_c_backend_engine_finish_test_release(void) {
+void hl_engine_finish_test_release(hl_engine *engine) {
+    if (atomic_load_explicit(&engine_finish_test_target, memory_order_acquire) != (uintptr_t)engine) return;
     atomic_store_explicit(&engine_finish_test_phase, 3, memory_order_release);
 }
 #endif
@@ -1333,11 +1335,13 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     hl_engine_unlock(engine);
 #if defined(HL_NATIVE_TEST_HOOKS)
     {
-        unsigned int expected = 1;
-        if (atomic_compare_exchange_strong_explicit(&engine_finish_test_phase, &expected, 2, memory_order_acq_rel,
-                                                    memory_order_acquire))
-            while (atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire) != 3)
-                hl_engine_yield(engine);
+        if (atomic_load_explicit(&engine_finish_test_target, memory_order_acquire) == (uintptr_t)engine) {
+            unsigned int expected = 1;
+            if (atomic_compare_exchange_strong_explicit(&engine_finish_test_phase, &expected, 2, memory_order_acq_rel,
+                                                        memory_order_acquire))
+                while (atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire) != 3)
+                    hl_engine_yield(engine);
+        }
     }
 #endif
     return status;
