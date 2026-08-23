@@ -121,8 +121,10 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_bound_vector_io: VectorIoTest,
     #[cfg(test)]
     pub(crate) aarch64_fdvis_path_publication: ScenarioTest,
+    pub(crate) aarch64_proc_fdinfo_listing: ScenarioTest,
     #[cfg(test)]
     pub(crate) x86_64_fdvis_path_publication: ScenarioTest,
+    pub(crate) x86_64_proc_fdinfo_listing: ScenarioTest,
     pub(crate) aarch64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_store_preflight: NoArgumentTest,
