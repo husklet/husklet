@@ -323,20 +323,25 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
         int named = 0;
         for (int i = 0; i < nfoll; i++)
             if (!completed[i]) {
+                hl_host_process_info info;
+                int live = hl_host_process_read(foll[i].identity, &info);
+                int registered = ckpt_stream_participant_registered(foll[i].identity);
+                enum ckpt_outstanding_kind kind = ckpt_outstanding_classify(live, registered);
                 fprintf(stderr,
                         "[ckpt] participant %lld never committed proc.%d and stopped making progress "
-                        "towards a checkpoint safepoint (no host CPU time consumed for %d ms); refusing "
-                        "incomplete manifest\n",
+                        "towards a checkpoint safepoint (no host CPU time consumed for %d ms); %s; "
+                        "host state=%c threads=%u ppid=%lld pgrp=%lld session=%lld; refusing incomplete manifest\n",
                         (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity),
-                        CKPT_RENDEZVOUS_STALL_PASSES * 10);
+                        CKPT_RENDEZVOUS_STALL_PASSES * 10, ckpt_outstanding_describe(kind), live ? info.state : '-',
+                        live ? info.threads : 0, live ? (long long)info.parent_pid : -1,
+                        live ? (long long)info.process_group : -1, live ? (long long)info.session : -1);
                 if (!named) {
                     named = 1;
                     snprintf(reason, sizeof reason,
                              "%d of %d participants never committed their group; the first is process %lld "
-                             "(proc.%d), which stopped making progress towards a checkpoint safepoint -- it "
-                             "consumed no host CPU time for %d ms -- or had its dump refused",
+                             "(proc.%d), which stopped making progress for %d ms: %s",
                              nfoll - ndone, nfoll, (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity),
-                             CKPT_RENDEZVOUS_STALL_PASSES * 10);
+                             CKPT_RENDEZVOUS_STALL_PASSES * 10, ckpt_outstanding_describe(kind));
                 }
             }
         if (!named) snprintf(reason, sizeof reason, "a participant never committed its group");

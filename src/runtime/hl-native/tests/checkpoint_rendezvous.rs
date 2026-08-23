@@ -64,6 +64,20 @@ fn an_unanswerable_broker_grants_no_exemption() {
 #[test]
 fn the_rendezvous_hook_rejects_unknown_scenarios() {
     for isa in [1, 2] {
-        assert_eq!(hl_native::checkpoint_rendezvous_test(isa, 4), Err(-22));
+        assert_eq!(hl_native::checkpoint_rendezvous_test(isa, 8), Err(-22));
+    }
+}
+
+/// The refusal snapshot is taken before teardown removes `/proc` state.  The two independent bits must
+/// remain independent: collapsing registration into liveness recreates the old message that could not
+/// distinguish a missed safepoint from a member whose dump had already begun.
+#[test]
+fn outstanding_participants_are_classified_by_liveness_and_registration() {
+    for isa in [1, 2] {
+        for scenario in 4..=7 {
+            hl_native::checkpoint_rendezvous_test(isa, scenario).unwrap_or_else(|status| {
+                panic!("ISA {isa} did not distinguish outstanding participant scenario {scenario}: {status}")
+            });
+        }
     }
 }
