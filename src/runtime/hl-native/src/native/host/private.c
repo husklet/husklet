@@ -24,6 +24,7 @@
 
 #define HL_PRIVATE_PROCESSES 1024u
 #define HL_PRIVATE_CELLS 256u
+#define HL_PRIVATE_FIXED_HEADROOM 64u
 #define HL_PRIVATE_INIT 1u
 #define HL_PRIVATE_LIVE 2u
 
@@ -42,6 +43,7 @@ static _Atomic uint64_t *hl_private_epoch;
 static _Thread_local int64_t hl_private_pid;
 static _Thread_local uint64_t hl_private_start;
 static uint64_t *hl_private_fork_cells;
+static void hl_private_configure_limit(void);
 static size_t hl_private_fork_count;
 static pthread_mutex_t hl_private_fork_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t hl_private_fork_atfork_once = PTHREAD_ONCE_INIT;
@@ -196,6 +198,7 @@ void hl_host_private_init(void) {
     size_t records_size = sizeof(*hl_private) * HL_PRIVATE_PROCESSES;
     (void)pthread_once(&hl_private_fork_atfork_once, hl_private_register_atfork);
     if (hl_private != NULL) return;
+    hl_private_configure_limit();
     void *memory =
         mmap(NULL, records_size + sizeof(*hl_private_epoch), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (memory != MAP_FAILED) {
@@ -272,12 +275,12 @@ int hl_host_process_fd_private_add(int fd) {
  * kern.maxfilesperproc). hl_host_process_fd_private_adopt() calls it once per adopted descriptor, which
  * made getrlimit 15 of the 20 the engine issued per guest open() on Linux and 20 of 20 on macOS.
  *
- * The host limit is provably immutable from inside this process: the guest's limits are emulated end to
- * end in g_limits (linux_abi/container/state.c), linux_abi/host_proc.h refuses setrlimit/prlimit
- * outright so that layer cannot even name the host call, and the only setrlimit() call site in the tree
- * is RLIMIT_CORE in checkpoint/socket_restore.c. Limits are also inherited across fork(), so the value
- * is correct in a child too -- but the cache is keyed on the self identity pair anyway, so a child
- * re-derives once and can never inherit a floor stamped by a process that is not it.
+ * Guest limit changes are emulated end to end in g_limits (linux_abi/container/state.c), and that layer
+ * cannot name the host call. hl_private_configure_limit() is the deliberate host exception: on Linux it
+ * may raise RLIMIT_NOFILE for the whole engine process, and fork/native-exec children inherit that larger
+ * host table. The guest ceiling is captured first and remains the boundary, so neither the guest nor a
+ * low descriptor it names can enter the enlarged private band. The floor cache is still keyed on process
+ * identity, so a child re-derives once and never inherits a floor stamped by a different process.
  *
  * What that reasoning does NOT cover is an EXTERNAL prlimit(2) aimed at this process, which is the one
  * way the soft limit can drop under us. Only a DROP is harmful -- a raised limit merely leaves the
@@ -287,6 +290,7 @@ int hl_host_process_fd_private_add(int fd) {
 static _Atomic int hl_private_floor_value;
 static _Atomic int64_t hl_private_floor_pid;
 static _Atomic uint64_t hl_private_floor_start;
+static _Atomic uint32_t hl_private_guest_limit;
 
 static void hl_private_floor_forget(void) {
     atomic_store_explicit(&hl_private_floor_pid, 0, memory_order_release);
@@ -307,6 +311,37 @@ static rlim_t hl_private_guest_ceiling(rlim_t ceiling) {
     rlim_t guest = ceiling - reserve;
     if (guest > HL_LINUX_FD_LIMIT) guest = HL_LINUX_FD_LIMIT;
     return guest;
+}
+
+static void hl_private_configure_limit(void) {
+#if !defined(__APPLE__)
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return;
+    rlim_t guest = hl_private_guest_ceiling(limit.rlim_cur);
+    if (guest == 0) return;
+    /* A mapped guest file can retain both its typed host handle and a mapping backing. Keeping one sixteenth of an
+     * ordinary 1024-entry table private therefore exhausts the host band after 32 simultaneously-open files,
+     * even though the guest was told it could open 960. When the inherited hard limit permits it, widen only
+     * the engine's host table and retain the inherited guest ceiling below. No privilege is required to raise
+     * a soft limit to its existing hard limit, and the 4096-slot band covers two backing descriptors for every
+     * guest-visible slot plus process-wide engine handles. The raise is intentionally process-wide: every
+     * sibling shares this private namespace, while the emulated guest limit remains separately captured. */
+    rlim_t desired = guest + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
+    if (limit.rlim_cur < desired && (limit.rlim_max == RLIM_INFINITY || limit.rlim_max >= desired)) {
+        rlim_t inherited = limit.rlim_cur;
+        limit.rlim_cur = desired;
+        if (setrlimit(RLIMIT_NOFILE, &limit) != 0) limit.rlim_cur = inherited;
+    }
+    if (limit.rlim_cur < desired) {
+        /* With an equally low hard limit there is nowhere to create a larger host-only band. A regular
+         * guest file can consume both its typed handle and a retained mapping backing, so advertise no more
+         * than one third of the real table rather than promising descriptors the bridge cannot represent. */
+        rlim_t enforceable =
+            limit.rlim_cur > HL_PRIVATE_FIXED_HEADROOM ? (limit.rlim_cur - HL_PRIVATE_FIXED_HEADROOM) / 3u : 0;
+        if (guest > enforceable) guest = enforceable;
+    }
+    atomic_store_explicit(&hl_private_guest_limit, (uint32_t)guest, memory_order_release);
+#endif
 }
 
 static int hl_private_floor_derive(void) {
@@ -339,9 +374,10 @@ static int hl_private_floor_derive(void) {
     /* Anchor the private interval just under the real ceiling rather than refusing when the soft limit does
      * not clear HL_HOST_GUEST_DESCRIPTOR_MINIMUM: below that minimum it is not the true ceiling (same as the
      * Darwin branch above).  Refusing broke engine-in-engine, where the inner guest reports RLIMIT_NOFILE
-     * 20480 < MINIMUM + reserve.  Do NOT raise our own soft limit instead -- hl_engine_guest_fd_limit()
-     * derives the GUEST-VISIBLE ceiling from it and that must stay golden-stable. */
-    rlim_t guest = hl_private_guest_ceiling(limit.rlim_cur);
+     * 20480 < MINIMUM + reserve. hl_private_configure_limit() can raise the host soft limit, but preserves
+     * the inherited guest ceiling separately so the guest-visible answer stays stable. */
+    rlim_t guest = atomic_load_explicit(&hl_private_guest_limit, memory_order_acquire);
+    if (guest == 0 || guest >= limit.rlim_cur) guest = hl_private_guest_ceiling(limit.rlim_cur);
     return guest != 0 ? (int)guest : -EMFILE;
 }
 
@@ -372,6 +408,8 @@ uint32_t hl_engine_guest_fd_limit(void) {
     // its private fds under that ceiling. (Guest fd numbers stay low in practice, far below the private band.)
     struct rlimit limit;
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return 0;
+    uint32_t configured = atomic_load_explicit(&hl_private_guest_limit, memory_order_acquire);
+    if (configured != 0 && configured < limit.rlim_cur) return configured;
     return (uint32_t)hl_private_guest_ceiling(limit.rlim_cur);
 }
 
@@ -741,6 +779,41 @@ static void *hl_private_fork_lock_holder(void *argument) {
    locked mutex whose owner does not exist in the child and blocks forever; the wait below
    is bounded so that regression is reported rather than wedging the caller. */
 HL_API int hl_c_backend_private_fork_lock_test(uint32_t scenario) {
+    if (scenario == 2) {
+        pid_t child = fork();
+        if (child == 0) {
+            struct rlimit limit;
+            if (getrlimit(RLIMIT_NOFILE, &limit) != 0) _exit(2);
+            limit.rlim_cur = 1024;
+            if (setrlimit(RLIMIT_NOFILE, &limit) != 0) _exit(3);
+            atomic_store_explicit(&hl_private_guest_limit, 0, memory_order_release);
+            hl_private_configure_limit();
+            hl_private_floor_forget();
+            if (getrlimit(RLIMIT_NOFILE, &limit) != 0) _exit(4);
+            uint32_t guest = hl_engine_guest_fd_limit();
+            int floor = hl_host_process_fd_private_floor();
+            _exit(guest == 960u && floor == 960 && limit.rlim_cur >= 5056u ? 0 : 5);
+        }
+        int status = 0;
+        if (child < 0 || waitpid(child, &status, 0) != child) return -errno;
+        return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -ERANGE;
+    }
+    if (scenario == 3) {
+        pid_t child = fork();
+        if (child == 0) {
+            struct rlimit low = {96, 96};
+            if (setrlimit(RLIMIT_NOFILE, &low) != 0) _exit(2);
+            atomic_store_explicit(&hl_private_guest_limit, 0, memory_order_release);
+            hl_private_configure_limit();
+            hl_private_floor_forget();
+            uint32_t guest = hl_engine_guest_fd_limit();
+            int floor = hl_host_process_fd_private_floor();
+            _exit(guest == 10u && floor == 10 ? 0 : 3);
+        }
+        int status = 0;
+        if (child < 0 || waitpid(child, &status, 0) != child) return -errno;
+        return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -ERANGE;
+    }
     if (scenario != 1) {
         errno = EINVAL;
         return -EINVAL;
