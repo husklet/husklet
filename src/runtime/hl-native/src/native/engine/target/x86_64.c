@@ -484,6 +484,10 @@ static int translit_enabled(void) {
     return 0;
 }
 
+static int translit_report(char *out, size_t size) {
+    return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
+}
+
 #else
 // interp.c defines the same names emit.c/translate.c/cache.c do, so everything below is host-identical.
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
@@ -1635,13 +1639,20 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 #else
         const char *ibtc_mode = "absent: interpreter host";
 #endif
-        char profile[320];
+        char profile[512];
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu\n"
                                     "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
                                     (unsigned long long)g_ibtc_fill, ibtc_mode);
+        // The same-ISA backend, and -- when it produced nothing -- which of its two silent refusals
+        // fired. Both are permanent for the process, so without this line an operator can only tell
+        // "transliterated" from "refused" by timing the run.
+        if (profile_size > 0 && (size_t)profile_size < sizeof profile) {
+            int translit_size = translit_report(profile + profile_size, sizeof profile - (size_t)profile_size);
+            if (translit_size > 0) profile_size += translit_size;
+        }
         if (profile_size > 0) {
             size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
             (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
