@@ -56,13 +56,24 @@ fn fd_scans(stderr: &str) -> Result<Vec<FdScan>, String> {
                     .parse::<u64>()
                     .map_err(|_| format!("invalid fd scan {name}: {line}"))
             };
+            let pass = fields["pass"]
+                .parse::<u32>()
+                .map_err(|_| format!("invalid fd scan pass: {line}"))?;
+            let hash = fields["hash"];
+            if hash.len() != 16
+                || !hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!("invalid fd scan identity/class hash: {line}"));
+            }
             Ok(FdScan {
                 isa: fields["isa"].to_owned(),
-                pass: number("pass")? as u32,
+                pass,
                 visible: number("visible")?,
                 captured: number("captured")?,
                 comparisons: number("comparisons")?,
-                hash: fields["hash"].to_owned(),
+                hash: hash.to_owned(),
             })
         })
         .collect()
@@ -314,7 +325,7 @@ mod tests {
     fn fd_scan_receipt_requires_identical_admission_and_consumption_sets() {
         let pair = |isa: &str| {
             format!(
-                "checkpoint_fd_scan\tisa={isa}\tpass=1\tvisible=7\tcaptured=7\tcomparisons=0\thash=abc\ncheckpoint_fd_scan\tisa={isa}\tpass=2\tvisible=7\tcaptured=7\tcomparisons=0\thash=abc\n"
+                "checkpoint_fd_scan\tisa={isa}\tpass=1\tvisible=7\tcaptured=7\tcomparisons=0\thash=0123456789abcdef\ncheckpoint_fd_scan\tisa={isa}\tpass=2\tvisible=7\tcaptured=7\tcomparisons=0\thash=0123456789abcdef\n"
             )
         };
         let mut text = String::new();
@@ -325,7 +336,13 @@ mod tests {
         }
         let rows = fd_scans(&text).unwrap();
         validate_fd_scans(&rows).unwrap();
-        assert!(validate_fd_scans(&fd_scans(&text.replacen("hash=abc", "hash=wrong", 1)).unwrap()).is_err());
+        assert!(
+            validate_fd_scans(&fd_scans(&text.replacen("hash=0123456789abcdef", "hash=fedcba9876543210", 1)).unwrap())
+                .is_err()
+        );
+        assert!(fd_scans(&text.replacen("pass=1", "pass=4294967297", 1)).is_err());
+        assert!(fd_scans(&text.replacen("0123456789abcdef", "0123456789abcde", 1)).is_err());
+        assert!(fd_scans(&text.replacen("0123456789abcdef", "0123456789abcdeF", 1)).is_err());
     }
 
     #[test]
