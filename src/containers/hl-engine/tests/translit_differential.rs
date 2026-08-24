@@ -12,13 +12,10 @@
 //! engine, once with `HL_TRANSLIT=0` and once with `HL_TRANSLIT=1`, and requires byte-identical output and
 //! the same exit status. The interpreter is the oracle.
 //!
-//! **A fixture must be position-independent or it proves nothing.** `translit_image_ok()` refuses the
-//! whole image when `g_nonpie_lo != 0`, and on this Linux host a non-PIE `ET_EXEC` guest is placed at a
-//! storage bias rather than at its link address -- measured, not assumed: with `-static` fixtures the
-//! instruction count is identical to four significant figures with the option on and off, and removing the
-//! `g_nonpie_lo == 0` clamp makes the engine SIGSEGV on the same guests. Every fixture is therefore built
-//! `-static-pie` and `elf_is_position_independent` asserts it, because a `-static` fixture would pass this
-//! whole file while executing no transliterated instruction at all.
+//! Linux places a non-PIE `ET_EXEC` guest at its link address when that range is free, so those images are
+//! valid transliterator fixtures too. If anything already owns the link range, the loader safely falls back
+//! to displaced storage and `translit_image_ok()` refuses the image: verbatim copied instructions cannot
+//! express the two address domains. Both paths are exercised below, including a non-clobbering collision.
 
 use hl_engine::{
     activation::GuestIsa,
@@ -97,6 +94,44 @@ fn displaced_fixture(directory: &Path, name: &str) -> PathBuf {
         "{name} is not ET_EXEC, so it does not exercise the non-PIE image refusal at all"
     );
     output
+}
+
+/// Serialises the two tests which deliberately depend on whether the process-wide ELF link range is free.
+static NONPIE_LINK_RANGE: Mutex<()> = Mutex::new(());
+
+struct LinkPage(*mut libc::c_void);
+
+impl LinkPage {
+    fn occupy() -> Self {
+        const LINK_BASE: usize = 0x0040_0000;
+        let page = unsafe {
+            libc::mmap(
+                LINK_BASE as *mut libc::c_void,
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+                -1,
+                0,
+            )
+        };
+        assert_eq!(
+            page, LINK_BASE as *mut libc::c_void,
+            "the test could not reserve the ET_EXEC link page without replacement"
+        );
+        unsafe { *(page as *mut u8) = 0xa5 };
+        Self(page)
+    }
+}
+
+impl Drop for LinkPage {
+    fn drop(&mut self) {
+        assert_eq!(
+            unsafe { *(self.0 as *const u8) },
+            0xa5,
+            "the guest loader clobbered the occupied link page"
+        );
+        assert_eq!(unsafe { libc::munmap(self.0, 4096) }, 0);
+    }
 }
 
 fn build(directory: &Path, name: &str, linkage: &str) -> PathBuf {
@@ -275,16 +310,9 @@ fn an_executable_guest_mapping_refuses_the_backend_for_the_rest_of_the_process()
     );
 }
 
-/// The image refusal, which is the one part of `translit.inc` that must fire rather than work.
-///
-/// A non-PIE `ET_EXEC` is mapped at a storage bias whenever the loader could not place it at its link
-/// address, and every baked pointer in it then has two names. Verbatim copying can express neither
-/// direction of that fold, so `translit_image_ok()` answers false for the whole image and the block runs
-/// on the interpreter, which already implements both. Selecting the backend must therefore be a no-op
-/// here rather than a miscompile: with the `g_nonpie_lo == 0` clamp removed, the same guests take a
-/// SIGSEGV inside the engine.
 #[test]
-fn a_non_position_independent_image_is_refused_rather_than_transliterated() {
+fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
+    let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
     let work = TempDir::new().unwrap();
     for name in ["flags", "operands", "sigs"] {
         let executable = displaced_fixture(work.path(), name);
@@ -294,27 +322,47 @@ fn a_non_position_independent_image_is_refused_rather_than_transliterated() {
             interpreted_status, 0,
             "{name}: the non-PIE fixture did not run under the interpreter"
         );
-        // Named, not merely absent: the refusal has to be the IMAGE predicate, not a filter that
-        // happened to admit nothing, and an operator has no other way to tell the two apart.
         assert!(
-            selected_backend
-                .line
-                .contains("declined, non-PIE image at a storage bias"),
-            "{name}: the backend did not report the non-PIE image refusal -- {}",
+            selected_backend.entries > 0,
+            "{name}: an ET_EXEC at its link address entered no emitted code -- {}",
             selected_backend.line
         );
         assert_eq!(
-            selected_backend.entries, 0,
-            "{name}: a refused image still entered emitted code"
-        );
-        assert_eq!(
             selected_status, interpreted_status,
-            "{name}: selecting the transliterator changed the exit status of a refused image"
+            "{name}: selecting the transliterator changed the exit status"
         );
         assert_eq!(
             String::from_utf8_lossy(&interpreted),
             String::from_utf8_lossy(&selected),
-            "{name}: selecting the transliterator changed the output of a refused image"
+            "{name}: selecting the transliterator changed the output"
         );
+        let native = std::process::Command::new(&executable)
+            .output()
+            .expect("native fixture");
+        assert_eq!(native.status.code(), Some(interpreted_status));
+        assert_eq!(native.stdout, interpreted, "{name}: engine output differs from native");
     }
+}
+
+/// An occupied link address must never be replaced. The loader instead uses displaced storage, whose
+/// two address domains are unsupported by the transliterator and therefore named as a refusal.
+#[test]
+fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
+    let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
+    let occupied = LinkPage::occupy();
+    let work = TempDir::new().unwrap();
+    let executable = displaced_fixture(work.path(), "flags");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert!(
+        selected_backend
+            .line
+            .contains("declined, non-PIE image at a storage bias"),
+        "the displaced image did not report the storage-bias refusal -- {}",
+        selected_backend.line
+    );
+    assert_eq!(selected_backend.entries, 0, "a displaced image entered emitted code");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    drop(occupied); // checks the sentinel before unmapping the page
 }
