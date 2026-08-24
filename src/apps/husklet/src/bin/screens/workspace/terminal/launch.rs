@@ -157,6 +157,48 @@ pub(crate) fn make_terminal_ex(
     history: Option<String>,
     slot: &str,
 ) -> (vte4::Terminal, Rc<Cell<i32>>) {
+    make_terminal_with(tw, cwd, history, slot, &ProductionPaneLauncher)
+}
+
+pub(crate) trait PaneLauncher {
+    fn spawn(
+        &self,
+        terminal: &vte4::Terminal,
+        argv: &[&str],
+        environment: &[&str],
+    ) -> std::io::Result<(i32, vte4::Pty)>;
+
+    fn observe(&self, _event: RestoreEvent) {}
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RestoreEvent {
+    Started,
+    PaneStarting,
+    PaneStarted(i32),
+    Completed,
+}
+
+pub(crate) struct ProductionPaneLauncher;
+
+impl PaneLauncher for ProductionPaneLauncher {
+    fn spawn(
+        &self,
+        terminal: &vte4::Terminal,
+        argv: &[&str],
+        environment: &[&str],
+    ) -> std::io::Result<(i32, vte4::Pty)> {
+        PtyProcess::spawn(terminal, argv, environment)
+    }
+}
+
+pub(crate) fn make_terminal_with<L: PaneLauncher>(
+    tw: &Rc<TermWin>,
+    cwd: Option<String>,
+    history: Option<String>,
+    slot: &str,
+    launcher: &L,
+) -> (vte4::Terminal, Rc<Cell<i32>>) {
     let term = vte4::Terminal::new();
     let cfg = tw.ws.terminal_config();
     Terminal::new(&term).style(&cfg);
@@ -232,7 +274,8 @@ pub(crate) fn make_terminal_ex(
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
-    match PtyProcess::spawn(&term, &launch_args, &envv) {
+    launcher.observe(RestoreEvent::PaneStarting);
+    match launcher.spawn(&term, &launch_args, &envv) {
         Ok((child, pty)) => Launch {
             window: tw,
             terminal: &term,
@@ -240,6 +283,9 @@ pub(crate) fn make_terminal_ex(
         }
         .attach(child, &pty),
         Err(e) => term.feed(format!("\r\n\x1b[31mfailed to start shell: {e}\x1b[0m\r\n").as_bytes()),
+    }
+    if pid.get() != 0 {
+        launcher.observe(RestoreEvent::PaneStarted(pid.get()));
     }
     (term, pid)
 }

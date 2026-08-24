@@ -554,6 +554,8 @@ mod launch;
 mod link;
 mod pane;
 mod panes;
+#[cfg(test)]
+mod restore_profile;
 mod search;
 mod slots;
 mod state;

@@ -437,7 +437,12 @@ impl HistorySnapshot {
 /// Rebuild all tabs from a saved [`Session`].
 impl WindowSession<'_> {
     pub(crate) fn restore(&self, session: &Session) {
+        self.restore_with(session, &ProductionPaneLauncher);
+    }
+
+    pub(crate) fn restore_with<L: PaneLauncher>(&self, session: &Session, launcher: &L) {
         let tw = self.window;
+        launcher.observe(RestoreEvent::Started);
         let storage = tw.ws.storage_dir(&Home::current().root());
         for tab in &session.tabs {
             let n = tw.shell_no.get() + 1;
@@ -446,7 +451,7 @@ impl WindowSession<'_> {
             paneroot.set_hexpand(true);
             paneroot.set_vexpand(true);
             let mut pids = Vec::new();
-            let (widget, first) = self.build_pane_widget(&tab.root, &storage, &mut pids);
+            let (widget, first) = self.build_pane_widget(&tab.root, &storage, &mut pids, launcher);
             paneroot.append(&widget);
             let title = if tab.title.is_empty() {
                 format!("shell {n}")
@@ -459,15 +464,17 @@ impl WindowSession<'_> {
                 t.grab_focus();
             }
         }
+        launcher.observe(RestoreEvent::Completed);
     }
 
-    pub(crate) fn build_pane_widget(
+    pub(crate) fn build_pane_widget<L: PaneLauncher>(
         &self,
         node: &PaneNode,
         storage: &std::path::Path,
         pids: &mut Vec<Rc<Cell<i32>>>,
+        launcher: &L,
     ) -> (gtk::Widget, Option<vte4::Terminal>) {
-        PaneWidget::build(self, node, storage, pids)
+        PaneWidget::build(self, node, storage, pids, launcher)
     }
 }
 

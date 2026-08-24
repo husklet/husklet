@@ -26,11 +26,12 @@ impl PaneFocus {
 pub(crate) struct PaneWidget;
 
 impl PaneWidget {
-    pub(crate) fn build(
+    pub(crate) fn build<L: PaneLauncher>(
         session: &WindowSession<'_>,
         node: &PaneNode,
         storage: &std::path::Path,
         pids: &mut Vec<Rc<Cell<i32>>>,
+        launcher: &L,
     ) -> (gtk::Widget, Option<vte4::Terminal>) {
         let tw = session.window;
         match node {
@@ -51,7 +52,7 @@ impl PaneWidget {
                     });
                 // Reuse the pane's saved layout slot (fresh one if the session predates slots).
                 let slot = Slots::new(tw).adopt(pane.slot.as_deref());
-                let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, &slot);
+                let (term, pid) = make_terminal_with(tw, pane.cwd.clone(), history, &slot, launcher);
                 pids.push(pid);
                 (term.clone().upcast(), Some(term))
             }
@@ -72,8 +73,8 @@ impl PaneWidget {
                 paned.set_resize_end_child(true);
                 paned.set_hexpand(true);
                 paned.set_vexpand(true);
-                let (wa, fa) = session.build_pane_widget(a, storage, pids);
-                let (wb, fb) = session.build_pane_widget(b, storage, pids);
+                let (wa, fa) = session.build_pane_widget(a, storage, pids, launcher);
+                let (wb, fb) = session.build_pane_widget(b, storage, pids, launcher);
                 paned.set_start_child(Some(&wa));
                 paned.set_end_child(Some(&wb));
                 // Apply the saved split ratio once the paned has been allocated a size.
