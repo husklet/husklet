@@ -47,6 +47,9 @@ _Static_assert(__builtin_offsetof(struct cpu, r) == 0, "translit bakes r[] at of
 // every other block and the dispatcher flushes wholesale when it fills.
 #define TL_MAX_INSNS 192
 #define TL_MAX_BYTES 3072
+#ifndef TL_STITCH_MAX_JMPS
+#define TL_STITCH_MAX_JMPS 8
+#endif
 
 // ---- the host<->guest boundary
 //
@@ -141,6 +144,8 @@ static int translit_selected = -1; // inside the gate: off a Linux/x86-64 host i
 static uint64_t translit_blocks;
 static uint64_t translit_entries;
 static uint64_t translit_declined;
+static uint64_t translit_stitch_candidates;
+static uint64_t translit_stitch_admitted;
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -599,7 +604,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
     hl_x64_asm *a = &builder.asm_state;
 
     uint64_t pc = gpc;
-    int count = 0, terminated = 0;
+    int count = 0, terminated = 0, stitched = 0;
     uint8_t bytes[16];
 
     while (count < TL_MAX_INSNS && !a->overflow) {
@@ -649,9 +654,29 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             continue;
         }
 
+        // A bounded forward jump on the same source page can remain in this descriptor: no host address is
+        // baked, the existing [gpc, guest_end) hull remains a conservative SMC interval, and the ordinary
+        // instruction/byte caps still bound the distance between dispatcher safepoints. Validate the target
+        // before admitting it so an inaccessible/corrupt successor takes the normal guest-fault path from a
+        // fresh block rather than turning a translation-time read into an engine fault.
+        if (kind == TL_JMP) {
+            uint64_t target = next + (uint64_t)insn.imm;
+            if (target > next && (target >> 12) == (pc >> 12)) {
+                (void)__atomic_fetch_add(&translit_stitch_candidates, 1, __ATOMIC_RELAXED);
+                struct insn successor;
+                if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode(target, &successor) > 0 && successor.len > 0) {
+                    pc = target;
+                    count++;
+                    stitched++;
+                    (void)__atomic_fetch_add(&translit_stitch_admitted, 1, __ATOMIC_RELAXED);
+                    continue;
+                }
+            }
+        }
+
         // Terminators. Each writes cpu->rip (directly or through the exit) and returns to the dispatcher;
-        // no inter-block edge is emitted, so every exit is a dispatcher safepoint and the shared loop's
-        // signal/checkpoint/stop-the-world polling keeps working unchanged.
+        // no external inter-block edge is emitted, so every exit is a dispatcher safepoint and the shared
+        // loop's signal/checkpoint/stop-the-world polling keeps working unchanged.
         switch (kind) {
         case TL_SYSCALL:
             // The frontend convention is that rip is already past the 0F 05 when the block exits.
@@ -747,6 +772,8 @@ static int translit_report(char *out, size_t size) {
     uint64_t blocks = __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED);
     uint64_t entries = __atomic_load_n(&translit_entries, __ATOMIC_RELAXED);
     uint64_t declined = __atomic_load_n(&translit_declined, __ATOMIC_RELAXED);
+    uint64_t stitch_candidates = __atomic_load_n(&translit_stitch_candidates, __ATOMIC_RELAXED);
+    uint64_t stitch_admitted = __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED);
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
     uint64_t displaced_operand_declined =
@@ -781,7 +808,7 @@ static int translit_report(char *out, size_t size) {
                         " displaced_entries=%llu operand_declined=%llu riprel_projected=%llu lea_low=%llu"
                         " riprel_unreachable=%llu riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu"
                         " refusal_key=%u refusal_count=%llu refusal_prefix=%llu refusal_width=%llu"
-                        " refusal_rsp=%llu refusal_opcode=%llu\n",
+                        " refusal_rsp=%llu refusal_opcode=%llu stitch_candidates=%llu stitch_admitted=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -792,14 +819,19 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)displaced_lea_lowered, displaced_refusal_key,
                         (unsigned long long)displaced_refusal_count, (unsigned long long)displaced_refusal_prefix,
                         (unsigned long long)displaced_refusal_width, (unsigned long long)displaced_refusal_rsp,
-                        (unsigned long long)displaced_refusal_opcode_other);
+                        (unsigned long long)displaced_refusal_opcode_other, (unsigned long long)stitch_candidates,
+                        (unsigned long long)stitch_admitted);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
-                        " (blocks=%llu entries=%llu declined=%llu)\n",
-                        (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined);
-    return snprintf(out, size, "[prof] translit: blocks=%llu entries=%llu declined=%llu\n",
-                    (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined);
+                        " (blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu stitch_admitted=%llu)\n",
+                        (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
+                        (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted);
+    return snprintf(out, size,
+                    "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
+                    " stitch_admitted=%llu\n",
+                    (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
+                    (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.
