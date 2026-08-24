@@ -7,6 +7,16 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: []
 cases:
+  - id: runtime/filesystem/cwd-relative-resolution
+    status: !oracle-excluded
+      reason: "The host oracle has no Husklet provider mount corresponding to HL_VOLUMES"
+      evidence: "The fixture runs both the in-image /etc directory and provider-mounted /mnt through the engine"
+    compat: { class: compatibility }
+    build: { source: source/cwd_relative_resolution.c, output: cwd-relative-resolution, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/cwd-relative-resolution }
+    environment: { HL_VOLUMES: "/mnt:/tmp" }
+    run: []
+    expect: { exit: 0, stdout_empty: true }
   - id: runtime/filesystem/directory-lifecycle
     status: active
     compat: { class: compatibility }

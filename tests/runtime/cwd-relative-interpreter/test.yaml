@@ -1,0 +1,17 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: {}
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/cwd-relative-interpreter/resolution
+    status: !oracle-excluded
+      reason: "The host oracle has no Husklet provider mount corresponding to HL_VOLUMES"
+      evidence: "The fixture runs both the in-image /etc directory and provider-mounted /mnt through the engine interpreter"
+    compat: { class: compatibility }
+    build: { source: source/cwd_relative_resolution.c, output: cwd-relative-resolution, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/cwd-relative-resolution }
+    environment: { HL_VOLUMES: "/mnt:/tmp" }
+    run: []
+    expect: { exit: 0, stdout_empty: true }

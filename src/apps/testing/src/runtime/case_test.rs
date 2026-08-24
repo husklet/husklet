@@ -261,3 +261,16 @@ fn a_floor_on_an_app_that_never_emits_counters_is_a_load_error() {
     .expect("a floor without native diagnostics unexpectedly loaded");
     assert!(error.to_string().contains("diagnostics-floor"), "{error}");
 }
+
+#[test]
+fn cwd_backend_controls_compile_the_identical_fixture() {
+    const NATIVE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../tests/runtime/filesystem/source/cwd_relative_resolution.c"
+    ));
+    const INTERPRETED: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../tests/runtime/cwd-relative-interpreter/source/cwd_relative_resolution.c"
+    ));
+    assert_eq!(NATIVE, INTERPRETED, "native and interpreter controls drifted");
+}
