@@ -938,6 +938,67 @@ static int ckpt_logical_descriptor_compare(const void *left, const void *right) 
     return 0;
 }
 
+struct ckpt_logical_snapshot {
+    hl_logical_vma_descriptor *items;
+    size_t count;
+};
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic uint64_t g_ckpt_logical_exports;
+static _Atomic uint64_t g_ckpt_logical_sorted;
+static _Atomic uint64_t g_ckpt_logical_visits;
+#define CKPT_LOGICAL_COUNT(counter, amount) __atomic_fetch_add(&(counter), (uint64_t)(amount), __ATOMIC_RELAXED)
+#else
+#define CKPT_LOGICAL_COUNT(counter, amount) ((void)0)
+#endif
+
+static int ckpt_logical_snapshot_take(struct ckpt_logical_snapshot *snapshot) {
+    memset(snapshot, 0, sizeof *snapshot);
+    snapshot->count = hl_logical_vma_global_export(NULL, 0);
+    if (snapshot->count != 0) {
+        snapshot->items = malloc(snapshot->count * sizeof *snapshot->items);
+        if (snapshot->items == NULL) return -1;
+        if (hl_logical_vma_global_export(snapshot->items, snapshot->count) != snapshot->count) {
+            free(snapshot->items);
+            memset(snapshot, 0, sizeof *snapshot);
+            errno = EAGAIN;
+            return -1;
+        }
+        qsort(snapshot->items, snapshot->count, sizeof *snapshot->items, ckpt_logical_descriptor_compare);
+    }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    CKPT_LOGICAL_COUNT(g_ckpt_logical_exports, 1);
+    CKPT_LOGICAL_COUNT(g_ckpt_logical_sorted, snapshot->count);
+#endif
+    return 0;
+}
+
+static size_t ckpt_logical_lower_bound(const struct ckpt_logical_snapshot *snapshot, uint64_t address) {
+    size_t first = 0;
+    size_t count = snapshot->count;
+    while (count != 0) {
+        size_t step = count / 2;
+        size_t middle = first + step;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        CKPT_LOGICAL_COUNT(g_ckpt_logical_visits, 1);
+#endif
+        if (snapshot->items[middle].guest_first < address) {
+            first = middle + 1;
+            count -= step + 1;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
+static int ckpt_logical_contains(const struct ckpt_logical_snapshot *snapshot, uint64_t address) {
+    size_t after = ckpt_logical_lower_bound(snapshot, address + (address != UINT64_MAX));
+    if (after == 0) return 0;
+    const hl_logical_vma_descriptor *candidate = &snapshot->items[after - 1];
+    return address >= candidate->guest_first && address - candidate->guest_first < candidate->length;
+}
+
 static int ckpt_dump_region_bytes(struct ckpt_sink *sink, struct ckpt_sink_stream *f, size_t pagesz,
                                   struct ckpt_region *reg) {
     static uint8_t zero[65536];
@@ -989,6 +1050,7 @@ static void ckpt_pages_refuse(const char *step, uint64_t address) {
 
 static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, size_t pagesz, uint64_t *out_n) {
     uint64_t nreg = 0;
+    struct ckpt_logical_snapshot logical_snapshot;
     // One host mapping-table read for the whole dump; every region's anonymous-shared lookup is
     // answered from it. A truncated or unreadable scan cannot distinguish a shared anonymous region
     // from a private one, and guessing "private" is exactly the silent per-process copy this exists
@@ -999,6 +1061,18 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
                         "region's shared identity would be unrepresentable\n");
         return -1;
     }
+    // Checkpoint safepoints freeze mapping mutation. Export the immutable logical ledger once; gmap order is
+    // publication order rather than address order, so each mapping uses a logarithmic lower bound into this
+    // sorted snapshot instead of a global monotonic cursor that could silently skip an earlier range.
+    if (ckpt_logical_snapshot_take(&logical_snapshot) != 0) {
+        ckpt_pages_refuse("snapshot the logical VMA ledger at %#llx", 0);
+        return -1;
+    }
+#define CKPT_PAGES_RETURN(value)                                                                                       \
+    do {                                                                                                               \
+        free(logical_snapshot.items);                                                                                  \
+        return (value);                                                                                                \
+    } while (0)
     size_t mapping_count = hl_gmap_count();
     for (size_t i = 0; i < mapping_count; i++) {
         hl_gmap_entry mapping;
@@ -1049,40 +1123,25 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
                 if (claimed < 0) {
                     fprintf(stderr, "[ckpt] refuse: cannot elect a publisher for anonymous shared region %llx+%llx\n",
                             (unsigned long long)addr, (unsigned long long)(glen ? glen : len));
-                    return -1;
+                    CKPT_PAGES_RETURN(-1);
                 }
                 anon_shared_publisher = claimed;
             }
         }
-        hl_logical_vma_descriptor logical;
-        int is_logical = hl_logical_vma_global_describe(addr, &logical);
-        if (is_logical < 0) {
-            ckpt_pages_refuse("describe the logical VMA at %#llx", addr);
-            return -1;
-        }
+        int is_logical = ckpt_logical_contains(&logical_snapshot, addr);
         if (is_logical == 1) {
             /*
              * gmap tracks the original mmap while mprotect may split the
              * logical ledger. Emit every descriptor in this gmap separately;
              * the next outer entry (if any) skips descriptors it does not own.
              */
-            size_t descriptor_count = hl_logical_vma_global_export(NULL, 0);
-            hl_logical_vma_descriptor *descriptors =
-                descriptor_count ? malloc(descriptor_count * sizeof(*descriptors)) : NULL;
-            if (descriptor_count && descriptors == NULL) {
-                ckpt_pages_refuse("allocate the logical VMA descriptors for %#llx", addr);
-                return -1;
-            }
-            if (hl_logical_vma_global_export(descriptors, descriptor_count) != descriptor_count) {
-                free(descriptors);
-                errno = EAGAIN;
-                ckpt_pages_refuse("export the logical VMA descriptors for %#llx", addr);
-                return -1;
-            }
-            qsort(descriptors, descriptor_count, sizeof(*descriptors), ckpt_logical_descriptor_compare);
-            for (size_t descriptor_index = 0; descriptor_index < descriptor_count; ++descriptor_index) {
-                const hl_logical_vma_descriptor *descriptor = &descriptors[descriptor_index];
-                if (descriptor->guest_first < addr || descriptor->guest_first >= addr + glen) continue;
+            size_t descriptor_index = ckpt_logical_lower_bound(&logical_snapshot, addr);
+            for (; descriptor_index < logical_snapshot.count; ++descriptor_index) {
+                const hl_logical_vma_descriptor *descriptor = &logical_snapshot.items[descriptor_index];
+                if (descriptor->guest_first >= addr + glen) break;
+#if defined(HL_NATIVE_TEST_HOOKS)
+                CKPT_LOGICAL_COUNT(g_ckpt_logical_visits, 1);
+#endif
                 struct ckpt_region logical_region = {0};
                 logical_region.addr = descriptor->guest_first;
                 logical_region.len = descriptor->length;
@@ -1097,38 +1156,37 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
                 if (logical_header < 0 || ckpt_write_region(sink, f, &logical_region) != 0 ||
                     ckpt_dump_region_bytes(sink, f, pagesz, &logical_region) != 0 ||
                     ckpt_write_region_at(sink, f, (uint64_t)logical_header, &logical_region) != 0) {
-                    free(descriptors);
                     ckpt_pages_refuse("write a logical region inside %#llx", addr);
-                    return -1;
+                    CKPT_PAGES_RETURN(-1);
                 }
                 nreg++;
             }
-            free(descriptors);
             continue;
         }
         int64_t header_offset = ckpt_sink_tell(sink, f);
         if (header_offset < 0) {
             ckpt_pages_refuse("take the stream offset for region %#llx", addr);
-            return -1;
+            CKPT_PAGES_RETURN(-1);
         }
         if (ckpt_write_region(sink, f, &reg) != 0) {
             ckpt_pages_refuse("write the region header for %#llx", addr);
-            return -1;
+            CKPT_PAGES_RETURN(-1);
         }
         if ((!reg.backing_anon_shared || anon_shared_publisher) && ckpt_dump_region_bytes(sink, f, pagesz, &reg) != 0) {
             ckpt_pages_refuse("write the region bytes for %#llx", addr);
-            return -1;
+            CKPT_PAGES_RETURN(-1);
         }
         // Patch the region header in place now that npages is known (the streaming equivalent of the
         // old seek-back-and-rewrite).
         if (ckpt_write_region_at(sink, f, (uint64_t)header_offset, &reg) != 0) {
             ckpt_pages_refuse("patch the region header for %#llx", addr);
-            return -1;
+            CKPT_PAGES_RETURN(-1);
         }
         nreg++;
     }
     *out_n = nreg;
-    return 0;
+    CKPT_PAGES_RETURN(0);
+#undef CKPT_PAGES_RETURN
 }
 
 // This process's guest identity (pid / parent / group / session), mapped from host ids to guest space (the
