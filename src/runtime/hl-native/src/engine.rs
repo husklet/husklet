@@ -871,7 +871,7 @@ mod tests {
         let mut bytes = image();
         put16(&mut bytes, 18, 0x3e);
         // ioctl(0, TCSETSF, 0x400200), then exit_group(ioctl_result).
-        bytes[0x100..0x11d].copy_from_slice(&[
+        bytes[0x100..0x11c].copy_from_slice(&[
             0xb8, 0x10, 0, 0, 0, 0x31, 0xff, 0xbe, 0x04, 0x54, 0, 0, 0xba, 0, 0x02, 0x40, 0, 0x0f, 0x05, 0x89, 0xc7,
             0xb8, 0x3c, 0, 0, 0, 0x0f, 0x05,
         ]);
@@ -1001,12 +1001,18 @@ mod tests {
         );
         let first_before = crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd());
         let other_before = crate::terminal_termios_flush_generation(terminals[1].1.as_raw_fd());
-        for _ in 0..65 {
+        let _ = crate::terminal_termios_flush_mark_test(terminals[0].1.as_raw_fd(), 0x5404);
+        let per_publish = crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd()) - first_before;
+        assert!(
+            matches!(per_publish, 1 | 2),
+            "one target-local publication per compiled guest ISA"
+        );
+        for _ in 1..65 {
             let _ = crate::terminal_termios_flush_mark_test(terminals[0].1.as_raw_fd(), 0x5404);
         }
         assert_eq!(
             crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd()),
-            first_before + 65
+            first_before + 65 * per_publish
         );
         assert_eq!(
             crate::terminal_termios_flush_generation(terminals[1].1.as_raw_fd()),
@@ -1034,7 +1040,7 @@ mod tests {
         }
         assert_eq!(
             crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd()),
-            first_before + 65 + 8,
+            first_before + (65 + 8) * per_publish,
             "concurrent fork publishers lost an atomic increment"
         );
 
