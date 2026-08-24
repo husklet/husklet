@@ -747,6 +747,25 @@ static int ckpt_scan_fds_walk(struct ckpt_fd *recs, int cap, int *out_n) {
     return 0;
 }
 
+/* Allocate records for the population we can actually observe, not for every possible guest descriptor.
+ * A ckpt_fd is deliberately self-contained (including a 512-byte path), so the old HL_NFD allocation
+ * dirtied roughly 36 MiB twice per process even when a shell owned fewer than ten descriptors. The guest
+ * is stopped while this runs; if the second population read nevertheless grows, ckpt_scan_fds_walk refuses
+ * it through its existing capacity check rather than truncating the image. */
+static int ckpt_fd_record_capacity(size_t visible, size_t *capacity) {
+    if (visible > HL_NFD) return -1;
+    *capacity = visible > 0 ? visible : 1;
+    return 0;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_fd_capacity_test)(uint32_t scenario) {
+    size_t capacity = 0;
+    if (scenario == 0) return ckpt_fd_record_capacity(0, &capacity) == 0 && capacity == 1 ? 0 : -1;
+    if (scenario == 1) return ckpt_fd_record_capacity(64, &capacity) == 0 && capacity == 64 ? 0 : -1;
+    if (scenario == 2) return ckpt_fd_record_capacity((size_t)HL_NFD + 1, &capacity) != 0 ? 0 : -1;
+    return -22;
+}
+
 // Two passes over the descriptor set: prove, then consume. See g_ckpt_admission_only in capture.c for why
 // the split exists and why the claim election stays in the second pass. The first pass's records are
 // discarded -- they exist only so the arms run their gates against a real record -- and the second pass is
@@ -1784,9 +1803,14 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
         return -1;
     }
     struct ckpt_sink *sink = ckpt_sink_current();
-    struct ckpt_fd *fdrecs = calloc(HL_NFD, sizeof *fdrecs);
+    size_t fd_capacity = 0;
+    if (ckpt_fd_record_capacity(proc_fdvis_list((int)getpid(), NULL, 0), &fd_capacity) != 0) {
+        g_ckpt_member_refusal = "size its own descriptor table";
+        return -1;
+    }
+    struct ckpt_fd *fdrecs = calloc(fd_capacity, sizeof *fdrecs);
     int nfd = 0;
-    if (fdrecs == NULL || ckpt_scan_fds(fdrecs, HL_NFD, &nfd) != 0) {
+    if (fdrecs == NULL || ckpt_scan_fds(fdrecs, (int)fd_capacity, &nfd) != 0) {
         free(fdrecs);
         g_ckpt_member_refusal = "scan its own descriptor table"; // P3 refusal already reported
         return -1;

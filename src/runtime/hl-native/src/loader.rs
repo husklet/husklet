@@ -190,6 +190,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_pipe_capture: ScenarioTest,
     pub(crate) aarch64_checkpoint_stdio_alias_capture: ScenarioTest,
     pub(crate) x86_64_checkpoint_stdio_alias_capture: ScenarioTest,
+    pub(crate) aarch64_checkpoint_fd_capacity: ScenarioTest,
+    pub(crate) x86_64_checkpoint_fd_capacity: ScenarioTest,
     pub(crate) aarch64_checkpoint_socket_halfclose: ScenarioTest,
     pub(crate) x86_64_checkpoint_socket_halfclose: ScenarioTest,
     pub(crate) aarch64_checkpoint_ipc_admission: ScenarioTest,
@@ -568,6 +570,8 @@ impl TestApi {
                 "hl_x86_64_checkpoint_stdio_alias_capture_test",
                 ScenarioTest
             ),
+            aarch64_checkpoint_fd_capacity: symbol!("hl_aarch64_checkpoint_fd_capacity_test", ScenarioTest),
+            x86_64_checkpoint_fd_capacity: symbol!("hl_x86_64_checkpoint_fd_capacity_test", ScenarioTest),
             aarch64_checkpoint_socket_halfclose: symbol!("hl_aarch64_checkpoint_socket_halfclose_test", ScenarioTest),
             x86_64_checkpoint_socket_halfclose: symbol!("hl_x86_64_checkpoint_socket_halfclose_test", ScenarioTest),
             aarch64_checkpoint_ipc_admission: symbol!("hl_aarch64_checkpoint_ipc_admission_test", ScenarioTest),

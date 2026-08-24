@@ -189,6 +189,16 @@ pub(crate) fn checkpoint_stdio_alias_capture_test(isa: u32, scenario: u32) -> Re
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_fd_capacity_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_fd_capacity,
+        test_api().x86_64_checkpoint_fd_capacity,
+        scenario,
+    )
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_socket_halfclose_test(isa: u32, scenario: u32) -> Result<(), i32> {
     // is its own static buffer, clears the identity it assigned, restores the previous sink and the
     // destructive-capture flag, and returns a scalar status.
