@@ -506,7 +506,7 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 1..=3 {
+        for scenario in 1..=9 {
             // SAFETY: the hook accepts one bounded scalar selector and owns no external state.
             assert_eq!(unsafe { hook(scenario) }, 0, "scenario {scenario}");
         }

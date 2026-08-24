@@ -274,8 +274,8 @@ static int translit_classify(const struct insn *insn) {
 // instructions whose copied bytes either touch no memory or carry a RIP-relative address that can be
 // projected below. Everything with an implicit memory operand, a guest-stack effect, or a register-derived
 // effective address stays in the interpreter until it has dedicated lowering.
-static int translit_displaced_safe(const struct insn *insn, int kind) {
-    if (!g_nonpie_lo) return 1;
+static int translit_displaced_safe_for(const struct insn *insn, int kind, int displaced) {
+    if (!displaced) return 1;
     if (kind == TL_CALL || kind == TL_CALL_REG || kind == TL_RET) return 0;
     if (kind != TL_COPY) return 1; // direct control, register jmp, and syscall touch no guest memory here
     if (insn->is_mem) return insn->rip_rel;
@@ -287,6 +287,10 @@ static int translit_displaced_safe(const struct insn *insn, int kind) {
     if (op >= 0xAA && op <= 0xAF) return 0; // stos, lods, scas
     if (op == 0xFF && insn->reg == 6) return 0; // push r/m
     return 1;
+}
+
+static int translit_displaced_safe(const struct insn *insn, int kind) {
+    return translit_displaced_safe_for(insn, kind, g_nonpie_lo != 0);
 }
 
 // ---- the block
@@ -398,6 +402,25 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if ((int32_t)encoded != 0x123) return 4;
         return translit_rel32(UINT64_C(0x8000000000), 0, &encoded) ? 5 : 0;
     }
+    struct insn insn = {0};
+    if (scenario == 4) {
+        insn.is_mem = 1;
+        return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 7 : 0;
+    }
+    if (scenario == 5) {
+        insn.is_mem = insn.rip_rel = 1;
+        return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 0 : 8;
+    }
+    if (scenario == 6) {
+        insn.op = 0x50;
+        return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 9 : 0;
+    }
+    if (scenario == 7) {
+        insn.op = 0xA4;
+        return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 10 : 0;
+    }
+    if (scenario == 8) return translit_displaced_safe_for(&insn, TL_CALL, 1) ? 11 : 0;
+    if (scenario == 9) return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 0 : 12;
     return 6;
 }
 #endif
