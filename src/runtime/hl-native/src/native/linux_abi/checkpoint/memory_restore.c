@@ -3,6 +3,21 @@
 #include <mach/mach_vm.h>
 #endif
 
+struct ckpt_restore_validation_profile {
+    uint64_t regions;
+    uint64_t page_records;
+    uint64_t page_bytes;
+    uint64_t fd_validation_records;
+    uint64_t fd_preflight_records;
+    uint64_t external_probes;
+    uint64_t external_requests;
+    uint64_t unique_external_paths;
+    uint64_t unique_external_objects;
+    char (*external_paths)[512];
+    uint64_t *external_objects;
+};
+static struct ckpt_restore_validation_profile g_ckpt_restore_validation_profile;
+
 static int ckpt_read_manifest(struct ckpt_manifest *man) {
     if (ckpt_source_load("MANIFEST", man, sizeof *man) != 0) {
         fprintf(stderr, "[restore] the store has no MANIFEST (not a complete checkpoint)\n");

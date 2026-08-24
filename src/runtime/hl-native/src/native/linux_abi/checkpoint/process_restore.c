@@ -1193,6 +1193,7 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
             ckpt_source_fclose(pages);
             return -1;
         }
+        g_ckpt_restore_validation_profile.regions++;
         // The only walk over every member's regions that runs before the restore allocates anything of
         // its own, which is the whole window in which the image's addresses can still be taken.
         ckpt_restore_reserve_note(region.addr, region.len);
@@ -1205,6 +1206,8 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
             }
             uint64_t remaining = region.addr + region.len - address;
             size_t size = (size_t)(remaining < meta->pagesz ? remaining : meta->pagesz);
+            g_ckpt_restore_validation_profile.page_records++;
+            g_ckpt_restore_validation_profile.page_bytes += size;
             unsigned char buffer[4096];
             while (size != 0) {
                 size_t chunk = size < sizeof buffer ? size : sizeof buffer;
@@ -1239,6 +1242,7 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
     uint64_t descriptors = 0;
     struct ckpt_fd record;
     while (ckpt_rd_fd(fds, &record) == 0) {
+        g_ckpt_restore_validation_profile.fd_validation_records++;
         if (record.gfd < 0 || record.gfd >= HL_NFD || record.kind < CKF_TTY || record.kind > CKF_DEVICE) {
             ckpt_source_fclose(fds);
             return -1;
@@ -1250,21 +1254,105 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
     return valid_fds ? 0 : -1;
 }
 
+struct ckpt_external_preflight_entry {
+    char path[512];
+    uint64_t object_id;
+    int32_t kind;
+    int flags;
+    int directory;
+    int unavailable;
+};
+static struct ckpt_external_preflight_entry *g_external_preflight;
+static size_t g_external_preflight_count;
+
+static int ckpt_external_preflight_key_equal(const struct ckpt_external_preflight_entry *entry,
+                                             const struct ckpt_fd *record, int flags, int directory) {
+    return entry->object_id == record->object_id && entry->kind == record->kind && entry->flags == flags &&
+           entry->directory == directory && memcmp(entry->path, record->path, sizeof entry->path) == 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_external_preflight_key_test)(uint32_t scenario) {
+    if (scenario != 0) return -22;
+    struct ckpt_fd record = {.kind = CKF_FILE, .flags = O_RDONLY, .object_id = 41};
+    snprintf(record.path, sizeof record.path, "/fixture/data");
+    struct ckpt_external_preflight_entry entry = {
+        .object_id = record.object_id, .kind = record.kind, .flags = O_RDONLY, .directory = 0};
+    memcpy(entry.path, record.path, sizeof entry.path);
+    if (!ckpt_external_preflight_key_equal(&entry, &record, O_RDONLY, 0)) return -1;
+    record.object_id++;
+    if (ckpt_external_preflight_key_equal(&entry, &record, O_RDONLY, 0)) return -2;
+    record.object_id--;
+    record.kind = CKF_DEVICE;
+    if (ckpt_external_preflight_key_equal(&entry, &record, O_RDONLY, 0)) return -3;
+    record.kind = CKF_FILE;
+    record.path[1] = 'x';
+    if (ckpt_external_preflight_key_equal(&entry, &record, O_RDONLY, 0)) return -4;
+    record.path[1] = 'f';
+    if (ckpt_external_preflight_key_equal(&entry, &record, O_WRONLY, 0) ||
+        ckpt_external_preflight_key_equal(&entry, &record, O_RDONLY, 1))
+        return -5;
+    return 0;
+}
+#endif
+
 static int ckpt_external_unavailable(const struct ckpt_fd *record) {
     if (record->kind != CKF_FILE && record->kind != CKF_DEVICE) return 0;
-    struct stat status;
-    if (stat(record->path, &status) != 0) return 1;
-    if (record->kind == CKF_DEVICE) {
-        if (!S_ISCHR(status.st_mode) && !S_ISBLK(status.st_mode)) return 1;
-    } else {
-        int directory = (record->auxiliary & CKFA_DIRECTORY) != 0;
-        if (directory ? !S_ISDIR(status.st_mode) : !S_ISREG(status.st_mode)) return 1;
-    }
+    g_ckpt_restore_validation_profile.external_requests++;
     int flags = record->flags & ~(O_CREAT | O_EXCL | O_TRUNC);
-    int probe = open(record->path, flags);
-    if (probe < 0) return 1;
-    close(probe);
-    return 0;
+    int directory = record->kind == CKF_FILE && (record->auxiliary & CKFA_DIRECTORY) != 0;
+    for (size_t index = 0; index < g_external_preflight_count; ++index)
+        if (ckpt_external_preflight_key_equal(&g_external_preflight[index], record, flags, directory))
+            return g_external_preflight[index].unavailable;
+    g_ckpt_restore_validation_profile.external_probes++;
+    uint64_t path_index = 0;
+    while (path_index < g_ckpt_restore_validation_profile.unique_external_paths &&
+           strcmp(g_ckpt_restore_validation_profile.external_paths[path_index], record->path) != 0)
+        path_index++;
+    if (path_index == g_ckpt_restore_validation_profile.unique_external_paths) {
+        void *paths = realloc(g_ckpt_restore_validation_profile.external_paths,
+                              (size_t)(path_index + 1) * sizeof *g_ckpt_restore_validation_profile.external_paths);
+        if (paths != NULL) {
+            g_ckpt_restore_validation_profile.external_paths = paths;
+            memcpy(g_ckpt_restore_validation_profile.external_paths[path_index], record->path, sizeof record->path);
+            g_ckpt_restore_validation_profile.unique_external_paths++;
+        }
+    }
+    uint64_t object_index = 0;
+    while (object_index < g_ckpt_restore_validation_profile.unique_external_objects &&
+           g_ckpt_restore_validation_profile.external_objects[object_index] != record->object_id)
+        object_index++;
+    if (object_index == g_ckpt_restore_validation_profile.unique_external_objects) {
+        void *objects = realloc(g_ckpt_restore_validation_profile.external_objects,
+                                (size_t)(object_index + 1) * sizeof *g_ckpt_restore_validation_profile.external_objects);
+        if (objects != NULL) {
+            g_ckpt_restore_validation_profile.external_objects = objects;
+            g_ckpt_restore_validation_profile.external_objects[object_index] = record->object_id;
+            g_ckpt_restore_validation_profile.unique_external_objects++;
+        }
+    }
+    struct stat status;
+    int unavailable = stat(record->path, &status) != 0;
+    if (!unavailable && record->kind == CKF_DEVICE) {
+        unavailable = !S_ISCHR(status.st_mode) && !S_ISBLK(status.st_mode);
+    } else if (!unavailable) {
+        unavailable = directory ? !S_ISDIR(status.st_mode) : !S_ISREG(status.st_mode);
+    }
+    int probe = unavailable ? -1 : open(record->path, flags);
+    if (!unavailable) unavailable = probe < 0;
+    if (probe >= 0) close(probe);
+    void *entries = realloc(g_external_preflight, (g_external_preflight_count + 1) * sizeof *g_external_preflight);
+    if (entries != NULL) {
+        g_external_preflight = entries;
+        struct ckpt_external_preflight_entry *entry = &g_external_preflight[g_external_preflight_count++];
+        memcpy(entry->path, record->path, sizeof entry->path);
+        entry->object_id = record->object_id;
+        entry->kind = record->kind;
+        entry->flags = flags;
+        entry->directory = directory;
+        entry->unavailable = unavailable;
+    }
+    return unavailable;
 }
 
 static int ckpt_preflight_socket_queue(const struct ckpt_fd *socket_record, struct ckpt_fd *unavailable) {
@@ -1329,6 +1417,7 @@ static int ckpt_restore_preflight(int policy) {
         }
         struct ckpt_fd record;
         while (process->viable && ckpt_rd_fd(file, &record) == 0) {
+            g_ckpt_restore_validation_profile.fd_preflight_records++;
             if (record.kind == CKF_FILE || record.kind == CKF_DEVICE) {
                 if (ckpt_external_unavailable(&record)) {
                     char reason[192];

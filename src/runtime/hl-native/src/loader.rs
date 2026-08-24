@@ -192,6 +192,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_stdio_alias_capture: ScenarioTest,
     pub(crate) aarch64_checkpoint_fd_capacity: ScenarioTest,
     pub(crate) x86_64_checkpoint_fd_capacity: ScenarioTest,
+    pub(crate) aarch64_checkpoint_external_preflight_key: ScenarioTest,
+    pub(crate) x86_64_checkpoint_external_preflight_key: ScenarioTest,
     pub(crate) aarch64_checkpoint_socket_halfclose: ScenarioTest,
     pub(crate) x86_64_checkpoint_socket_halfclose: ScenarioTest,
     pub(crate) aarch64_checkpoint_ipc_admission: ScenarioTest,
@@ -572,6 +574,14 @@ impl TestApi {
             ),
             aarch64_checkpoint_fd_capacity: symbol!("hl_aarch64_checkpoint_fd_capacity_test", ScenarioTest),
             x86_64_checkpoint_fd_capacity: symbol!("hl_x86_64_checkpoint_fd_capacity_test", ScenarioTest),
+            aarch64_checkpoint_external_preflight_key: symbol!(
+                "hl_aarch64_checkpoint_external_preflight_key_test",
+                ScenarioTest
+            ),
+            x86_64_checkpoint_external_preflight_key: symbol!(
+                "hl_x86_64_checkpoint_external_preflight_key_test",
+                ScenarioTest
+            ),
             aarch64_checkpoint_socket_halfclose: symbol!("hl_aarch64_checkpoint_socket_halfclose_test", ScenarioTest),
             x86_64_checkpoint_socket_halfclose: symbol!("hl_x86_64_checkpoint_socket_halfclose_test", ScenarioTest),
             aarch64_checkpoint_ipc_admission: symbol!("hl_aarch64_checkpoint_ipc_admission_test", ScenarioTest),

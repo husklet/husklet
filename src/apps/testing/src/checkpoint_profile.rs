@@ -36,6 +36,84 @@ struct FdScan {
     hash: String,
 }
 
+#[derive(Debug)]
+struct RestoreValidation {
+    isa: String,
+    external_requests: u64,
+    external_probes: u64,
+    unique_paths: u64,
+    unique_objects: u64,
+}
+
+fn restore_validations(stderr: &str) -> Result<Vec<RestoreValidation>, String> {
+    stderr
+        .lines()
+        .filter(|line| line.starts_with("checkpoint_restore_validation\t"))
+        .map(|line| {
+            let fields = line
+                .split('\t')
+                .skip(1)
+                .filter_map(|field| field.split_once('='))
+                .collect::<BTreeMap<_, _>>();
+            if fields.keys().copied().collect::<Vec<_>>()
+                != [
+                    "external_probes",
+                    "external_requests",
+                    "fd_preflight",
+                    "fd_validation",
+                    "isa",
+                    "page_bytes",
+                    "page_records",
+                    "regions",
+                    "unique_objects",
+                    "unique_paths",
+                ]
+            {
+                return Err(format!("restore validation schema mismatch: {line}"));
+            }
+            let number = |name: &str| {
+                fields[name]
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid restore validation {name}: {line}"))
+            };
+            for name in ["regions", "page_records", "page_bytes", "fd_validation", "fd_preflight"] {
+                number(name)?;
+            }
+            Ok(RestoreValidation {
+                isa: fields["isa"].to_owned(),
+                external_requests: number("external_requests")?,
+                external_probes: number("external_probes")?,
+                unique_paths: number("unique_paths")?,
+                unique_objects: number("unique_objects")?,
+            })
+        })
+        .collect()
+}
+
+fn validate_restore_validations(rows: &[RestoreValidation]) -> Result<(), String> {
+    for isa in ["aarch64", "x86_64"] {
+        let matching = rows.iter().filter(|row| row.isa == isa).collect::<Vec<_>>();
+        if matching.len() != 2 {
+            return Err(format!(
+                "{isa} expected 2 restore validation rows, got {}",
+                matching.len()
+            ));
+        }
+        if matching.iter().any(|row| {
+            row.external_requests == 0
+                || row.external_probes == 0
+                || row.external_probes > row.external_requests
+                || row.unique_paths == 0
+                || row.unique_objects == 0
+                || row.unique_paths > row.external_probes
+                || row.unique_objects > row.external_probes
+        }) {
+            return Err(format!("{isa} invalid restore validation counts: {matching:?}"));
+        }
+    }
+    Ok(())
+}
+
 fn fd_scans(stderr: &str) -> Result<Vec<FdScan>, String> {
     stderr
         .lines()
@@ -269,6 +347,14 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         let scans =
             fd_scans(std::str::from_utf8(&output.stderr)?).map_err(|error| format!("sample {sample}: {error}"))?;
         validate_fd_scans(&scans).map_err(|error| format!("sample {sample}: {error}"))?;
+        let validations = restore_validations(std::str::from_utf8(&output.stderr)?)
+            .map_err(|error| format!("sample {sample}: {error}"))?;
+        validate_restore_validations(&validations).map_err(|error| format!("sample {sample}: {error}"))?;
+        if options.scale == 2048 && validations.iter().any(|row| row.external_probes > 4) {
+            return Err(
+                format!("sample {sample}: duplicate external validation did not collapse: {validations:?}").into(),
+            );
+        }
         for scan in scans {
             let total = scan_totals.entry(scan.isa).or_default();
             total.0 += scan.visible;
@@ -291,7 +377,7 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         temporary.join("receipt"),
         format!(
-            "checkpoint_profile_v1\nsamples={}\nscale={}\nprobe_sha256={probe_hash}\nfd_scan_rows_per_sample=24\nfd_scan_admission_equals_consumption=1\n",
+            "checkpoint_profile_v1\nsamples={}\nscale={}\nprobe_sha256={probe_hash}\nfd_scan_rows_per_sample=24\nfd_scan_admission_equals_consumption=1\nrestore_validation_rows_per_sample=4\n",
             options.samples, options.scale
         ),
     )?;
@@ -319,7 +405,9 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CONTROL, NATIVE, fd_scans, rows, validate, validate_fd_scans};
+    use super::{
+        CONTROL, NATIVE, fd_scans, restore_validations, rows, validate, validate_fd_scans, validate_restore_validations,
+    };
 
     #[test]
     fn fd_scan_receipt_requires_identical_admission_and_consumption_sets() {
@@ -343,6 +431,25 @@ mod tests {
         assert!(fd_scans(&text.replacen("pass=1", "pass=4294967297", 1)).is_err());
         assert!(fd_scans(&text.replacen("0123456789abcdef", "0123456789abcde", 1)).is_err());
         assert!(fd_scans(&text.replacen("0123456789abcdef", "0123456789abcdeF", 1)).is_err());
+    }
+
+    #[test]
+    fn restore_validation_receipt_requires_both_isas_and_bounded_unique_counts() {
+        let pair = |isa: &str| {
+            format!(
+                "checkpoint_restore_validation\tisa={isa}\tregions=9\tpage_records=9\tpage_bytes=36864\tfd_validation=9\tfd_preflight=9\texternal_requests=8\texternal_probes=2\tunique_paths=2\tunique_objects=2\ncheckpoint_restore_validation\tisa={isa}\tregions=9\tpage_records=9\tpage_bytes=36864\tfd_validation=9\tfd_preflight=9\texternal_requests=8\texternal_probes=2\tunique_paths=2\tunique_objects=2\n"
+            )
+        };
+        let text = pair("aarch64") + &pair("x86_64");
+        validate_restore_validations(&restore_validations(&text).unwrap()).unwrap();
+        assert!(restore_validations(&text.replacen("unique_paths=2", "unique_paths=9", 1)).is_ok());
+        assert!(
+            validate_restore_validations(
+                &restore_validations(&text.replacen("unique_paths=2", "unique_paths=9", 1)).unwrap()
+            )
+            .is_err()
+        );
+        assert!(restore_validations(&text.replacen("page_bytes=36864", "page_bytes=bad", 1)).is_err());
     }
 
     #[test]

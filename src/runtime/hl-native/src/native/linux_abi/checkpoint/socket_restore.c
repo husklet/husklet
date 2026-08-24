@@ -1322,6 +1322,10 @@ static void ckpt_restore_proc_run(int gpid) {
 // RAM FIRST (before engine init, so MAP_FIXED lands on free VAs), then re-forks the tree.
 static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_ledger *phases, int *completed) {
     uint64_t phase = ckpt_phase_begin(phases);
+    memset(&g_ckpt_restore_validation_profile, 0, sizeof g_ckpt_restore_validation_profile);
+    free(g_external_preflight);
+    g_external_preflight = NULL;
+    g_external_preflight_count = 0;
     struct ckpt_manifest man;
     ckpt_restore_hold_tty_signals();
     // Before anything forks: every member must inherit ONE anonymous-shared naming generation, or two
@@ -1353,6 +1357,26 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     // before the first allocation, or the kernel's top-down allocator will hand the restore its own
     // members' guest addresses for the commit barrier, the image buffers and everything after them.
     ckpt_restore_reserve_apply();
+    if (hl_option_get("HL_CHECKPOINT_FD_SCAN_PROFILE") != NULL)
+        fprintf(stderr,
+                "checkpoint_restore_validation\tisa=%s\tregions=%llu\tpage_records=%llu\tpage_bytes=%llu\tfd_validation=%llu\tfd_preflight=%llu\texternal_requests=%llu\texternal_probes=%llu\tunique_paths=%llu\tunique_objects=%llu\n",
+                ckpt_phase_isa_name(G_CKPT_ARCH),
+                (unsigned long long)g_ckpt_restore_validation_profile.regions,
+                (unsigned long long)g_ckpt_restore_validation_profile.page_records,
+                (unsigned long long)g_ckpt_restore_validation_profile.page_bytes,
+                (unsigned long long)g_ckpt_restore_validation_profile.fd_validation_records,
+                (unsigned long long)g_ckpt_restore_validation_profile.fd_preflight_records,
+                (unsigned long long)g_ckpt_restore_validation_profile.external_requests,
+                (unsigned long long)g_ckpt_restore_validation_profile.external_probes,
+                (unsigned long long)g_ckpt_restore_validation_profile.unique_external_paths,
+                (unsigned long long)g_ckpt_restore_validation_profile.unique_external_objects);
+    free(g_ckpt_restore_validation_profile.external_paths);
+    free(g_ckpt_restore_validation_profile.external_objects);
+    free(g_external_preflight);
+    g_external_preflight = NULL;
+    g_external_preflight_count = 0;
+    g_ckpt_restore_validation_profile.external_paths = NULL;
+    g_ckpt_restore_validation_profile.external_objects = NULL;
     ckpt_phase_finish(phases, "restore_validation", phase, 0);
     phase = ckpt_phase_begin(phases);
     if (ckpt_prepare_restore_pipes() != 0) {

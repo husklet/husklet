@@ -373,6 +373,13 @@ pub fn checkpoint_fd_capacity_test(isa: u32, scenario: u32) -> Result<(), i32> {
     bindings::checkpoint_fd_capacity_test(isa, scenario)
 }
 
+/// Prove restore validation memo keys preserve path, type, flags, directory shape and captured object identity.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_external_preflight_key_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::checkpoint_external_preflight_key_test(isa, scenario)
+}
+
 /// Exercise socket half-close across the checkpoint: that capture records the direction each endpoint
 /// closed, that a drain reading end-of-stream from a peer that is still open does not record it as closed,
 /// that a half-closed endpoint is admissible, and that the replay reproduces the kernel state measured on
