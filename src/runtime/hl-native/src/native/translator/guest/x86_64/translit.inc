@@ -712,20 +712,24 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
                                                                  g_nonpie_hi, g_nonpie_bias);
-                // Keep the loaded target in borrowed r11 until both guest stack stores succeed. The whole
-                // faulting interval preserves r11, and cpu->rip remains the source CALL until commit, so
-                // even a wrapped provenance map restarts the instruction instead of publishing its target.
+                // Borrow r11 only for the pointer load, then spill the target and restore the guest value
+                // before either stack store can fault. cpu->rip remains the source CALL until both stores
+                // succeed. A wrapped provenance map therefore retains the block-source fallback with an
+                // exact guest register file rather than publishing this CALL's target early.
                 hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
                 hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
                 preserve_start = a->cursor;
                 hl_x64_load_ind(a, HL_X64_R11, HL_X64_R11);
+                preserve_end = a->cursor;
                 preserve_register = HL_X64_R11;
+                hl_x64_store_gs(a, HL_X64_R11, TL_MM_ENTRY);
+                hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
             hl_x64_store_rsp_imm32(a, -8, (uint32_t)pushed);
             hl_x64_store_rsp_imm32(a, -4, (uint32_t)(pushed >> 32));
-            if (kind == TL_CALL_RIP) preserve_end = a->cursor;
             hl_x64_lea_rsp(a, -8);
             if (kind == TL_CALL_RIP) {
+                hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
                 hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
                 hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
@@ -909,6 +913,7 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     const char *force_miss = hl_option_get("HL_TRANSLIT_PROVENANCE_FALLBACK");
     if (force_miss != NULL && force_miss[0] != '0' && force_miss[0] != 0) {
         exact_pc = 0;
+        preserve_registers = 0;
         (void)__atomic_fetch_add(&translit_provenance_fallback, 1, __ATOMIC_RELAXED);
     }
 #endif
