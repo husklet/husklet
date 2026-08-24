@@ -144,6 +144,9 @@ static uint64_t translit_declined;
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
+static uint64_t translit_displaced_riprel_projected;
+static uint64_t translit_displaced_lea_low;
+static uint64_t translit_displaced_riprel_unreachable;
 #endif
 
 static int translit_enabled(void) {
@@ -347,6 +350,20 @@ static void translit_emit_exit_preset(hl_x64_asm *a, uint64_t reason) {
 // otherwise -- it is an ACCESS, and accesses are not un-biased (and a biased image never reaches here).
 // Out of int32 reach ends the block; that is a real limit, not a rarity to be assumed away, because
 // nothing places the code arena near the guest image.
+static uint64_t translit_riprel_target(uint8_t op, int two, uint64_t guest_target, uint64_t nonpie_lo,
+                                       uint64_t nonpie_hi, uint64_t nonpie_bias) {
+    if (op == 0x8D && !two) return guest_target;
+    return nonpie_lo && guest_target >= nonpie_lo && guest_target < nonpie_hi ? guest_target + nonpie_bias
+                                                                                 : guest_target;
+}
+
+static int translit_rel32(uint64_t target, int64_t host_next, uint32_t *encoded) {
+    int64_t delta = (int64_t)target - host_next;
+    if (delta < INT32_MIN || delta > INT32_MAX) return 0;
+    *encoded = (uint32_t)(int32_t)delta;
+    return 1;
+}
+
 static int translit_fix_riprel(struct translit_builder *b, const struct insn *insn, uint64_t guest_next,
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
@@ -354,16 +371,36 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
     uint64_t guest_target = guest_next + (uint64_t)insn->disp;
     // LEA materialises a guest-visible pointer and must remain LOW. Every other admitted RIP-relative
     // memory form dereferences the target, so a displaced image must name its HIGH storage projection.
-    uint64_t projected_target = insn->op == 0x8D && !insn->two ? guest_target : hl_x86_guest_pointer(guest_target);
-    int64_t target = (int64_t)projected_target;
+    uint64_t projected_target = translit_riprel_target(insn->op, insn->two, guest_target, g_nonpie_lo,
+                                                       g_nonpie_hi, g_nonpie_bias);
     int64_t host_next = translit_rx(b, copy_start + insn->len);
-    int64_t delta = target - host_next;
-    if (delta < INT32_MIN || delta > INT32_MAX) return 0;
-    uint32_t value = (uint32_t)(int32_t)delta;
+    uint32_t value;
+    if (!translit_rel32(projected_target, host_next, &value)) return 0;
+    if (g_nonpie_lo) {
+        uint64_t *counter = insn->op == 0x8D && !insn->two ? &translit_displaced_lea_low
+                                                            : &translit_displaced_riprel_projected;
+        (void)__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
+    }
     for (int i = 0; i < 4; i++)
         copy_start[disp_offset + i] = (uint8_t)(value >> (8 * i));
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
+    if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
+    if (scenario == 2)
+        return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
+    if (scenario == 3) {
+        uint32_t encoded = 0;
+        if (!translit_rel32(lo + bias + 0x123, (int64_t)(lo + bias), &encoded)) return 3;
+        if ((int32_t)encoded != 0x123) return 4;
+        return translit_rel32(UINT64_C(0x8000000000), 0, &encoded) ? 5 : 0;
+    }
+    return 6;
+}
+#endif
 
 // Both jcc encodings (7x rel8 and 0F 8x rel32) carry the condition in the opcode's low nibble.
 static int translit_condition(const struct insn *insn) {
@@ -404,6 +441,8 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             hl_x64_copy(a, bytes, insn.len);
             if (a->overflow) break;
             if (insn.rip_rel && !translit_fix_riprel(&builder, &insn, next, instruction_start)) {
+                if (g_nonpie_lo)
+                    (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
                 a->cursor = instruction_start; // un-emit: the block ends before this instruction
                 break;
             }
@@ -515,14 +554,22 @@ static int translit_report(char *out, size_t size) {
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
     uint64_t displaced_operand_declined =
         __atomic_load_n(&translit_displaced_operand_declined, __ATOMIC_RELAXED);
+    uint64_t displaced_riprel_projected =
+        __atomic_load_n(&translit_displaced_riprel_projected, __ATOMIC_RELAXED);
+    uint64_t displaced_lea_low = __atomic_load_n(&translit_displaced_lea_low, __ATOMIC_RELAXED);
+    uint64_t displaced_riprel_unreachable =
+        __atomic_load_n(&translit_displaced_riprel_unreachable, __ATOMIC_RELAXED);
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
     if (g_nonpie_lo != 0)
         return snprintf(out, size,
                         "[prof] translit: displaced blocks=%llu entries=%llu declined=%llu displaced_blocks=%llu"
-                        " displaced_entries=%llu operand_declined=%llu\n",
+                        " displaced_entries=%llu operand_declined=%llu riprel_projected=%llu lea_low=%llu"
+                        " riprel_unreachable=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
-                        (unsigned long long)displaced_operand_declined);
+                        (unsigned long long)displaced_operand_declined,
+                        (unsigned long long)displaced_riprel_projected, (unsigned long long)displaced_lea_low,
+                        (unsigned long long)displaced_riprel_unreachable);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"

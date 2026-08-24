@@ -146,6 +146,8 @@ pub(crate) struct TestApi {
     pub(crate) aarch64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_store_preflight: NoArgumentTest,
+    #[cfg(test)]
+    pub(crate) x86_64_translit_displaced: ScenarioTest,
     pub(crate) aarch64_reserved_register: NoArgumentTest,
     pub(crate) x86_64_reserved_register: NoArgumentTest,
     pub(crate) aarch64_imported_path_guard: NoArgumentTest,
@@ -501,6 +503,8 @@ impl TestApi {
             aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
             x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
             x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
+            #[cfg(test)]
+            x86_64_translit_displaced: symbol!("hl_x86_64_translit_displaced_test", ScenarioTest),
             aarch64_reserved_register: symbol!("hl_aarch64_reserved_register_test", NoArgumentTest),
             x86_64_reserved_register: symbol!("hl_x86_64_reserved_register_test", NoArgumentTest),
             aarch64_imported_path_guard: symbol!("hl_aarch64_imported_path_guard_test", NoArgumentTest),

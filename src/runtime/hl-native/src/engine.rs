@@ -500,6 +500,18 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     use std::time::{Duration, Instant};
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn displaced_transliteration_projects_dereferences_but_not_lea() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in 1..=3 {
+            // SAFETY: the hook accepts one bounded scalar selector and owns no external state.
+            assert_eq!(unsafe { hook(scenario) }, 0, "scenario {scenario}");
+        }
+    }
+
     #[cfg(feature = "native-test-hooks")]
     struct IsolatedTestChild(Option<std::process::Child>);
 
