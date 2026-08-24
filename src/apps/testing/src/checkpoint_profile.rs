@@ -90,6 +90,11 @@ fn validate_fd_scans(scans: &[FdScan]) -> Result<(), String> {
                 "{isa} admission/consumption descriptor sets differ: admission={admission:?} consumption={consumption:?}"
             ));
         }
+        if rows.iter().any(|row| row.comparisons != 0) {
+            return Err(format!(
+                "{isa} descriptor scan performed redundant prior-record comparisons"
+            ));
+        }
     }
     if scans
         .iter()
@@ -309,7 +314,7 @@ mod tests {
     fn fd_scan_receipt_requires_identical_admission_and_consumption_sets() {
         let pair = |isa: &str| {
             format!(
-                "checkpoint_fd_scan\tisa={isa}\tpass=1\tvisible=7\tcaptured=7\tcomparisons=21\thash=abc\ncheckpoint_fd_scan\tisa={isa}\tpass=2\tvisible=7\tcaptured=7\tcomparisons=21\thash=abc\n"
+                "checkpoint_fd_scan\tisa={isa}\tpass=1\tvisible=7\tcaptured=7\tcomparisons=0\thash=abc\ncheckpoint_fd_scan\tisa={isa}\tpass=2\tvisible=7\tcaptured=7\tcomparisons=0\thash=abc\n"
             )
         };
         let mut text = String::new();
