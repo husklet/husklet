@@ -254,12 +254,26 @@ static _Alignas(64) hl_translation_index g_translation_index;
 // generation invalidates the whole table in O(1), while normal lookup still stops at the first slot that
 // is empty in the current generation.  A physical clear is needed only after the 32-bit epoch wraps.
 static uint32_t g_map_epoch = 1;
+static uint64_t g_map_host_generation = 1;
 static uint64_t g_cache_gen; /* generation of the current immutable code arena */
 static uint32_t g_live_map_indices[JIT_MAP_N];
 static uint32_t g_live_map_count;
 #if HL_NATIVE_TEST_HOOKS
 static _Thread_local uint64_t g_map_host_probe_count;
 #endif
+
+typedef struct {
+    uint64_t gpc;
+    uint64_t generation;
+    void *host;
+} hl_map_host_cache_entry;
+
+static _Thread_local hl_map_host_cache_entry g_map_host_cache[2];
+
+static void map_host_cache_invalidate(void) {
+    uint64_t next = __atomic_add_fetch(&g_map_host_generation, 1, __ATOMIC_RELEASE);
+    if (next == 0) __atomic_store_n(&g_map_host_generation, 1, __ATOMIC_RELEASE);
+}
 
 /*
  * A live entry's cold per-slot record: the decoded guest-source interval, and the code-cache generation
@@ -362,6 +376,7 @@ static void map_clear(void) {
             __atomic_store_n(&g_instruction_map[i].epoch, 0, __ATOMIC_RELAXED);
         g_map_epoch = 1;
     }
+    map_host_cache_invalidate();
 }
 
 // Crash-only reverse lookup: map a host RX pc back to the nearest translated block start.
@@ -590,48 +605,119 @@ static int map_idx(uint64_t gpc) {
 }
 
 static void *map_host(uint64_t gpc) {
+    uint64_t generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_ACQUIRE);
+    if (g_map_host_cache[0].generation == generation && g_map_host_cache[0].gpc == gpc)
+        return g_map_host_cache[0].host;
+    if (g_map_host_cache[1].generation == generation && g_map_host_cache[1].gpc == gpc) {
+        hl_map_host_cache_entry hit = g_map_host_cache[1];
+        g_map_host_cache[1] = g_map_host_cache[0];
+        g_map_host_cache[0] = hit;
+        return hit.host;
+    }
     int i = map_idx(gpc);
-    return i < 0 ? NULL : g_map[i].host;
+    if (i < 0) return NULL;
+    g_map_host_cache[1] = g_map_host_cache[0];
+    g_map_host_cache[0] = (hl_map_host_cache_entry){gpc, generation, g_map[i].host};
+    return g_map[i].host;
 }
 
 #if HL_NATIVE_TEST_HOOKS
 static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body);
+typedef struct {
+    uint64_t guest;
+    uintptr_t before;
+    uintptr_t after;
+    uint64_t probes;
+    _Atomic int ready;
+    _Atomic int published;
+} hl_map_host_thread_test;
+
+static void *map_host_thread_test(void *opaque) {
+    hl_map_host_thread_test *test = opaque;
+    g_map_host_probe_count = 0;
+    if ((uintptr_t)map_host(test->guest) != test->before) test->probes = UINT64_MAX;
+    __atomic_store_n(&test->ready, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&test->published, __ATOMIC_ACQUIRE)) sched_yield();
+    if ((uintptr_t)map_host(test->guest) != test->after) test->probes = UINT64_MAX;
+    if (test->probes != UINT64_MAX) test->probes = g_map_host_probe_count;
+    return NULL;
+}
+
 static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
-    if (scenario != 15 || probes == NULL) return -EINVAL;
+    if (scenario < 15 || scenario > 17 || probes == NULL) return -EINVAL;
     const uint64_t first = UINT64_C(0x100000);
     const uint64_t second = UINT64_C(0x200001);
+    const uint64_t third = UINT64_C(0x300002);
     uint32_t first_index = (uint32_t)((first >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & (JIT_MAP_N - 1);
     uint32_t second_index = (uint32_t)((second >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & (JIT_MAP_N - 1);
+    uint32_t third_index = (uint32_t)((third >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & (JIT_MAP_N - 1);
     hl_translation_map_entry first_saved = g_map[first_index];
     hl_translation_map_entry second_saved = g_map[second_index];
+    hl_translation_map_entry third_saved = g_map[third_index];
     hl_translation_map_metadata first_meta = g_map_metadata[first_index];
     hl_translation_map_metadata second_meta = g_map_metadata[second_index];
+    hl_translation_map_metadata third_meta = g_map_metadata[third_index];
     uint32_t saved_epoch = g_map_epoch;
     uint32_t saved_live_count = g_live_map_count;
-    uint32_t saved_live_indices[2] = {g_live_map_indices[0], g_live_map_indices[1]};
+    uint32_t saved_live_indices[3] = {g_live_map_indices[0], g_live_map_indices[1], g_live_map_indices[2]};
     uint64_t saved_probe_count = g_map_host_probe_count;
+    uint64_t saved_host_generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_RELAXED);
+    hl_map_host_cache_entry saved_host_cache[2] = {g_map_host_cache[0], g_map_host_cache[1]};
 
     map_clear();
     map_put(first, first, first + 1, (void *)(uintptr_t)UINT64_C(0x111000), (void *)(uintptr_t)UINT64_C(0x111001));
     map_put(second, second, second + 1, (void *)(uintptr_t)UINT64_C(0x222000), (void *)(uintptr_t)UINT64_C(0x222001));
     g_map_host_probe_count = 0;
     int result = 0;
-    for (int iteration = 0; iteration < 64; ++iteration) {
-        uint64_t guest = (iteration & 1) != 0 ? second : first;
-        uintptr_t expected = (iteration & 1) != 0 ? UINT64_C(0x222000) : UINT64_C(0x111000);
-        if ((uintptr_t)map_host(guest) != expected) result = -EUCLEAN;
+    if (scenario == 15) {
+        for (int iteration = 0; iteration < 64; ++iteration) {
+            uint64_t guest = (iteration & 1) != 0 ? second : first;
+            uintptr_t expected = (iteration & 1) != 0 ? UINT64_C(0x222000) : UINT64_C(0x111000);
+            if ((uintptr_t)map_host(guest) != expected) result = -EUCLEAN;
+        }
+        *probes = g_map_host_probe_count;
+    } else if (scenario == 16) {
+        if ((uintptr_t)map_host(first) != UINT64_C(0x111000)) result = -EUCLEAN;
+        if ((uintptr_t)map_host(second) != UINT64_C(0x222000)) result = -EUCLEAN;
+        map_put(third, third, third + 1,
+                (void *)(uintptr_t)UINT64_C(0x333000), (void *)(uintptr_t)UINT64_C(0x333001));
+        if ((uintptr_t)map_host(first) != UINT64_C(0x111000)) result = -EUCLEAN;
+        *probes = g_map_host_probe_count;
+    } else {
+        hl_map_host_thread_test test = {
+            .guest = first,
+            .before = UINT64_C(0x111000),
+            .after = UINT64_C(0x444000),
+        };
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, map_host_thread_test, &test) != 0) {
+            result = -errno;
+        } else {
+            while (!__atomic_load_n(&test.ready, __ATOMIC_ACQUIRE)) sched_yield();
+            map_clear();
+            map_put(first, first, first + 1, (void *)(uintptr_t)test.after,
+                    (void *)(uintptr_t)(test.after + 1));
+            __atomic_store_n(&test.published, 1, __ATOMIC_RELEASE);
+            if (pthread_join(thread, NULL) != 0 || test.probes != 2) result = -EUCLEAN;
+            *probes = test.probes;
+        }
     }
-    *probes = g_map_host_probe_count;
 
     g_map[first_index] = first_saved;
     g_map[second_index] = second_saved;
+    g_map[third_index] = third_saved;
     g_map_metadata[first_index] = first_meta;
     g_map_metadata[second_index] = second_meta;
+    g_map_metadata[third_index] = third_meta;
     g_map_epoch = saved_epoch;
     g_live_map_count = saved_live_count;
     g_live_map_indices[0] = saved_live_indices[0];
     g_live_map_indices[1] = saved_live_indices[1];
+    g_live_map_indices[2] = saved_live_indices[2];
     g_map_host_probe_count = saved_probe_count;
+    __atomic_store_n(&g_map_host_generation, saved_host_generation, __ATOMIC_RELAXED);
+    g_map_host_cache[0] = saved_host_cache[0];
+    g_map_host_cache[1] = saved_host_cache[1];
     return result;
 }
 #endif
@@ -662,6 +748,7 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
             g_map[j].tombstone_epoch = 0;
             g_map[j].generation = g_map_epoch;
             g_live_map_indices[g_live_map_count++] = j;
+            map_host_cache_invalidate();
             return;
         }
     }
@@ -677,6 +764,7 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
         g_map[j].tombstone_epoch = 0;
         g_map[j].generation = g_map_epoch;
         g_live_map_indices[g_live_map_count++] = j;
+        map_host_cache_invalidate();
     }
 }
 
@@ -712,6 +800,7 @@ static uint32_t map_invalidate_source_ranges(const uint64_t ranges[][2], uint32_
         removed++;
     }
     g_live_map_count = retained;
+    if (removed != 0) map_host_cache_invalidate();
     return removed;
 }
 
@@ -730,6 +819,7 @@ static uint32_t map_invalidate_cache_generation(uint64_t generation) {
         removed++;
     }
     g_live_map_count = retained;
+    if (removed != 0) map_host_cache_invalidate();
     return removed;
 }
 

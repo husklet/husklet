@@ -46,6 +46,8 @@ fn x86_decoded_pc_memo_revalidates_bytes_and_execute_permission() {
 #[test]
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
-        assert_eq!(exec_page_cache_test(isa, 15), Ok(64));
+        assert_eq!(exec_page_cache_test(isa, 15), Ok(2));
+        assert_eq!(exec_page_cache_test(isa, 16), Ok(3));
+        assert_eq!(exec_page_cache_test(isa, 17), Ok(2));
     }
 }
