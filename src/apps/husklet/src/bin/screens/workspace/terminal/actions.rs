@@ -28,7 +28,7 @@ impl LiveActions {
         let window = window.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
             Page::new(&window, &selected).select_and_focus();
-            Self::record(&receipt, &format!("selected {selected}"));
+            Self::record(&receipt, &format!("selected {selected} run={}", plan.nonce));
 
             let window = window.clone();
             let receipt = receipt.clone();
@@ -40,13 +40,13 @@ impl LiveActions {
                 };
                 terminal.clipboard().set_text(&plan.paste);
                 Clipboard::paste(&window);
-                Self::record(&receipt, "pasted live-paste-λ");
+                Self::record(&receipt, &format!("pasted live-paste-λ run={}", plan.nonce));
 
                 let window = window.clone();
                 let receipt = receipt.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
                     CurrentPage::close(&window);
-                    Self::record(&receipt, "closed selected");
+                    Self::record(&receipt, &format!("closed selected run={}", plan.nonce));
 
                     let window = window.clone();
                     let receipt = receipt.clone();
@@ -56,18 +56,21 @@ impl LiveActions {
                             Self::record(&receipt, "failed type:no-focus");
                             return;
                         };
-                        terminal.feed_child(plan.after_close.as_bytes());
-                        Self::record(&receipt, "typed live-after-close-終");
+                        terminal.feed_child(plan.after_close(&selected).as_bytes());
+                        Self::record(
+                            &receipt,
+                            &format!("typed live-after-close-終 run={} selected={selected}", plan.nonce),
+                        );
 
                         let replacement = Tabs::new(&window).terminal();
                         let Some(opened) = replacement_receipt(&replacement) else {
                             Self::record(&receipt, "failed reopen:empty-identity");
                             return;
                         };
-                        Self::record(&receipt, &opened);
+                        Self::record(&receipt, &format!("{opened} run={}", plan.nonce));
                         let window = window.clone();
                         let receipt = receipt.clone();
-                        let reopened = plan.reopened.clone();
+                        let reopened = plan.reopened(&replacement);
                         glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
                             let Some(terminal) = window
                                 .stack
@@ -78,7 +81,10 @@ impl LiveActions {
                                 return;
                             };
                             terminal.feed_child(reopened.as_bytes());
-                            Self::record(&receipt, "typed live-reopened-再");
+                            Self::record(
+                                &receipt,
+                                &format!("typed live-reopened-再 run={} opened={replacement}", plan.nonce),
+                            );
                         });
                     });
                 });
@@ -98,10 +104,9 @@ impl LiveActions {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ActionPlan {
+    nonce: String,
     marker: String,
     paste: String,
-    after_close: String,
-    reopened: String,
 }
 
 impl ActionPlan {
@@ -116,17 +121,21 @@ impl ActionPlan {
     fn with_nonce(nonce: &str) -> Self {
         assert!(nonce.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-'));
         let marker = format!("/tmp/.husklet-live-actions-{nonce}");
-        let paste = format!("rm -f {marker}; printf '%s %s\\n' 'live-paste-λ' \"$$\" > {marker}\n");
-        let after_close = format!(
-            "value=$(cat {marker} 2>/dev/null); rm -f {marker}; set -- $value; test \"$1\" = 'live-paste-λ' && test \"$2\" != \"$$\" && printf '%s\\n' 'live-after-close-終 marker=live-paste-λ'\n"
-        );
-        let reopened = "printf '%s\\n' 'live-reopened-再'\n".to_owned();
-        Self {
-            marker,
-            paste,
-            after_close,
-            reopened,
-        }
+        let paste = format!("rm -f {marker}; printf '%s %s %s\\n' 'live-paste-λ' '{nonce}' \"$$\" > {marker}\n");
+        Self { nonce: nonce.to_owned(), marker, paste }
+    }
+
+    fn after_close(&self, selected: &str) -> String {
+        assert!(!selected.is_empty() && !selected.chars().any(char::is_whitespace));
+        format!(
+            "value=$(cat {} 2>/dev/null); rm -f {}; set -- $value; test \"$1\" = 'live-paste-λ' && test \"$2\" = '{}' && test \"$3\" != \"$$\" && printf '%s\\n' 'live-after-close-終 marker=live-paste-λ run={} selected={} source_pid='\"$3\"' current_pid='\"$$\"\n",
+            self.marker, self.marker, self.nonce, self.nonce, selected
+        )
+    }
+
+    fn reopened(&self, opened: &str) -> String {
+        assert!(!opened.is_empty() && !opened.chars().any(char::is_whitespace));
+        format!("printf '%s\\n' 'live-reopened-再 run={} opened={opened}'\n", self.nonce)
     }
 }
 
@@ -147,17 +156,12 @@ mod tests {
 
     fn receipt_stage(line: &str) -> Option<&'static str> {
         match line {
-            line if line.starts_with("selected ") => Some("selected"),
-            "pasted live-paste-λ" => Some("pasted"),
-            "closed selected" => Some("closed"),
-            "typed live-after-close-終" => Some("after-close"),
-            line if line
-                .strip_prefix("opened replacement ")
-                .is_some_and(|name| !name.is_empty() && !name.chars().any(char::is_whitespace)) =>
-            {
-                Some("opened")
-            }
-            "typed live-reopened-再" => Some("reopened"),
+            "selected shell-2 run=17-42" => Some("selected"),
+            "pasted live-paste-λ run=17-42" => Some("pasted"),
+            "closed selected run=17-42" => Some("closed"),
+            "typed live-after-close-終 run=17-42 selected=shell-2" => Some("after-close"),
+            "opened replacement shell-5 run=17-42" => Some("opened"),
+            "typed live-reopened-再 run=17-42 opened=shell-5" => Some("reopened"),
             _ => None,
         }
     }
@@ -167,18 +171,21 @@ mod tests {
         let plan = ActionPlan::with_nonce("17-42");
         assert_eq!(plan.marker, "/tmp/.husklet-live-actions-17-42");
         assert!(plan.paste.ends_with('\n'));
-        assert!(plan.after_close.ends_with('\n'));
-        assert!(plan.reopened.ends_with('\n'));
+        let after_close = plan.after_close("shell-2");
+        let reopened = plan.reopened("shell-5");
+        assert!(after_close.ends_with('\n'));
+        assert!(reopened.ends_with('\n'));
         assert!(plan.paste.contains("live-paste-λ"));
         let read = format!("value=$(cat {} 2>/dev/null)", plan.marker);
         let remove = format!("rm -f {}", plan.marker);
-        assert!(plan.after_close.starts_with(&read));
-        assert!(plan.after_close.contains(&remove));
+        assert!(after_close.starts_with(&read));
+        assert!(after_close.contains(&remove));
         let check = "set -- $value; test \"$1\" = 'live-paste-λ'";
-        assert!(plan.after_close.find(&remove).unwrap() < plan.after_close.find(check).unwrap());
-        assert!(plan.after_close.contains("test \"$2\" != \"$$\""));
-        assert!(plan.after_close.contains("live-after-close-終 marker=live-paste-λ"));
-        assert_eq!(plan.reopened, "printf '%s\\n' 'live-reopened-再'\n");
+        assert!(after_close.find(&remove).unwrap() < after_close.find(check).unwrap());
+        assert!(after_close.contains("test \"$2\" = '17-42'"));
+        assert!(after_close.contains("test \"$3\" != \"$$\""));
+        assert!(after_close.contains("run=17-42 selected=shell-2"));
+        assert_eq!(reopened, "printf '%s\\n' 'live-reopened-再 run=17-42 opened=shell-5'\n");
     }
 
     #[test]
@@ -191,12 +198,12 @@ mod tests {
     #[test]
     fn the_receipt_parser_requires_close_before_replacement_and_reopened_input() {
         let receipt = [
-            "selected shell-2",
-            "pasted live-paste-λ",
-            "closed selected",
-            "typed live-after-close-終",
-            "opened replacement shell-5",
-            "typed live-reopened-再",
+            "selected shell-2 run=17-42",
+            "pasted live-paste-λ run=17-42",
+            "closed selected run=17-42",
+            "typed live-after-close-終 run=17-42 selected=shell-2",
+            "opened replacement shell-5 run=17-42",
+            "typed live-reopened-再 run=17-42 opened=shell-5",
         ];
         assert_eq!(
             receipt.map(receipt_stage),
@@ -209,8 +216,8 @@ mod tests {
                 Some("reopened"),
             ]
         );
-        assert_eq!(receipt_stage("opened replacement"), None);
-        assert_eq!(receipt_stage("opened replacement "), None);
+        assert_eq!(receipt_stage("opened replacement shell-5 run=17-43"), None);
+        assert_eq!(receipt_stage("typed live-after-close-終 run=17-42 selected=shell-3"), None);
         assert_eq!(replacement_receipt(""), None);
         assert_eq!(replacement_receipt("shell 5"), None);
         assert_eq!(replacement_receipt("shell-5").as_deref(), Some("opened replacement shell-5"));
