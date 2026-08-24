@@ -468,11 +468,7 @@ impl<'a> CaseExecution<'a> {
                 .expected_signal
                 .map_or_else(|| output::validate_profile(text), |_| Ok(()));
             output::forward_profile(text, std::io::stderr().lock())?;
-            logs.stderr = text
-                .lines()
-                .filter(|line| !line.starts_with("[prof] "))
-                .flat_map(|line| [line.as_bytes(), b"\n"].concat())
-                .collect();
+            logs.stderr = output::guest_stderr(text);
         }
         let expected = if let Some(golden) = &self.case.golden {
             tokio::fs::read(golden)

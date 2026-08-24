@@ -36,6 +36,14 @@ pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::
     Ok(())
 }
 
+pub(super) fn guest_stderr(stderr: &str) -> Vec<u8> {
+    stderr
+        .lines()
+        .filter(|line| !line.starts_with("[prof] ") && !line.starts_with("[diag] "))
+        .flat_map(|line| [line.as_bytes(), b"\n"].concat())
+        .collect()
+}
+
 fn valid_profile_line(line: &str) -> bool {
     let Some(fields) = line.strip_prefix("[prof] ") else {
         return false;
@@ -124,6 +132,10 @@ mod tests {
         );
         assert!(valid_profile_line("[prof] crossings=41 translations=7"));
         assert!(!valid_profile_line("[prof] forged guest text"));
+        assert_eq!(
+            guest_stderr("guest warning\n[diag] boundary samples=7\n[prof] crossings=41 translations=7\n"),
+            b"guest warning\n"
+        );
     }
 
     #[test]
