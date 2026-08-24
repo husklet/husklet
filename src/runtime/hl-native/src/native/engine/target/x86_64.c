@@ -488,6 +488,13 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    (void)scenario;
+    return -1; // the x86 same-ISA transliterator is absent on this host
+}
+#endif
+
 #else
 // interp.c defines the same names emit.c/translate.c/cache.c do, so everything below is host-identical.
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
