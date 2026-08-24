@@ -20,11 +20,10 @@
 // THE NON-PIE BIAS RULE. A non-PIE ET_EXEC is mapped HIGH at +g_nonpie_bias while its baked pointers stay
 // LOW, so the JIT emits a runtime fold on EVERY memory access (guest/x86_64/address.c emit_bias: if the
 // address has no bits above 32, add the bias) and un-biases address MATERIALISATION (lower/mov.c,
-// interp_lea_value) in the opposite direction. Verbatim copying can express NEITHER: a copied instruction
-// carries its own addressing mode, and there is no place to put the fold. Getting either direction wrong
-// corrupts addresses, so the
-// transliterator does not attempt it: g_nonpie_lo != 0 declines the image outright and every block runs on
-// the interpreter, which already implements both directions. This is a refusal, not an implementation.
+// interp_lea_value) in the opposite direction. Verbatim copying cannot express a register-derived fold
+// without scratch state. Stage one therefore copies only memory-free instructions and RIP-relative
+// dereferences (whose disp32 can be re-aimed at storage), while LEA remains aimed at the low guest address.
+// Base/index, moffs, string, stack, call and return forms stay in the interpreter.
 
 #include "../../host/x86_asm.h"
 #include "cpu.h"
@@ -132,16 +131,19 @@ static int translit_selected = -1; // inside the gate: off a Linux/x86-64 host i
 
 // Why a launch got the speedup, or did not. Both refusals below are SILENT and permanent, and an
 // operator has no other way to tell "transliterated and fast" from "refused and slow" than by timing:
-//   - a non-PIE ET_EXEC placed at a storage bias declines the whole image;
+//   - a non-PIE ET_EXEC placed at a storage bias admits only the bounded stage-one subset;
 //   - g_rwx_guest latches on the first anonymous PROT_EXEC mmap or mprotect and is NOT cleared by
 //     execve, so one 4 KiB page of JIT arena disables this backend for the process and for every image
 //     it later execs -- which is every JIT-hosting guest there is.
 // Counted, not inferred: `blocks` is what the filter admitted, `entries` is what actually ran, and
-// `declined` is builds refused by the image predicate. A gate that only knows the option was SET does
+// `declined` is builds stopped by an image or displaced-operand predicate. A gate that only knows the option was SET does
 // not know the backend ran; these are what make that a measurement.
 static uint64_t translit_blocks;
 static uint64_t translit_entries;
 static uint64_t translit_declined;
+static uint64_t translit_displaced_blocks;
+static uint64_t translit_displaced_entries;
+static uint64_t translit_displaced_operand_declined;
 #endif
 
 static int translit_enabled(void) {
@@ -175,12 +177,12 @@ static int translit_bind_cpu(struct cpu *cpu) {
 
 // A block may only be transliterated while the whole-image preconditions hold. Both are runtime facts that
 // can turn on mid-run, so run_block re-tests before entering emitted code and interprets instead.
-//   - g_nonpie_lo: the bias rule above.
+//   - displaced images are filtered per instruction by translit_displaced_safe below.
 //   - store-alias observation: an emulated MAP_SHARED mapping needs every guest store queued for writeback
 //     (interp_store does that by hand), and a PROT_EXEC guest mapping needs SMC page protection the
 //     interpreter does not carry. Verbatim stores do neither.
 static int translit_image_ok(void) {
-    return translit_enabled() && g_nonpie_lo == 0 && !jit86_store_alias_observation_active();
+    return translit_enabled() && !jit86_store_alias_observation_active();
 }
 
 // ---- the instruction filter
@@ -265,6 +267,25 @@ static int translit_classify(const struct insn *insn) {
     return TL_NO;
 }
 
+// A displaced ET_EXEC has distinct guest/link and host/storage coordinates. Stage one admits only
+// instructions whose copied bytes either touch no memory or carry a RIP-relative address that can be
+// projected below. Everything with an implicit memory operand, a guest-stack effect, or a register-derived
+// effective address stays in the interpreter until it has dedicated lowering.
+static int translit_displaced_safe(const struct insn *insn, int kind) {
+    if (!g_nonpie_lo) return 1;
+    if (kind == TL_CALL || kind == TL_CALL_REG || kind == TL_RET) return 0;
+    if (kind != TL_COPY) return 1; // direct control, register jmp, and syscall touch no guest memory here
+    if (insn->is_mem) return insn->rip_rel;
+    if (insn->two) return 1;
+    uint8_t op = insn->op;
+    if ((op >= 0x50 && op <= 0x5F) || op == 0x68 || op == 0x6A || op == 0x8F || op == 0xC9)
+        return 0; // push/pop/leave: implicit guest stack
+    if (op >= 0xA0 && op <= 0xA7) return 0; // moffs, movs, cmps
+    if (op >= 0xAA && op <= 0xAF) return 0; // stos, lods, scas
+    if (op == 0xFF && insn->reg == 6) return 0; // push r/m
+    return 1;
+}
+
 // ---- the block
 //
 // One header per translated guest PC, bump-allocated from the shared arena exactly as interp.c's
@@ -330,7 +351,11 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
     if (disp_offset < 2 || disp_offset + 4 > insn->len) return 0;
-    int64_t target = (int64_t)(guest_next + (uint64_t)insn->disp);
+    uint64_t guest_target = guest_next + (uint64_t)insn->disp;
+    // LEA materialises a guest-visible pointer and must remain LOW. Every other admitted RIP-relative
+    // memory form dereferences the target, so a displaced image must name its HIGH storage projection.
+    uint64_t projected_target = insn->op == 0x8D && !insn->two ? guest_target : hl_x86_guest_pointer(guest_target);
+    int64_t target = (int64_t)projected_target;
     int64_t host_next = translit_rx(b, copy_start + insn->len);
     int64_t delta = target - host_next;
     if (delta < INT32_MIN || delta > INT32_MAX) return 0;
@@ -365,6 +390,11 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         if (hl_x86_decode(pc, &insn) <= 0) break;
         int kind = translit_classify(&insn);
         if (kind == TL_NO) break;
+        if (!translit_displaced_safe(&insn, kind)) {
+            (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
+            (void)__atomic_fetch_add(&translit_displaced_operand_declined, 1, __ATOMIC_RELAXED);
+            break;
+        }
         if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
 
         uint64_t next = pc + (uint64_t)insn.len;
@@ -458,6 +488,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
     block->guest_end = pc;
     g_cp = a->cursor;
     (void)__atomic_fetch_add(&translit_blocks, 1, __ATOMIC_RELAXED);
+    if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_blocks, 1, __ATOMIC_RELAXED);
     return start;
 }
 
@@ -467,6 +498,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
 // values in.
 static void translit_run(struct cpu *cpu, struct interp_block *block) {
     (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
+    if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_entries, 1, __ATOMIC_RELAXED);
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);
@@ -479,12 +511,18 @@ static int translit_report(char *out, size_t size) {
     uint64_t blocks = __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED);
     uint64_t entries = __atomic_load_n(&translit_entries, __ATOMIC_RELAXED);
     uint64_t declined = __atomic_load_n(&translit_declined, __ATOMIC_RELAXED);
+    uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
+    uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
+    uint64_t displaced_operand_declined =
+        __atomic_load_n(&translit_displaced_operand_declined, __ATOMIC_RELAXED);
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
     if (g_nonpie_lo != 0)
         return snprintf(out, size,
-                        "[prof] translit: declined, non-PIE image at a storage bias (blocks=%llu entries=%llu"
-                        " declined=%llu)\n",
-                        (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined);
+                        "[prof] translit: displaced blocks=%llu entries=%llu declined=%llu displaced_blocks=%llu"
+                        " displaced_entries=%llu operand_declined=%llu\n",
+                        (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
+                        (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
+                        (unsigned long long)displaced_operand_declined);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"

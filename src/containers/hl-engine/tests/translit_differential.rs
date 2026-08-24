@@ -57,6 +57,7 @@ struct Backend {
     blocks: u64,
     entries: u64,
     declined: u64,
+    operand_declined: u64,
     translations: u64,
 }
 
@@ -89,6 +90,7 @@ fn backend(stderr: &[u8]) -> Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
         declined: counter("declined="),
+        operand_declined: counter("operand_declined="),
         translations,
         line,
     }
@@ -409,34 +411,48 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
     }
 }
 
-/// An occupied link address must never be replaced. The loader instead uses displaced storage, whose
-/// two address domains are unsupported by the transliterator and therefore named as a refusal.
+/// An occupied link address must never be replaced. The loader instead uses displaced storage; stage-one
+/// transliteration admits only memory-free and projected RIP-relative instructions and reports every
+/// operand family that remains in the interpreter.
 #[test]
 fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
     let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
     let occupied = LinkPage::occupy(2);
     let work = TempDir::new().unwrap();
-    let executable = displaced_fixture(work.path(), "flags");
-    let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run(&executable, "1");
-    assert!(
-        selected_backend
-            .line
-            .contains("declined, non-PIE image at a storage bias"),
-        "the displaced image did not report the storage-bias refusal -- {}",
-        selected_backend.line
-    );
-    assert_eq!(selected_backend.entries, 0, "a displaced image entered emitted code");
-    assert_eq!(selected_backend.blocks, 0, "a displaced image built emitted code");
-    assert!(
-        selected_backend.translations > 0,
-        "the interpreter translated no blocks"
-    );
-    assert_eq!(
-        selected_backend.declined, selected_backend.translations,
-        "every translated block must carry the displaced-image refusal"
-    );
-    assert_eq!(selected_status, interpreted_status);
-    assert_eq!(selected, interpreted);
+    for name in ["flags", "operands", "sigs"] {
+        let executable = displaced_fixture(work.path(), name);
+        let (interpreted, interpreted_status, _) = run(&executable, "0");
+        let (selected, selected_status, selected_backend) = run(&executable, "1");
+        assert!(
+            selected_backend.line.contains("translit: displaced"),
+            "{name}: the displaced image did not report its constrained backend -- {}",
+            selected_backend.line
+        );
+        assert!(
+            selected_backend.entries > 0,
+            "{name}: displaced image entered no emitted code"
+        );
+        assert!(
+            selected_backend.blocks > 0,
+            "{name}: displaced image built no emitted code"
+        );
+        assert!(
+            selected_backend.translations > 0,
+            "{name}: interpreter translated no blocks"
+        );
+        assert!(
+            selected_backend.declined > 0,
+            "{name}: fixture reached no refused operand"
+        );
+        assert_eq!(selected_backend.operand_declined, selected_backend.declined);
+        assert!(selected_backend.declined <= selected_backend.translations);
+        assert_eq!(selected_status, interpreted_status, "{name}: exit status changed");
+        assert_eq!(selected, interpreted, "{name}: output changed");
+        let native = std::process::Command::new(&executable)
+            .output()
+            .expect("native fixture");
+        assert_eq!(native.status.code(), Some(interpreted_status));
+        assert_eq!(native.stdout, interpreted, "{name}: engine output differs from native");
+    }
     occupied.verify_and_release();
 }
