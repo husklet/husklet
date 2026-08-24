@@ -303,3 +303,16 @@ void hl_host_linux_destroy(hl_host_linux *host) {
     free(host->timers);
     free(host);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* The macOS host is the only implementation with a cached DIR* whose descriptor must live in the
+   engine-private band.  Linux has neither that cache nor a private descriptor band, but every symbol
+   in the test-hook export manifest is resolved against the staged artifact.  Keep that contract
+   complete and refuse the inapplicable probe, as the Windows host does. */
+HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario);
+
+HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario) {
+    (void)scenario;
+    return -ENOTSUP;
+}
+#endif
