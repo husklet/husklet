@@ -1171,8 +1171,9 @@
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_RUSTFLAGS=${lib.escapeShellArg "-Lnative=${windows.windows.pthreads}/lib"}
             export HL_NATIVE_COMPILE_CHECK=1
-            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine -p engine 2>&1 |
+            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine -p engine -p hl-images 2>&1 |
               tee "$TMPDIR/windows-contract.log"
+            test "$(grep -c '^   Compiling hl-images ' "$TMPDIR/windows-contract.log")" -eq 1
             for executable in hl-engine hl-aarch64 hl-x86_64; do
               binary="target/${target}/debug/$executable.exe"
               test -s "$binary"
