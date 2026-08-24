@@ -64,6 +64,7 @@ struct Backend {
     riprel_lowered: u64,
     scratch_lowered: u64,
     lea_lowered: u64,
+    rip_indirect_lowered: u64,
     translations: u64,
 }
 
@@ -102,6 +103,7 @@ fn backend(stderr: &[u8]) -> Backend {
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
         lea_lowered: counter("lea_lowered="),
+        rip_indirect_lowered: counter("rip_indirect_lowered="),
         translations,
         line,
     }
@@ -367,6 +369,25 @@ fn a_same_page_forward_jump_is_stitched_without_executing_its_gap() {
         "{}",
         selected_backend.line
     );
+}
+
+/// RIP-relative memory-indirect CALL/JMP, including a pointer load crossing into an unmapped page.
+#[test]
+fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "rip_indirect");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert!(
+        selected_backend.rip_indirect_lowered >= 3,
+        "the fixture did not build its two valid and one page-boundary RIP-indirect terminators -- {}",
+        selected_backend.line
+    );
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    let native = std::process::Command::new(&executable).output().expect("native fixture");
+    assert_eq!(native.status.code(), Some(interpreted_status));
+    assert_eq!(native.stdout, interpreted);
 }
 
 /// The other refusal, and the one that decides whether this backend is worth anything to a developer.

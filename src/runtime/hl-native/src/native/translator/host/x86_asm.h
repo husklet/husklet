@@ -18,7 +18,7 @@ typedef struct hl_x64_asm {
     int overflow;
 } hl_x64_asm;
 
-enum { HL_X64_RAX = 0, HL_X64_RCX = 1, HL_X64_RDX = 2, HL_X64_RSP = 4, HL_X64_R15 = 15 };
+enum { HL_X64_RAX = 0, HL_X64_RCX = 1, HL_X64_RDX = 2, HL_X64_RSP = 4, HL_X64_R11 = 11, HL_X64_R15 = 15 };
 
 static inline void hl_x64_u8(hl_x64_asm *a, uint8_t value) {
     if (a->cursor >= a->end) {
@@ -80,6 +80,13 @@ static inline void hl_x64_mov_imm64(hl_x64_asm *a, int reg, uint64_t value) {
     hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 1 : 0)));
     hl_x64_u8(a, (uint8_t)(0xB8 + (reg & 7)));
     hl_x64_u64(a, value);
+}
+
+// mov (%base), %reg  (64-bit)
+static inline void hl_x64_load_ind(hl_x64_asm *a, int reg, int base) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 4 : 0) | ((base >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x8B);
+    hl_x64_u8(a, (uint8_t)(((reg & 7) << 3) | (base & 7)));
 }
 
 // movl $imm32, disp8(%rsp) -- the one guest store the transliterator itself performs (a CALL's pushed

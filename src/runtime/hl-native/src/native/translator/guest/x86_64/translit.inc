@@ -147,6 +147,7 @@ static uint64_t translit_declined;
 static uint64_t translit_stitch_candidates;
 static uint64_t translit_stitch_admitted;
 static uint64_t translit_displaced_blocks;
+static uint64_t translit_rip_indirect_lowered;
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
 static uint64_t translit_displaced_riprel_projected;
@@ -220,6 +221,8 @@ enum {
     TL_RET,      // ret / ret imm16
     TL_JMP_REG,  // jmp *%reg
     TL_CALL_REG, // call *%reg
+    TL_JMP_RIP,  // jmp *disp32(%rip)
+    TL_CALL_RIP, // call *disp32(%rip)
     TL_SYSCALL
 };
 
@@ -284,6 +287,8 @@ static int translit_classify(const struct insn *insn) {
         if (insn->reg == 0 || insn->reg == 1 || insn->reg == 6) return TL_COPY; // inc/dec/push r/m
         if (insn->mod == 3 && insn->reg == 2) return TL_CALL_REG;
         if (insn->mod == 3 && insn->reg == 4) return TL_JMP_REG;
+        if (insn->rip_rel && insn->reg == 2) return TL_CALL_RIP;
+        if (insn->rip_rel && insn->reg == 4) return TL_JMP_RIP;
     }
     return TL_NO;
 }
@@ -623,6 +628,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         uint64_t next = pc + (uint64_t)insn.len;
         uint8_t *instruction_start = a->cursor;
         int preserve_register = -1;
+        uint8_t *preserve_start = NULL, *preserve_end = NULL;
 
         if (kind == TL_COPY) {
             hl_x64_copy(a, bytes, insn.len);
@@ -691,7 +697,8 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             break;
         }
         case TL_CALL:
-        case TL_CALL_REG: {
+        case TL_CALL_REG:
+        case TL_CALL_RIP: {
             // The pushed return address is guest-visible (unwinders and dladdr read it), so it is exactly
             // interp_call_return_pc's value -- which is `next` here, since a biased image never gets this
             // far. Written as two 32-bit immediate stores because that clobbers no register: if the store
@@ -700,6 +707,21 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             uint64_t pushed = interp_call_return_pc(next);
             // Read the target from the LIVE host register, not from cpu->r[] -- nothing is spilled yet.
             if (kind == TL_CALL_REG) hl_x64_store_gs(a, insn.rm_reg, OFF_RIP);
+            if (kind == TL_CALL_RIP) {
+                uint64_t guest_target = next + (uint64_t)insn.disp;
+                uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
+                                                                 g_nonpie_hi, g_nonpie_bias);
+                // r11 is borrowed only around the guest pointer load. Publish its live value first so a
+                // fault attributed to this CALL reconstructs the guest register file exactly.
+                hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+                hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
+                preserve_start = a->cursor;
+                hl_x64_load_ind(a, HL_X64_R11, HL_X64_R11);
+                preserve_end = a->cursor;
+                preserve_register = HL_X64_R11;
+                hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
+                hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            }
             hl_x64_store_rsp_imm32(a, -8, (uint32_t)pushed);
             hl_x64_store_rsp_imm32(a, -4, (uint32_t)(pushed >> 32));
             hl_x64_lea_rsp(a, -8);
@@ -713,6 +735,21 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             hl_x64_store_gs(a, insn.rm_reg, OFF_RIP);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
+        case TL_JMP_RIP: {
+            uint64_t guest_target = next + (uint64_t)insn.disp;
+            uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
+                                                             g_nonpie_hi, g_nonpie_bias);
+            hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
+            preserve_start = a->cursor;
+            hl_x64_load_ind(a, HL_X64_R11, HL_X64_R11);
+            preserve_end = a->cursor;
+            preserve_register = HL_X64_R11;
+            hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
+            hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            translit_emit_exit_preset(a, R_BRANCH);
+            break;
+        }
         case TL_RET: {
             // Save rax through %gs (never through the stack: the red zone is the guest's), read the return
             // address while every guest register is still live, then pop. A fault on the load leaves the
@@ -731,7 +768,14 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             a->cursor = instruction_start;
             break;
         }
-        jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)a->cursor, pc);
+        if (preserve_start) {
+            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)preserve_start,
+                                             (uint64_t)(uintptr_t)preserve_end, pc,
+                                             translit_preserve_mask(preserve_register));
+            (void)__atomic_fetch_add(&translit_rip_indirect_lowered, 1, __ATOMIC_RELAXED);
+        }
+        jit_instruction_map_put((uint64_t)(uintptr_t)(preserve_end ? preserve_end : instruction_start),
+                                (uint64_t)(uintptr_t)a->cursor, pc);
         pc = next;
         count++;
         terminated = 1;
@@ -774,6 +818,7 @@ static int translit_report(char *out, size_t size) {
     uint64_t declined = __atomic_load_n(&translit_declined, __ATOMIC_RELAXED);
     uint64_t stitch_candidates = __atomic_load_n(&translit_stitch_candidates, __ATOMIC_RELAXED);
     uint64_t stitch_admitted = __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED);
+    uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
     uint64_t displaced_operand_declined =
@@ -808,7 +853,8 @@ static int translit_report(char *out, size_t size) {
                         " displaced_entries=%llu operand_declined=%llu riprel_projected=%llu lea_low=%llu"
                         " riprel_unreachable=%llu riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu"
                         " refusal_key=%u refusal_count=%llu refusal_prefix=%llu refusal_width=%llu"
-                        " refusal_rsp=%llu refusal_opcode=%llu stitch_candidates=%llu stitch_admitted=%llu\n",
+                        " refusal_rsp=%llu refusal_opcode=%llu stitch_candidates=%llu stitch_admitted=%llu"
+                        " rip_indirect_lowered=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -820,7 +866,7 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)displaced_refusal_count, (unsigned long long)displaced_refusal_prefix,
                         (unsigned long long)displaced_refusal_width, (unsigned long long)displaced_refusal_rsp,
                         (unsigned long long)displaced_refusal_opcode_other, (unsigned long long)stitch_candidates,
-                        (unsigned long long)stitch_admitted);
+                        (unsigned long long)stitch_admitted, (unsigned long long)rip_indirect_lowered);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
@@ -829,9 +875,10 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted);
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
-                    " stitch_admitted=%llu\n",
+                    " stitch_admitted=%llu rip_indirect_lowered=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
-                    (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted);
+                    (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
+                    (unsigned long long)rip_indirect_lowered);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.
