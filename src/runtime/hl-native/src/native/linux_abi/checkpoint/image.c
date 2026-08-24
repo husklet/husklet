@@ -953,6 +953,11 @@ struct ckpt_logical_snapshot {
     size_t count;
 };
 
+static void ckpt_logical_snapshot_release(struct ckpt_logical_snapshot *snapshot) {
+    free(snapshot->items);
+    memset(snapshot, 0, sizeof *snapshot);
+}
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic uint64_t g_ckpt_logical_exports;
 static _Atomic uint64_t g_ckpt_logical_sorted;
@@ -1051,6 +1056,9 @@ static int ckpt_logical_for_mapping(const struct ckpt_logical_snapshot *snapshot
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static int ckpt_logical_patch_test(uint32_t scenario);
+static int g_ckpt_logical_test_skip_bytes;
+
 struct ckpt_logical_test_emission {
     uint64_t addresses[8];
     size_t count;
@@ -1064,8 +1072,13 @@ static int ckpt_logical_test_emit(const hl_logical_vma_descriptor *descriptor, v
 }
 
 HL_API int HL_TARGET_LOCAL(checkpoint_logical_snapshot_test)(uint32_t scenario, uint64_t *visits_out) {
+    if (visits_out == NULL) return 1;
+    if (scenario >= 4 && scenario <= 6) {
+        *visits_out = 0;
+        return ckpt_logical_patch_test(scenario);
+    }
     size_t count = scenario == 1 ? 1u : scenario == 2 ? 64u : scenario == 3 ? 256u : 0u;
-    if (count == 0 || visits_out == NULL) return 1;
+    if (count == 0) return 1;
     struct ckpt_logical_snapshot snapshot = { .items = calloc(count, sizeof *snapshot.items), .count = count };
     if (snapshot.items == NULL) return 2;
     hl_logical_vma_descriptor edges[] = {
@@ -1149,7 +1162,13 @@ static int ckpt_dump_region_bytes(struct ckpt_sink *sink, struct ckpt_sink_strea
         size_t n = (reg->len - off < pagesz) ? (size_t)(reg->len - off) : pagesz;
         const void *bytes = (const void *)(uintptr_t)va;
         if (reg->logical) {
-            if (hl_logical_vma_global_copy_out(va, logical_page, n) != 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (g_ckpt_logical_test_skip_bytes) {
+                memset(logical_page, 0, n);
+                bytes = logical_page;
+            } else
+#endif
+                if (hl_logical_vma_global_copy_out(va, logical_page, n) != 0) {
                 free(logical_page);
                 return -1;
             }
@@ -1206,6 +1225,65 @@ static int ckpt_logical_emit_region(const hl_logical_vma_descriptor *descriptor,
     return 0;
 }
 
+static int ckpt_logical_emit_mapping_owned(struct ckpt_logical_snapshot *snapshot, uint64_t first, uint64_t last,
+                                           struct ckpt_logical_emit_context *context) {
+    if (ckpt_logical_for_mapping(snapshot, first, last, ckpt_logical_emit_region, context, NULL) == 0) return 0;
+    ckpt_logical_snapshot_release(snapshot);
+    return -1;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int g_ckpt_logical_patch_result;
+static uint64_t g_ckpt_logical_patch_offset;
+static struct ckpt_region g_ckpt_logical_patch_region;
+
+static int64_t ckpt_logical_test_tell(struct ckpt_sink_stream *stream) {
+    (void)stream;
+    return 73;
+}
+
+static int ckpt_logical_test_write(struct ckpt_sink_stream *stream, const void *data, size_t size) {
+    (void)stream;
+    (void)data;
+    (void)size;
+    return 0;
+}
+
+static int ckpt_logical_test_write_at(struct ckpt_sink_stream *stream, uint64_t offset, const void *data, size_t size) {
+    (void)stream;
+    if (size != sizeof g_ckpt_logical_patch_region) return -1;
+    g_ckpt_logical_patch_offset = offset;
+    memcpy(&g_ckpt_logical_patch_region, data, size);
+    return g_ckpt_logical_patch_result;
+}
+
+static int ckpt_logical_patch_test(uint32_t scenario) {
+    static const ckpt_sink_vtable ops = {
+        .write = ckpt_logical_test_write,
+        .write_at = ckpt_logical_test_write_at,
+        .tell = ckpt_logical_test_tell,
+    };
+    struct ckpt_sink sink = {&ops};
+    struct ckpt_logical_snapshot snapshot = {.items = calloc(1, sizeof *snapshot.items), .count = 1};
+    if (snapshot.items == NULL) return 2;
+    snapshot.items[0] = (hl_logical_vma_descriptor){.guest_first = 0x1000, .length = 1, .protection = 3};
+    uint64_t regions = 0;
+    struct ckpt_logical_emit_context context = {&sink, (struct ckpt_sink_stream *)(uintptr_t)1, 4096, &regions};
+    memset(&g_ckpt_logical_patch_region, 0, sizeof g_ckpt_logical_patch_region);
+    g_ckpt_logical_patch_offset = 0;
+    g_ckpt_logical_patch_result = scenario == 4 ? 1 : scenario == 5 ? -1 : 0;
+    g_ckpt_logical_test_skip_bytes = 1;
+    int result = ckpt_logical_emit_mapping_owned(&snapshot, 0x1000, 0x2000, &context);
+    g_ckpt_logical_test_skip_bytes = 0;
+    if (scenario < 6) return result == -1 && snapshot.items == NULL && snapshot.count == 0 && regions == 0 ? 0 : 8;
+    int exact = result == 0 && snapshot.items != NULL && snapshot.count == 1 && regions == 1 &&
+                g_ckpt_logical_patch_offset == 73 && g_ckpt_logical_patch_region.addr == 0x1000 &&
+                g_ckpt_logical_patch_region.len == 1 && g_ckpt_logical_patch_region.npages == 0;
+    ckpt_logical_snapshot_release(&snapshot);
+    return exact ? 0 : 9;
+}
+#endif
+
 // Sparse-dump every tracked guest mapping (image/interp/heap/stack/anon/file mmap). Non-zero HOST pages only.
 /* A refused page dump names the step and the region it refused at. Every one of these paths used to
  * return -1 in silence, so `ABORT -- see the refusal above` pointed at nothing and the member's real
@@ -1238,7 +1316,7 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
     }
 #define CKPT_PAGES_RETURN(value)                                                                                       \
     do {                                                                                                               \
-        free(logical_snapshot.items);                                                                                  \
+        ckpt_logical_snapshot_release(&logical_snapshot);                                                              \
         return (value);                                                                                                \
     } while (0)
     size_t mapping_count = hl_gmap_count();
@@ -1306,8 +1384,7 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
              * the next outer entry (if any) skips descriptors it does not own.
              */
             struct ckpt_logical_emit_context context = { sink, f, pagesz, &nreg };
-            if (ckpt_logical_for_mapping(&logical_snapshot, addr, logical_end, ckpt_logical_emit_region, &context,
-                                         NULL) != 0) {
+            if (ckpt_logical_emit_mapping_owned(&logical_snapshot, addr, logical_end, &context) != 0) {
                 ckpt_pages_refuse("write a logical region inside %#llx", addr);
                 CKPT_PAGES_RETURN(-1);
             }
