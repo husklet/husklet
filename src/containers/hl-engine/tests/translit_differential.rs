@@ -99,45 +99,47 @@ fn displaced_fixture(directory: &Path, name: &str) -> PathBuf {
 /// Serialises the two tests which deliberately depend on whether the process-wide ELF link range is free.
 static NONPIE_LINK_RANGE: Mutex<()> = Mutex::new(());
 
-struct LinkPage(*mut libc::c_void);
+struct LinkPage {
+    active: bool,
+}
 
-#[allow(unsafe_code)]
 impl LinkPage {
     fn occupy() -> Self {
-        const LINK_BASE: usize = 0x0040_0000;
-        // SAFETY: MAP_FIXED_NOREPLACE either claims exactly this otherwise-unused page or fails; unlike
-        // MAP_FIXED it cannot replace a mapping owned by this test process.
-        let page = unsafe {
-            libc::mmap(
-                LINK_BASE as *mut libc::c_void,
-                4096,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
-                -1,
-                0,
-            )
-        };
-        assert_eq!(
-            page, LINK_BASE as *mut libc::c_void,
-            "the test could not reserve the ET_EXEC link page without replacement"
-        );
-        // SAFETY: the successful writable one-page mapping above remains owned by this guard.
-        unsafe { *(page as *mut u8) = 0xa5 };
-        Self(page)
+        hl_native::exec_page_cache_test(2, 12).expect("occupy the ET_EXEC link page");
+        Self { active: true }
+    }
+
+    fn verify_and_release(mut self) {
+        let result = hl_native::exec_page_cache_test(2, 13);
+        // Scenario 13 attempts the release even when sentinel verification fails. Disarm before
+        // reporting that failure so unwinding never repeats the operation through Drop.
+        self.active = false;
+        result.expect("verify and release the ET_EXEC link page");
     }
 }
 
-#[allow(unsafe_code)]
 impl Drop for LinkPage {
     fn drop(&mut self) {
-        // SAFETY: this guard exclusively owns the still-live page until the munmap below.
-        assert_eq!(
-            unsafe { *(self.0 as *const u8) },
-            0xa5,
-            "the guest loader clobbered the occupied link page"
-        );
-        assert_eq!(unsafe { libc::munmap(self.0, 4096) }, 0);
+        if self.active {
+            // A prior assertion may already be unwinding. Cleanup remains best-effort and must never
+            // turn that first useful failure into a process abort from a second panic.
+            let _ = hl_native::exec_page_cache_test(2, 13);
+            self.active = false;
+        }
     }
+}
+
+#[test]
+fn collision_guard_verification_is_explicit_and_drop_cannot_panic() {
+    let source = include_str!("translit_differential.rs");
+    let explicit_call = ["occupied", ".verify_and_release();"].concat();
+    assert_eq!(source.matches(&explicit_call).count(), 1);
+    let drop_body = source
+        .split_once("impl Drop for LinkPage")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n#[test]\nfn collision_guard_verification"))
+        .map(|(body, _)| body)
+        .expect("LinkPage Drop body");
+    assert!(!drop_body.contains(".expect("), "LinkPage::drop must remain non-panicking");
 }
 
 fn build(directory: &Path, name: &str, linkage: &str) -> PathBuf {
@@ -370,5 +372,5 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
     assert_eq!(selected_backend.entries, 0, "a displaced image entered emitted code");
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
-    drop(occupied); // checks the sentinel before unmapping the page
+    occupied.verify_and_release();
 }

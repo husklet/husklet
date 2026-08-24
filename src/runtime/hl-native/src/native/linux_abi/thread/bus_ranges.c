@@ -759,6 +759,9 @@ static int guest_exec_direct_valid(uint64_t guest, size_t length) {
 }
 
 #if HL_NATIVE_TEST_HOOKS
+static hl_host_memory_mapping g_nonpie_collision_mapping;
+static int g_nonpie_collision_active;
+
 HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *scans) {
     if (scans == NULL) return -1;
     void *saved = malloc(sizeof g_gnx);
@@ -811,6 +814,36 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 10:
     case 11: result = hl_x86_decode_memo_test(scenario, scans); break;
 #endif
+    case 12: {
+        if (g_nonpie_collision_active) {
+            result = -EALREADY;
+            break;
+        }
+        uint64_t page = nonpie_place_at_link_address(UINT64_C(0x400000), UINT64_C(4096),
+                                                      &g_nonpie_collision_mapping);
+        if (page != UINT64_C(0x400000)) {
+            result = -EADDRINUSE;
+            break;
+        }
+        *(volatile uint8_t *)(uintptr_t)page = UINT8_C(0xa5);
+        g_nonpie_collision_active = 1;
+        *scans = 1;
+        break;
+    }
+    case 13: {
+        if (!g_nonpie_collision_active) {
+            result = -ENOENT;
+            break;
+        }
+        if (*(volatile uint8_t *)(uintptr_t)UINT64_C(0x400000) != UINT8_C(0xa5)) result = -EUCLEAN;
+        const hl_host_services *host = effective_host_services();
+        hl_host_result released = host->memory->release(host->context, g_nonpie_collision_mapping.handle);
+        if (result == 0 && released.status != HL_STATUS_OK) result = -EIO;
+        g_nonpie_collision_mapping = (hl_host_memory_mapping){0};
+        g_nonpie_collision_active = 0;
+        *scans = 1;
+        break;
+    }
     default: result = -10;
     }
     if (scenario <= 4) *scans = g_gnx_scan_count;
