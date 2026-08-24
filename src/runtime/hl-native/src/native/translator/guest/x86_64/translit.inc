@@ -148,6 +148,7 @@ static uint64_t translit_stitch_candidates;
 static uint64_t translit_stitch_admitted;
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
+static uint64_t translit_provenance_fallback;
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
 static uint64_t translit_displaced_riprel_projected;
@@ -711,20 +712,23 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
                                                                  g_nonpie_hi, g_nonpie_bias);
-                // r11 is borrowed only around the guest pointer load. Publish its live value first so a
-                // fault attributed to this CALL reconstructs the guest register file exactly.
+                // Keep the loaded target in borrowed r11 until both guest stack stores succeed. The whole
+                // faulting interval preserves r11, and cpu->rip remains the source CALL until commit, so
+                // even a wrapped provenance map restarts the instruction instead of publishing its target.
                 hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
                 hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
                 preserve_start = a->cursor;
                 hl_x64_load_ind(a, HL_X64_R11, HL_X64_R11);
-                preserve_end = a->cursor;
                 preserve_register = HL_X64_R11;
-                hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
-                hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
             hl_x64_store_rsp_imm32(a, -8, (uint32_t)pushed);
             hl_x64_store_rsp_imm32(a, -4, (uint32_t)(pushed >> 32));
+            if (kind == TL_CALL_RIP) preserve_end = a->cursor;
             hl_x64_lea_rsp(a, -8);
+            if (kind == TL_CALL_RIP) {
+                hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
+                hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            }
             if (kind == TL_CALL)
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             else
@@ -819,6 +823,7 @@ static int translit_report(char *out, size_t size) {
     uint64_t stitch_candidates = __atomic_load_n(&translit_stitch_candidates, __ATOMIC_RELAXED);
     uint64_t stitch_admitted = __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED);
     uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
+    uint64_t provenance_fallback = __atomic_load_n(&translit_provenance_fallback, __ATOMIC_RELAXED);
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
     uint64_t displaced_operand_declined =
@@ -875,10 +880,10 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted);
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
-                    " stitch_admitted=%llu rip_indirect_lowered=%llu\n",
+                    " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
-                    (unsigned long long)rip_indirect_lowered);
+                    (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.
@@ -900,6 +905,13 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     uint32_t preserve_registers = 0;
     uint64_t guest_pc;
     int exact_pc = jit_instruction_guest_pc_preserve(host_pc, &guest_pc, &preserve_registers);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *force_miss = hl_option_get("HL_TRANSLIT_PROVENANCE_FALLBACK");
+    if (force_miss != NULL && force_miss[0] != '0' && force_miss[0] != 0) {
+        exact_pc = 0;
+        (void)__atomic_fetch_add(&translit_provenance_fallback, 1, __ATOMIC_RELAXED);
+    }
+#endif
     for (int i = 0; i < 16; i++) {
         if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
     }

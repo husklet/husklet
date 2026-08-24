@@ -65,6 +65,7 @@ struct Backend {
     scratch_lowered: u64,
     lea_lowered: u64,
     rip_indirect_lowered: u64,
+    provenance_fallback: u64,
     translations: u64,
 }
 
@@ -104,6 +105,7 @@ fn backend(stderr: &[u8]) -> Backend {
         scratch_lowered: counter("scratch_lowered="),
         lea_lowered: counter("lea_lowered="),
         rip_indirect_lowered: counter("rip_indirect_lowered="),
+        provenance_fallback: counter("provenance_fallback="),
         translations,
         line,
     }
@@ -245,15 +247,27 @@ fn elf_is_position_independent(path: &Path) -> bool {
 /// One guest run with the backend explicitly selected -- through the LAUNCH OPTION, never through the
 /// environment, so this gate does not depend on `translit_enabled()`'s command-line fallback existing.
 /// Answers (stdout, exit status, what the backend reported about itself).
-fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
+fn run_with_arguments(
+    executable: &Path,
+    translit: &str,
+    extra: &[&[u8]],
+    force_provenance_miss: bool,
+) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", translit, true).expect("HL_TRANSLIT");
     options.set("HL_C_DIAGNOSTICS", "1", true).expect("HL_C_DIAGNOSTICS");
+    if force_provenance_miss {
+        options
+            .set("HL_TRANSLIT_PROVENANCE_FALLBACK", "1", true)
+            .expect("HL_TRANSLIT_PROVENANCE_FALLBACK");
+    }
     let plan = RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        arguments: std::iter::once(executable.as_os_str().as_encoded_bytes().to_vec())
+            .chain(extra.iter().map(|argument| argument.to_vec()))
+            .collect(),
         environment: Vec::new(),
         result_path: None,
         options,
@@ -266,6 +280,10 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     let out = captured.out.lock().unwrap().clone();
     let report = backend(&captured.err.lock().unwrap());
     (out, exit.guest_status, report)
+}
+
+fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
+    run_with_arguments(executable, translit, &[], false)
 }
 
 /// The whole contract: the backend selection must not be observable in the guest's output.
@@ -380,7 +398,7 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     let (selected, selected_status, selected_backend) = run(&executable, "1");
     assert!(
         selected_backend.rip_indirect_lowered >= 3,
-        "the fixture did not build its two valid and one page-boundary RIP-indirect terminators -- {}",
+        "the fixture did not build its valid and page-boundary RIP-indirect terminators -- {}",
         selected_backend.line
     );
     assert_eq!(selected_status, interpreted_status);
@@ -388,6 +406,21 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     let native = std::process::Command::new(&executable).output().expect("native fixture");
     assert_eq!(native.status.code(), Some(interpreted_status));
     assert_eq!(native.stdout, interpreted);
+
+    // The interpreter currently changes rsp before reporting a failed CALL push. Keep the new emitted
+    // path pinned to native architectural behaviour without making that older compatibility defect the
+    // oracle for this lowering.
+    let (selected_stack, selected_stack_status, selected_stack_backend) =
+        run_with_arguments(&executable, "1", &[b"stack"], true);
+    assert!(selected_stack_backend.rip_indirect_lowered >= 4, "{}", selected_stack_backend.line);
+    assert_eq!(selected_stack_backend.provenance_fallback, 1, "{}", selected_stack_backend.line);
+    let native_stack = std::process::Command::new(&executable)
+        .arg("stack")
+        .output()
+        .expect("native stack-fault fixture");
+    assert_eq!(selected_stack_status, 0, "{}", String::from_utf8_lossy(&selected_stack));
+    assert_eq!(native_stack.status.code(), Some(0));
+    assert_eq!(selected_stack, native_stack.stdout);
 }
 
 /// The other refusal, and the one that decides whether this backend is worth anything to a developer.

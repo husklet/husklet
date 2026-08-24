@@ -87,6 +87,9 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
                         "process forked immediately after the scan is",
                         HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_PROVENANCE_FALLBACK",
+                        "test-only same-ISA fault recovery without exact instruction provenance",
+                        HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",

@@ -126,6 +126,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_PROVENANCE_FALLBACK",
+        "test-only same-ISA fault recovery without exact instruction provenance",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",
         Flag
