@@ -432,4 +432,50 @@ mod tests {
             TerminalChannel::CANCELLATION_POLL
         );
     }
+
+    /// Profiles the owned-message-to-byte-buffer path used by a real terminal paste.
+    ///
+    /// Run alone with `--ignored --nocapture`. The second round reuses the queue's high-water
+    /// allocation; hashes and exact byte equality prevent a faster partial drain from looking like
+    /// an improvement. This intentionally measures the current `Vec` -> `VecDeque` -> read-buffer
+    /// path before changing it.
+    #[test]
+    #[ignore = "a large-paste profile, not an assertion"]
+    fn terminal_channel_large_paste_cost() {
+        const MESSAGE_BYTES: usize = 16 * 1024;
+        for length in [1024_usize, 8 * 1024, 64 * 1024, 1024 * 1024] {
+            let messages = length.div_ceil(MESSAGE_BYTES);
+            let (input, receiver) = tokio::sync::mpsc::channel(messages.max(1));
+            let (output, _logs) = crate::service::log_channel();
+            let terminal = TerminalChannel::new(Some(receiver), output);
+            for round in 0..2 {
+                let end_to_end_started = std::time::Instant::now();
+                let expected = (0..length).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+                for chunk in expected.chunks(MESSAGE_BYTES) {
+                    input.blocking_send(chunk.to_vec()).unwrap();
+                }
+                let receiver_started = std::time::Instant::now();
+                let mut seen = Vec::with_capacity(length);
+                let mut read_calls = 0;
+                let mut buffer = [0_u8; 8192];
+                while seen.len() < length {
+                    let count = terminal.read(&mut buffer).unwrap();
+                    assert_ne!(count, 0, "terminal input ended before the declared paste length");
+                    read_calls += 1;
+                    seen.extend_from_slice(&buffer[..count]);
+                }
+                assert_eq!(seen, expected, "terminal channel changed paste bytes");
+                let hash = seen.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                    (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+                });
+                println!(
+                    "channel-paste round={round} bytes={length} receiver_ns={} end_to_end_ns={} messages={messages} read_calls={read_calls} fnv64={hash:016x}",
+                    receiver_started.elapsed().as_nanos(),
+                    end_to_end_started.elapsed().as_nanos()
+                );
+            }
+            drop(input);
+            assert_eq!(terminal.read(&mut [0_u8; 1]).unwrap(), 0);
+        }
+    }
 }

@@ -477,6 +477,8 @@ mod tests {
     struct Port {
         state: Mutex<(VecDeque<u8>, Vec<u8>, bool)>,
         changed: Condvar,
+        reads: AtomicUsize,
+        writes: AtomicUsize,
     }
 
     impl TerminalPort for Port {
@@ -492,10 +494,12 @@ mod tests {
             for byte in &mut output[..count] {
                 *byte = state.0.pop_front().unwrap();
             }
+            self.reads.fetch_add(1, Ordering::Relaxed);
             Ok(count)
         }
 
         fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+            self.writes.fetch_add(1, Ordering::Relaxed);
             let mut state = self.state.lock().unwrap();
             state.1.extend_from_slice(input);
             self.changed.notify_all();
@@ -830,7 +834,13 @@ mod tests {
                 Ok(0) => break,
                 Ok(count) => collected.extend_from_slice(&chunk[..count]),
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(2));
+                    let mut ready = libc::pollfd {
+                        fd: slave.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // SAFETY: poll borrows one initialized descriptor record for this call.
+                    assert!(unsafe { libc::poll(&raw mut ready, 1, 100) } >= 0, "poll the pty slave");
                 }
                 Err(error) => panic!("read the pty slave: {error}"),
             }
@@ -1026,6 +1036,110 @@ mod tests {
             at(99),
         );
         drop(bridge);
+    }
+
+    fn fnv64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+        })
+    }
+
+    fn queue_paste(port: &Port, bytes: &[u8], message_bytes: usize) -> usize {
+        let mut messages = 0;
+        for chunk in bytes.chunks(message_bytes) {
+            port.state.lock().unwrap().0.extend(chunk.iter().copied());
+            messages += 1;
+        }
+        messages
+    }
+
+    /// Large-paste throughput through the real input pump and PTY.
+    ///
+    /// The host arm is the native N_TTY raw control. The Linux arm keeps canonical processing in
+    /// Husklet and deliberately stops below its 4096-byte line limit. Two rounds on each live
+    /// bridge expose first-use allocation separately from the warm high-water mark. This is a
+    /// profile, not a timing assertion: run it alone with `--ignored --nocapture` and quote the
+    /// commit, host, and both byte hashes with any result.
+    #[test]
+    #[ignore = "a large-paste profile, not an assertion"]
+    fn terminal_paste_throughput() {
+        const MESSAGE_BYTES: usize = 16 * 1024;
+
+        let raw_port = Arc::new(Port::default());
+        let raw_terminal = Terminal::new(raw_port.clone(), 24, 80).unwrap();
+        let raw_bridge = NativeTerminalBridge::attach(raw_terminal, InputDiscipline::Host).unwrap();
+        let raw_fd = raw_bridge.standard_fds()[0];
+        let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: `raw_fd` is the bridge's live slave and `attributes` is writable.
+        assert_eq!(unsafe { libc::tcgetattr(raw_fd, attributes.as_mut_ptr()) }, 0);
+        // SAFETY: tcgetattr succeeded, and both calls borrow initialized termios/live fd values.
+        let mut attributes = unsafe { attributes.assume_init() };
+        unsafe { libc::cfmakeraw(&raw mut attributes) };
+        assert_eq!(unsafe { libc::tcsetattr(raw_fd, libc::TCSANOW, &raw const attributes) }, 0);
+        // SAFETY: dup returns a fresh descriptor and the result is checked.
+        let raw_copy = unsafe { libc::dup(raw_fd) };
+        assert!(raw_copy >= 0);
+        // SAFETY: the descriptor is live and F_SETFL only updates its status flags.
+        unsafe { libc::fcntl(raw_copy, libc::F_SETFL, libc::O_NONBLOCK) };
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut raw_slave = unsafe { std::fs::File::from_raw_fd(raw_copy) };
+
+        for round in 0..2 {
+            for length in [1024_usize, 8 * 1024, 64 * 1024, 1024 * 1024] {
+                let end_to_end_started = Instant::now();
+                let bytes = (0..length).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+                let reads_before = raw_port.reads.load(Ordering::Relaxed);
+                let messages = queue_paste(raw_port.as_ref(), &bytes, MESSAGE_BYTES);
+                let receiver_started = Instant::now();
+                raw_port.changed.notify_all();
+                let seen = read_exactly(&mut raw_slave, length);
+                let reads = raw_port.reads.load(Ordering::Relaxed) - reads_before;
+                assert_eq!(seen, bytes, "raw paste changed bytes");
+                println!(
+                    "paste host-ntty-control round={round} bytes={length} receiver_ns={} end_to_end_ns={} messages={messages} read_calls={reads} master_batches={reads} fnv64={:016x}",
+                    receiver_started.elapsed().as_nanos(),
+                    end_to_end_started.elapsed().as_nanos(),
+                    fnv64(&seen)
+                );
+            }
+        }
+        drop(raw_bridge);
+
+        let canonical_port = Arc::new(Port::default());
+        let canonical_terminal = Terminal::new(canonical_port.clone(), 24, 80).unwrap();
+        let canonical_bridge = NativeTerminalBridge::attach(canonical_terminal, InputDiscipline::Linux).unwrap();
+        assert_eq!(canonical_bridge.discipline(), InputDiscipline::Linux);
+        let canonical_copy = unsafe { libc::dup(canonical_bridge.standard_fds()[0]) };
+        assert!(canonical_copy >= 0);
+        // SAFETY: the descriptor is live and F_SETFL only updates its status flags.
+        unsafe { libc::fcntl(canonical_copy, libc::F_SETFL, libc::O_NONBLOCK) };
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut canonical_slave = unsafe { std::fs::File::from_raw_fd(canonical_copy) };
+        for round in 0..2 {
+            for length in [1024_usize, 2048, 4000] {
+                let end_to_end_started = Instant::now();
+                let mut bytes = vec![b'p'; length];
+                bytes.push(b'\n');
+                let reads_before = canonical_port.reads.load(Ordering::Relaxed);
+                let writes_before = canonical_port.writes.load(Ordering::Relaxed);
+                let messages = queue_paste(canonical_port.as_ref(), &bytes, MESSAGE_BYTES);
+                let receiver_started = Instant::now();
+                canonical_port.changed.notify_all();
+                let seen = read_exactly(&mut canonical_slave, bytes.len());
+                let reads = canonical_port.reads.load(Ordering::Relaxed) - reads_before;
+                let writes = canonical_port.writes.load(Ordering::Relaxed) - writes_before;
+                assert_eq!(seen, bytes, "canonical paste changed bytes");
+                assert_eq!(reads, 1, "canonical paste unexpectedly crossed more than one master batch");
+                println!(
+                    "paste canonical round={round} bytes={} receiver_ns={} end_to_end_ns={} messages={messages} read_calls={reads} master_batches={reads} echo_writes={writes} fnv64={:016x}",
+                    bytes.len(),
+                    receiver_started.elapsed().as_nanos(),
+                    end_to_end_started.elapsed().as_nanos(),
+                    fnv64(&seen)
+                );
+            }
+        }
+        drop(canonical_bridge);
     }
 
     /// The two line-editor shapes measured on this host, as the `tcsetattr` each performs between
