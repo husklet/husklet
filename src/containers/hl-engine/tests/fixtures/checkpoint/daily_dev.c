@@ -61,11 +61,12 @@ static int profile_resources(const char *directory) {
     FILE *scale_file = fopen(scale_path, "r");
     if (scale_file == NULL) return errno == ENOENT ? 0 : -1;
     unsigned scale = 0;
-    if (fscanf(scale_file, "%u", &scale) != 1 || fclose(scale_file) != 0 || scale == 0 || scale > 512) return -1;
+    if (fscanf(scale_file, "%u", &scale) != 1 || fclose(scale_file) != 0 || scale == 0 || scale > 2048) return -1;
     int data = open(data_path, O_RDWR | O_CREAT | O_TRUNC, 0600);
     if (data < 0 || ftruncate(data, (off_t)scale * 4096) != 0) return -1;
-    static int descriptors[512];
-    static void *mappings[512];
+    int *descriptors = calloc(scale, sizeof *descriptors);
+    void **mappings = calloc(scale, sizeof *mappings);
+    if (descriptors == NULL || mappings == NULL) return -1;
     for (unsigned index = 0; index < scale; ++index) {
         descriptors[index] = dup(data);
         mappings[index] = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, data, (off_t)index * 4096);

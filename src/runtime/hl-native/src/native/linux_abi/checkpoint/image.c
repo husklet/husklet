@@ -145,9 +145,11 @@ static _Noreturn void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *le
 #include "refusal_order_test.inc"
 #endif
 
-static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
-    for (int prior = 0; prior < count; ++prior)
+static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd, uint64_t *comparisons) {
+    for (int prior = 0; prior < count; ++prior) {
+        (*comparisons)++;
         if (records[prior].gfd == fd) return 1;
+    }
     return 0;
 }
 
@@ -711,7 +713,7 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
     return CKPT_FD_CAPTURED;
 }
 
-static int ckpt_scan_fds_walk(struct ckpt_fd *recs, int cap, int *out_n) {
+static int ckpt_scan_fds_walk(struct ckpt_fd *recs, int cap, int *out_n, uint64_t *comparisons) {
     static struct fdvis_view views[HL_NFD];
     int n = 0;
     size_t visible = proc_fdvis_list((int)getpid(), NULL, 0);
@@ -725,7 +727,7 @@ static int ckpt_scan_fds_walk(struct ckpt_fd *recs, int cap, int *out_n) {
     }
     for (size_t index = 0; index < visible; index++) {
         int fd = views[index].guest_fd;
-        if (ckpt_fd_was_captured(recs, n, fd)) continue;
+        if (ckpt_fd_was_captured(recs, n, fd, comparisons)) continue;
         int result = ckpt_capture_early_emulated_fd(recs, &n, fd);
         if (result == CKPT_FD_CAPTURE_ERROR) {
             fprintf(stderr, "[ckpt] refuse: early emulated fd %d capture failed\n", fd);
@@ -774,13 +776,32 @@ struct ckpt_scan_request {
     struct ckpt_fd *records;
     int capacity;
     int count;
+    unsigned pass;
 };
+
+static uint64_t ckpt_fd_semantic_hash(const struct ckpt_fd *records, int count) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (int index = 0; index < count; ++index) {
+        const unsigned char *bytes = (const unsigned char *)&records[index].gfd;
+        for (size_t offset = 0; offset < sizeof records[index].gfd + sizeof records[index].kind; ++offset) {
+            hash ^= bytes[offset];
+            hash *= UINT64_C(1099511628211);
+        }
+    }
+    return hash;
+}
 
 static int ckpt_scan_fds_pass(void *context) {
     struct ckpt_scan_request *request = context;
     memset(request->records, 0, (size_t)request->capacity * sizeof *request->records);
     request->count = 0;
-    return ckpt_scan_fds_walk(request->records, request->capacity, &request->count);
+    uint64_t comparisons = 0;
+    int result = ckpt_scan_fds_walk(request->records, request->capacity, &request->count, &comparisons);
+    if (result == 0 && hl_option_get("HL_CHECKPOINT_FD_SCAN_PROFILE") != NULL)
+        fprintf(stderr, "checkpoint_fd_scan\tpass=%u\tvisible=%d\tcaptured=%d\tcomparisons=%llu\thash=%016llx\n",
+                ++request->pass, request->capacity, request->count, (unsigned long long)comparisons,
+                (unsigned long long)ckpt_fd_semantic_hash(request->records, request->count));
+    return result;
 }
 
 static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {

@@ -48,6 +48,8 @@ static const hl_option_definition hl_option_definitions[] = {
                        "this launch owns the domain freeze: exactly one engine per checkpoint broker", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_LEDGER", "emit checkpoint phase timing records for performance gates",
                        HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CHECKPOINT_FD_SCAN_PROFILE",
+                       "emit checkpoint descriptor scan complexity records for performance gates", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_DIAGNOSTIC_PORT", "private engine diagnostic writer descriptor", HL_OPTION_INTEGER),
     HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_CLOCK_FAIL", "inject an unavailable checkpoint phase clock",
                        HL_OPTION_FLAG),

@@ -11,7 +11,7 @@ pub(crate) struct Options {
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=20))]
     samples: u32,
     /// Extra file mappings and descriptors held by the daily-development fixture.
-    #[arg(long, default_value_t = 64, value_parser = clap::value_parser!(u32).range(1..=512))]
+    #[arg(long, default_value_t = 64, value_parser = clap::value_parser!(u32).range(1..=2048))]
     scale: u32,
     /// New directory that receives immutable per-sample ledgers.
     #[arg(long)]
@@ -24,6 +24,80 @@ struct Row {
     isa: String,
     phase: String,
     duration_us: u64,
+}
+
+#[derive(Debug)]
+struct FdScan {
+    isa: String,
+    pass: u32,
+    visible: u64,
+    captured: u64,
+    comparisons: u64,
+    hash: String,
+}
+
+fn fd_scans(stderr: &str) -> Result<Vec<FdScan>, String> {
+    stderr
+        .lines()
+        .filter(|line| line.starts_with("checkpoint_fd_scan\t"))
+        .map(|line| {
+            let fields = line
+                .split('\t')
+                .skip(1)
+                .filter_map(|field| field.split_once('='))
+                .collect::<BTreeMap<_, _>>();
+            if fields.keys().copied().collect::<Vec<_>>()
+                != ["captured", "comparisons", "hash", "isa", "pass", "visible"]
+            {
+                return Err(format!("fd scan schema mismatch: {line}"));
+            }
+            let number = |name: &str| {
+                fields[name]
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid fd scan {name}: {line}"))
+            };
+            Ok(FdScan {
+                isa: fields["isa"].to_owned(),
+                pass: number("pass")? as u32,
+                visible: number("visible")?,
+                captured: number("captured")?,
+                comparisons: number("comparisons")?,
+                hash: fields["hash"].to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn validate_fd_scans(scans: &[FdScan]) -> Result<(), String> {
+    for isa in ["aarch64", "x86_64"] {
+        let rows = scans.iter().filter(|row| row.isa == isa).collect::<Vec<_>>();
+        if rows.len() != 12 {
+            return Err(format!("{isa} expected 12 fd scan rows, got {}", rows.len()));
+        }
+        let signatures = |pass| {
+            let mut values = rows
+                .iter()
+                .filter(|row| row.pass == pass)
+                .map(|row| (row.visible, row.captured, row.comparisons, row.hash.as_str()))
+                .collect::<Vec<_>>();
+            values.sort_unstable();
+            values
+        };
+        let admission = signatures(1);
+        let consumption = signatures(2);
+        if admission.len() != 6 || admission != consumption {
+            return Err(format!(
+                "{isa} admission/consumption descriptor sets differ: admission={admission:?} consumption={consumption:?}"
+            ));
+        }
+    }
+    if scans
+        .iter()
+        .any(|row| !matches!(row.isa.as_str(), "aarch64" | "x86_64"))
+    {
+        return Err("unknown fd scan ISA".to_owned());
+    }
+    Ok(())
 }
 
 const NATIVE: [&str; 20] = [
@@ -157,6 +231,7 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         .collect::<String>();
     std::fs::write(temporary.join("probe.sha256"), format!("{probe_hash}\n"))?;
     let mut totals = BTreeMap::<(String, String, String), (u64, u64)>::new();
+    let mut scan_totals = BTreeMap::<String, (u64, u64, u64, u64)>::new();
     for sample in 1..=options.samples {
         let ledger = temporary.join(format!("sample-{sample}.ledger"));
         let output = Command::new(&options.probe)
@@ -175,6 +250,16 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         if !output.status.success() {
             return Err(format!("checkpoint sample {sample} failed with {}", output.status).into());
         }
+        let scans =
+            fd_scans(std::str::from_utf8(&output.stderr)?).map_err(|error| format!("sample {sample}: {error}"))?;
+        validate_fd_scans(&scans).map_err(|error| format!("sample {sample}: {error}"))?;
+        for scan in scans {
+            let total = scan_totals.entry(scan.isa).or_default();
+            total.0 += scan.visible;
+            total.1 += scan.captured;
+            total.2 += scan.comparisons;
+            total.3 += 1;
+        }
         let content = std::fs::read_to_string(&ledger)?;
         let parsed = rows(&content).map_err(|error| format!("sample {sample}: {error}"))?;
         if parsed.is_empty() {
@@ -190,7 +275,7 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         temporary.join("receipt"),
         format!(
-            "checkpoint_profile_v1\nsamples={}\nscale={}\nprobe_sha256={probe_hash}\n",
+            "checkpoint_profile_v1\nsamples={}\nscale={}\nprobe_sha256={probe_hash}\nfd_scan_rows_per_sample=24\nfd_scan_admission_equals_consumption=1\n",
             options.samples, options.scale
         ),
     )?;
@@ -205,12 +290,38 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             duration / count
         );
     }
+    for (isa, (visible, captured, comparisons, count)) in scan_totals {
+        println!(
+            "checkpoint_profile_fd_scan\tisa={isa}\trows={count}\tmean_visible={}\tmean_captured={}\tmean_comparisons={}",
+            visible / count,
+            captured / count,
+            comparisons / count
+        );
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CONTROL, NATIVE, rows, validate};
+    use super::{CONTROL, NATIVE, fd_scans, rows, validate, validate_fd_scans};
+
+    #[test]
+    fn fd_scan_receipt_requires_identical_admission_and_consumption_sets() {
+        let pair = |isa: &str| {
+            format!(
+                "checkpoint_fd_scan\tisa={isa}\tpass=1\tvisible=7\tcaptured=7\tcomparisons=21\thash=abc\ncheckpoint_fd_scan\tisa={isa}\tpass=2\tvisible=7\tcaptured=7\tcomparisons=21\thash=abc\n"
+            )
+        };
+        let mut text = String::new();
+        for isa in ["aarch64", "x86_64"] {
+            for _ in 0..6 {
+                text.push_str(&pair(isa));
+            }
+        }
+        let rows = fd_scans(&text).unwrap();
+        validate_fd_scans(&rows).unwrap();
+        assert!(validate_fd_scans(&fd_scans(&text.replacen("hash=abc", "hash=wrong", 1)).unwrap()).is_err());
+    }
 
     #[test]
     fn phase_parser_rejects_failure_and_accepts_exact_duration() {

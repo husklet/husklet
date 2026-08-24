@@ -59,6 +59,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CHECKPOINT_FD_SCAN_PROFILE",
+        "emit checkpoint descriptor scan complexity records for performance gates",
+        Flag
+    ),
+    internal!(
         "HL_DIAGNOSTIC_PORT",
         "private engine diagnostic writer descriptor",
         Integer

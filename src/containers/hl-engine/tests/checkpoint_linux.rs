@@ -782,6 +782,9 @@ fn daily_dev_phase_plan(
     capture: bool,
 ) -> RuntimePlan {
     let mut plan = daily_dev_plan(executable, directory, restore, capture);
+    if std::env::var_os("HL_CHECKPOINT_PROFILE_SCALE").is_some() {
+        plan.options.set("HL_CHECKPOINT_FD_SCAN_PROFILE", "1", true).unwrap();
+    }
     if let Some(path) = std::env::var_os("HL_CHECKPOINT_PHASE_LEDGER_PATH") {
         let descriptor = std::fs::OpenOptions::new()
             .create(true)
@@ -2708,6 +2711,18 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         "durable state regressed: {persisted} < {}",
         progress[1]
     );
+    if std::env::var_os("HL_CHECKPOINT_PROFILE_SCALE").is_some() {
+        let isa = match isa {
+            GuestIsa::Aarch64 => "aarch64",
+            GuestIsa::X86_64 => "x86_64",
+        };
+        for line in output
+            .lines()
+            .filter_map(|line| line.strip_prefix("checkpoint_fd_scan\t"))
+        {
+            eprintln!("checkpoint_fd_scan\tisa={isa}\t{line}");
+        }
+    }
     timings.finish();
 }
 
