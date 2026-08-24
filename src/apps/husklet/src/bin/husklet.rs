@@ -135,7 +135,14 @@ impl AppConfig {
     }
 
     fn get() -> &'static Self {
-        APP_CONFIG.get().expect("application config initialized in main")
+        #[cfg(test)]
+        {
+            APP_CONFIG.get_or_init(Self::parse)
+        }
+        #[cfg(not(test))]
+        {
+            APP_CONFIG.get().expect("application config initialized in main")
+        }
     }
 }
 

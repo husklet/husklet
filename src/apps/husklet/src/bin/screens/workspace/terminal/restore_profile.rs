@@ -69,7 +69,7 @@ fn characterize(panes: usize) {
     std::fs::create_dir_all(Session::dir(&storage)).unwrap();
     for index in 0..panes {
         std::fs::write(
-            Session::dir(&storage).join(format!("profile-{index}.txt")),
+            Session::dir(&storage).join(format!("hist-profile-{index}.txt")),
             format!("HL_RESTORE_HISTORY_{index}\n"),
         )
         .unwrap();
@@ -119,8 +119,11 @@ fn characterize(panes: usize) {
     for (index, pane) in tw.panes.borrow().iter().enumerate() {
         let terminal = pane.terminal.upgrade().unwrap();
         let text = Terminal::new(&terminal).history();
-        assert!(text.contains(&format!("HL_RESTORE_HISTORY_{index}")));
-        assert!(text.contains("HL_RESTORE_PROMPT_"));
+        assert!(
+            text.contains(&format!("HL_RESTORE_HISTORY_{index}")),
+            "pane {index} lost replayed history: {text:?}"
+        );
+        assert!(text.contains("HL_RESTORE_PROMPT_"), "pane {index} did not reach its prompt: {text:?}");
     }
 
     for pid in pids {
@@ -204,7 +207,7 @@ fn layout(leaves: usize, base: usize) -> PaneNode {
     if leaves == 1 {
         return PaneNode::Leaf(Pane {
             cwd: None,
-            history_file: Some(format!("profile-{base}.txt")),
+            history_file: Some(format!("hist-profile-{base}.txt")),
             slot: Some(format!("profile-{base}")),
         });
     }
