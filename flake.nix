@@ -1340,6 +1340,10 @@
                 + "\t" + .target.name + "\t" + (.target.kind | join(","))
             ' windows-units.json | sort -u | cut -f1 | sort | uniq -c \
               | sed 's/^ *//' > windows-units.actual
+            # The integrated checkpoint/clone3/dispatcher lanes add three auto-discovered hl-native
+            # test targets. Cargo reports them as compiler artifacts on Windows even where their
+            # native-test-hooks bodies are feature-gated, so 52 moves mechanically to 55 rather than
+            # treating an empty default body as an absent target.
             cat > windows-units.expected <<'WINDOWS_UNITS'
 6 engine
 3 extension
@@ -1350,7 +1354,7 @@
 1 hl-fs
 8 hl-gui
 2 hl-log
-52 hl-native
+55 hl-native
 1 hl-process
 1 hl-rpc
 1 hl-ws
