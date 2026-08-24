@@ -60,6 +60,8 @@ struct Backend {
     declined: u64,
     stitch_candidates: u64,
     stitch_admitted: u64,
+    jcc_fall_candidates: u64,
+    jcc_fall_admitted: u64,
     operand_declined: u64,
     riprel_lowered: u64,
     scratch_lowered: u64,
@@ -100,6 +102,8 @@ fn backend(stderr: &[u8]) -> Backend {
         declined: counter("declined="),
         stitch_candidates: counter("stitch_candidates="),
         stitch_admitted: counter("stitch_admitted="),
+        jcc_fall_candidates: counter("jcc_fall_candidates="),
+        jcc_fall_admitted: counter("jcc_fall_admitted="),
         operand_declined: counter("operand_declined="),
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
@@ -384,6 +388,25 @@ fn a_same_page_forward_jump_is_stitched_without_executing_its_gap() {
     assert!(selected_backend.stitch_admitted > 0, "{}", selected_backend.line);
     assert!(
         selected_backend.stitch_admitted <= selected_backend.stitch_candidates,
+        "{}",
+        selected_backend.line
+    );
+}
+
+#[test]
+fn a_same_page_conditional_fallthrough_stays_in_the_descriptor() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jcc_fallthrough");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert_eq!(interpreted_status, 0);
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected, b"fall=42 taken=41\n");
+    assert!(selected_backend.jcc_fall_candidates > 0, "{}", selected_backend.line);
+    assert!(selected_backend.jcc_fall_admitted > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.jcc_fall_admitted <= selected_backend.jcc_fall_candidates,
         "{}",
         selected_backend.line
     );
