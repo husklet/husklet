@@ -372,10 +372,18 @@ jobs:
           cargo test -p hl-gui-gtk --tests --locked --offline
 
       - name: Test the engine composition root
-        run: >-
-          .github/scripts/cargo-test-named.sh "engine composition root"
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p hl-engine --all-targets --locked --offline
+        run: |
+          set -o pipefail
+          .github/scripts/cargo-test-named.sh "engine composition root" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test -p hl-engine --all-targets --locked --offline 2>&1 | \
+            tee "$RUNNER_TEMP/engine-composition-root.log"
+          verdict='test a_peer_that_exited_before_joining_does_not_stall_or_fail_the_capture_on_both_isas ... ok'
+          count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/engine-composition-root.log" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error title=Linux checkpoint verdict missing::$verdict appeared $count times, expected exactly once."
+            exit 1
+          fi
 
       # `engine` is the worker application crate, not `hl-engine`. Its Linux direct-worker
       # regressions are integration tests, so neither the composition-root command above nor
@@ -412,11 +420,19 @@ jobs:
           cargo test -p hl-native --all-targets --locked --offline --no-fail-fast
 
       - name: Test the native engine package with its test hooks
-        run: >-
-          .github/scripts/cargo-test-named.sh "native engine package, test hooks"
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p hl-native --all-targets --features native-test-hooks
-          --locked --offline --no-fail-fast
+        run: |
+          set -o pipefail
+          .github/scripts/cargo-test-named.sh "native engine package, test hooks" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test -p hl-native --all-targets --features native-test-hooks \
+            --locked --offline --no-fail-fast 2>&1 | \
+            tee "$RUNNER_TEMP/native-engine-hooks.log"
+          verdict='test logical_checkpoint_descriptor_lookup_stays_subquadratic_for_both_targets ... ok'
+          count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/native-engine-hooks.log" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error title=Native checkpoint verdict missing::$verdict appeared $count times, expected exactly once."
+            exit 1
+          fi
 
       # AGENTS.md names this the gate every lane must run, and until today no CI job on
       # any host had ever run it on Linux. It excludes nothing. `--no-fail-fast` so a
