@@ -48,7 +48,13 @@ impl Server {
             let deadline = admission.deadline;
             let result = self
                 .publish_object(object, Some(deadline))
-                .map_err(Self::publication_failure)
+                .map_err(|error| {
+                    self.record_failure(
+                        admission.id,
+                        format!("checkpoint store rejected {}: {error:?}", object.name),
+                    );
+                    Self::publication_failure(error)
+                })
                 .and_then(|()| {
                     (std::time::Instant::now() < deadline)
                         .then_some(())
@@ -153,6 +159,7 @@ impl Server {
                 hl_log::tag::CHECKPOINT,
                 "checkpoint capture {id}: socket topology is not reciprocal -- {violation}"
             );
+            self.record_failure(id, format!("socket topology is not reciprocal: {violation}"));
             let mut capture = self.capture_lock()?;
             capture.phase = CapturePhase::Finished {
                 id,
@@ -175,7 +182,10 @@ impl Server {
                 Ok(())
             }
             Err(crate::composition::CompositionError::DeadlineExceeded) => Err(CaptureFailure::Deadline),
-            Err(_) => Err(CaptureFailure::Failed),
+            Err(error) => {
+                self.record_failure(id, format!("checkpoint store rejected manifest: {error:?}"));
+                Err(CaptureFailure::Failed)
+            }
         };
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Publishing { id: active } if active == id) {
