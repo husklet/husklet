@@ -293,6 +293,16 @@ pub(crate) fn dispatch_profile_test(isa: u32) -> i32 {
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn clone3_extended_args_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    scenario_status(
+        isa,
+        test_api().aarch64_clone3_extended_args,
+        test_api().x86_64_clone3_extended_args,
+        scenario,
+    )
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
     // SAFETY: this pure test export accepts and returns one scalar value.
     unsafe { (test_api().errno_from_host)(domain, host_errno) }

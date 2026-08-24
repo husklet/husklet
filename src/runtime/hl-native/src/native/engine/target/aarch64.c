@@ -1109,4 +1109,8 @@ HL_API int hl_aarch64_reserved_register_test(void) {
 HL_API int hl_aarch64_imported_path_guard_test(void) {
     return hl_linux_imported_path_guard_probe();
 }
+
+HL_API int hl_aarch64_clone3_extended_args_test(uint32_t scenario) {
+    return clone3_extended_args_test(HL_LINUX_GUEST_AARCH64, 435, scenario);
+}
 #endif

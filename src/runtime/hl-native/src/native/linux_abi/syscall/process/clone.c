@@ -339,25 +339,67 @@ static int svc_proc_281(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return svc_proc_exec(c, path, a2, a3, owned_descriptor);
 }
 
+static int clone3_decode(const uint8_t *imported, size_t size, uint64_t arguments[11]) {
+    if (size < 64) return -EINVAL;
+    if (size > 4096) return -E2BIG;
+    memset(arguments, 0, 11 * sizeof *arguments);
+    size_t known = size < 11 * sizeof *arguments ? size : 11 * sizeof *arguments;
+    memcpy(arguments, imported, known);
+    for (size_t index = 11 * sizeof *arguments; index < size; ++index)
+        if (imported[index] != 0) return -E2BIG;
+    if (arguments[8] != 0 || arguments[9] != 0 || arguments[10] != 0 ||
+        (arguments[0] & UINT64_C(0x200000000)) != 0)
+        return -EOPNOTSUPP;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int g_clone3_test_block_fork;
+static int g_clone3_test_fork_attempts;
+#endif
+
 static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                         uint64_t a5) {
     switch (nr) {
     case 435: {
         // clone3(clone_args*, size): a hostile/buggy guest can pass a bad args pointer or a junk size;
-        // validate BEFORE any deref so it returns an errno instead of faulting the engine. -EINVAL if size
-        // is below the VER0 clone_args (we read only its first 64 bytes) or implausibly large; -EFAULT if
-        // the args struct isn't mapped.
+        // validate BEFORE any fork so a versioned field we cannot honour never creates a child.
         if (a1 < 64 || a1 > 4096) {
-            fork_diagnostic_emit(c, nr, 0, "clone3-size", EINVAL, -1, NULL);
-            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            int size_error = a1 < 64 ? EINVAL : E2BIG;
+            fork_diagnostic_emit(c, nr, 0, "clone3-size", size_error, -1, NULL);
+            G_RET(c) = (uint64_t)(int64_t)-size_error;
             break;
         }
-        uint64_t ca[8];
-        if (guest_copy_from(ca, a0, sizeof ca) != sizeof ca) {
+        uint8_t imported[4096];
+        if (guest_copy_from(imported, a0, (size_t)a1) != (ssize_t)a1) {
             fork_diagnostic_emit(c, nr, 0, "clone3-arguments", EFAULT, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
+        uint64_t ca[11];
+        int extension = clone3_decode(imported, (size_t)a1, ca);
+        if (extension == -E2BIG) {
+            fork_diagnostic_emit(c, nr, ca[0], "clone3-future-fields", E2BIG, -1, NULL);
+            G_RET(c) = (uint64_t)(int64_t)(-E2BIG);
+            break;
+        }
+        // clone_args v1/v2 request PID selection and cgroup placement. Silently ignoring either reports a
+        // successful child with a different identity/placement than Linux. This runtime cannot honour those
+        // capabilities yet, so fail before any task/fd/accounting publication. EOPNOTSUPP is a documented
+        // CLONE_INTO_CGROUP result and is a fail-loud capability verdict for both extensions.
+        if (extension != 0) {
+            fork_diagnostic_emit(c, nr, ca[0], "clone3-extended-fields", EOPNOTSUPP, -1, NULL);
+            G_RET(c) = (uint64_t)(int64_t)(-EOPNOTSUPP);
+            break;
+        }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        /* A refusal test arms this boundary rather than allowing its deliberate mutation to fork. */
+        if (g_clone3_test_block_fork) {
+            g_clone3_test_fork_attempts++;
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
+#endif
         uint64_t flags = ca[0];
         const uint64_t namespace_flags = 0x00020000ull | 0x02000000ull | 0x04000000ull | 0x08000000ull | 0x10000000ull |
                                          0x20000000ull | 0x40000000ull;
@@ -508,3 +550,41 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     }
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int clone3_extended_args_test(enum hl_linux_guest_isa isa, uint64_t raw_number, uint32_t scenario) {
+    if (hl_linux_syscall_number(isa, raw_number) != 435) return 10;
+    uint8_t bytes[96] = {0};
+    size_t size = scenario == 1 ? 64 : scenario == 2 ? 80 : scenario <= 6 ? 88 : scenario <= 8 ? 96 : 63;
+    uint64_t one = 1;
+    if (scenario == 4 || scenario == 11) memcpy(bytes + 64, &one, sizeof one);
+    if (scenario == 5 || scenario == 12) memcpy(bytes + 72, &one, sizeof one);
+    if (scenario == 6 || scenario == 13) memcpy(bytes + 80, &one, sizeof one);
+    if (scenario == 8) bytes[95] = 1;
+    if (scenario == 14) bytes[95] = 1;
+    if (scenario == 15) memcpy(bytes, &(uint64_t){UINT64_C(0x200000000)}, sizeof(uint64_t));
+    uint64_t arguments[11];
+    int result = clone3_decode(bytes, size, arguments);
+    if (scenario <= 3) return result == 0 ? 0 : 11;
+    if (scenario >= 4 && scenario <= 6) return result == -EOPNOTSUPP ? 0 : 12;
+    if (scenario == 7) return result == 0 ? 0 : 13;
+    if (scenario == 8) return result == -E2BIG ? 0 : 14;
+    if (scenario == 9) return result == -EINVAL ? 0 : 15;
+
+    struct cpu fixture = {0};
+    uint64_t pointer = scenario == 10 ? 1 : (uint64_t)(uintptr_t)bytes;
+    size_t actual_size = scenario == 10 ? 64 : scenario == 14 ? 96 : scenario == 16 ? 4097 : 88;
+    g_clone3_test_fork_attempts = 0;
+    g_clone3_test_block_fork = scenario >= 11 && scenario <= 15;
+    (void)svc_proc_435(&fixture, 435, pointer, actual_size, 0, 0, 0, 0);
+    g_clone3_test_block_fork = 0;
+    int64_t actual = (int64_t)G_RET(&fixture);
+    if (scenario == 10) return actual == -EFAULT ? 0 : 16;
+    if (scenario >= 11 && scenario <= 13)
+        return actual == -EOPNOTSUPP && g_clone3_test_fork_attempts == 0 ? 0 : 17;
+    if (scenario == 14) return actual == -E2BIG && g_clone3_test_fork_attempts == 0 ? 0 : 18;
+    if (scenario == 15) return actual == -EOPNOTSUPP && g_clone3_test_fork_attempts == 0 ? 0 : 19;
+    if (scenario == 16) return actual == -E2BIG ? 0 : 20;
+    return 21;
+}
+#endif

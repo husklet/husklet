@@ -180,6 +180,13 @@ pub fn dispatch_profile_test(isa: u32) -> i32 {
     bindings::dispatch_profile_test(isa)
 }
 
+/// Exercises clone3's versioned argument import through each target translation unit.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn clone3_extended_args_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::clone3_extended_args_test(isa, scenario)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]

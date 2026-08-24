@@ -1811,4 +1811,8 @@ HL_API int hl_x86_64_dispatch_profile_test(void) {
 HL_API int hl_x86_64_imported_path_guard_test(void) {
     return hl_linux_imported_path_guard_probe();
 }
+
+HL_API int hl_x86_64_clone3_extended_args_test(uint32_t scenario) {
+    return clone3_extended_args_test(HL_LINUX_GUEST_X86_64, 435, scenario);
+}
 #endif
