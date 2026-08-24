@@ -58,6 +58,8 @@ struct Backend {
     blocks: u64,
     entries: u64,
     declined: u64,
+    stitch_candidates: u64,
+    stitch_admitted: u64,
     operand_declined: u64,
     riprel_lowered: u64,
     scratch_lowered: u64,
@@ -94,6 +96,8 @@ fn backend(stderr: &[u8]) -> Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
         declined: counter("declined="),
+        stitch_candidates: counter("stitch_candidates="),
+        stitch_admitted: counter("stitch_admitted="),
         operand_declined: counter("operand_declined="),
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
@@ -341,6 +345,28 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
 #[test]
 fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
     agrees("operands");
+}
+
+/// A direct forward edge stays in one emitted descriptor. The corrupt bytes in the skipped gap make
+/// target calculation observable, while the counters make a zero stitch budget observably red.
+#[test]
+fn a_same_page_forward_jump_is_stitched_without_executing_its_gap() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "forward_jump");
+    let (interpreted, interpreted_status, interpreted_backend) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert_eq!(interpreted_backend.line, "[prof] translit: not selected");
+    assert_eq!(interpreted_status, 0);
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected, b"42\n");
+    assert!(selected_backend.stitch_candidates > 0, "{}", selected_backend.line);
+    assert!(selected_backend.stitch_admitted > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.stitch_admitted <= selected_backend.stitch_candidates,
+        "{}",
+        selected_backend.line
+    );
 }
 
 /// The other refusal, and the one that decides whether this backend is worth anything to a developer.
