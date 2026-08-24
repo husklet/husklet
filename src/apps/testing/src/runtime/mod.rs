@@ -49,6 +49,14 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 }
 
 pub async fn run(options: Options) -> Result<(), Error> {
+    if options.broken_soak.is_some() && options.selection.case.is_none() {
+        return Err("--broken-soak requires one exact --case".into());
+    }
+    if options.broken_soak.is_some() && options.baseline.is_some() {
+        return Err(
+            "--broken-soak writes repetition receipts and cannot be compared to the active-corpus baseline".into(),
+        );
+    }
     options.engine_profile.require()?;
     work_root::WorkRoot::configure(options.work_root.clone())?.preflight()?;
     let runner = profile::identity()?;
@@ -81,7 +89,12 @@ pub async fn run(options: Options) -> Result<(), Error> {
     prior.retain(|_, row| row.attempt.status != ledger::NOT_RUN);
     record_all(&ledger, skipped).await?;
     work.retain(|item| !prior.contains_key(&item.key));
-    let mut running = crate::pool::Pool::new(work, options.selection.jobs);
+    let jobs = if options.broken_soak.is_some() {
+        1
+    } else {
+        options.selection.jobs
+    };
+    let mut running = crate::pool::Pool::new(work, jobs);
     let drained = drain(&mut running, &ledger).await;
     // The report is published even when the sweep aborts, so no case is silently absent.
     backfill(&ledger, drained.as_ref().err()).await;
@@ -156,7 +169,7 @@ async fn record_all(ledger: &Arc<ledger::Ledger>, rows: Vec<ledger::Row>) -> Res
     Ok(())
 }
 
-fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error> {
+fn worker_work(app: String, case: String, target: Target, allow_broken: bool) -> Result<Work, Error> {
     let options = Options {
         app: Some(app),
         selection: crate::suite::Selection::exact(case.clone(), target),
@@ -164,6 +177,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
         baseline: None,
         engine_profile: profile::Requested::Release,
         work_root: None,
+        broken_soak: allow_broken.then_some(1),
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
@@ -207,12 +221,13 @@ struct Work {
     app: Arc<App>,
     case_index: usize,
     target: Target,
+    broken_soak: bool,
 }
 
 impl Work {
     async fn execute(self) -> Completion {
         let started = std::time::Instant::now();
-        let result = execution::run_case(Arc::clone(&self.app), self.case_index, self.target)
+        let result = execution::run_case(Arc::clone(&self.app), self.case_index, self.target, self.broken_soak)
             .await
             .map_err(|error| error.to_string());
         Completion {
@@ -432,6 +447,23 @@ fn plan_case(
         return;
     }
     if let Some((kind, reason, evidence)) = case.inactive(host) {
+        if kind == "BROKEN"
+            && let Some(repetitions) = options.broken_soak
+        {
+            for repetition in 1..=repetitions {
+                work.push(Work {
+                    key: WorkKey {
+                        id: format!("{}#soak-{repetition:04}", case.id),
+                        target,
+                    },
+                    app: Arc::clone(app),
+                    case_index,
+                    target,
+                    broken_soak: true,
+                });
+            }
+            return;
+        }
         println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
         skipped.push(ledger::Row {
             attempt: crate::journal::Attempt {
@@ -455,6 +487,7 @@ fn plan_case(
         app: Arc::clone(app),
         case_index,
         target,
+        broken_soak: false,
     });
 }
 

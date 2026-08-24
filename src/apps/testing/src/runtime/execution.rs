@@ -47,9 +47,17 @@ pub struct Report {
     /// One `native counter=value ...` line, empty when the app does not emit diagnostics.
     pub counters: String,
 }
-pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Report, Error> {
+pub async fn run_case(app: Arc<App>, case_index: usize, target: Target, allow_broken: bool) -> Result<Report, Error> {
     let case = &app.cases[case_index];
-    worker::run(&app.name, &case.id, target, case.declared_timeout(), &case.diagnostics).await
+    worker::run(
+        &app.name,
+        &case.id,
+        target,
+        case.declared_timeout(),
+        &case.diagnostics,
+        allow_broken,
+    )
+    .await
 }
 
 pub(crate) async fn worker(options: WorkerOptions) -> Result<(), Error> {

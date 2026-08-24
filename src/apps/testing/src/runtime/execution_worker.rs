@@ -39,6 +39,8 @@ pub(crate) struct Options {
     token: String,
     #[arg(long, hide = true)]
     work_root: PathBuf,
+    #[arg(long, hide = true)]
+    allow_broken: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -50,7 +52,7 @@ struct Outcome {
 pub(crate) async fn execute(options: Options) -> Result<(), Error> {
     validate_token(&options.token)?;
     runtime::work_root::WorkRoot::configure(Some(options.work_root.clone()))?;
-    let work = runtime::worker_work(options.app, options.case, options.target)?;
+    let work = runtime::worker_work(options.app, options.case, options.target, options.allow_broken)?;
     // A worker outlives its supervisor whenever the sweep is killed, and the deadline inside
     // `CaseExecution::wait` covers neither the build, the image materialization, nor a container
     // removal whose guest refuses to stop. This bound owns the whole worker and needs nobody alive.
@@ -81,13 +83,15 @@ pub(super) async fn run(
     target: Target,
     timeout: Duration,
     assertions: &[Assertion],
+    allow_broken: bool,
 ) -> Result<Report, Error> {
     let interrupts = Interrupts::new()?;
     let app = app.to_owned();
     let case = case.to_owned();
     let assertions = assertions.to_vec();
-    let supervision =
-        Supervision::spawn(move |cancelled| supervise(&app, &case, target, timeout, cancelled, &assertions));
+    let supervision = Supervision::spawn(move |cancelled| {
+        supervise(&app, &case, target, timeout, cancelled, &assertions, allow_broken)
+    });
     interrupted(supervision, interrupts).await?.map_err(Into::into)
 }
 
@@ -281,6 +285,7 @@ fn supervise(
     timeout: Duration,
     cancelled: &AtomicBool,
     assertions: &[Assertion],
+    allow_broken: bool,
 ) -> Result<Report, String> {
     let workers = runtime::work_root::WorkRoot::open()
         .map_err(|error| error.to_string())?
@@ -309,6 +314,9 @@ fn supervise(
             .map_err(|error| error.to_string())?
             .path(),
     );
+    if allow_broken {
+        command.arg("--allow-broken");
+    }
     let capture = Capture {
         stdout: directory.path().join("stdout"),
         stderr: directory.path().join("stderr"),

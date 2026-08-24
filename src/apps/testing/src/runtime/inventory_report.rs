@@ -12,6 +12,7 @@ pub(crate) fn run() -> Result<(), Error> {
         baseline: None,
         engine_profile: profile::Requested::Release,
         work_root: None,
+        broken_soak: None,
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;

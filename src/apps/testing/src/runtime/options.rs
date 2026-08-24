@@ -27,4 +27,7 @@ pub(crate) struct Options {
     /// Absolute host-local directory for mutable corpus images, builds, workers, state, and failures.
     #[arg(long, env = "HL_RUNTIME_WORK_ROOT", value_name = "ABSOLUTE_PATH")]
     pub(super) work_root: Option<PathBuf>,
+    /// Explicitly execute an exactly selected `!broken` case this many times per ISA without changing corpus policy.
+    #[arg(long, value_name = "REPETITIONS", value_parser = clap::value_parser!(u16).range(1..=500))]
+    pub(super) broken_soak: Option<u16>,
 }

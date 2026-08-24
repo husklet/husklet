@@ -99,6 +99,29 @@ fn an_inactive_only_selection_is_recorded_rather_than_rejected() {
 }
 
 #[test]
+fn explicit_broken_soak_schedules_every_requested_repetition_on_each_isa() {
+    let options = options(&["--case", "runtime/inactive", "--broken-soak", "3"]);
+    let planned = require_planned(Schedule::plan(vec![app()], &options), options.selection.case.as_deref()).unwrap();
+    assert!(planned.skipped.is_empty());
+    assert_eq!(planned.work.len(), 6);
+    let keys = planned.work.into_iter().map(|work| work.key).collect::<BTreeSet<_>>();
+    for target in [Target::Arm64, Target::Amd64] {
+        for repetition in 1..=3 {
+            assert!(keys.contains(&WorkKey {
+                id: format!("runtime/inactive#soak-{repetition:04}"),
+                target,
+            }));
+        }
+    }
+}
+
+#[test]
+fn broken_soak_refuses_implicit_case_selection_and_baseline_comparison() {
+    assert!(options(&["--broken-soak", "3"]).selection.case.is_none());
+    assert!(RuntimeCli::try_parse_from(["runtime", "--case", "runtime/inactive", "--broken-soak", "0"]).is_err());
+}
+
+#[test]
 fn host_exclusion_uses_the_injected_engine_host() {
     let options = options(&["--case", "runtime/host-excluded", "--isa", "arm64"]);
     for host in [EngineHost::Linux, EngineHost::Windows] {
