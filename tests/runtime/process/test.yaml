@@ -875,6 +875,9 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/scheduler_errno.txt }
+  # Promoted 2026-08-24 after an immutable release soak passed 50 paired repetitions (100 target-runs).
+  # At the historical one-in-ten rate, 50 clean paired trials leave a conservative 0.9^50 = 0.515%
+  # miss bound. Ledger SHA-256: 39d061618352e6d38a3708eccea4d90258f862b28869881c37829c28199471ba.
   - id: runtime/process/spawn-concurrent
     targets: [arm64, amd64]
     status: active

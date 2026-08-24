@@ -85,7 +85,6 @@ pub async fn run(options: Options) -> Result<(), Error> {
     .await??;
     let ledger = Arc::new(opened.ledger);
     let mut prior = opened.prior;
-    // A NOT_RUN row records an unattempted case, so resume must retry rather than accept it.
     prior.retain(|_, row| row.attempt.status != ledger::NOT_RUN);
     record_all(&ledger, skipped).await?;
     work.retain(|item| !prior.contains_key(&item.key));
