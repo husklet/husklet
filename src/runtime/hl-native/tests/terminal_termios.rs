@@ -68,7 +68,9 @@ fn the_host_termios_translation_cannot_carry_every_linux_flag() {
     );
     assert_eq!(
         control
-            .matches("terminal_termios_observe_set(tfd, (const uint8_t *)arg)")
+            .matches(
+                "terminal_termios_observe_set(tfd, (const uint8_t *)arg, terminal_termios_flush_request(rq))",
+            )
             .count(),
         2,
         "TCSETS and TCSETS2 on a pts slave must record the image the guest installed"
@@ -88,7 +90,9 @@ fn the_host_termios_translation_cannot_carry_every_linux_flag() {
     );
     assert_eq!(
         route
-            .matches("terminal_termios_observe_set(native_fd, argument)")
+            .matches(
+                "terminal_termios_observe_set(native_fd, argument, terminal_termios_flush_request(request))",
+            )
             .count(),
         2,
         "TCSETS{{,W,F}} and TCSETS2{{,W2,F2}} must both record the image the guest installed"
