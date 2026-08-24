@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -52,6 +53,29 @@ static int helper(int cycle) {
     return cycle + 10;
 }
 
+static int profile_resources(const char *directory) {
+    char scale_path[1024], data_path[1024];
+    if (snprintf(scale_path, sizeof scale_path, "%s/profile-scale", directory) >= (int)sizeof scale_path ||
+        snprintf(data_path, sizeof data_path, "%s/profile-mappings", directory) >= (int)sizeof data_path)
+        return -1;
+    FILE *scale_file = fopen(scale_path, "r");
+    if (scale_file == NULL) return errno == ENOENT ? 0 : -1;
+    unsigned scale = 0;
+    if (fscanf(scale_file, "%u", &scale) != 1 || fclose(scale_file) != 0 || scale == 0 || scale > 512) return -1;
+    int data = open(data_path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (data < 0 || ftruncate(data, (off_t)scale * 4096) != 0) return -1;
+    static int descriptors[512];
+    static void *mappings[512];
+    for (unsigned index = 0; index < scale; ++index) {
+        descriptors[index] = dup(data);
+        mappings[index] = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, data, (off_t)index * 4096);
+        if (descriptors[index] < 0 || mappings[index] == MAP_FAILED) return -1;
+        ((volatile unsigned char *)mappings[index])[0] = (unsigned char)index;
+    }
+    dprintf(STDOUT_FILENO, "PROFILE-RESOURCES mappings=%u descriptors=%u\n", scale, scale);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
     const char *directory = argv[1];
@@ -60,6 +84,7 @@ int main(int argc, char **argv) {
     int output = open(output_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
     if (output < 0 || dup2(output, STDOUT_FILENO) < 0 || dup2(output, STDERR_FILENO) < 0) return 3;
     if (output > STDERR_FILENO) close(output);
+    if (profile_resources(directory) != 0) return 15;
 
     pid_t leader = getpid();
     pid_t group = getpgrp();

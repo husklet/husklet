@@ -2595,6 +2595,9 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         fixture_compile.as_micros()
     );
     let directory = tempfile::tempdir().unwrap();
+    if let Some(scale) = std::env::var_os("HL_CHECKPOINT_PROFILE_SCALE") {
+        std::fs::write(directory.path().join("profile-scale"), scale.as_encoded_bytes()).unwrap();
+    }
     let output_path = directory.path().join("output");
     let first = Arc::new(Store::default());
     let capture = Arc::new(
