@@ -247,10 +247,7 @@ impl Plan {
             link_start,
             link_end,
             has_interpreter: u32::from(layout.interpreter.is_some()),
-            // ET_EXEC images are always stored away from their fixed guest link addresses. This keeps
-            // host address ownership independent of executable-specific assumptions; the C projection
-            // layer translates every guest-visible address back to the ELF link range.
-            flags: u32::from(kind == 1),
+            flags: main_image_flags(kind),
             interpreter_identity,
         })
     }
@@ -261,6 +258,18 @@ impl Plan {
         file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
         let image_length = file.metadata().map_err(|_| 1)?.len();
         validate_elf_image(&mut file, image_length, config.isa).map(|(_, layout)| layout.interpreter)
+    }
+}
+
+fn main_image_flags(kind: u32) -> u32 {
+    // Linux can give an ET_EXEC the same fixed address it has under native exec, using
+    // MAP_FIXED_NOREPLACE so an engine mapping is never overwritten. Besides avoiding a second address
+    // domain, this is required by the x86 transliterator. Hosts whose low image range is unavailable keep
+    // the generic displaced projection used by the interpreter and checkpoint restore.
+    if cfg!(target_os = "linux") {
+        0
+    } else {
+        u32::from(kind == 1)
     }
 }
 
@@ -1886,10 +1895,10 @@ int main(void) {
     }
 
     #[test]
-    fn executable_plan_requires_generic_displacement() {
+    fn executable_plan_uses_the_host_placement_policy() {
         let plan = inspect(&image()).unwrap();
         assert_eq!(plan.kind, 1);
-        assert_eq!(plan.flags, 1);
+        assert_eq!(plan.flags, u32::from(!cfg!(target_os = "linux")));
     }
 
     #[test]
