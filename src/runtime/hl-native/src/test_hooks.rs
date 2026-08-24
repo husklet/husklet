@@ -268,6 +268,19 @@ pub(crate) fn x86_imported_path_guard_test() -> i32 {
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_logical_snapshot_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    let hook = match isa {
+        1 => test_api().aarch64_checkpoint_logical_snapshot,
+        2 => test_api().x86_64_checkpoint_logical_snapshot,
+        _ => return Err(-1),
+    };
+    let mut visits = 0;
+    // SAFETY: the hook owns its synthetic descriptor array and writes one scalar result.
+    let status = unsafe { hook(scenario, &raw mut visits) };
+    if status == 0 { Ok(visits) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
     // SAFETY: this pure test export accepts and returns one scalar value.
     unsafe { (test_api().errno_from_host)(domain, host_errno) }

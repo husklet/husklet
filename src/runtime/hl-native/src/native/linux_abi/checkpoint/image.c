@@ -938,6 +938,16 @@ static int ckpt_logical_descriptor_compare(const void *left, const void *right) 
     return 0;
 }
 
+static int ckpt_logical_descriptors_valid(const hl_logical_vma_descriptor *items, size_t count) {
+    for (size_t index = 0; index < count; ++index) {
+        const hl_logical_vma_descriptor *item = &items[index];
+        if (item->length == 0 || item->guest_first > UINT64_MAX - item->length ||
+            (index != 0 && items[index - 1].guest_first + items[index - 1].length > item->guest_first))
+            return 0;
+    }
+    return 1;
+}
+
 struct ckpt_logical_snapshot {
     hl_logical_vma_descriptor *items;
     size_t count;
@@ -965,6 +975,12 @@ static int ckpt_logical_snapshot_take(struct ckpt_logical_snapshot *snapshot) {
             return -1;
         }
         qsort(snapshot->items, snapshot->count, sizeof *snapshot->items, ckpt_logical_descriptor_compare);
+        if (!ckpt_logical_descriptors_valid(snapshot->items, snapshot->count)) {
+            free(snapshot->items);
+            memset(snapshot, 0, sizeof *snapshot);
+            errno = EINVAL;
+            return -1;
+        }
     }
 #if defined(HL_NATIVE_TEST_HOOKS)
     CKPT_LOGICAL_COUNT(g_ckpt_logical_exports, 1);
@@ -992,12 +1008,136 @@ static size_t ckpt_logical_lower_bound(const struct ckpt_logical_snapshot *snaps
     return first;
 }
 
-static int ckpt_logical_contains(const struct ckpt_logical_snapshot *snapshot, uint64_t address) {
-    size_t after = ckpt_logical_lower_bound(snapshot, address + (address != UINT64_MAX));
-    if (after == 0) return 0;
-    const hl_logical_vma_descriptor *candidate = &snapshot->items[after - 1];
-    return address >= candidate->guest_first && address - candidate->guest_first < candidate->length;
+static size_t ckpt_logical_first_overlap(const struct ckpt_logical_snapshot *snapshot, uint64_t first, uint64_t last) {
+    size_t index = ckpt_logical_lower_bound(snapshot, first);
+    if (index != 0) {
+        const hl_logical_vma_descriptor *previous = &snapshot->items[index - 1];
+#if defined(HL_NATIVE_TEST_HOOKS)
+        CKPT_LOGICAL_COUNT(g_ckpt_logical_visits, 1);
+#endif
+        if (previous->length > first - previous->guest_first) --index;
+    }
+    while (index < snapshot->count) {
+        const hl_logical_vma_descriptor *candidate = &snapshot->items[index];
+#if defined(HL_NATIVE_TEST_HOOKS)
+        CKPT_LOGICAL_COUNT(g_ckpt_logical_visits, 1);
+#endif
+        if (candidate->guest_first >= last) return snapshot->count;
+        if (candidate->guest_first < last &&
+            (candidate->guest_first > first || candidate->length > first - candidate->guest_first))
+            return index;
+        ++index;
+    }
+    return snapshot->count;
 }
+
+typedef int (*ckpt_logical_visit)(const hl_logical_vma_descriptor *, void *);
+
+static int ckpt_logical_for_mapping(const struct ckpt_logical_snapshot *snapshot, uint64_t first, uint64_t last,
+                                    ckpt_logical_visit visit, void *context, size_t *emitted) {
+    size_t index = ckpt_logical_first_overlap(snapshot, first, last);
+    size_t count = 0;
+    while (index < snapshot->count) {
+        const hl_logical_vma_descriptor *descriptor = &snapshot->items[index++];
+        if (descriptor->guest_first >= last) break;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        CKPT_LOGICAL_COUNT(g_ckpt_logical_visits, 1);
+#endif
+        if (visit != NULL && visit(descriptor, context) != 0) return -1;
+        ++count;
+    }
+    if (emitted != NULL) *emitted = count;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+struct ckpt_logical_test_emission {
+    uint64_t addresses[8];
+    size_t count;
+};
+
+static int ckpt_logical_test_emit(const hl_logical_vma_descriptor *descriptor, void *opaque) {
+    struct ckpt_logical_test_emission *emission = opaque;
+    if (emission->count >= sizeof emission->addresses / sizeof emission->addresses[0]) return -1;
+    emission->addresses[emission->count++] = descriptor->guest_first;
+    return 0;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_logical_snapshot_test)(uint32_t scenario, uint64_t *visits_out) {
+    size_t count = scenario == 1 ? 1u : scenario == 2 ? 64u : scenario == 3 ? 256u : 0u;
+    if (count == 0 || visits_out == NULL) return 1;
+    struct ckpt_logical_snapshot snapshot = { .items = calloc(count, sizeof *snapshot.items), .count = count };
+    if (snapshot.items == NULL) return 2;
+    hl_logical_vma_descriptor edges[] = {
+        { .guest_first = 0x1000, .length = 0x1000 },
+        { .guest_first = 0x3000, .length = 0x1000 },
+        { .guest_first = 0x3000, .length = 0x1000 },
+        { .guest_first = 0x3800, .length = 0x1000 },
+    };
+    struct ckpt_logical_snapshot edge_snapshot = { .items = edges, .count = sizeof edges / sizeof edges[0] };
+    if (ckpt_logical_first_overlap(&edge_snapshot, 0x1000, 0x2000) != 0 ||
+        ckpt_logical_first_overlap(&edge_snapshot, 0x1800, 0x2000) != 0 ||
+        ckpt_logical_first_overlap(&edge_snapshot, 0x2000, 0x3800) != 1 ||
+        ckpt_logical_first_overlap(&edge_snapshot, 0x2000, 0x3000) != edge_snapshot.count ||
+        ckpt_logical_first_overlap(&edge_snapshot, 0x3000, 0x4000) != 1 ||
+        ckpt_logical_first_overlap(&edge_snapshot, 0x4000, 0x4800) != 3) {
+        free(snapshot.items);
+        return 5;
+    }
+    hl_logical_vma_descriptor production_edges[] = {
+        { .guest_first = 0x1000, .length = 0x1000 },
+        { .guest_first = 0x3000, .length = 0x0800 },
+        { .guest_first = 0x3800, .length = 0x0800 },
+        { .guest_first = 0x5000, .length = 0x1000 },
+    };
+    struct ckpt_logical_snapshot production_snapshot = {
+        .items = production_edges, .count = sizeof production_edges / sizeof production_edges[0]
+    };
+    struct ckpt_logical_test_emission emission = {0};
+    size_t emitted = 0;
+    if (!ckpt_logical_descriptors_valid(production_edges, production_snapshot.count) ||
+        ckpt_logical_for_mapping(&production_snapshot, 0x1800, 0x4000, ckpt_logical_test_emit, &emission, &emitted) !=
+            0 ||
+        emitted != 3 || emission.count != 3 || emission.addresses[0] != 0x1000 || emission.addresses[1] != 0x3000 ||
+        emission.addresses[2] != 0x3800) {
+        free(snapshot.items);
+        return 6;
+    }
+    production_edges[2].guest_first = 0x3700;
+    if (ckpt_logical_descriptors_valid(production_edges, production_snapshot.count)) {
+        free(snapshot.items);
+        return 7;
+    }
+    // Reverse input proves the one sort is load-bearing; reverse mapping order proves lookup cannot carry a
+    // global monotonic cursor across gmap's publication-ordered entries.
+    for (size_t index = 0; index < count; ++index) {
+        size_t reverse = count - index - 1;
+        snapshot.items[index].guest_first = UINT64_C(0x100000) + reverse * UINT64_C(0x2000);
+        snapshot.items[index].length = UINT64_C(0x1000);
+    }
+    __atomic_store_n(&g_ckpt_logical_exports, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_ckpt_logical_sorted, count, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_ckpt_logical_visits, 0, __ATOMIC_RELAXED);
+    qsort(snapshot.items, snapshot.count, sizeof *snapshot.items, ckpt_logical_descriptor_compare);
+    for (size_t reverse = count; reverse != 0; --reverse) {
+        uint64_t address = UINT64_C(0x100000) + (reverse - 1) * UINT64_C(0x2000);
+        size_t found = ckpt_logical_first_overlap(&snapshot, address, address + UINT64_C(0x1000));
+        if (found >= count || snapshot.items[found].guest_first != address) {
+            free(snapshot.items);
+            return 3;
+        }
+    }
+    uint64_t visits = __atomic_load_n(&g_ckpt_logical_visits, __ATOMIC_RELAXED);
+    uint64_t ceiling = (uint64_t)count * 20u; // log2(256) searches twice per mapping, with ample exact headroom.
+    int result = __atomic_load_n(&g_ckpt_logical_exports, __ATOMIC_RELAXED) == 1 &&
+                         __atomic_load_n(&g_ckpt_logical_sorted, __ATOMIC_RELAXED) == count && visits <= ceiling
+                     ? 0
+                     : 4;
+    *visits_out = visits;
+    free(snapshot.items);
+    return result;
+}
+#endif
 
 static int ckpt_dump_region_bytes(struct ckpt_sink *sink, struct ckpt_sink_stream *f, size_t pagesz,
                                   struct ckpt_region *reg) {
@@ -1036,6 +1176,34 @@ static int ckpt_write_region(struct ckpt_sink *sink, struct ckpt_sink_stream *st
 static int ckpt_write_region_at(struct ckpt_sink *sink, struct ckpt_sink_stream *stream, uint64_t offset,
                                 const struct ckpt_region *region) {
     return ckpt_sink_write_at(sink, stream, offset, region, sizeof *region);
+}
+
+struct ckpt_logical_emit_context {
+    struct ckpt_sink *sink;
+    struct ckpt_sink_stream *stream;
+    size_t pagesz;
+    uint64_t *regions;
+};
+
+static int ckpt_logical_emit_region(const hl_logical_vma_descriptor *descriptor, void *opaque) {
+    struct ckpt_logical_emit_context *context = opaque;
+    struct ckpt_region region = {0};
+    region.addr = descriptor->guest_first;
+    region.len = descriptor->length;
+    region.glen = descriptor->length;
+    region.prot = (int32_t)descriptor->protection;
+    region.backing_object = ckpt_backing_values(descriptor->device, descriptor->inode);
+    region.backing_offset = descriptor->backing_offset;
+    region.backing_shared = 1;
+    region.format_version = CKPT_REGION_VERSION;
+    region.logical = 1;
+    int64_t header = ckpt_sink_tell(context->sink, context->stream);
+    if (header < 0 || ckpt_write_region(context->sink, context->stream, &region) != 0 ||
+        ckpt_dump_region_bytes(context->sink, context->stream, context->pagesz, &region) != 0 ||
+        ckpt_write_region_at(context->sink, context->stream, (uint64_t)header, &region) != 0)
+        return -1;
+    ++*context->regions;
+    return 0;
 }
 
 // Sparse-dump every tracked guest mapping (image/interp/heap/stack/anon/file mmap). Non-zero HOST pages only.
@@ -1128,38 +1296,20 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
                 anon_shared_publisher = claimed;
             }
         }
-        int is_logical = ckpt_logical_contains(&logical_snapshot, addr);
+        uint64_t logical_end = glen <= UINT64_MAX - addr ? addr + glen : UINT64_MAX;
+        size_t logical_first = ckpt_logical_first_overlap(&logical_snapshot, addr, logical_end);
+        int is_logical = logical_first != logical_snapshot.count;
         if (is_logical == 1) {
             /*
              * gmap tracks the original mmap while mprotect may split the
              * logical ledger. Emit every descriptor in this gmap separately;
              * the next outer entry (if any) skips descriptors it does not own.
              */
-            size_t descriptor_index = ckpt_logical_lower_bound(&logical_snapshot, addr);
-            for (; descriptor_index < logical_snapshot.count; ++descriptor_index) {
-                const hl_logical_vma_descriptor *descriptor = &logical_snapshot.items[descriptor_index];
-                if (descriptor->guest_first >= addr + glen) break;
-#if defined(HL_NATIVE_TEST_HOOKS)
-                CKPT_LOGICAL_COUNT(g_ckpt_logical_visits, 1);
-#endif
-                struct ckpt_region logical_region = {0};
-                logical_region.addr = descriptor->guest_first;
-                logical_region.len = descriptor->length;
-                logical_region.glen = descriptor->length;
-                logical_region.prot = (int32_t)descriptor->protection;
-                logical_region.backing_object = ckpt_backing_values(descriptor->device, descriptor->inode);
-                logical_region.backing_offset = descriptor->backing_offset;
-                logical_region.backing_shared = 1;
-                logical_region.format_version = CKPT_REGION_VERSION;
-                logical_region.logical = 1;
-                int64_t logical_header = ckpt_sink_tell(sink, f);
-                if (logical_header < 0 || ckpt_write_region(sink, f, &logical_region) != 0 ||
-                    ckpt_dump_region_bytes(sink, f, pagesz, &logical_region) != 0 ||
-                    ckpt_write_region_at(sink, f, (uint64_t)logical_header, &logical_region) != 0) {
-                    ckpt_pages_refuse("write a logical region inside %#llx", addr);
-                    CKPT_PAGES_RETURN(-1);
-                }
-                nreg++;
+            struct ckpt_logical_emit_context context = { sink, f, pagesz, &nreg };
+            if (ckpt_logical_for_mapping(&logical_snapshot, addr, logical_end, ckpt_logical_emit_region, &context,
+                                         NULL) != 0) {
+                ckpt_pages_refuse("write a logical region inside %#llx", addr);
+                CKPT_PAGES_RETURN(-1);
             }
             continue;
         }

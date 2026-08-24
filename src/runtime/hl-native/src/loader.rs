@@ -160,6 +160,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_gmap_release: ScenarioTest,
     pub(crate) aarch64_checkpoint_anon_shared: ScenarioTest,
     pub(crate) x86_64_checkpoint_anon_shared: ScenarioTest,
+    pub(crate) aarch64_checkpoint_logical_snapshot: ScenarioCountTest,
+    pub(crate) x86_64_checkpoint_logical_snapshot: ScenarioCountTest,
     pub(crate) aarch64_checkpoint_rendezvous: ScenarioTest,
     pub(crate) x86_64_checkpoint_rendezvous: ScenarioTest,
     pub(crate) aarch64_checkpoint_membership: ScenarioTest,
@@ -518,6 +520,14 @@ impl TestApi {
             ),
             aarch64_checkpoint_anon_shared: symbol!("hl_aarch64_checkpoint_anon_shared_test", ScenarioTest),
             x86_64_checkpoint_anon_shared: symbol!("hl_x86_64_checkpoint_anon_shared_test", ScenarioTest),
+            aarch64_checkpoint_logical_snapshot: symbol!(
+                "hl_aarch64_checkpoint_logical_snapshot_test",
+                ScenarioCountTest
+            ),
+            x86_64_checkpoint_logical_snapshot: symbol!(
+                "hl_x86_64_checkpoint_logical_snapshot_test",
+                ScenarioCountTest
+            ),
             aarch64_checkpoint_membership: symbol!("hl_aarch64_checkpoint_membership_test", ScenarioTest),
             x86_64_checkpoint_membership: symbol!("hl_x86_64_checkpoint_membership_test", ScenarioTest),
             aarch64_checkpoint_rendezvous: symbol!("hl_aarch64_checkpoint_rendezvous_test", ScenarioTest),

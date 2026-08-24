@@ -57,6 +57,13 @@ pub fn checkpoint_channel_notify_test(isa: u32, scenario: u32) -> Result<(), i32
     bindings::checkpoint_channel_notify_test(isa, scenario)
 }
 
+/// Exercises the one-snapshot logical checkpoint lookup and returns descriptor visits.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_logical_snapshot_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    bindings::checkpoint_logical_snapshot_test(isa, scenario)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_refusal_order_test(isa: u32) -> Result<(), i32> {
