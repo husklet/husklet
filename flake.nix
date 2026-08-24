@@ -1333,6 +1333,8 @@
               -p hl-native -p hl-engine -p engine -p hl-fs -p hl-log -p hl-process \
               -p hl-rpc -p hl-design -p hl-cc -p hl-gui -p hl-ws -p hl-ws-term \
               -p hl-extension -p extension > windows-units.json
+            cargo check --locked --offline --target ${target} --lib \
+              --message-format=json -p hl-images >> windows-units.json
             jq -r '
               select(.reason == "compiler-artifact")
               | select(.package_id | startswith("path+"))
@@ -1344,7 +1346,8 @@
             # The integrated checkpoint/clone3/dispatcher lanes add three auto-discovered hl-native
             # test targets. Cargo reports them as compiler artifacts on Windows even where their
             # native-test-hooks bodies are feature-gated, so 52 moves mechanically to 55 rather than
-            # treating an empty default body as an absent target.
+            # treating an empty default body as an absent target. The two non-Linux transliterator
+            # hook units make the current exact count 57.
             cat > windows-units.expected <<'WINDOWS_UNITS'
 6 engine
 3 extension
@@ -1354,6 +1357,7 @@
 7 hl-extension
 1 hl-fs
 8 hl-gui
+1 hl-images
 2 hl-log
 57 hl-native
 1 hl-process
@@ -1362,6 +1366,13 @@
 2 hl-ws-term
 WINDOWS_UNITS
             diff -u windows-units.expected windows-units.actual
+            if cargo check --locked --offline --target ${target} -p testing \
+              > windows-testing.expected-red 2>&1; then
+              echo 'testing unexpectedly crossed the intentional non-Unix container boundary' >&2
+              exit 1
+            fi
+            test "$(grep -c '^error: hl-container drives Linux namespaces' windows-testing.expected-red)" -eq 1
+            ! grep -F 'jitterentropy-base-user.h' windows-testing.expected-red >/dev/null
             runHook postBuild
           '';
           installPhase = ''
