@@ -258,7 +258,7 @@ impl LineDiscipline {
 
         if self.literal_next {
             self.literal_next = false;
-            self.accept(value, effect);
+            self.accept(value, true, effect);
             return;
         }
 
@@ -383,13 +383,17 @@ impl LineDiscipline {
             self.terminate(value, effect);
             return;
         }
-        self.accept(value, effect);
+        self.accept(value, false, effect);
     }
 
     /// Append an ordinary byte to the line being edited, honouring the 4096 rule.
-    fn accept(&mut self, value: u8, effect: &mut Effect) {
+    fn accept(&mut self, value: u8, quoted: bool, effect: &mut Effect) {
         if !self.termios.has_local(local_flag::ICANON) {
-            self.echo_byte(value, effect);
+            if quoted {
+                self.echo_quoted(value, effect);
+            } else {
+                self.echo_byte(value, effect);
+            }
             effect.to_guest.push(value);
             return;
         }
@@ -401,7 +405,11 @@ impl LineDiscipline {
             }
             return;
         }
-        let width = self.echo_byte(value, effect);
+        let width = if quoted {
+            self.echo_quoted(value, effect)
+        } else {
+            self.echo_byte(value, effect)
+        };
         self.line.push(value);
         self.widths.push(width);
     }
@@ -538,6 +546,23 @@ impl LineDiscipline {
             }
         }
         width
+    }
+
+    /// Echo a byte protected by LNEXT. Linux renders a quoted control with ECHOCTL even when that
+    /// byte is CR or LF: it is data in the edited line, not a cursor-moving line delimiter.
+    fn echo_quoted(&mut self, value: u8, effect: &mut Effect) -> u8 {
+        let termios = self.termios;
+        if termios.has_local(local_flag::ECHO)
+            && termios.has_local(local_flag::ECHOCTL)
+            && value != b'\t'
+            && (value < 0x20 || value == 0x7f)
+        {
+            effect.echo.push(b'^');
+            effect.echo.push(if value == 0x7f { b'?' } else { value + 0x40 });
+            self.column += 2;
+            return 2;
+        }
+        self.echo_byte(value, effect)
     }
 
     fn width_of(&self, value: u8) -> u8 {
@@ -867,9 +892,49 @@ mod tests {
     #[test]
     fn a_quoted_carriage_return_is_not_mapped_to_a_newline() {
         let mut discipline = LineDiscipline::new(cooked());
-        feed(&mut discipline, &[0x16, b'\r']);
+        let quoted = feed(&mut discipline, &[0x16, b'\r']);
+        assert_eq!(quoted.echo, b"^\x08^M", "quoted CR is data drawn with ECHOCTL");
+        assert_eq!(discipline.column, 2);
         let effect = feed(&mut discipline, b"\n");
         assert_eq!(effect.to_guest, [b'\r', b'\n'], "ICRNL must not reach a quoted byte");
+    }
+
+    #[test]
+    fn a_quoted_newline_is_drawn_as_data_until_an_unquoted_terminator_arrives() {
+        let mut discipline = LineDiscipline::new(cooked());
+        let quoted = feed(&mut discipline, &[0x16, b'\n']);
+        assert_eq!(quoted.echo, b"^\x08^J");
+        assert!(quoted.to_guest.is_empty());
+        assert_eq!(discipline.column, 2);
+        assert_eq!(feed(&mut discipline, b"\r").to_guest, [b'\n', b'\n']);
+    }
+
+    #[test]
+    fn literal_next_preserves_tab_echo_and_the_echo_disabled_control() {
+        let mut discipline = LineDiscipline::new(cooked());
+        let tab = feed(&mut discipline, &[0x16, b'\t']);
+        assert_eq!(tab.echo, b"^\x08\t", "TAB is the ECHOCTL exception");
+        assert_eq!(discipline.column, 8);
+
+        let mut quiet = LineDiscipline::new(without(cooked(), ECHO));
+        let carriage_return = feed(&mut quiet, &[0x16, b'\r']);
+        assert!(carriage_return.echo.is_empty());
+        assert_eq!(feed(&mut quiet, b"\n").to_guest, [b'\r', b'\n']);
+    }
+
+    #[test]
+    fn quoted_cr_and_lf_use_cursor_echo_when_echoctl_is_disabled() {
+        let termios = without(cooked(), ECHOCTL);
+        let mut carriage_return = LineDiscipline::new(termios);
+        let quoted = feed(&mut carriage_return, &[0x16, b'\r']);
+        assert_eq!(quoted.echo, b"\r", "quoted CR must not grow a caret form without ECHOCTL");
+        assert_eq!(feed(&mut carriage_return, b"\n").to_guest, [b'\r', b'\n']);
+
+        let mut newline = LineDiscipline::new(termios);
+        let quoted = feed(&mut newline, &[0x16, b'\n']);
+        assert_eq!(quoted.echo, b"\r\n", "ONLCR still applies when quoted LF is echoed literally");
+        assert!(quoted.to_guest.is_empty(), "quoted LF remains edited data, not a terminator");
+        assert_eq!(feed(&mut newline, b"\n").to_guest, [b'\n', b'\n']);
     }
 
     // ---- end of file ---------------------------------------------------------------------------
