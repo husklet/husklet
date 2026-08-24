@@ -865,6 +865,7 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
         if (!g_nonpie_collision_active || g_nonpie_collision_mapping == NULL) result = -EUCLEAN;
         break;
     }
+    case 15: result = map_host_cache_test(scenario, scans); break;
     default: result = -10;
     }
     if (scenario <= 4) *scans = g_gnx_scan_count;

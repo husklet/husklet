@@ -257,6 +257,9 @@ static uint32_t g_map_epoch = 1;
 static uint64_t g_cache_gen; /* generation of the current immutable code arena */
 static uint32_t g_live_map_indices[JIT_MAP_N];
 static uint32_t g_live_map_count;
+#if HL_NATIVE_TEST_HOOKS
+static _Thread_local uint64_t g_map_host_probe_count;
+#endif
 
 /*
  * A live entry's cold per-slot record: the decoded guest-source interval, and the code-cache generation
@@ -573,6 +576,9 @@ static int map_idx(uint64_t gpc) {
     // (>>2 spreads), x86 PCs are byte-granular (>>0). Pure tuning constant; aarch64 value is 2 (unchanged).
     uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & (JIT_MAP_N - 1);
     for (int i = 0; i < JIT_MAP_N; i++) {
+#if HL_NATIVE_TEST_HOOKS
+        g_map_host_probe_count++;
+#endif
         uint32_t j = (h + i) & (JIT_MAP_N - 1);
         if (!map_live(j)) {
             if (map_tombstone(j)) continue;
@@ -587,6 +593,43 @@ static void *map_host(uint64_t gpc) {
     int i = map_idx(gpc);
     return i < 0 ? NULL : g_map[i].host;
 }
+
+#if HL_NATIVE_TEST_HOOKS
+static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body);
+static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
+    if (scenario != 15 || probes == NULL) return -EINVAL;
+    const uint64_t first = UINT64_C(0x100000);
+    const uint64_t second = UINT64_C(0x200001);
+    uint32_t first_index = (uint32_t)((first >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & (JIT_MAP_N - 1);
+    uint32_t second_index = (uint32_t)((second >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & (JIT_MAP_N - 1);
+    hl_translation_map_entry first_saved = g_map[first_index];
+    hl_translation_map_entry second_saved = g_map[second_index];
+    hl_translation_map_metadata first_meta = g_map_metadata[first_index];
+    hl_translation_map_metadata second_meta = g_map_metadata[second_index];
+    uint32_t saved_epoch = g_map_epoch;
+    uint32_t saved_live_count = g_live_map_count;
+
+    map_clear();
+    map_put(first, first, first + 1, (void *)(uintptr_t)UINT64_C(0x111000), (void *)(uintptr_t)UINT64_C(0x111001));
+    map_put(second, second, second + 1, (void *)(uintptr_t)UINT64_C(0x222000), (void *)(uintptr_t)UINT64_C(0x222001));
+    g_map_host_probe_count = 0;
+    int result = 0;
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        uint64_t guest = (iteration & 1) != 0 ? second : first;
+        uintptr_t expected = (iteration & 1) != 0 ? UINT64_C(0x222000) : UINT64_C(0x111000);
+        if ((uintptr_t)map_host(guest) != expected) result = -EUCLEAN;
+    }
+    *probes = g_map_host_probe_count;
+
+    g_map[first_index] = first_saved;
+    g_map[second_index] = second_saved;
+    g_map_metadata[first_index] = first_meta;
+    g_map_metadata[second_index] = second_meta;
+    g_map_epoch = saved_epoch;
+    g_live_map_count = saved_live_count;
+    return result;
+}
+#endif
 
 static void *map_body(uint64_t gpc) {
     int i = map_idx(gpc);
