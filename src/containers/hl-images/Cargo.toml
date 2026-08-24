@@ -18,7 +18,6 @@ futures-util.workspace = true
 fs2.workspace = true
 hl-fs = { path = "../../packages/hl-fs" }
 hl-log = { path = "../../packages/hl-log" }
-oci-client.workspace = true
 oci-spec.workspace = true
 reflink-copy.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -35,6 +34,15 @@ uuid = { workspace = true, features = ["v4"] }
 # is `fchmodat`/`fchownat`/`mknodat` and the layer-application mode and ownership bits.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.30", features = ["fs"] }
+
+[target.'cfg(not(windows))'.dependencies]
+oci-client = { workspace = true, features = ["rustls-tls"] }
+
+# MinGW has no POSIX `sched.h`, which aws-lc's jitterentropy backend requires. Windows already
+# supplies its native TLS and certificate store through Schannel, preserving registry TLS without
+# compiling a Unix entropy source for the wrong host ABI.
+[target.'cfg(windows)'.dependencies]
+oci-client = { workspace = true, features = ["native-tls"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

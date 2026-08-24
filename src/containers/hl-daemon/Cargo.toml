@@ -117,7 +117,6 @@ http-body-util = { workspace = true, optional = true }
 hyper = { workspace = true, features = ["http1", "server"], optional = true }
 hyper-util = { workspace = true, features = ["http1", "server", "tokio"], optional = true }
 regex = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
@@ -127,6 +126,12 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync"], optional = true }
 tokio-util = { workspace = true, features = ["io"], optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
+reqwest = { workspace = true, features = ["rustls"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+reqwest = { workspace = true, features = ["native-tls"], optional = true }
 
 [dev-dependencies]
 flate2.workspace = true
