@@ -100,20 +100,21 @@ fn displaced_fixture(directory: &Path, name: &str) -> PathBuf {
 static NONPIE_LINK_RANGE: Mutex<()> = Mutex::new(());
 
 struct LinkPage {
+    isa: u32,
     active: bool,
 }
 
 impl LinkPage {
-    fn occupy() -> Self {
-        hl_native::exec_page_cache_test(2, 12).expect("occupy the ET_EXEC link page");
-        Self { active: true }
+    fn occupy(isa: u32) -> Self {
+        hl_native::exec_page_cache_test(isa, 12).expect("occupy the ET_EXEC link page");
+        Self { isa, active: true }
     }
 
     fn verify_and_release(mut self) {
-        let result = hl_native::exec_page_cache_test(2, 13);
-        // Scenario 13 attempts the release even when sentinel verification fails. Disarm before
-        // reporting that failure so unwinding never repeats the operation through Drop.
-        self.active = false;
+        let result = hl_native::exec_page_cache_test(self.isa, 13);
+        if result.is_ok() {
+            self.active = false;
+        }
         result.expect("verify and release the ET_EXEC link page");
     }
 }
@@ -123,8 +124,9 @@ impl Drop for LinkPage {
         if self.active {
             // A prior assertion may already be unwinding. Cleanup remains best-effort and must never
             // turn that first useful failure into a process abort from a second panic.
-            let _ = hl_native::exec_page_cache_test(2, 13);
-            self.active = false;
+            if hl_native::exec_page_cache_test(self.isa, 13).is_ok() {
+                self.active = false;
+            }
         }
     }
 }
@@ -133,16 +135,45 @@ impl Drop for LinkPage {
 fn collision_guard_verification_is_explicit_and_drop_cannot_panic() {
     let source = include_str!("translit_differential.rs");
     let explicit_call = ["occupied", ".verify_and_release();"].concat();
-    assert_eq!(source.matches(&explicit_call).count(), 1);
+    assert!(source.contains(&explicit_call));
     let drop_body = source
         .split_once("impl Drop for LinkPage")
         .and_then(|(_, tail)| tail.split_once("\n}\n\n#[test]\nfn collision_guard_verification"))
         .map(|(body, _)| body)
         .expect("LinkPage Drop body");
-    assert!(
-        !drop_body.contains(".expect("),
-        "LinkPage::drop must remain non-panicking"
-    );
+    for forbidden in [
+        ".expect(",
+        "unwrap(",
+        "panic!(",
+        "assert!(",
+        "assert_eq!(",
+        "assert_ne!(",
+    ] {
+        assert!(!drop_body.contains(forbidden), "LinkPage::drop contains {forbidden}");
+    }
+}
+
+#[test]
+fn collision_guard_drop_releases_during_unwind_and_target_state_is_local() {
+    let _link_range = NONPIE_LINK_RANGE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for isa in [1, 2] {
+        let other = if isa == 1 { 2 } else { 1 };
+        let unwound = std::panic::catch_unwind(|| {
+            let _occupied = LinkPage::occupy(isa);
+            panic!("exercise collision cleanup during unwind");
+        });
+        assert!(unwound.is_err());
+        let occupied = LinkPage::occupy(isa);
+        assert_eq!(hl_native::exec_page_cache_test(other, 14), Err(-2));
+        assert_eq!(hl_native::exec_page_cache_test(isa, 12), Err(-114));
+        assert_eq!(hl_native::exec_page_cache_test(isa, 14), Err(-5));
+        assert_eq!(hl_native::exec_page_cache_test(isa, 12), Err(-114));
+        occupied.verify_and_release();
+        assert_eq!(hl_native::exec_page_cache_test(isa, 13), Err(-2));
+        assert_eq!(hl_native::exec_page_cache_test(other, 14), Err(-2));
+    }
 }
 
 fn build(directory: &Path, name: &str, linkage: &str) -> PathBuf {
@@ -323,7 +354,9 @@ fn an_executable_guest_mapping_refuses_the_backend_for_the_rest_of_the_process()
 
 #[test]
 fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
-    let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
+    let _link_range = NONPIE_LINK_RANGE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let work = TempDir::new().unwrap();
     for name in ["flags", "operands", "sigs"] {
         let executable = displaced_fixture(work.path(), name);
@@ -360,7 +393,7 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
 #[test]
 fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
     let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
-    let occupied = LinkPage::occupy();
+    let occupied = LinkPage::occupy(2);
     let work = TempDir::new().unwrap();
     let executable = displaced_fixture(work.path(), "flags");
     let (interpreted, interpreted_status, _) = run(&executable, "0");

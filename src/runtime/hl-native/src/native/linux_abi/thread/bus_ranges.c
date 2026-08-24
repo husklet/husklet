@@ -759,8 +759,15 @@ static int guest_exec_direct_valid(uint64_t guest, size_t length) {
 }
 
 #if HL_NATIVE_TEST_HOOKS
-static hl_host_memory_mapping g_nonpie_collision_mapping;
+static void *g_nonpie_collision_mapping;
 static int g_nonpie_collision_active;
+
+static int nonpie_collision_finish_release(int released) {
+    if (released != 0) return -EIO;
+    g_nonpie_collision_mapping = NULL;
+    g_nonpie_collision_active = 0;
+    return 0;
+}
 
 HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *scans) {
     if (scans == NULL) return -1;
@@ -819,15 +826,20 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
             result = -EALREADY;
             break;
         }
-        uint64_t page = nonpie_place_at_link_address(UINT64_C(0x400000), UINT64_C(4096),
-                                                      &g_nonpie_collision_mapping);
-        if (page != UINT64_C(0x400000)) {
+#if defined(__linux__)
+        void *page = mmap((void *)(uintptr_t)UINT64_C(0x400000), 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (page == MAP_FAILED || page != (void *)(uintptr_t)UINT64_C(0x400000)) {
+            if (page != MAP_FAILED) (void)munmap(page, 4096);
             result = -EADDRINUSE;
             break;
         }
-        *(volatile uint8_t *)(uintptr_t)page = UINT8_C(0xa5);
+        g_nonpie_collision_mapping = page;
         g_nonpie_collision_active = 1;
         *scans = 1;
+#else
+        result = -ENOTSUP;
+#endif
         break;
     }
     case 13: {
@@ -835,13 +847,22 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
             result = -ENOENT;
             break;
         }
-        if (*(volatile uint8_t *)(uintptr_t)UINT64_C(0x400000) != UINT8_C(0xa5)) result = -EUCLEAN;
-        const hl_host_services *host = effective_host_services();
-        hl_host_result released = host->memory->release(host->context, g_nonpie_collision_mapping.handle);
-        if (result == 0 && released.status != HL_STATUS_OK) result = -EIO;
-        g_nonpie_collision_mapping = (hl_host_memory_mapping){0};
-        g_nonpie_collision_active = 0;
+#if defined(__linux__)
+        int release_result = nonpie_collision_finish_release(munmap(g_nonpie_collision_mapping, 4096));
+        if (result == 0) result = release_result;
         *scans = 1;
+#else
+        result = -ENOTSUP;
+#endif
+        break;
+    }
+    case 14: { // A failed host release retains ownership so cleanup can be retried.
+        if (!g_nonpie_collision_active) {
+            result = -ENOENT;
+            break;
+        }
+        result = nonpie_collision_finish_release(-1);
+        if (!g_nonpie_collision_active || g_nonpie_collision_mapping == NULL) result = -EUCLEAN;
         break;
     }
     default: result = -10;
