@@ -406,6 +406,25 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test --workspace --lib --bins --locked --offline --no-fail-fast
 
+      # The workspace command above builds `husklet` with default features, so its
+      # runtime module -- including the workspace checkpoint store -- does not exist in
+      # that test binary. Run the product library surface explicitly, and require the
+      # cross-process generation assertion by exact name: a green command after a
+      # feature or module wiring regression must not count as coverage.
+      - name: Test the container-runtime application library
+        run: |
+          set -o pipefail
+          .github/scripts/cargo-test-named.sh "container-runtime application library" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test -p husklet --features runtime --lib --locked --offline \
+            --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/husklet-runtime-lib.log"
+          verdict='test runtime::checkpoint::tests::reopening_refreshes_a_generation_published_through_another_storage_handle ... ok'
+          count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/husklet-runtime-lib.log" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error title=Runtime checkpoint verdict missing::$verdict appeared $count times, expected exactly once."
+            exit 1
+          fi
+
       # THE EIGHT LINUX-ONLY FLAKE CHECKS HAD NO RUNNER ANYWHERE. They are
       # `lib.optionalAttrs pkgs.stdenv.isLinux` in `flake.nix`, so the macOS job's
       # `nix flake check` cannot see them, and this job runs cargo commands rather than
