@@ -672,7 +672,7 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 
 #[cfg(not(debug_assertions))]
 fn candidates() -> Result<Vec<PathBuf>, LoadError> {
-    let executable = crate::platform::current_executable().map_err(LoadError::CurrentExecutable)?;
+    let executable = std::env::current_exe().map_err(LoadError::CurrentExecutable)?;
     release_candidates(&executable)
 }
 

@@ -1,14 +1,5 @@
 //! Native-engine host and guest capability model.
 
-/// Resolves the executable whose installed layout owns the native engine library.
-///
-/// This is ambient host state, so the platform adapter captures it rather than the
-/// reusable loader reaching into the process environment itself.
-#[cfg(not(debug_assertions))]
-pub(crate) fn current_executable() -> std::io::Result<std::path::PathBuf> {
-    std::env::current_exe()
-}
-
 /// Operating systems for which the native engine has a host-services backend.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostOs {
