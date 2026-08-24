@@ -1027,6 +1027,11 @@ uint64_t hl_run_linux_guest_translations(void) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_aarch64_dispatch_profile_test(void) {
+    int result = hl_dispatch_profile_accumulator_test();
+    return result == 0 ? dispatch_profile_thread_stress_test() : result;
+}
+
 /*
  * Host x18 is reserved by Darwin and cleared asynchronously between arbitrary
  * instructions, so emitted code may never keep a live value there. The two

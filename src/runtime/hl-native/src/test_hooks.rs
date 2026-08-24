@@ -281,6 +281,18 @@ pub(crate) fn checkpoint_logical_snapshot_test(isa: u32, scenario: u32) -> Resul
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn dispatch_profile_test(isa: u32) -> i32 {
+    // SAFETY: both hooks operate only on a stack-local accumulator.
+    unsafe {
+        match isa {
+            1 => (test_api().aarch64_dispatch_profile)(),
+            2 => (test_api().x86_64_dispatch_profile)(),
+            _ => -1,
+        }
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
     // SAFETY: this pure test export accepts and returns one scalar value.
     unsafe { (test_api().errno_from_host)(domain, host_errno) }

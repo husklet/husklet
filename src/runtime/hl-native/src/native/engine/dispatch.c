@@ -231,7 +231,15 @@ static void run_guest(struct cpu *c) {
     // a per-thread alternate signal stack so a guest stack overflow's guard fault can be delivered
     // even when the (aarch64) host SP == the exhausted guest SP. No-op reservation on x86 (host SP differs).
     install_host_sigaltstack();
+    int profile_reason_open = 0;
+    uint64_t profile_reason_start = 0;
     while (!c->exited) {
+        if (profile_reason_open) {
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start, now_ns());
+            profile_reason_open = 0;
+        }
+        int profile_sample = hl_dispatch_profile_sample(&g_dispatch_profile);
+        uint64_t profile_poll_start = profile_sample ? now_ns() : 0;
         if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
             c->exit_code = 70;
             c->exited = 1;
@@ -248,6 +256,8 @@ static void run_guest(struct cpu *c) {
            this iteration: clearing irq without consulting pending state loses that
            only kick and lets a translated hot loop run forever.  Store zero first;
            a signal racing after the pending scan writes one itself. */
+        if (g_dispatch_profile.enabled && __atomic_load_n(&c->irq, __ATOMIC_SEQ_CST))
+            hl_dispatch_profile_pending(&g_dispatch_profile);
         __atomic_store_n(&c->irq, 0, __ATOMIC_SEQ_CST);
         if (signal_deliverable_for_cpu(c)) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
         // A checkpoint freezes the registry while holding g_jit_lock. Peers must acknowledge and park at
@@ -284,8 +294,15 @@ static void run_guest(struct cpu *c) {
         // map_host() races map_put() (torn entry) and lacks the acquire barrier
         // that makes a peer thread's freshly-emitted+icache-flushed code visible.
         // Single-threaded skips the lock entirely (g_threaded == 0).
+        uint64_t profile_map_start = 0;
+        if (profile_sample) {
+            uint64_t now = now_ns();
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_POLL, profile_poll_start, now);
+            profile_map_start = now;
+        }
         if (g_threaded) jit_dispatch_lock();
         void *code = map_host(G_PC(c));
+        hl_dispatch_profile_map(&g_dispatch_profile, code != NULL);
         if (!code) {
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;
             // near full -> wholesale flush
@@ -409,15 +426,45 @@ static void run_guest(struct cpu *c) {
         G_TRACE_DUMP(c);
         c->reason = 0;
         hl_dispatch_profile_crossing(&g_dispatch_profile);
-        if (!stw_before_translated(selected_bus_epoch)) continue;
+        if (g_threaded) hl_dispatch_profile_threaded(&g_dispatch_profile);
+        uint64_t profile_stw_start = 0;
+        if (profile_sample) {
+            uint64_t now = now_ns();
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_MAP, profile_map_start, now);
+            profile_stw_start = now;
+            __atomic_fetch_add(&g_dispatch_profile.sampled, 1, __ATOMIC_RELAXED);
+        }
+        if (!stw_before_translated(selected_bus_epoch)) {
+            if (profile_sample)
+                hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_STW, profile_stw_start, now_ns());
+            hl_dispatch_profile_reason(&g_dispatch_profile, 0, 1);
+            continue;
+        }
+        uint64_t profile_block_start = 0;
+        if (profile_sample) {
+            uint64_t now = now_ns();
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_STW, profile_stw_start, now);
+            profile_block_start = now;
+        }
         // map_host()/translate_block() return RW-alias addresses; execute via the RX alias.
         run_block(c, rxcode);
         // The translated image is fully spilled at block return. Release STW ownership before reason handling:
         // clone and mapping syscalls may themselves initiate a stop-the-world operation and must not wait on
         // their own caller. Checkpoint capture still occurs at the next loop-top dispatcher safepoint.
+        uint64_t profile_after_block = profile_sample ? now_ns() : 0;
+        if (profile_sample)
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_BLOCK, profile_block_start,
+                                      profile_after_block);
         stw_after_translated();
+        if (profile_sample) {
+            uint64_t now = now_ns();
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_STW, profile_after_block, now);
+            profile_reason_start = now;
+            profile_reason_open = 1;
+        }
         // Frontend hook: post-run_block reason handling (aarch64: R_SYSCALL service + pc+=4, else R_BRANCH;
         // x86 adds R_CPUID/x87/DIV/IDIV/99). The per-arch syscall pc-advance convention lives in the hook.
+        hl_dispatch_profile_reason(&g_dispatch_profile, c->reason, 0);
         G_DISPATCH_REASON(c);
         // W4E tier-2: a hot self-loop's back-edge counter fired -> recompile+swap it in. pc is already =
         // loop start, so the next iteration of this dispatcher loop runs the folded block. R_TIER2 is
@@ -428,7 +475,13 @@ static void run_guest(struct cpu *c) {
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
         if (signal_deliverable_for_cpu(c)) maybe_deliver_signal(c);
+        if (profile_reason_open) {
+            hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start, now_ns());
+            profile_reason_open = 0;
+        }
     }
+    if (profile_reason_open)
+        hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start, now_ns());
     /* A checkpoint may publish its request after the last loop-top safepoint
        but before this thread removes its registry slot. Acknowledge once more
        with architectural state spilled; otherwise checkpoint holds the
@@ -443,3 +496,33 @@ static void run_guest(struct cpu *c) {
     stw_unregister();
     uninstall_host_sigaltstack(); // release this thread's alternate signal stack
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+struct dispatch_profile_stress_context {
+    hl_dispatch_profile *profile;
+    uint64_t iterations;
+};
+
+static void *dispatch_profile_stress_worker(void *opaque) {
+    struct dispatch_profile_stress_context *context = opaque;
+    for (uint64_t index = 0; index < context->iterations; ++index) {
+        hl_dispatch_profile_crossing(context->profile);
+        hl_dispatch_profile_reason(context->profile, R_BRANCH, 0);
+    }
+    return NULL;
+}
+
+static int dispatch_profile_thread_stress_test(void) {
+    hl_dispatch_profile profile = { .enabled = 1 };
+    struct dispatch_profile_stress_context context = { .profile = &profile, .iterations = 10000 };
+    pthread_t first;
+    pthread_t second;
+    if (pthread_create(&first, NULL, dispatch_profile_stress_worker, &context) != 0) return 20;
+    if (pthread_create(&second, NULL, dispatch_profile_stress_worker, &context) != 0) {
+        (void)pthread_join(first, NULL);
+        return 21;
+    }
+    if (pthread_join(first, NULL) != 0 || pthread_join(second, NULL) != 0) return 22;
+    return profile.crossings == 20000 && hl_dispatch_profile_reason_total(&profile) == profile.crossings ? 0 : 23;
+}
+#endif

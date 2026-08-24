@@ -144,6 +144,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_reserved_register: NoArgumentTest,
     pub(crate) aarch64_imported_path_guard: NoArgumentTest,
     pub(crate) x86_64_imported_path_guard: NoArgumentTest,
+    pub(crate) aarch64_dispatch_profile: NoArgumentTest,
+    pub(crate) x86_64_dispatch_profile: NoArgumentTest,
     pub(crate) aarch64_signal_errno_frame: SignalFrameTest,
     pub(crate) x86_64_signal_errno_frame: SignalFrameTest,
     pub(crate) aarch64_checkpoint_signal_precedence: NoArgumentTest,
@@ -495,6 +497,8 @@ impl TestApi {
             x86_64_reserved_register: symbol!("hl_x86_64_reserved_register_test", NoArgumentTest),
             aarch64_imported_path_guard: symbol!("hl_aarch64_imported_path_guard_test", NoArgumentTest),
             x86_64_imported_path_guard: symbol!("hl_x86_64_imported_path_guard_test", NoArgumentTest),
+            aarch64_dispatch_profile: symbol!("hl_aarch64_dispatch_profile_test", NoArgumentTest),
+            x86_64_dispatch_profile: symbol!("hl_x86_64_dispatch_profile_test", NoArgumentTest),
             aarch64_signal_errno_frame: symbol!("hl_aarch64_signal_errno_frame_test", SignalFrameTest),
             x86_64_signal_errno_frame: symbol!("hl_x86_64_signal_errno_frame_test", SignalFrameTest),
             aarch64_checkpoint_signal_precedence: symbol!(

@@ -172,6 +172,14 @@ pub fn x86_imported_path_guard_test() -> i32 {
     bindings::x86_imported_path_guard_test()
 }
 
+/// Exercises the dispatcher diagnostic accumulator for one guest target.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn dispatch_profile_test(isa: u32) -> i32 {
+    bindings::dispatch_profile_test(isa)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]
