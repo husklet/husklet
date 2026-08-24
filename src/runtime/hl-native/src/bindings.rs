@@ -252,7 +252,10 @@ pub(super) fn hl_c_backend_terminal_termios_flush_register(native_fd: c_int) -> 
 }
 
 pub(super) fn hl_c_backend_terminal_termios_flush_unregister(native_fd: c_int) {
-    if let Some(function) = crate::loader::api().ok().and_then(|api| api.terminal_termios_flush_unregister) {
+    if let Some(function) = crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_flush_unregister)
+    {
         // SAFETY: the descriptor remains live through this synchronous unregister.
         unsafe { function(native_fd) };
     }

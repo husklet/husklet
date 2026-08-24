@@ -139,7 +139,10 @@ fn collision_guard_verification_is_explicit_and_drop_cannot_panic() {
         .and_then(|(_, tail)| tail.split_once("\n}\n\n#[test]\nfn collision_guard_verification"))
         .map(|(body, _)| body)
         .expect("LinkPage Drop body");
-    assert!(!drop_body.contains(".expect("), "LinkPage::drop must remain non-panicking");
+    assert!(
+        !drop_body.contains(".expect("),
+        "LinkPage::drop must remain non-panicking"
+    );
 }
 
 fn build(directory: &Path, name: &str, linkage: &str) -> PathBuf {

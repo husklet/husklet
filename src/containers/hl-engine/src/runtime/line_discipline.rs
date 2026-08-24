@@ -927,13 +927,22 @@ mod tests {
         let termios = without(cooked(), ECHOCTL);
         let mut carriage_return = LineDiscipline::new(termios);
         let quoted = feed(&mut carriage_return, &[0x16, b'\r']);
-        assert_eq!(quoted.echo, b"\r", "quoted CR must not grow a caret form without ECHOCTL");
+        assert_eq!(
+            quoted.echo, b"\r",
+            "quoted CR must not grow a caret form without ECHOCTL"
+        );
         assert_eq!(feed(&mut carriage_return, b"\n").to_guest, [b'\r', b'\n']);
 
         let mut newline = LineDiscipline::new(termios);
         let quoted = feed(&mut newline, &[0x16, b'\n']);
-        assert_eq!(quoted.echo, b"\r\n", "ONLCR still applies when quoted LF is echoed literally");
-        assert!(quoted.to_guest.is_empty(), "quoted LF remains edited data, not a terminator");
+        assert_eq!(
+            quoted.echo, b"\r\n",
+            "ONLCR still applies when quoted LF is echoed literally"
+        );
+        assert!(
+            quoted.to_guest.is_empty(),
+            "quoted LF remains edited data, not a terminator"
+        );
         assert_eq!(feed(&mut newline, b"\n").to_guest, [b'\n', b'\n']);
     }
 

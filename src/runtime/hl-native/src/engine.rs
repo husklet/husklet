@@ -491,7 +491,10 @@ mod tests {
         ffi::CString,
         fs::{File, OpenOptions},
         io::{Read as _, Seek, SeekFrom, Write},
-        os::{fd::{AsRawFd, FromRawFd, OwnedFd}, unix::fs::PermissionsExt as _},
+        os::{
+            fd::{AsRawFd, FromRawFd, OwnedFd},
+            unix::fs::PermissionsExt as _,
+        },
     };
 
     #[cfg(feature = "native-test-hooks")]
@@ -869,8 +872,8 @@ mod tests {
         put16(&mut bytes, 18, 0x3e);
         // ioctl(0, TCSETSF, 0x400200), then exit_group(ioctl_result).
         bytes[0x100..0x11d].copy_from_slice(&[
-            0xb8, 0x10, 0, 0, 0, 0x31, 0xff, 0xbe, 0x04, 0x54, 0, 0, 0xba, 0, 0x02, 0x40, 0, 0x0f,
-            0x05, 0x89, 0xc7, 0xb8, 0x3c, 0, 0, 0, 0x0f, 0x05,
+            0xb8, 0x10, 0, 0, 0, 0x31, 0xff, 0xbe, 0x04, 0x54, 0, 0, 0xba, 0, 0x02, 0x40, 0, 0x0f, 0x05, 0x89, 0xc7,
+            0xb8, 0x3c, 0, 0, 0, 0x0f, 0x05,
         ]);
         bytes[0x200..0x224].copy_from_slice(termios);
         bytes
@@ -911,20 +914,26 @@ mod tests {
         let mut master = -1;
         let mut slave = -1;
         // SAFETY: both descriptor outputs are writable; no name, termios override or size is requested.
-        assert_eq!(unsafe {
-            libc::openpty(
-                &raw mut master,
-                &raw mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        }, 0);
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &raw mut master,
+                    &raw mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
         // SAFETY: successful openpty transferred two uniquely owned descriptors.
         let (_master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
         let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
         // SAFETY: the slave is live and the output points at writable storage.
-        assert_eq!(unsafe { libc::tcgetattr(slave.as_raw_fd(), attributes.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::tcgetattr(slave.as_raw_fd(), attributes.as_mut_ptr()) },
+            0
+        );
         // SAFETY: successful tcgetattr initialized the structure; Linux's guest image is its first 36 bytes.
         let attributes = unsafe { attributes.assume_init() };
         let mut image = [0_u8; 36];
@@ -968,15 +977,18 @@ mod tests {
             let mut master = -1;
             let mut slave = -1;
             // SAFETY: writable descriptor outputs are supplied and checked.
-            assert_eq!(unsafe {
-                libc::openpty(
-                    &raw mut master,
-                    &raw mut slave,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                )
-            }, 0);
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &raw mut master,
+                        &raw mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                0
+            );
             // SAFETY: successful openpty returned uniquely owned descriptors.
             terminals.push(unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) });
         }
@@ -1049,7 +1061,8 @@ mod tests {
         // SAFETY: inherited pipe ends remain live in this parent.
         assert_eq!(unsafe { libc::read(ready[0], byte.as_mut_ptr().cast(), 1) }, 1);
         crate::terminal_termios_flush_unregister(terminals[0].1.as_raw_fd());
-        crate::terminal_termios_flush_register(terminals[0].1.as_raw_fd()).expect("reuse released slot with a new epoch");
+        crate::terminal_termios_flush_register(terminals[0].1.as_raw_fd())
+            .expect("reuse released slot with a new epoch");
         let replacement = crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd());
         // SAFETY: releasing the child requires one byte on its inherited pipe.
         assert_eq!(unsafe { libc::write(release[1], byte.as_ptr().cast(), 1) }, 1);
@@ -1071,7 +1084,10 @@ mod tests {
             });
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while crate::terminal_termios_flush_mark_test(descriptor, u64::MAX - 1) != 2 {
-                assert!(std::time::Instant::now() < deadline, "publisher never reached the pre-CAS barrier");
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "publisher never reached the pre-CAS barrier"
+                );
                 std::thread::yield_now();
             }
             crate::terminal_termios_flush_unregister(descriptor);

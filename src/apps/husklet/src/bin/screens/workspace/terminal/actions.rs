@@ -72,10 +72,7 @@ impl LiveActions {
                         let receipt = receipt.clone();
                         let reopened = plan.reopened(&replacement);
                         glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
-                            let Some(terminal) = window
-                                .stack
-                                .visible_child()
-                                .and_then(|page| PaneView::first(&page))
+                            let Some(terminal) = window.stack.visible_child().and_then(|page| PaneView::first(&page))
                             else {
                                 Self::record(&receipt, "failed reopen:no-terminal");
                                 return;
@@ -122,7 +119,11 @@ impl ActionPlan {
         assert!(nonce.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-'));
         let marker = format!("/tmp/.husklet-live-actions-{nonce}");
         let paste = format!("rm -f {marker}; printf '%s %s %s\\n' 'live-paste-λ' '{nonce}' \"$$\" > {marker}\n");
-        Self { nonce: nonce.to_owned(), marker, paste }
+        Self {
+            nonce: nonce.to_owned(),
+            marker,
+            paste,
+        }
     }
 
     fn after_close(&self, selected: &str) -> String {
@@ -217,10 +218,16 @@ mod tests {
             ]
         );
         assert_eq!(receipt_stage("opened replacement shell-5 run=17-43"), None);
-        assert_eq!(receipt_stage("typed live-after-close-終 run=17-42 selected=shell-3"), None);
+        assert_eq!(
+            receipt_stage("typed live-after-close-終 run=17-42 selected=shell-3"),
+            None
+        );
         assert_eq!(replacement_receipt(""), None);
         assert_eq!(replacement_receipt("shell 5"), None);
-        assert_eq!(replacement_receipt("shell-5").as_deref(), Some("opened replacement shell-5"));
+        assert_eq!(
+            replacement_receipt("shell-5").as_deref(),
+            Some("opened replacement shell-5")
+        );
         assert_eq!(receipt_stage("typed live-reopened"), None);
     }
 

@@ -123,7 +123,10 @@ fn characterize(panes: usize) {
             text.contains(&format!("HL_RESTORE_HISTORY_{index}")),
             "pane {index} lost replayed history: {text:?}"
         );
-        assert!(text.contains("HL_RESTORE_PROMPT_"), "pane {index} did not reach its prompt: {text:?}");
+        assert!(
+            text.contains("HL_RESTORE_PROMPT_"),
+            "pane {index} did not reach its prompt: {text:?}"
+        );
     }
 
     for pid in pids {

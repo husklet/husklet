@@ -85,20 +85,13 @@ impl WorkspaceCheckpoints {
         )
     }
 
-    fn current(
-        &self,
-        root: &Key,
-        current_key: &Key,
-    ) -> Result<Option<Namespace<Directory>>, CheckpointError> {
+    fn current(&self, root: &Key, current_key: &Key) -> Result<Option<Namespace<Directory>>, CheckpointError> {
         match self.storage.get(current_key) {
             Ok(bytes) => {
                 let generation = std::str::from_utf8(&bytes).map_err(Self::error)?.trim();
                 #[cfg(test)]
                 observe_current(generation);
-                let current = Namespace::new(
-                    self.storage.clone(),
-                    root.join(generation).map_err(Self::error)?,
-                );
+                let current = Namespace::new(self.storage.clone(), root.join(generation).map_err(Self::error)?);
                 current
                     .get(&Key::parse("MANIFEST").map_err(Self::error)?)
                     .map_err(|error| Self::error(format!("checkpoint current generation is incomplete: {error}")))?;
@@ -464,7 +457,9 @@ mod tests {
         let published = Namespace::new(storage.clone(), generation_key);
         published.put(&Key::parse("state").unwrap(), state).unwrap();
         published.put(&Key::parse("MANIFEST").unwrap(), b"external").unwrap();
-        storage.put(&root.join("current").unwrap(), generation.as_bytes()).unwrap();
+        storage
+            .put(&root.join("current").unwrap(), generation.as_bytes())
+            .unwrap();
     }
 
     #[test]
@@ -505,19 +500,14 @@ mod tests {
             .unwrap();
         let state = concrete.state().unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(2));
-        *REFRESH_BEFORE_STATE.get_or_init(|| Mutex::new(None)).lock().unwrap() =
-            Some((key, barrier.clone()));
+        *REFRESH_BEFORE_STATE.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some((key, barrier.clone()));
         *WATCHED_CURRENT.get_or_init(|| Mutex::new(None)).lock().unwrap() =
             Some("generation-refresh-barrier".to_owned());
         WATCHED_CURRENT_READS.store(0, Ordering::Relaxed);
 
         let workspace = temporary.path().to_owned();
-        let refresh = std::thread::spawn(move || {
-            WorkspaceCheckpoints::open(&workspace)
-                .unwrap()
-                .open(namespace)
-                .unwrap()
-        });
+        let refresh =
+            std::thread::spawn(move || WorkspaceCheckpoints::open(&workspace).unwrap().open(namespace).unwrap());
         barrier.wait();
         assert_eq!(WATCHED_CURRENT_READS.load(Ordering::Relaxed), 0);
         barrier.wait();

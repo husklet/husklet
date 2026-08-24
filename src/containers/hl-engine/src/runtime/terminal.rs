@@ -1075,7 +1075,10 @@ mod tests {
         // SAFETY: tcgetattr succeeded, and both calls borrow initialized termios/live fd values.
         let mut attributes = unsafe { attributes.assume_init() };
         unsafe { libc::cfmakeraw(&raw mut attributes) };
-        assert_eq!(unsafe { libc::tcsetattr(raw_fd, libc::TCSANOW, &raw const attributes) }, 0);
+        assert_eq!(
+            unsafe { libc::tcsetattr(raw_fd, libc::TCSANOW, &raw const attributes) },
+            0
+        );
         // SAFETY: dup returns a fresh descriptor and the result is checked.
         let raw_copy = unsafe { libc::dup(raw_fd) };
         assert!(raw_copy >= 0);
@@ -1129,7 +1132,10 @@ mod tests {
                 let reads = canonical_port.reads.load(Ordering::Relaxed) - reads_before;
                 let writes = canonical_port.writes.load(Ordering::Relaxed) - writes_before;
                 assert_eq!(seen, bytes, "canonical paste changed bytes");
-                assert_eq!(reads, 1, "canonical paste unexpectedly crossed more than one master batch");
+                assert_eq!(
+                    reads, 1,
+                    "canonical paste unexpectedly crossed more than one master batch"
+                );
                 println!(
                     "paste canonical round={round} bytes={} receiver_ns={} end_to_end_ns={} messages={messages} read_calls={reads} master_batches={reads} echo_writes={writes} fnv64={:016x}",
                     bytes.len(),
