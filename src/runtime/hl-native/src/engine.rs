@@ -1026,7 +1026,7 @@ mod tests {
         let stale = unsafe { libc::fork() };
         assert!(stale >= 0);
         if stale == 0 {
-            let byte = [1_u8];
+            let mut byte = [1_u8];
             // SAFETY: inherited pipe ends remain live in this child.
             unsafe {
                 libc::write(ready[1], byte.as_ptr().cast(), 1);
