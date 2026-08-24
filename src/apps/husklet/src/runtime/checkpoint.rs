@@ -11,7 +11,9 @@ static TRANSACTION: AtomicU64 = AtomicU64::new(1);
 static IMAGES: OnceLock<Mutex<HashMap<String, std::sync::Weak<WorkspaceImage>>>> = OnceLock::new();
 
 #[cfg(test)]
-static REFRESH_BEFORE_STATE: OnceLock<Mutex<Option<(String, Arc<std::sync::Barrier>)>>> = OnceLock::new();
+type RefreshBarrier = Option<(String, Arc<std::sync::Barrier>)>;
+#[cfg(test)]
+static REFRESH_BEFORE_STATE: OnceLock<Mutex<RefreshBarrier>> = OnceLock::new();
 #[cfg(test)]
 static WATCHED_CURRENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 #[cfg(test)]
@@ -24,7 +26,7 @@ fn refresh_before_state(key: &str) {
         .lock()
         .unwrap()
         .clone();
-    if let Some((watched, barrier)) = configured.filter(|(watched, _)| watched == key) {
+    if let Some((_, barrier)) = configured.filter(|(watched, _)| watched == key) {
         barrier.wait();
         barrier.wait();
     }
