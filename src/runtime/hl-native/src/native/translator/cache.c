@@ -608,6 +608,8 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
     hl_translation_map_metadata second_meta = g_map_metadata[second_index];
     uint32_t saved_epoch = g_map_epoch;
     uint32_t saved_live_count = g_live_map_count;
+    uint32_t saved_live_indices[2] = {g_live_map_indices[0], g_live_map_indices[1]};
+    uint64_t saved_probe_count = g_map_host_probe_count;
 
     map_clear();
     map_put(first, first, first + 1, (void *)(uintptr_t)UINT64_C(0x111000), (void *)(uintptr_t)UINT64_C(0x111001));
@@ -627,6 +629,9 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
     g_map_metadata[second_index] = second_meta;
     g_map_epoch = saved_epoch;
     g_live_map_count = saved_live_count;
+    g_live_map_indices[0] = saved_live_indices[0];
+    g_live_map_indices[1] = saved_live_indices[1];
+    g_map_host_probe_count = saved_probe_count;
     return result;
 }
 #endif
