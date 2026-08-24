@@ -58,9 +58,8 @@ struct Backend {
     entries: u64,
     declined: u64,
     operand_declined: u64,
-    riprel_projected: u64,
-    lea_low: u64,
-    riprel_unreachable: u64,
+    riprel_lowered: u64,
+    lea_lowered: u64,
     translations: u64,
 }
 
@@ -94,9 +93,8 @@ fn backend(stderr: &[u8]) -> Backend {
         entries: counter("entries="),
         declined: counter("declined="),
         operand_declined: counter("operand_declined="),
-        riprel_projected: counter("riprel_projected="),
-        lea_low: counter("lea_low="),
-        riprel_unreachable: counter("riprel_unreachable="),
+        riprel_lowered: counter("riprel_lowered="),
+        lea_lowered: counter("lea_lowered="),
         translations,
         line,
     }
@@ -453,9 +451,13 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
         assert_eq!(selected_backend.operand_declined, selected_backend.declined);
         if name == "displaced_memory" {
             assert!(
-                selected_backend.riprel_projected + selected_backend.lea_low > 0
-                    || selected_backend.riprel_unreachable > 0,
-                "the displaced RIP-relative path was neither emitted nor refused for range -- {}",
+                selected_backend.riprel_lowered > 0,
+                "the displaced accumulator dereference was not lowered -- {}",
+                selected_backend.line
+            );
+            assert!(
+                selected_backend.lea_lowered > 0,
+                "the displaced LEA was not lowered -- {}",
                 selected_backend.line
             );
         }

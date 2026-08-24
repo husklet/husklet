@@ -147,6 +147,8 @@ static uint64_t translit_displaced_operand_declined;
 static uint64_t translit_displaced_riprel_projected;
 static uint64_t translit_displaced_lea_low;
 static uint64_t translit_displaced_riprel_unreachable;
+static uint64_t translit_displaced_riprel_lowered;
+static uint64_t translit_displaced_lea_lowered;
 #endif
 
 static int translit_enabled(void) {
@@ -368,6 +370,51 @@ static int translit_rel32(uint64_t target, int64_t host_next, uint32_t *encoded)
     return 1;
 }
 
+// Rel32 is deliberately attempted first: a one-instruction copy is the cheapest exact spelling. When the
+// host-only arena is out of reach, x86's accumulator moffs forms provide a bounded absolute dereference
+// without borrowing a guest register, touching the stack, or adding fault-recovery state. LEA is address
+// materialisation rather than a dereference, so an immediate move preserves its low guest identity.
+static int translit_lower_displaced_riprel(hl_x64_asm *a, const struct insn *insn, uint64_t guest_target,
+                                           uint64_t storage_target) {
+    if (insn->op == 0x8D && !insn->two) {
+        if (insn->lock || insn->rep || insn->repne ||
+            (insn->opsize != 2 && insn->opsize != 4 && insn->opsize != 8))
+            return 0;
+        int reg = insn->reg;
+        if (insn->opsize == 8) {
+            hl_x64_mov_imm64(a, reg, guest_target);
+        } else {
+            if (insn->opsize == 2) hl_x64_u8(a, 0x66);
+            if (reg >= 8) hl_x64_u8(a, 0x41);
+            hl_x64_u8(a, (uint8_t)(0xB8 + (reg & 7)));
+            if (insn->opsize == 2) {
+                hl_x64_u8(a, (uint8_t)guest_target);
+                hl_x64_u8(a, (uint8_t)(guest_target >> 8));
+            } else {
+                hl_x64_u32(a, (uint32_t)guest_target);
+            }
+        }
+        return !a->overflow;
+    }
+    if (insn->two || insn->lock || insn->rep || insn->repne || insn->reg != HL_X64_RAX) return 0;
+    uint8_t moffs;
+    if (insn->op == 0x8A)
+        moffs = 0xA0;
+    else if (insn->op == 0x8B)
+        moffs = 0xA1;
+    else if (insn->op == 0x88)
+        moffs = 0xA2;
+    else if (insn->op == 0x89)
+        moffs = 0xA3;
+    else
+        return 0;
+    if ((moffs == 0xA1 || moffs == 0xA3) && insn->opsize == 2) hl_x64_u8(a, 0x66);
+    if ((moffs == 0xA1 || moffs == 0xA3) && insn->opsize == 8) hl_x64_u8(a, 0x48);
+    hl_x64_u8(a, moffs);
+    hl_x64_u64(a, storage_target);
+    return !a->overflow;
+}
+
 static int translit_fix_riprel(struct translit_builder *b, const struct insn *insn, uint64_t guest_next,
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
@@ -421,6 +468,32 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 8) return translit_displaced_safe_for(&insn, TL_CALL, 1) ? 11 : 0;
     if (scenario == 9) return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 0 : 12;
+    uint8_t bytes[16] = {0};
+    hl_x64_asm output = {bytes, bytes + sizeof(bytes), 0};
+    insn.opsize = 8;
+    if (scenario == 10) {
+        insn.op = 0x8D;
+        insn.reg = 9;
+        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123)) return 13;
+        const uint8_t expected[] = {0x49, 0xB9, 0x23, 0x01, 0x40, 0, 0, 0, 0, 0};
+        return output.cursor - bytes == (ptrdiff_t)sizeof(expected) && memcmp(bytes, expected, sizeof(expected)) == 0
+                   ? 0
+                   : 14;
+    }
+    if (scenario == 11 || scenario == 12) {
+        insn.op = scenario == 11 ? 0x8B : 0x89;
+        insn.reg = 0;
+        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123)) return 15;
+        return output.cursor - bytes == 10 && bytes[0] == 0x48 && bytes[1] == (scenario == 11 ? 0xA1 : 0xA3) &&
+                       memcmp(bytes + 2, (uint8_t[]){0x23, 0x01, 0x40, 0, 0x01, 0, 0, 0}, 8) == 0
+                   ? 0
+                   : 16;
+    }
+    if (scenario == 13) {
+        insn.op = 0x8B;
+        insn.reg = 1;
+        return translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123) ? 17 : 0;
+    }
     return 6;
 }
 #endif
@@ -464,10 +537,19 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             hl_x64_copy(a, bytes, insn.len);
             if (a->overflow) break;
             if (insn.rip_rel && !translit_fix_riprel(&builder, &insn, next, instruction_start)) {
-                if (g_nonpie_lo)
-                    (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
-                a->cursor = instruction_start; // un-emit: the block ends before this instruction
-                break;
+                a->cursor = instruction_start;
+                uint64_t guest_target = next + (uint64_t)insn.disp;
+                uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
+                                                                 g_nonpie_hi, g_nonpie_bias);
+                if (!g_nonpie_lo || !translit_lower_displaced_riprel(a, &insn, guest_target, storage_target)) {
+                    if (g_nonpie_lo)
+                        (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
+                    a->cursor = instruction_start; // un-emit: the block ends before this instruction
+                    break;
+                }
+                uint64_t *counter = insn.op == 0x8D && !insn.two ? &translit_displaced_lea_lowered
+                                                                 : &translit_displaced_riprel_lowered;
+                (void)__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
             }
             jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)a->cursor, pc);
             pc = next;
@@ -582,17 +664,20 @@ static int translit_report(char *out, size_t size) {
     uint64_t displaced_lea_low = __atomic_load_n(&translit_displaced_lea_low, __ATOMIC_RELAXED);
     uint64_t displaced_riprel_unreachable =
         __atomic_load_n(&translit_displaced_riprel_unreachable, __ATOMIC_RELAXED);
+    uint64_t displaced_riprel_lowered = __atomic_load_n(&translit_displaced_riprel_lowered, __ATOMIC_RELAXED);
+    uint64_t displaced_lea_lowered = __atomic_load_n(&translit_displaced_lea_lowered, __ATOMIC_RELAXED);
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
     if (g_nonpie_lo != 0)
         return snprintf(out, size,
                         "[prof] translit: displaced blocks=%llu entries=%llu declined=%llu displaced_blocks=%llu"
                         " displaced_entries=%llu operand_declined=%llu riprel_projected=%llu lea_low=%llu"
-                        " riprel_unreachable=%llu\n",
+                        " riprel_unreachable=%llu riprel_lowered=%llu lea_lowered=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
                         (unsigned long long)displaced_riprel_projected, (unsigned long long)displaced_lea_low,
-                        (unsigned long long)displaced_riprel_unreachable);
+                        (unsigned long long)displaced_riprel_unreachable,
+                        (unsigned long long)displaced_riprel_lowered, (unsigned long long)displaced_lea_lowered);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"

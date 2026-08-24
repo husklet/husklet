@@ -15,7 +15,7 @@ int main(void) {
     const void *identity;
     uint64_t before;
     __asm__ volatile("lea cell(%%rip),%0" : "=r"(identity));
-    __asm__ volatile("mov cell(%%rip),%0" : "=r"(before) : : "memory");
+    __asm__ volatile("mov cell(%%rip),%0" : "=a"(before) : : "memory");
     __asm__ volatile("addq $1,cell(%%rip)" : : : "cc", "memory");
     char source[8] = "domain", destination[8] = {0};
     void *to = destination;
