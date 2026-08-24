@@ -62,6 +62,7 @@ struct Backend {
     stitch_admitted: u64,
     jcc_fall_candidates: u64,
     jcc_fall_admitted: u64,
+    jcc_fall_page_refused: u64,
     operand_declined: u64,
     riprel_lowered: u64,
     scratch_lowered: u64,
@@ -104,6 +105,7 @@ fn backend(stderr: &[u8]) -> Backend {
         stitch_admitted: counter("stitch_admitted="),
         jcc_fall_candidates: counter("jcc_fall_candidates="),
         jcc_fall_admitted: counter("jcc_fall_admitted="),
+        jcc_fall_page_refused: counter("jcc_fall_page_refused="),
         operand_declined: counter("operand_declined="),
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
@@ -410,6 +412,30 @@ fn a_same_page_conditional_fallthrough_stays_in_the_descriptor() {
         "{}",
         selected_backend.line
     );
+}
+
+#[test]
+fn a_cross_page_conditional_fallthrough_keeps_the_dispatch_boundary() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jcc_page_boundary");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected, b"fall=5 taken=6\n");
+    assert!(selected_backend.jcc_fall_page_refused > 0, "{}", selected_backend.line);
+}
+
+#[test]
+fn a_fault_after_an_internalized_fallthrough_keeps_guest_provenance() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jcc_fallthrough_fault");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected, b"fault=1 rip=1 r11=1 taken=7\n");
+    assert!(selected_backend.jcc_fall_admitted > 0, "{}", selected_backend.line);
 }
 
 /// RIP-relative memory-indirect CALL/JMP, including a pointer load crossing into an unmapped page.

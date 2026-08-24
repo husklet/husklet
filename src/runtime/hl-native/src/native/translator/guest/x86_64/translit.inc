@@ -148,6 +148,7 @@ static uint64_t translit_stitch_candidates;
 static uint64_t translit_stitch_admitted;
 static uint64_t translit_jcc_fall_candidates;
 static uint64_t translit_jcc_fall_admitted;
+static uint64_t translit_jcc_fall_page_refused;
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
 static uint64_t translit_provenance_fallback;
@@ -669,6 +670,8 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         // host condition lets the overwhelmingly common fall-through skip that side exit without a
         // second branch. The same-page and decode checks keep the source hull linear and make an
         // inaccessible successor start a fresh interpreted/translated block instead of faulting here.
+        if (kind == TL_JCC && (next >> 12) != (pc >> 12))
+            (void)__atomic_fetch_add(&translit_jcc_fall_page_refused, 1, __ATOMIC_RELAXED);
         if (kind == TL_JCC && (next >> 12) == (pc >> 12)) {
             (void)__atomic_fetch_add(&translit_jcc_fall_candidates, 1, __ATOMIC_RELAXED);
             struct insn successor;
@@ -857,6 +860,7 @@ static int translit_report(char *out, size_t size) {
     uint64_t stitch_admitted = __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED);
     uint64_t jcc_fall_candidates = __atomic_load_n(&translit_jcc_fall_candidates, __ATOMIC_RELAXED);
     uint64_t jcc_fall_admitted = __atomic_load_n(&translit_jcc_fall_admitted, __ATOMIC_RELAXED);
+    uint64_t jcc_fall_page_refused = __atomic_load_n(&translit_jcc_fall_page_refused, __ATOMIC_RELAXED);
     uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
     uint64_t provenance_fallback = __atomic_load_n(&translit_provenance_fallback, __ATOMIC_RELAXED);
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
@@ -894,7 +898,8 @@ static int translit_report(char *out, size_t size) {
                         " riprel_unreachable=%llu riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu"
                         " refusal_key=%u refusal_count=%llu refusal_prefix=%llu refusal_width=%llu"
                         " refusal_rsp=%llu refusal_opcode=%llu stitch_candidates=%llu stitch_admitted=%llu"
-                        " rip_indirect_lowered=%llu jcc_fall_candidates=%llu jcc_fall_admitted=%llu\n",
+                        " rip_indirect_lowered=%llu jcc_fall_candidates=%llu jcc_fall_admitted=%llu"
+                        " jcc_fall_page_refused=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -907,7 +912,8 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)displaced_refusal_width, (unsigned long long)displaced_refusal_rsp,
                         (unsigned long long)displaced_refusal_opcode_other, (unsigned long long)stitch_candidates,
                         (unsigned long long)stitch_admitted, (unsigned long long)rip_indirect_lowered,
-                        (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted);
+                        (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
+                        (unsigned long long)jcc_fall_page_refused);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
@@ -917,11 +923,12 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
-                    " jcc_fall_candidates=%llu jcc_fall_admitted=%llu\n",
+                    " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
-                    (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted);
+                    (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
+                    (unsigned long long)jcc_fall_page_refused);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.
