@@ -50,7 +50,7 @@ fn saved_layouts_reach_their_foreign_ptys_before_the_first_frame() {
 fn characterize(panes: usize) {
     let pty_baseline = open_pty_count();
     let workspace = WorkspaceConfig::new(
-        &format!("restore-profile-{}-{panes}", std::process::id()),
+        format!("restore-profile-{}-{panes}", std::process::id()),
         "offline.invalid/unused",
         hl_ws::Arch::Amd64,
     );
