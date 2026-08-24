@@ -122,6 +122,28 @@ fn broken_soak_refuses_implicit_case_selection_and_baseline_comparison() {
 }
 
 #[test]
+fn worker_opt_in_resolves_the_recorded_broken_case_instead_of_zero_work() {
+    assert!(
+        super::worker_work(
+            "process".to_owned(),
+            "runtime/process/spawn-concurrent".to_owned(),
+            Target::Amd64,
+            false,
+        )
+        .is_err()
+    );
+    let work = super::worker_work(
+        "process".to_owned(),
+        "runtime/process/spawn-concurrent".to_owned(),
+        Target::Amd64,
+        true,
+    )
+    .expect("the explicit worker opt-in selected zero work");
+    assert_eq!(work.key.id, "runtime/process/spawn-concurrent#soak-0001");
+    assert!(work.broken_soak);
+}
+
+#[test]
 fn host_exclusion_uses_the_injected_engine_host() {
     let options = options(&["--case", "runtime/host-excluded", "--isa", "arm64"]);
     for host in [EngineHost::Linux, EngineHost::Windows] {
