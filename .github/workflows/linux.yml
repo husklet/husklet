@@ -433,11 +433,11 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test --workspace --lib --bins --locked --offline --no-fail-fast
 
-      # The workspace command above builds `husklet` with default features, so its
-      # runtime module -- including the workspace checkpoint store -- does not exist in
-      # that test binary. Run the product library surface explicitly, and require the
-      # cross-process generation assertion by exact name: a green command after a
-      # feature or module wiring regression must not count as coverage.
+      # The `husklet` runtime library now has its own Linux step below: the workspace
+      # command above still builds the application with default features and therefore
+      # omits that module, including the workspace checkpoint store. Require the
+      # cross-process generation assertion by exact name so a green command after a
+      # feature or module wiring regression cannot count as coverage.
       - name: Test the container-runtime application library
         run: |
           set -o pipefail
