@@ -54,7 +54,10 @@ impl StandardStreamPort for CapturedOutput {
 /// What the engine reported about the same-ISA backend for one run.
 struct Backend {
     line: String,
+    blocks: u64,
     entries: u64,
+    declined: u64,
+    translations: u64,
 }
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
@@ -67,12 +70,28 @@ fn backend(stderr: &[u8]) -> Backend {
             panic!("the exit report carried no translit line; HL_C_DIAGNOSTICS produced:\n{text}");
         })
         .to_owned();
-    let entries = line
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("entries="))
-        .and_then(|value| value.trim_end_matches(')').parse().ok())
+    let counter = |name: &str| {
+        line.split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.trim_end_matches(')').parse().ok())
+            .unwrap_or(0)
+    };
+    let translations = text
+        .lines()
+        .find(|line| line.starts_with("[prof] crossings="))
+        .and_then(|line| {
+            line.split_whitespace()
+                .find_map(|field| field.strip_prefix("translations="))
+        })
+        .and_then(|value| value.parse().ok())
         .unwrap_or(0);
-    Backend { line, entries }
+    Backend {
+        blocks: counter("blocks="),
+        entries: counter("entries="),
+        declined: counter("declined="),
+        translations,
+        line,
+    }
 }
 
 /// Builds one fixture position-independent and statically linked.
@@ -371,6 +390,8 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
             "{name}: an ET_EXEC at its link address entered no emitted code -- {}",
             selected_backend.line
         );
+        assert!(selected_backend.blocks > 0, "{name}: no transliterated block was built");
+        assert_eq!(selected_backend.declined, 0, "{name}: a link-address image was refused");
         assert_eq!(
             selected_status, interpreted_status,
             "{name}: selecting the transliterator changed the exit status"
@@ -406,6 +427,15 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
         selected_backend.line
     );
     assert_eq!(selected_backend.entries, 0, "a displaced image entered emitted code");
+    assert_eq!(selected_backend.blocks, 0, "a displaced image built emitted code");
+    assert!(
+        selected_backend.translations > 0,
+        "the interpreter translated no blocks"
+    );
+    assert_eq!(
+        selected_backend.declined, selected_backend.translations,
+        "every translated block must carry the displaced-image refusal"
+    );
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
     occupied.verify_and_release();
