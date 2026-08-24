@@ -17,7 +17,9 @@ __attribute__((visibility("hidden"))) function call_slot = target;
 __attribute__((visibility("hidden"))) function jump_slot = target;
 static volatile sig_atomic_t faults;
 static volatile sig_atomic_t r11_preserved;
+static volatile sig_atomic_t rip_preserved;
 static volatile uintptr_t resume_pc;
+static volatile uintptr_t fault_pc;
 
 __asm__(".pushsection .rip_indirect_boundary,\"aw\",@progbits\n"
         ".balign 4096\n"
@@ -40,10 +42,12 @@ __attribute__((naked, noinline)) static uint64_t valid_jump(uint64_t value) {
 }
 
 __attribute__((naked, noinline)) static void faulting_call(void) {
-    __asm__ volatile("lea 1f(%rip),%r11\n\t"
+    __asm__ volatile("lea 2f(%rip),%r11\n\t"
+                     "mov %r11,fault_pc(%rip)\n\t"
+                     "lea 1f(%rip),%r11\n\t"
                      "mov %r11,resume_pc(%rip)\n\t"
                      "movabs $0x8877665544332211,%r11\n\t"
-                     "call *boundary_slot(%rip)\n\t"
+                     "2: call *boundary_slot(%rip)\n\t"
                      "1: ret");
 }
 
@@ -53,6 +57,7 @@ static void fault(int signal, siginfo_t *info, void *context) {
     if (signal == SIGSEGV) {
         faults++;
         r11_preserved += (uint64_t)state->uc_mcontext.gregs[REG_R11] == UINT64_C(0x8877665544332211);
+        rip_preserved += (uintptr_t)state->uc_mcontext.gregs[REG_RIP] == fault_pc;
         state->uc_mcontext.gregs[REG_RIP] = (greg_t)resume_pc;
     }
 }
@@ -72,7 +77,7 @@ int main(void) {
     faulting_call();
     if (mprotect((void *)second, (size_t)page, PROT_READ | PROT_WRITE) != 0) return 5;
 
-    printf("rip-indirect call=%llu jump=%llu faults=%d preserved=%d\n",
-           (unsigned long long)call, (unsigned long long)jump, faults, r11_preserved);
-    return call == 40 && jump == 46 && faults == 1 && r11_preserved == 1 ? 0 : 6;
+    printf("rip-indirect call=%llu jump=%llu faults=%d r11=%d rip=%d\n",
+           (unsigned long long)call, (unsigned long long)jump, faults, r11_preserved, rip_preserved);
+    return call == 40 && jump == 46 && faults == 1 && r11_preserved == 1 && rip_preserved == 1 ? 0 : 6;
 }
