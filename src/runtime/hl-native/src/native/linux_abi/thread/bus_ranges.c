@@ -862,7 +862,7 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
             break;
         }
         result = nonpie_collision_finish_release(-1);
-        if (!g_nonpie_collision_active || g_nonpie_collision_mapping == NULL) result = -EUCLEAN;
+        if (!g_nonpie_collision_active || g_nonpie_collision_mapping == NULL) result = -EIO;
         break;
     }
     case 15:

@@ -689,15 +689,15 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
         for (int iteration = 0; iteration < 64; ++iteration) {
             uint64_t guest = (iteration & 1) != 0 ? second : first;
             uintptr_t expected = (iteration & 1) != 0 ? UINT64_C(0x222000) : UINT64_C(0x111000);
-            if ((uintptr_t)map_host(guest) != expected) result = -EUCLEAN;
+            if ((uintptr_t)map_host(guest) != expected) result = -EIO;
         }
         *probes = g_map_host_probe_count;
     } else if (scenario == 16) {
-        if ((uintptr_t)map_host(first) != UINT64_C(0x111000)) result = -EUCLEAN;
-        if ((uintptr_t)map_host(second) != UINT64_C(0x222000)) result = -EUCLEAN;
+        if ((uintptr_t)map_host(first) != UINT64_C(0x111000)) result = -EIO;
+        if ((uintptr_t)map_host(second) != UINT64_C(0x222000)) result = -EIO;
         map_put(third, third, third + 1,
                 (void *)(uintptr_t)UINT64_C(0x333000), (void *)(uintptr_t)UINT64_C(0x333001));
-        if ((uintptr_t)map_host(first) != UINT64_C(0x111000)) result = -EUCLEAN;
+        if ((uintptr_t)map_host(first) != UINT64_C(0x111000)) result = -EIO;
         *probes = g_map_host_probe_count;
     } else {
         hl_map_host_thread_test test = {
@@ -714,7 +714,7 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
             map_put(first, first, first + 1, (void *)(uintptr_t)test.after,
                     (void *)(uintptr_t)(test.after + 1));
             __atomic_store_n(&test.published, 1, __ATOMIC_RELEASE);
-            if (pthread_join(thread, NULL) != 0 || test.probes != 2) result = -EUCLEAN;
+            if (pthread_join(thread, NULL) != 0 || test.probes != 2) result = -EIO;
             *probes = test.probes;
         }
     }
