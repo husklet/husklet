@@ -99,6 +99,7 @@ static inline void hl_dispatch_profile_delta(hl_dispatch_profile *profile, hl_di
     case HL_DISPATCH_PHASE_STW: __atomic_fetch_add(&profile->stw_ns, delta, __ATOMIC_RELAXED); break;
     case HL_DISPATCH_PHASE_BLOCK: __atomic_fetch_add(&profile->block_ns, delta, __ATOMIC_RELAXED); break;
     case HL_DISPATCH_PHASE_REASON: __atomic_fetch_add(&profile->reason_ns, delta, __ATOMIC_RELAXED); break;
+    default: break;
     }
 }
 
@@ -130,6 +131,7 @@ static inline int hl_dispatch_profile_accumulator_test(void) {
     hl_dispatch_profile_delta(&profile, HL_DISPATCH_PHASE_BLOCK, 60, 77);
     hl_dispatch_profile_delta(&profile, HL_DISPATCH_PHASE_REASON, 90, 109);
     hl_dispatch_profile_delta(&profile, HL_DISPATCH_PHASE_REASON, 10, 9); /* a broken clock adds nothing */
+    hl_dispatch_profile_delta(&profile, (hl_dispatch_profile_phase)99, 1, 1000); /* an invalid phase adds nothing */
     profile.crossings = 3;
     if (profile.map_hit != 1 || profile.map_miss != 1 || profile.threaded_crossings != 1 ||
         profile.pending_interrupts != 1 || profile.stw_retries != 1)
