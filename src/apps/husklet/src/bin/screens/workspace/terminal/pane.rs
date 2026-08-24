@@ -236,7 +236,7 @@ impl<'a> Page<'a> {
     }
 
     /// Restores a user-selected tab's last pane; programmatic selection does not steal focus.
-    fn select_and_focus(&self) {
+    pub(super) fn select_and_focus(&self) {
         self.select();
         let tw = self.window;
         let name = self.name.clone();

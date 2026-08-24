@@ -101,6 +101,8 @@ struct AppConfig {
     script: Option<String>,
     /// Debug: window geometry in pixels, as `<ms>:<width>x<height>` (`HL_TERM_RESIZE`).
     resize: Option<String>,
+    /// Debug: receipt for the fixed live tab/paste/close/type exercise (`HL_TERM_LIVE_ACTIONS`).
+    live_actions: Option<String>,
     environment: host::environment::Environment,
     home: std::path::PathBuf,
 }
@@ -122,6 +124,7 @@ impl AppConfig {
             pane_text: std::env::var("HL_TERM_TEXT").ok(),
             script: std::env::var("HL_TERM_SCRIPT").ok(),
             resize: std::env::var("HL_TERM_RESIZE").ok(),
+            live_actions: std::env::var("HL_TERM_LIVE_ACTIONS").ok(),
             screenshot_ms: std::env::var("HL_TERM_SHOT_MS")
                 .ok()
                 .and_then(|value| value.parse().ok())

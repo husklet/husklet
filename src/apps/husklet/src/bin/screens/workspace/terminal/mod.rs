@@ -523,6 +523,7 @@ impl Window {
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "terminal");
         Screenshot::schedule_resize(&window);
+        LiveActions::schedule(&tw);
     }
 }
 
@@ -546,6 +547,7 @@ impl<'a> Terminal<'a> {
 
 use crate::*;
 
+mod actions;
 mod close;
 mod grid;
 mod launch;
@@ -558,6 +560,7 @@ mod state;
 mod surface;
 mod text;
 
+use actions::LiveActions;
 pub(crate) use close::*;
 pub(crate) use launch::*;
 pub(crate) use pane::*;
