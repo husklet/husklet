@@ -129,23 +129,32 @@ static hl_host_result hl_linux_process_wait(void *context, hl_host_handle handle
         pthread_mutex_unlock(&host->lock);
         return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     }
-    options = WNOHANG;
-    for (;;) {
-        do {
-            waited = waitpid(pid, &status, options);
-        } while (waited < 0 && errno == EINTR);
-        if (waited != 0) break;
-        if (deadline_ns == 0 || (deadline_ns != HL_HOST_DEADLINE_INFINITE && hl_linux_monotonic_value() >= deadline_ns))
-            break;
+    if (deadline_ns == HL_HOST_DEADLINE_INFINITE) {
+        /* The waiter owns this handle until it publishes the result: close observes
+         * process_waiting/process_waiters, while destroy kills the child and waits for
+         * this waiter.  A blocking wait therefore needs no millisecond WNOHANG poll. */
         pthread_mutex_unlock(&host->lock);
-        hl_linux_sleep_until(deadline_ns == HL_HOST_DEADLINE_INFINITE ? hl_linux_monotonic_value() + UINT64_C(1000000)
-                                                                      : deadline_ns);
+        do {
+            waited = waitpid(pid, &status, 0);
+        } while (waited < 0 && errno == EINTR);
         pthread_mutex_lock(&host->lock);
-        entry = hl_linux_lookup_locked(host, handle, HL_LINUX_HANDLE_PROCESS);
-        if (entry == NULL || entry->process_reaped || host->destroying) {
-            waited = -1;
-            errno = EINVAL;
-            break;
+    } else {
+        options = WNOHANG;
+        for (;;) {
+            do {
+                waited = waitpid(pid, &status, options);
+            } while (waited < 0 && errno == EINTR);
+            if (waited != 0) break;
+            if (deadline_ns == 0 || hl_linux_monotonic_value() >= deadline_ns) break;
+            pthread_mutex_unlock(&host->lock);
+            hl_linux_sleep_until(deadline_ns);
+            pthread_mutex_lock(&host->lock);
+            entry = hl_linux_lookup_locked(host, handle, HL_LINUX_HANDLE_PROCESS);
+            if (entry == NULL || entry->process_reaped || host->destroying) {
+                waited = -1;
+                errno = EINVAL;
+                break;
+            }
         }
     }
     entry = hl_linux_lookup_locked(host, handle, HL_LINUX_HANDLE_PROCESS);
