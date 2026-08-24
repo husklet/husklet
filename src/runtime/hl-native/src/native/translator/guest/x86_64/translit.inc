@@ -862,4 +862,11 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, not a Linux x86-64 host\n");
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    (void)scenario;
+    return -1;
+}
+#endif
+
 #endif
