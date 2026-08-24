@@ -669,7 +669,7 @@ mod tests {
 
         // SAFETY: releasing and reaping the exact child forked above.
         unsafe {
-            let mut byte = [1_u8];
+            let byte = [1_u8];
             libc::write(release[1], byte.as_ptr().cast(), 1);
             let mut status = 0;
             libc::waitpid(child, &raw mut status, 0);

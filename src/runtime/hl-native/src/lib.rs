@@ -132,6 +132,7 @@ pub fn terminal_termios_flush_unregister(descriptor: std::os::fd::RawFd) {
 
 #[cfg(unix)]
 #[doc(hidden)]
+#[must_use]
 pub fn terminal_termios_flush_mark_test(descriptor: std::os::fd::RawFd, request: u64) -> u64 {
     bindings::hl_c_backend_terminal_termios_flush_mark_test(descriptor, request)
 }
