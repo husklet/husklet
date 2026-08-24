@@ -315,6 +315,7 @@ static hl_translation_map_metadata g_map_metadata[JIT_MAP_N];
 
 typedef struct {
     uint64_t host, end, guest;
+    uint32_t preserve_registers;
     uint32_t epoch;
 } jit_instruction_map_entry;
 
@@ -324,34 +325,49 @@ static int jit_host_to_rwpc(uint64_t host_pc, uint64_t *rwpc);
 static inline __attribute__((always_inline)) int jit_resolve_rw_code(void *rwcode, void **rxcode, uint64_t *generation);
 static void ibtc_drop_target(uint64_t target);
 
-static void jit_instruction_map_put(uint64_t host, uint64_t end, uint64_t guest) {
+static void jit_instruction_map_put_preserve(uint64_t host, uint64_t end, uint64_t guest,
+                                             uint32_t preserve_registers) {
     if (host >= end) return;
     uint32_t index = __atomic_fetch_add(&g_instruction_map_next, 1u, __ATOMIC_RELAXED) & (JIT_INSN_MAP_N - 1u);
     g_instruction_map[index].host = host;
     g_instruction_map[index].end = end;
     g_instruction_map[index].guest = guest;
+    g_instruction_map[index].preserve_registers = preserve_registers;
     __atomic_store_n(&g_instruction_map[index].epoch, g_map_epoch, __ATOMIC_RELEASE);
 }
 
-static int jit_instruction_map_lookup(uint64_t rwpc, uint64_t *guest) {
+static void jit_instruction_map_put(uint64_t host, uint64_t end, uint64_t guest) {
+    jit_instruction_map_put_preserve(host, end, guest, 0);
+}
+
+static int jit_instruction_map_lookup(uint64_t rwpc, uint64_t *guest, uint32_t *preserve_registers) {
     uint64_t best = 0, source = 0;
+    uint32_t preserve = 0;
     for (uint32_t i = 0; i < JIT_INSN_MAP_N; i++) {
         uint32_t epoch = __atomic_load_n(&g_instruction_map[i].epoch, __ATOMIC_ACQUIRE);
         if (epoch == g_map_epoch && g_instruction_map[i].host <= rwpc && rwpc < g_instruction_map[i].end &&
             g_instruction_map[i].host >= best) {
             best = g_instruction_map[i].host;
             source = g_instruction_map[i].guest;
+            preserve = g_instruction_map[i].preserve_registers;
         }
     }
     if (!best) return 0;
     if (guest) *guest = source;
+    if (preserve_registers) *preserve_registers = preserve;
     return 1;
 }
 
 static int jit_instruction_guest_pc(uint64_t host_pc, uint64_t *guest_pc) {
     uint64_t rwpc;
     if (!jit_host_to_rwpc(host_pc, &rwpc)) return 0;
-    return jit_instruction_map_lookup(rwpc, guest_pc);
+    return jit_instruction_map_lookup(rwpc, guest_pc, NULL);
+}
+
+static int jit_instruction_guest_pc_preserve(uint64_t host_pc, uint64_t *guest_pc, uint32_t *preserve_registers) {
+    uint64_t rwpc;
+    if (!jit_host_to_rwpc(host_pc, &rwpc)) return 0;
+    return jit_instruction_map_lookup(rwpc, guest_pc, preserve_registers);
 }
 
 static int map_live(uint32_t index) {
@@ -395,7 +411,7 @@ int jit_hostpc_lookup(uint64_t hpc, uint64_t *gpc, uint64_t *off, uint32_t *insn
     }
     if (!best) return 0;
     uint64_t exact = 0;
-    if (gpc) *gpc = jit_instruction_map_lookup(rwpc, &exact) ? exact : bgpc;
+    if (gpc) *gpc = jit_instruction_map_lookup(rwpc, &exact, NULL) ? exact : bgpc;
     if (off) *off = rwpc - best;
     if (insn) *insn = *(uint32_t *)rwpc;
     return 1;

@@ -148,7 +148,13 @@ static uint64_t translit_displaced_riprel_projected;
 static uint64_t translit_displaced_lea_low;
 static uint64_t translit_displaced_riprel_unreachable;
 static uint64_t translit_displaced_riprel_lowered;
+static uint64_t translit_displaced_scratch_lowered;
 static uint64_t translit_displaced_lea_lowered;
+static uint64_t translit_displaced_refusal_opcode[512];
+static uint64_t translit_displaced_refusal_prefix;
+static uint64_t translit_displaced_refusal_width;
+static uint64_t translit_displaced_refusal_rsp;
+static uint64_t translit_displaced_refusal_opcode_other;
 #endif
 
 static int translit_enabled(void) {
@@ -165,6 +171,11 @@ static int translit_enabled(void) {
 }
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+
+static void translit_count_displaced_refusal(const struct insn *insn) {
+    unsigned key = (insn->two ? 256u : 0u) | insn->op;
+    (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[key], 1, __ATOMIC_RELAXED);
+}
 
 // %gs base == this thread's cpu. Per thread, so re-published whenever run_block sees a cpu it has not
 // published for -- a cloned guest thread, a fork child and a restored checkpoint all land here.
@@ -370,12 +381,17 @@ static int translit_rel32(uint64_t target, int64_t host_next, uint32_t *encoded)
     return 1;
 }
 
+static uint32_t translit_preserve_mask(int reg) {
+    return reg < 0 ? 0 : 1u << reg;
+}
+
 // Rel32 is deliberately attempted first: a one-instruction copy is the cheapest exact spelling. When the
 // host-only arena is out of reach, x86's accumulator moffs forms provide a bounded absolute dereference
 // without borrowing a guest register, touching the stack, or adding fault-recovery state. LEA is address
 // materialisation rather than a dereference, so an immediate move preserves its low guest identity.
 static int translit_lower_displaced_riprel(hl_x64_asm *a, const struct insn *insn, uint64_t guest_target,
-                                           uint64_t storage_target) {
+                                           uint64_t storage_target, int *preserve_register) {
+    *preserve_register = -1;
     if (insn->op == 0x8D && !insn->two) {
         if (insn->lock || insn->rep || insn->repne ||
             (insn->opsize != 2 && insn->opsize != 4 && insn->opsize != 8))
@@ -396,18 +412,51 @@ static int translit_lower_displaced_riprel(hl_x64_asm *a, const struct insn *ins
         }
         return !a->overflow;
     }
-    if (insn->two || insn->lock || insn->rep || insn->repne || insn->reg != HL_X64_RAX) return 0;
-    uint8_t moffs;
-    if (insn->op == 0x8A)
-        moffs = 0xA0;
-    else if (insn->op == 0x8B)
-        moffs = 0xA1;
-    else if (insn->op == 0x88)
-        moffs = 0xA2;
-    else if (insn->op == 0x89)
-        moffs = 0xA3;
-    else
+    if (insn->lock || insn->rep || insn->repne) {
+        if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_refusal_prefix, 1, __ATOMIC_RELAXED);
         return 0;
+    }
+    uint8_t moffs = 0;
+    if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
+        moffs = 0xA0;
+    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8B)
+        moffs = 0xA1;
+    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x88)
+        moffs = 0xA2;
+    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x89)
+        moffs = 0xA3;
+    if (moffs == 0) {
+        int family = (!insn->two && (insn->op == 0x8B || insn->op == 0x63)) ||
+                     (insn->two &&
+                      (insn->op == 0xB6 || insn->op == 0xB7 || insn->op == 0xBE || insn->op == 0xBF));
+        int supported = family && (insn->opsize == 4 || insn->opsize == 8) &&
+                        (insn->two || insn->op != 0x63 || insn->opsize == 8);
+        int reg = insn->reg;
+        if (!supported) {
+            if (g_nonpie_lo)
+                (void)__atomic_fetch_add(family ? &translit_displaced_refusal_width
+                                                : &translit_displaced_refusal_opcode_other,
+                                         1, __ATOMIC_RELAXED);
+            return 0;
+        }
+        if (reg == HL_X64_RSP) {
+            if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_refusal_rsp, 1, __ATOMIC_RELAXED);
+            return 0;
+        }
+        hl_x64_mov_imm64(a, reg, storage_target);
+        uint8_t rex = (uint8_t)(0x40 | (insn->opsize == 8 ? 8 : 0) | (reg >= 8 ? 5 : 0));
+        if (rex != 0x40) hl_x64_u8(a, rex);
+        if (insn->two) hl_x64_u8(a, 0x0F);
+        hl_x64_u8(a, insn->op);
+        int low = reg & 7;
+        uint8_t mod = low == 5 ? 0x40 : 0;
+        hl_x64_u8(a, (uint8_t)(mod | ((reg & 7) << 3) | (low == 4 ? 4 : low)));
+        if (low == 4) hl_x64_u8(a, 0x24);
+        if (low == 5) hl_x64_u8(a, 0);
+        if (a->overflow) return 0;
+        *preserve_register = reg;
+        return 1;
+    }
     if ((moffs == 0xA1 || moffs == 0xA3) && insn->opsize == 2) hl_x64_u8(a, 0x66);
     if ((moffs == 0xA1 || moffs == 0xA3) && insn->opsize == 8) hl_x64_u8(a, 0x48);
     hl_x64_u8(a, moffs);
@@ -474,7 +523,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 10) {
         insn.op = 0x8D;
         insn.reg = 9;
-        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123)) return 13;
+        int preserve;
+        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 13;
         const uint8_t expected[] = {0x49, 0xB9, 0x23, 0x01, 0x40, 0, 0, 0, 0, 0};
         return output.cursor - bytes == (ptrdiff_t)sizeof(expected) && memcmp(bytes, expected, sizeof(expected)) == 0
                    ? 0
@@ -483,7 +533,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 11 || scenario == 12) {
         insn.op = scenario == 11 ? 0x8B : 0x89;
         insn.reg = 0;
-        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123)) return 15;
+        int preserve;
+        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 15;
         return output.cursor - bytes == 10 && bytes[0] == 0x48 && bytes[1] == (scenario == 11 ? 0xA1 : 0xA3) &&
                        memcmp(bytes + 2, (uint8_t[]){0x23, 0x01, 0x40, 0, 0x01, 0, 0, 0}, 8) == 0
                    ? 0
@@ -491,8 +542,41 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 13) {
         insn.op = 0x8B;
-        insn.reg = 1;
-        return translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123) ? 17 : 0;
+        insn.reg = 4;
+        int preserve;
+        return translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve) ? 17 : 0;
+    }
+    if (scenario >= 14 && scenario <= 16) {
+        int preserve;
+        insn.reg = scenario == 14 ? 1 : (scenario == 15 ? 13 : 2);
+        insn.op = scenario == 16 ? 0xBE : 0x8B;
+        insn.two = scenario == 16;
+        insn.opsize = scenario == 15 ? 4 : 8;
+        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 18;
+        static const uint8_t suffix[][4] = {{0x48, 0x8B, 0x09, 0}, {0x45, 0x8B, 0x6D, 0},
+                                             {0x48, 0x0F, 0xBE, 0x12}};
+        size_t suffix_size = scenario == 14 ? 3 : 4;
+        size_t length = 10 + suffix_size;
+        if (preserve != insn.reg || output.cursor - bytes != (ptrdiff_t)length ||
+            memcmp(bytes + 10, suffix[scenario - 14], suffix_size) != 0)
+            return 19;
+        return 0;
+    }
+    if (scenario == 17) return translit_preserve_mask(10) == (1u << 10) ? 0 : 20;
+    if (scenario == 18 || scenario == 19) {
+        int preserve;
+        insn.reg = scenario == 18 ? 11 : 14;
+        insn.op = scenario == 18 ? 0xB6 : 0x63;
+        insn.two = scenario == 18;
+        insn.opsize = scenario == 18 ? 4 : 8;
+        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 21;
+        const uint8_t *expected = scenario == 18 ? (uint8_t[]){0x45, 0x0F, 0xB6, 0x1B}
+                                                 : (uint8_t[]){0x4D, 0x63, 0x36};
+        size_t expected_size = scenario == 18 ? 4 : 3;
+        if (preserve != insn.reg || output.cursor - bytes != (ptrdiff_t)(10 + expected_size) ||
+            memcmp(bytes + 10, expected, expected_size) != 0)
+            return 22;
+        return 0;
     }
     return 6;
 }
@@ -526,12 +610,14 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         if (!translit_displaced_safe(&insn, kind)) {
             (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
             (void)__atomic_fetch_add(&translit_displaced_operand_declined, 1, __ATOMIC_RELAXED);
+            translit_count_displaced_refusal(&insn);
             break;
         }
         if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
 
         uint64_t next = pc + (uint64_t)insn.len;
         uint8_t *instruction_start = a->cursor;
+        int preserve_register = -1;
 
         if (kind == TL_COPY) {
             hl_x64_copy(a, bytes, insn.len);
@@ -541,17 +627,23 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
                                                                  g_nonpie_hi, g_nonpie_bias);
-                if (!g_nonpie_lo || !translit_lower_displaced_riprel(a, &insn, guest_target, storage_target)) {
+                if (!g_nonpie_lo ||
+                    !translit_lower_displaced_riprel(a, &insn, guest_target, storage_target, &preserve_register)) {
                     if (g_nonpie_lo)
                         (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
+                    if (g_nonpie_lo) translit_count_displaced_refusal(&insn);
                     a->cursor = instruction_start; // un-emit: the block ends before this instruction
                     break;
                 }
                 uint64_t *counter = insn.op == 0x8D && !insn.two ? &translit_displaced_lea_lowered
                                                                  : &translit_displaced_riprel_lowered;
                 (void)__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
+                if (preserve_register >= 0)
+                    (void)__atomic_fetch_add(&translit_displaced_scratch_lowered, 1, __ATOMIC_RELAXED);
             }
-            jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)a->cursor, pc);
+            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)instruction_start,
+                                             (uint64_t)(uintptr_t)a->cursor, pc,
+                                             translit_preserve_mask(preserve_register));
             pc = next;
             count++;
             continue;
@@ -665,19 +757,42 @@ static int translit_report(char *out, size_t size) {
     uint64_t displaced_riprel_unreachable =
         __atomic_load_n(&translit_displaced_riprel_unreachable, __ATOMIC_RELAXED);
     uint64_t displaced_riprel_lowered = __atomic_load_n(&translit_displaced_riprel_lowered, __ATOMIC_RELAXED);
+    uint64_t displaced_scratch_lowered =
+        __atomic_load_n(&translit_displaced_scratch_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_lea_lowered = __atomic_load_n(&translit_displaced_lea_lowered, __ATOMIC_RELAXED);
+    uint64_t displaced_refusal_prefix = __atomic_load_n(&translit_displaced_refusal_prefix, __ATOMIC_RELAXED);
+    uint64_t displaced_refusal_width = __atomic_load_n(&translit_displaced_refusal_width, __ATOMIC_RELAXED);
+    uint64_t displaced_refusal_rsp = __atomic_load_n(&translit_displaced_refusal_rsp, __ATOMIC_RELAXED);
+    uint64_t displaced_refusal_opcode_other =
+        __atomic_load_n(&translit_displaced_refusal_opcode_other, __ATOMIC_RELAXED);
+    unsigned displaced_refusal_key = 0;
+    uint64_t displaced_refusal_count = 0;
+    for (unsigned key = 0; key < 512; key++) {
+        uint64_t count = __atomic_load_n(&translit_displaced_refusal_opcode[key], __ATOMIC_RELAXED);
+        if (count > displaced_refusal_count) {
+            displaced_refusal_key = key;
+            displaced_refusal_count = count;
+        }
+    }
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
     if (g_nonpie_lo != 0)
         return snprintf(out, size,
                         "[prof] translit: displaced blocks=%llu entries=%llu declined=%llu displaced_blocks=%llu"
                         " displaced_entries=%llu operand_declined=%llu riprel_projected=%llu lea_low=%llu"
-                        " riprel_unreachable=%llu riprel_lowered=%llu lea_lowered=%llu\n",
+                        " riprel_unreachable=%llu riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu"
+                        " refusal_key=%u refusal_count=%llu refusal_prefix=%llu refusal_width=%llu"
+                        " refusal_rsp=%llu refusal_opcode=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
                         (unsigned long long)displaced_riprel_projected, (unsigned long long)displaced_lea_low,
                         (unsigned long long)displaced_riprel_unreachable,
-                        (unsigned long long)displaced_riprel_lowered, (unsigned long long)displaced_lea_lowered);
+                        (unsigned long long)displaced_riprel_lowered,
+                        (unsigned long long)displaced_scratch_lowered,
+                        (unsigned long long)displaced_lea_lowered, displaced_refusal_key,
+                        (unsigned long long)displaced_refusal_count, (unsigned long long)displaced_refusal_prefix,
+                        (unsigned long long)displaced_refusal_width, (unsigned long long)displaced_refusal_rsp,
+                        (unsigned long long)displaced_refusal_opcode_other);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
@@ -703,11 +818,14 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     uint64_t host_pc = (uint64_t)HL_HOST_UC_PC(uc);
     if (!jit_pc_in_retained_cache(host_pc)) return 0;
     greg_t *gregs = HL_HOST_UC_GREGS(uc);
-    for (int i = 0; i < 16; i++)
-        cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
-    translit_flags_out(cpu, (uint64_t)gregs[HL_HOST_UC_REG_EFL]);
+    uint32_t preserve_registers = 0;
     uint64_t guest_pc;
-    if (jit_instruction_guest_pc(host_pc, &guest_pc)) cpu->rip = guest_pc;
+    int exact_pc = jit_instruction_guest_pc_preserve(host_pc, &guest_pc, &preserve_registers);
+    for (int i = 0; i < 16; i++) {
+        if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
+    }
+    translit_flags_out(cpu, (uint64_t)gregs[HL_HOST_UC_REG_EFL]);
+    if (exact_pc) cpu->rip = guest_pc;
     cpu->reason = R_BRANCH;
     return 1;
 }

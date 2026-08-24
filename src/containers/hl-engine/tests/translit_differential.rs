@@ -25,6 +25,7 @@ use hl_engine::{
     runtime::Engine,
 };
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -59,6 +60,7 @@ struct Backend {
     declined: u64,
     operand_declined: u64,
     riprel_lowered: u64,
+    scratch_lowered: u64,
     lea_lowered: u64,
     translations: u64,
 }
@@ -94,6 +96,7 @@ fn backend(stderr: &[u8]) -> Backend {
         declined: counter("declined="),
         operand_declined: counter("operand_declined="),
         riprel_lowered: counter("riprel_lowered="),
+        scratch_lowered: counter("scratch_lowered="),
         lea_lowered: counter("lea_lowered="),
         translations,
         line,
@@ -383,7 +386,7 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let work = TempDir::new().unwrap();
-    for name in ["flags", "operands", "sigs", "displaced_memory"] {
+    for name in ["flags", "operands", "sigs", "displaced_memory", "displaced_fault"] {
         let executable = displaced_fixture(work.path(), name);
         let (interpreted, interpreted_status, _) = run(&executable, "0");
         let (selected, selected_status, selected_backend) = run(&executable, "1");
@@ -423,7 +426,7 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
     let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
     let occupied = LinkPage::occupy(2);
     let work = TempDir::new().unwrap();
-    for name in ["flags", "operands", "sigs", "displaced_memory"] {
+    for name in ["flags", "operands", "sigs", "displaced_memory", "displaced_fault"] {
         let executable = displaced_fixture(work.path(), name);
         let (interpreted, interpreted_status, _) = run(&executable, "0");
         let (selected, selected_status, selected_backend) = run(&executable, "1");
@@ -449,10 +452,15 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
             "{name}: fixture reached no refused operand"
         );
         assert_eq!(selected_backend.operand_declined, selected_backend.declined);
-        if name == "displaced_memory" {
+        if name == "displaced_memory" || name == "displaced_fault" {
             assert!(
                 selected_backend.riprel_lowered > 0,
                 "the displaced accumulator dereference was not lowered -- {}",
+                selected_backend.line
+            );
+            assert!(
+                selected_backend.scratch_lowered > 0,
+                "the displaced non-accumulator load was not lowered -- {}",
                 selected_backend.line
             );
             assert!(
@@ -470,5 +478,72 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
         assert_eq!(native.status.code(), Some(interpreted_status));
         assert_eq!(native.stdout, interpreted, "{name}: engine output differs from native");
     }
+    occupied.verify_and_release();
+}
+
+/// Manual profile arm for a captured, real non-PIE tool. The caller supplies an owned root copy and
+/// newline-delimited argv; keeping this ignored prevents a machine-local compiler corpus from becoming
+/// a gate dependency. Reserving the link page in this process is the same collision seam as the exact
+/// differential above, so a `translit: displaced` receipt is mandatory rather than inferred.
+#[test]
+#[ignore = "requires HL_PROFILE_CC1_ROOT and HL_PROFILE_CC1_ARGV"]
+fn a_captured_cc1_runs_from_displaced_storage() {
+    let root = PathBuf::from(std::env::var_os("HL_PROFILE_CC1_ROOT").expect("HL_PROFILE_CC1_ROOT"));
+    let argv_path = PathBuf::from(std::env::var_os("HL_PROFILE_CC1_ARGV").expect("HL_PROFILE_CC1_ARGV"));
+    let selected = std::env::var("HL_PROFILE_CC1_TRANSLIT").expect("HL_PROFILE_CC1_TRANSLIT");
+    assert!(selected == "0" || selected == "1");
+    let mut arguments: Vec<Vec<u8>> = std::fs::read(&argv_path)
+        .expect("cc1 argv")
+        .split(|byte| *byte == b'\n')
+        .filter(|argument| !argument.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect();
+    let executable = arguments.first().expect("cc1 argv[0]").clone();
+    let output = arguments
+        .iter()
+        .position(|argument| argument == b"-o")
+        .and_then(|index| arguments.get_mut(index + 1))
+        .expect("cc1 -o output");
+    *output = b"/work/stage3-output.s".to_vec();
+    let executable_host = root.join(
+        Path::new(std::ffi::OsStr::from_bytes(&executable))
+            .strip_prefix("/")
+            .unwrap(),
+    );
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", &selected, true).unwrap();
+    options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    let plan = RuntimePlan {
+        rootfs: Some(root.as_os_str().as_encoded_bytes().to_vec()),
+        executable_host: Some(executable_host.as_os_str().as_encoded_bytes().to_vec()),
+        arguments,
+        environment: vec![b"LC_ALL=C".to_vec()],
+        result_path: None,
+        options,
+    };
+    let captured = Arc::new(CapturedOutput::default());
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let _guard = NONPIE_LINK_RANGE.lock().unwrap();
+    let occupied = LinkPage::occupy(2);
+    let started = std::time::Instant::now();
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).expect("launch cc1");
+    engine.start().expect("start cc1");
+    let exit = engine.wait().expect("wait cc1");
+    engine.destroy().expect("destroy cc1");
+    let elapsed = started.elapsed();
+    let report = backend(&captured.err.lock().unwrap());
+    if selected == "1" {
+        assert!(report.line.contains("translit: displaced"), "{}", report.line);
+        assert!(report.blocks > 0 && report.entries > 0, "{}", report.line);
+    } else {
+        assert_eq!(report.line, "[prof] translit: not selected");
+    }
+    assert_eq!(exit.guest_status, 0, "{}", report.line);
+    assert!(captured.out.lock().unwrap().is_empty());
+    eprintln!(
+        "[cc1-profile] selected={selected} elapsed_ns={} {}",
+        elapsed.as_nanos(),
+        report.line
+    );
     occupied.verify_and_release();
 }
