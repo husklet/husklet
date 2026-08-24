@@ -10,6 +10,39 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 static TRANSACTION: AtomicU64 = AtomicU64::new(1);
 static IMAGES: OnceLock<Mutex<HashMap<String, std::sync::Weak<WorkspaceImage>>>> = OnceLock::new();
 
+#[cfg(test)]
+static REFRESH_BEFORE_STATE: OnceLock<Mutex<Option<(String, Arc<std::sync::Barrier>)>>> = OnceLock::new();
+#[cfg(test)]
+static WATCHED_CURRENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+#[cfg(test)]
+static WATCHED_CURRENT_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn refresh_before_state(key: &str) {
+    let configured = REFRESH_BEFORE_STATE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone();
+    if let Some((watched, barrier)) = configured.filter(|(watched, _)| watched == key) {
+        barrier.wait();
+        barrier.wait();
+    }
+}
+
+#[cfg(test)]
+fn observe_current(generation: &str) {
+    if WATCHED_CURRENT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .as_deref()
+        == Some(generation)
+    {
+        WATCHED_CURRENT_READS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Workspace-owned checkpoint generations with atomic manifest publication.
 pub(super) struct WorkspaceCheckpoints {
     storage: Directory,
@@ -49,33 +82,62 @@ impl WorkspaceCheckpoints {
             GENERATION.fetch_add(1, Ordering::Relaxed)
         )
     }
+
+    fn current(
+        &self,
+        root: &Key,
+        current_key: &Key,
+    ) -> Result<Option<Namespace<Directory>>, CheckpointError> {
+        match self.storage.get(current_key) {
+            Ok(bytes) => {
+                let generation = std::str::from_utf8(&bytes).map_err(Self::error)?.trim();
+                #[cfg(test)]
+                observe_current(generation);
+                let current = Namespace::new(
+                    self.storage.clone(),
+                    root.join(generation).map_err(Self::error)?,
+                );
+                current
+                    .get(&Key::parse("MANIFEST").map_err(Self::error)?)
+                    .map_err(|error| Self::error(format!("checkpoint current generation is incomplete: {error}")))?;
+                Ok(Some(current))
+            }
+            Err(hl_ws::storage::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(Self::error(error)),
+        }
+    }
 }
 
 impl CheckpointImages for WorkspaceCheckpoints {
     fn open(&self, namespace: &str) -> Result<Arc<dyn CheckpointImage>, CheckpointError> {
         let key = format!("{}:{namespace}", self.identity);
+        let root = Key::parse("checkpoints")
+            .and_then(|key| key.join(namespace))
+            .map_err(Self::error)?;
+        let current_key = root.join("current").map_err(Self::error)?;
         let mut images = IMAGES
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .map_err(|_| CheckpointError::new("checkpoint image cache is poisoned"))?;
         if let Some(image) = images.get(&key).and_then(std::sync::Weak::upgrade) {
+            // Do not hold the process-wide cache while reading storage. The image lock is the
+            // refresh linearization point: an older read cannot arrive after a newer one and roll
+            // the shared Arc back. An active capture owns its cached view and must not even inspect
+            // an external pointer until that transaction has ended -- malformed external state is
+            // not allowed to interrupt an already-open capture.
+            drop(images);
+            #[cfg(test)]
+            refresh_before_state(&key);
+            let mut state = image.state()?;
+            if state.transaction.is_some() {
+                drop(state);
+                return Ok(image);
+            }
+            state.current = self.current(&root, &current_key)?;
+            drop(state);
             return Ok(image);
         }
-        let root = Key::parse("checkpoints")
-            .and_then(|key| key.join(namespace))
-            .map_err(Self::error)?;
-        let current_key = root.join("current").map_err(Self::error)?;
-        let current = match self.storage.get(&current_key) {
-            Ok(bytes) => {
-                let generation = std::str::from_utf8(&bytes).map_err(Self::error)?.trim();
-                Some(Namespace::new(
-                    self.storage.clone(),
-                    root.join(generation).map_err(Self::error)?,
-                ))
-            }
-            Err(hl_ws::storage::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(Self::error(error)),
-        };
+        let current = self.current(&root, &current_key)?;
         let generation = Self::generation();
         let staging = Namespace::new(self.storage.clone(), root.join(&generation).map_err(Self::error)?);
         let image = Arc::new(WorkspaceImage {
@@ -391,6 +453,140 @@ mod tests {
             let key = std::ptr::from_ref(self).cast::<()>() as usize;
             TRANSACTIONS.with(|transactions| transactions.borrow()[&key])
         }
+    }
+
+    fn publish_external(workspace: &std::path::Path, namespace: &str, generation: &str, state: &[u8]) {
+        let storage = Directory::open(workspace).unwrap();
+        let root = Key::parse("checkpoints").unwrap().join(namespace).unwrap();
+        let generation_key = root.join(generation).unwrap();
+        let published = Namespace::new(storage.clone(), generation_key);
+        published.put(&Key::parse("state").unwrap(), state).unwrap();
+        published.put(&Key::parse("MANIFEST").unwrap(), b"external").unwrap();
+        storage.put(&root.join("current").unwrap(), generation.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn reopening_refreshes_a_generation_published_through_another_storage_handle() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let cached = images.open("shared-generation").unwrap();
+        cached.put("state", b"first").unwrap();
+        cached.commit(b"first-manifest").unwrap();
+
+        publish_external(temporary.path(), "shared-generation", "generation-external", b"second");
+
+        let reopened = images.open("shared-generation").unwrap();
+        assert!(Arc::ptr_eq(&cached, &reopened));
+        assert_eq!(reopened.get("state").unwrap(), b"second");
+        assert_eq!(reopened.get("MANIFEST").unwrap(), b"external");
+    }
+
+    #[test]
+    fn a_delayed_refresh_cannot_roll_the_cached_generation_back() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let namespace = "serialized-refresh";
+        let cached = images.open(namespace).unwrap();
+        cached.put("state", b"first").unwrap();
+        cached.commit(b"first-manifest").unwrap();
+        publish_external(temporary.path(), namespace, "generation-refresh-barrier", b"second");
+
+        let key = format!("{}:{namespace}", images.identity);
+        let concrete = IMAGES
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get(&key)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let state = concrete.state().unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        *REFRESH_BEFORE_STATE.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+            Some((key, barrier.clone()));
+        *WATCHED_CURRENT.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+            Some("generation-refresh-barrier".to_owned());
+        WATCHED_CURRENT_READS.store(0, Ordering::Relaxed);
+
+        let workspace = temporary.path().to_owned();
+        let refresh = std::thread::spawn(move || {
+            WorkspaceCheckpoints::open(&workspace)
+                .unwrap()
+                .open(namespace)
+                .unwrap()
+        });
+        barrier.wait();
+        assert_eq!(WATCHED_CURRENT_READS.load(Ordering::Relaxed), 0);
+        barrier.wait();
+        assert_eq!(WATCHED_CURRENT_READS.load(Ordering::Relaxed), 0);
+        drop(state);
+        let refreshed = refresh.join().unwrap();
+
+        *REFRESH_BEFORE_STATE.get().unwrap().lock().unwrap() = None;
+        *WATCHED_CURRENT.get().unwrap().lock().unwrap() = None;
+        assert_eq!(WATCHED_CURRENT_READS.load(Ordering::Relaxed), 1);
+        assert_eq!(refreshed.get("state").unwrap(), b"second");
+    }
+
+    #[test]
+    fn an_active_capture_keeps_its_view_until_the_transaction_ends() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let cached = images.open("active-generation").unwrap();
+        cached.put("state", b"first").unwrap();
+        cached.commit(b"first-manifest").unwrap();
+        cached.put("staging", b"owned").unwrap();
+
+        publish_external(temporary.path(), "active-generation", "generation-external", b"second");
+
+        let active = images.open("active-generation").unwrap();
+        assert_eq!(active.get("state").unwrap(), b"first");
+        active.abort().unwrap();
+        let refreshed = images.open("active-generation").unwrap();
+        assert_eq!(refreshed.get("state").unwrap(), b"second");
+    }
+
+    #[test]
+    fn an_active_capture_ignores_missing_or_malformed_external_current() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let namespace = "active-invalid-current";
+        let cached = images.open(namespace).unwrap();
+        cached.put("state", b"first").unwrap();
+        cached.commit(b"first-manifest").unwrap();
+        cached.put("staging", b"owned").unwrap();
+
+        let storage = Directory::open(temporary.path()).unwrap();
+        let current = Key::parse("checkpoints")
+            .unwrap()
+            .join(namespace)
+            .unwrap()
+            .join("current")
+            .unwrap();
+        storage.put(&current, &[0xff]).unwrap();
+        assert_eq!(images.open(namespace).unwrap().get("state").unwrap(), b"first");
+        storage.remove(&current).unwrap();
+        assert_eq!(images.open(namespace).unwrap().get("state").unwrap(), b"first");
+
+        cached.abort().unwrap();
+        let reopened = images.open(namespace).unwrap();
+        assert!(reopened.get("state").is_err());
+    }
+
+    #[test]
+    fn a_current_pointer_never_selects_an_incomplete_generation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let storage = Directory::open(temporary.path()).unwrap();
+        let root = Key::parse("checkpoints").unwrap().join("incomplete").unwrap();
+        let generation = Namespace::new(storage.clone(), root.join("generation-incomplete").unwrap());
+        generation.put(&Key::parse("state").unwrap(), b"orphan").unwrap();
+        storage
+            .put(&root.join("current").unwrap(), b"generation-incomplete")
+            .unwrap();
+
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        assert!(images.open("incomplete").is_err());
     }
 
     #[test]
