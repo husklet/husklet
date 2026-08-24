@@ -1112,6 +1112,7 @@ mod tests {
         let canonical_terminal = Terminal::new(canonical_port.clone(), 24, 80).unwrap();
         let canonical_bridge = NativeTerminalBridge::attach(canonical_terminal, InputDiscipline::Linux).unwrap();
         assert_eq!(canonical_bridge.discipline(), InputDiscipline::Linux);
+        // SAFETY: `standard_fds()[0]` remains owned by the live bridge and `dup` creates a new descriptor.
         let canonical_copy = unsafe { libc::dup(canonical_bridge.standard_fds()[0]) };
         assert!(canonical_copy >= 0);
         // SAFETY: the descriptor is live and F_SETFL only updates its status flags.
