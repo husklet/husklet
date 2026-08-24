@@ -219,10 +219,13 @@ impl LineDiscipline {
     /// Leaving canonical mode delivers whatever was being edited, exactly as the kernel does: the
     /// bytes were already accepted, so discarding them here would reintroduce the loss this module
     /// exists to remove.
-    pub(super) fn set_termios(&mut self, termios: Termios, effect: &mut Effect) {
+    pub(super) fn set_termios(&mut self, termios: Termios, flush_input: bool, effect: &mut Effect) {
         let was_canonical = self.termios.has_local(local_flag::ICANON);
         self.termios = termios;
-        if was_canonical && !termios.has_local(local_flag::ICANON) {
+        if flush_input {
+            self.reset_line();
+            self.literal_next = false;
+        } else if was_canonical && !termios.has_local(local_flag::ICANON) {
             effect.to_guest.extend_from_slice(&self.line);
             self.reset_line();
         }
@@ -716,8 +719,18 @@ mod tests {
         let mut discipline = LineDiscipline::new(cooked());
         feed(&mut discipline, b"half");
         let mut effect = Effect::default();
-        discipline.set_termios(without(cooked(), ICANON), &mut effect);
+        discipline.set_termios(without(cooked(), ICANON), false, &mut effect);
         assert_eq!(effect.to_guest, b"half", "bytes already accepted must not be discarded");
+    }
+
+    #[test]
+    fn input_flushing_termios_discards_the_line_even_when_it_stays_canonical() {
+        let mut discipline = LineDiscipline::new(cooked());
+        feed(&mut discipline, b"old");
+        let mut effect = Effect::default();
+        discipline.set_termios(cooked(), true, &mut effect);
+        assert!(effect.to_guest.is_empty());
+        assert_eq!(feed(&mut discipline, b"new\n").to_guest, b"new\n");
     }
 
     // ---- editing keys --------------------------------------------------------------------------

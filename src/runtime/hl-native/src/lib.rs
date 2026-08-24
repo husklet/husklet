@@ -112,6 +112,30 @@ pub fn terminal_termios_generation() -> u64 {
     bindings::hl_c_backend_terminal_termios_generation()
 }
 
+/// Generation of the last successful input-flushing termios install on `descriptor`.
+#[cfg(unix)]
+#[must_use]
+pub fn terminal_termios_flush_generation(descriptor: std::os::fd::RawFd) -> u64 {
+    bindings::hl_c_backend_terminal_termios_flush_generation(descriptor)
+}
+
+#[cfg(unix)]
+#[must_use]
+pub fn terminal_termios_flush_register(descriptor: std::os::fd::RawFd) -> Option<()> {
+    bindings::hl_c_backend_terminal_termios_flush_register(descriptor).then_some(())
+}
+
+#[cfg(unix)]
+pub fn terminal_termios_flush_unregister(descriptor: std::os::fd::RawFd) {
+    bindings::hl_c_backend_terminal_termios_flush_unregister(descriptor);
+}
+
+#[cfg(unix)]
+#[doc(hidden)]
+pub fn terminal_termios_flush_mark_test(descriptor: std::os::fd::RawFd, request: u64) -> u64 {
+    bindings::hl_c_backend_terminal_termios_flush_mark_test(descriptor, request)
+}
+
 // Not offered on Windows: every function below is a descriptor capability, and the C side already
 // answers this question the same way -- `hl_c_backend_process_identity_signal`'s `#else` arm refuses
 // outright, because a pidfd (Linux) and a `NOTE_EXIT` kqueue watch (macOS) are the only two things

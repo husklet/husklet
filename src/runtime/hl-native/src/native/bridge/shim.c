@@ -387,11 +387,19 @@ extern uint64_t hl_x86_64_terminal_termios_generation(void);
 extern int hl_x86_64_terminal_termios_image(int32_t native_fd, uint8_t *out);
 extern int hl_x86_64_terminal_termios_capture(int32_t native_fd, uint8_t *out);
 extern int hl_x86_64_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+extern uint64_t hl_x86_64_terminal_termios_flush_generation(int32_t native_fd);
+extern int hl_x86_64_terminal_termios_flush_register(int32_t native_fd);
+extern void hl_x86_64_terminal_termios_flush_unregister(int32_t native_fd);
+extern uint64_t hl_x86_64_terminal_termios_flush_mark_test(int32_t native_fd, uint64_t request);
 #if !defined(HL_BUILD_TARGET_X86_64_ONLY)
 extern uint64_t hl_aarch64_terminal_termios_generation(void);
 extern int hl_aarch64_terminal_termios_image(int32_t native_fd, uint8_t *out);
 extern int hl_aarch64_terminal_termios_capture(int32_t native_fd, uint8_t *out);
 extern int hl_aarch64_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+extern uint64_t hl_aarch64_terminal_termios_flush_generation(int32_t native_fd);
+extern int hl_aarch64_terminal_termios_flush_register(int32_t native_fd);
+extern void hl_aarch64_terminal_termios_flush_unregister(int32_t native_fd);
+extern uint64_t hl_aarch64_terminal_termios_flush_mark_test(int32_t native_fd, uint64_t request);
 #endif
 
 HL_API uint64_t hl_c_backend_terminal_termios_generation(void) {
@@ -434,6 +442,45 @@ HL_API int32_t hl_c_backend_terminal_termios_adopt(int32_t native_fd, const uint
 #endif
     if (hl_x86_64_terminal_termios_adopt(native_fd, image)) adopted = 1;
     return adopted;
+}
+
+HL_API uint64_t hl_c_backend_terminal_termios_flush_generation(int32_t native_fd) {
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    return hl_x86_64_terminal_termios_flush_generation(native_fd);
+#else
+    return hl_aarch64_terminal_termios_flush_generation(native_fd) +
+           hl_x86_64_terminal_termios_flush_generation(native_fd);
+#endif
+}
+
+HL_API int32_t hl_c_backend_terminal_termios_flush_register(int32_t native_fd) {
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (!hl_aarch64_terminal_termios_flush_register(native_fd)) return 0;
+    if (!hl_x86_64_terminal_termios_flush_register(native_fd)) {
+        hl_aarch64_terminal_termios_flush_unregister(native_fd);
+        return 0;
+    }
+    return 1;
+#else
+    return hl_x86_64_terminal_termios_flush_register(native_fd) ? 1 : 0;
+#endif
+}
+
+HL_API void hl_c_backend_terminal_termios_flush_unregister(int32_t native_fd) {
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    hl_aarch64_terminal_termios_flush_unregister(native_fd);
+#endif
+    hl_x86_64_terminal_termios_flush_unregister(native_fd);
+}
+
+HL_API uint64_t hl_c_backend_terminal_termios_flush_mark_test(int32_t native_fd, uint64_t request) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (request >= UINT64_MAX - 2) return hl_x86_64_terminal_termios_flush_mark_test(native_fd, request);
+#endif
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    (void)hl_aarch64_terminal_termios_flush_mark_test(native_fd, request);
+#endif
+    return hl_x86_64_terminal_termios_flush_mark_test(native_fd, request);
 }
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {

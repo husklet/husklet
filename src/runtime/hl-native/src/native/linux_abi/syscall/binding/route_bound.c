@@ -602,7 +602,8 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                     result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
                 }
 #endif
-                if (result == 0) terminal_termios_observe_set(native_fd, argument);
+                if (result == 0)
+                    terminal_termios_observe_set(native_fd, argument, terminal_termios_flush_request(request));
             } else if (request >= 0x5402u && request <= 0x5404u) { /* TCSETS{,W,F} */
 
                 struct termios native;
@@ -615,7 +616,8 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
 #endif
                     int action = request == 0x5402u ? TCSANOW : request == 0x5403u ? TCSADRAIN : TCSAFLUSH;
                     result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
-                    if (result == 0) terminal_termios_observe_set(native_fd, argument);
+                    if (result == 0)
+                        terminal_termios_observe_set(native_fd, argument, terminal_termios_flush_request(request));
                 }
             } else if (request == 0x5413u || request == 0x5414u) { /* TIOCGWINSZ/TIOCSWINSZ */
                 result = ioctl(native_fd, request == 0x5413u ? TIOCGWINSZ : TIOCSWINSZ, argument) == 0 ? 0 : -errno;

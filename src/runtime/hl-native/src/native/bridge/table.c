@@ -29,6 +29,10 @@ static const hl_c_bridge_api HL_C_BRIDGE_API = {
     .terminal_termios = hl_c_backend_terminal_termios,
     .terminal_termios_capture = hl_c_backend_terminal_termios_capture,
     .terminal_termios_adopt = hl_c_backend_terminal_termios_adopt,
+    .terminal_termios_flush_generation = hl_c_backend_terminal_termios_flush_generation,
+    .terminal_termios_flush_register = hl_c_backend_terminal_termios_flush_register,
+    .terminal_termios_flush_unregister = hl_c_backend_terminal_termios_flush_unregister,
+    .terminal_termios_flush_mark_test = hl_c_backend_terminal_termios_flush_mark_test,
 };
 
 const hl_c_bridge_api *hl_c_bridge_api_v1(void) {

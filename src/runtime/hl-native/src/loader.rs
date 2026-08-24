@@ -82,6 +82,8 @@ pub(crate) type ProcessIdentitySignal = unsafe extern "C" fn(c_int, u64, c_int) 
 pub(crate) type TerminalTermiosGeneration = unsafe extern "C" fn() -> u64;
 pub(crate) type TerminalTermios = unsafe extern "C" fn(c_int, *mut u8) -> c_int;
 pub(crate) type TerminalTermiosAdopt = unsafe extern "C" fn(c_int, *const u8) -> c_int;
+pub(crate) type TerminalTermiosFlushGeneration = unsafe extern "C" fn(c_int) -> u64;
+pub(crate) type TerminalTermiosFlushMarkTest = unsafe extern "C" fn(c_int, u64) -> u64;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -113,6 +115,10 @@ pub(crate) struct BridgeApi {
     pub(crate) terminal_termios: Option<TerminalTermios>,
     pub(crate) terminal_termios_capture: Option<TerminalTermios>,
     pub(crate) terminal_termios_adopt: Option<TerminalTermiosAdopt>,
+    pub(crate) terminal_termios_flush_generation: Option<TerminalTermiosFlushGeneration>,
+    pub(crate) terminal_termios_flush_register: Option<unsafe extern "C" fn(c_int) -> c_int>,
+    pub(crate) terminal_termios_flush_unregister: Option<unsafe extern "C" fn(c_int)>,
+    pub(crate) terminal_termios_flush_mark_test: Option<TerminalTermiosFlushMarkTest>,
 }
 
 #[derive(Clone, Copy)]

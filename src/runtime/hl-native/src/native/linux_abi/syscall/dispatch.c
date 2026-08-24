@@ -660,7 +660,8 @@ static int bound_exec_descriptor(int descriptor);
  * is used by fs/control.c as well, which is included first. Declaring the two entry points rather than
  * moving the definition keeps binding.c's include order -- and therefore every system header it pulls in
  * -- exactly where it was. */
-static void terminal_termios_observe_set(int native_fd, const uint8_t *image);
+static void terminal_termios_observe_set(int native_fd, const uint8_t *image, int flush_input);
+static int terminal_termios_flush_request(unsigned long request);
 static void terminal_termios_apply_recall(int native_fd, uint8_t *argument);
 #include "fs.c"
 static void bound_mapping_reset(void);

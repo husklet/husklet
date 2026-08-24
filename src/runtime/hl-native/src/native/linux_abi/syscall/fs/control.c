@@ -37,7 +37,7 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         } // master always accepts
         else {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
-            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg);
+            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg, terminal_termios_flush_request(rq));
         }
         break;
     }
@@ -78,7 +78,7 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
             G_RET(c) = 0;
         } else {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
-            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg);
+            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg, terminal_termios_flush_request(rq));
         }
         break;
     }

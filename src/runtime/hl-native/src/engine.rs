@@ -482,7 +482,7 @@ mod tests {
         ffi::CString,
         fs::{File, OpenOptions},
         io::{Read as _, Seek, SeekFrom, Write},
-        os::{fd::AsRawFd, unix::fs::PermissionsExt as _},
+        os::{fd::{AsRawFd, FromRawFd, OwnedFd}, unix::fs::PermissionsExt as _},
     };
 
     #[cfg(feature = "native-test-hooks")]
@@ -669,7 +669,7 @@ mod tests {
 
         // SAFETY: releasing and reaping the exact child forked above.
         unsafe {
-            let byte = [1_u8];
+            let mut byte = [1_u8];
             libc::write(release[1], byte.as_ptr().cast(), 1);
             let mut status = 0;
             libc::waitpid(child, &raw mut status, 0);
@@ -853,6 +853,236 @@ mod tests {
         // `b .`: a valid AArch64 process that remains live until force-stop.
         bytes[0x100..0x104].copy_from_slice(&0x1400_0000_u32.to_le_bytes());
         bytes
+    }
+
+    fn x86_tcsetsf_image(termios: &[u8; 36]) -> Vec<u8> {
+        let mut bytes = image();
+        put16(&mut bytes, 18, 0x3e);
+        // ioctl(0, TCSETSF, 0x400200), then exit_group(ioctl_result).
+        bytes[0x100..0x11d].copy_from_slice(&[
+            0xb8, 0x10, 0, 0, 0, 0x31, 0xff, 0xbe, 0x04, 0x54, 0, 0, 0xba, 0, 0x02, 0x40, 0, 0x0f,
+            0x05, 0x89, 0xc7, 0xb8, 0x3c, 0, 0, 0, 0x0f, 0x05,
+        ]);
+        bytes[0x200..0x224].copy_from_slice(termios);
+        bytes
+    }
+
+    fn aarch64_tcsetsf_image(termios: &[u8; 36]) -> Vec<u8> {
+        let mut bytes = image();
+        // ioctl(0, TCSETSF, 0x400200), then exit_group(ioctl_result). The ADR is relative to
+        // 0x400108 and names the image at 0x400200.
+        for (offset, instruction) in [
+            0xd280_0000_u32, // mov x0, #0
+            0xd28a_8081,     // mov x1, #0x5404
+            0x1000_07c2,     // adr x2, +0xf8
+            0xd280_03a8,     // mov x8, #29 (ioctl)
+            0xd400_0001,     // svc #0
+            0xd280_0bc8,     // mov x8, #94 (exit_group)
+            0xd400_0001,     // svc #0
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            bytes[0x100 + offset * 4..0x104 + offset * 4].copy_from_slice(&instruction.to_le_bytes());
+        }
+        bytes[0x200..0x224].copy_from_slice(termios);
+        bytes
+    }
+
+    fn flush_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn guest_tcsetsf_publishes_flush_across_the_launch_fork_on_both_isas() {
+        let _serial = flush_test_lock();
+        let mut master = -1;
+        let mut slave = -1;
+        // SAFETY: both descriptor outputs are writable; no name, termios override or size is requested.
+        assert_eq!(unsafe {
+            libc::openpty(
+                &raw mut master,
+                &raw mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        }, 0);
+        // SAFETY: successful openpty transferred two uniquely owned descriptors.
+        let (_master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+        let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: the slave is live and the output points at writable storage.
+        assert_eq!(unsafe { libc::tcgetattr(slave.as_raw_fd(), attributes.as_mut_ptr()) }, 0);
+        // SAFETY: successful tcgetattr initialized the structure; Linux's guest image is its first 36 bytes.
+        let attributes = unsafe { attributes.assume_init() };
+        let mut image = [0_u8; 36];
+        // SAFETY: both objects are live and non-overlapping for exactly the guest image width.
+        unsafe { std::ptr::copy_nonoverlapping((&raw const attributes).cast::<u8>(), image.as_mut_ptr(), image.len()) };
+
+        for (isa, guest) in [(1, aarch64_tcsetsf_image(&image)), (2, x86_tcsetsf_image(&image))] {
+            crate::terminal_termios_flush_register(slave.as_raw_fd()).expect("register terminal before launch fork");
+            let before = crate::terminal_termios_flush_generation(slave.as_raw_fd());
+            let mut executable = tempfile::tempfile().unwrap();
+            executable.write_all(&guest).unwrap();
+            executable.seek(SeekFrom::Start(0)).unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: None,
+                executable_host: None,
+                executable_fd: executable.as_raw_fd(),
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [slave.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: all borrowed descriptors remain live through creation and run.
+            let engine = unsafe { Engine::create(config) }.unwrap();
+            let argument = CString::new("guest").unwrap();
+            assert_eq!(engine.run(&[argument.as_ptr()]), Ok(()));
+            assert_eq!(engine.exit().status, 0, "ISA {isa} guest TCSETSF syscall failed");
+            assert!(
+                crate::terminal_termios_flush_generation(slave.as_raw_fd()) > before,
+                "ISA {isa} guest ioctl returned without publishing flush provenance"
+            );
+            crate::terminal_termios_flush_unregister(slave.as_raw_fd());
+        }
+    }
+
+    #[test]
+    fn flush_provenance_survives_capacity_and_concurrent_fork_publishers() {
+        let _serial = flush_test_lock();
+        let mut terminals = Vec::new();
+        for _ in 0..(64 + 8) {
+            let mut master = -1;
+            let mut slave = -1;
+            // SAFETY: writable descriptor outputs are supplied and checked.
+            assert_eq!(unsafe {
+                libc::openpty(
+                    &raw mut master,
+                    &raw mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            }, 0);
+            // SAFETY: successful openpty returned uniquely owned descriptors.
+            terminals.push(unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) });
+        }
+        for (_, slave) in terminals.iter().take(64) {
+            crate::terminal_termios_flush_register(slave.as_raw_fd()).expect("one stable active-terminal slot");
+        }
+        assert!(
+            crate::terminal_termios_flush_register(terminals[64].1.as_raw_fd()).is_none(),
+            "capacity exhaustion silently evicted an active terminal"
+        );
+        let first_before = crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd());
+        let other_before = crate::terminal_termios_flush_generation(terminals[1].1.as_raw_fd());
+        for _ in 0..65 {
+            let _ = crate::terminal_termios_flush_mark_test(terminals[0].1.as_raw_fd(), 0x5404);
+        }
+        assert_eq!(
+            crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd()),
+            first_before + 65
+        );
+        assert_eq!(
+            crate::terminal_termios_flush_generation(terminals[1].1.as_raw_fd()),
+            other_before,
+            "another terminal inherited the repeated flushes"
+        );
+        let mut children = Vec::new();
+        for _ in 0..8 {
+            let slave = &terminals[0].1;
+            // SAFETY: the child calls one allocation-free native publisher and exits without unwinding.
+            let child = unsafe { libc::fork() };
+            assert!(child >= 0);
+            if child == 0 {
+                let _ = crate::terminal_termios_flush_mark_test(slave.as_raw_fd(), 0x5404);
+                // SAFETY: leave the post-fork child without touching inherited Rust state.
+                unsafe { libc::_exit(0) };
+            }
+            children.push(child);
+        }
+        for child in children {
+            let mut status = 0;
+            // SAFETY: every PID is an unreaped child created above.
+            assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
+            assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
+        }
+        assert_eq!(
+            crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd()),
+            first_before + 65 + 8,
+            "concurrent fork publishers lost an atomic increment"
+        );
+
+        let mut ready = [0; 2];
+        let mut release = [0; 2];
+        // SAFETY: both arrays provide writable storage for fresh pipe descriptors.
+        assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+        // SAFETY: the child performs only async-signal-safe descriptor operations and the native publisher.
+        let stale = unsafe { libc::fork() };
+        assert!(stale >= 0);
+        if stale == 0 {
+            let byte = [1_u8];
+            // SAFETY: inherited pipe ends remain live in this child.
+            unsafe {
+                libc::write(ready[1], byte.as_ptr().cast(), 1);
+                libc::read(release[0], byte.as_mut_ptr().cast(), 1);
+            }
+            let _ = crate::terminal_termios_flush_mark_test(terminals[0].1.as_raw_fd(), 0x5404);
+            // SAFETY: leave the post-fork child without touching inherited Rust state.
+            unsafe { libc::_exit(0) };
+        }
+        let mut byte = [0_u8];
+        // SAFETY: inherited pipe ends remain live in this parent.
+        assert_eq!(unsafe { libc::read(ready[0], byte.as_mut_ptr().cast(), 1) }, 1);
+        crate::terminal_termios_flush_unregister(terminals[0].1.as_raw_fd());
+        crate::terminal_termios_flush_register(terminals[0].1.as_raw_fd()).expect("reuse released slot with a new epoch");
+        let replacement = crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd());
+        // SAFETY: releasing the child requires one byte on its inherited pipe.
+        assert_eq!(unsafe { libc::write(release[1], byte.as_ptr().cast(), 1) }, 1);
+        let mut status = 0;
+        // SAFETY: `stale` is an unreaped child created above.
+        assert_eq!(unsafe { libc::waitpid(stale, &raw mut status, 0) }, stale);
+        assert_eq!(
+            crate::terminal_termios_flush_generation(terminals[0].1.as_raw_fd()),
+            replacement,
+            "a pre-unregister child published into a reused slot"
+        );
+
+        #[cfg(feature = "native-test-hooks")]
+        {
+            let descriptor = terminals[0].1.as_raw_fd();
+            assert_eq!(crate::terminal_termios_flush_mark_test(descriptor, u64::MAX), 1);
+            let publisher = std::thread::spawn(move || {
+                let _ = crate::terminal_termios_flush_mark_test(descriptor, 0x5404);
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while crate::terminal_termios_flush_mark_test(descriptor, u64::MAX - 1) != 2 {
+                assert!(std::time::Instant::now() < deadline, "publisher never reached the pre-CAS barrier");
+                std::thread::yield_now();
+            }
+            crate::terminal_termios_flush_unregister(descriptor);
+            crate::terminal_termios_flush_register(descriptor).expect("reuse the slot while a stale CAS is paused");
+            let replacement = crate::terminal_termios_flush_generation(descriptor);
+            assert_eq!(crate::terminal_termios_flush_mark_test(descriptor, u64::MAX - 2), 3);
+            publisher.join().unwrap();
+            assert_eq!(
+                crate::terminal_termios_flush_generation(descriptor),
+                replacement,
+                "a publisher that loaded the old tag incremented the replacement counter"
+            );
+        }
+        for descriptor in ready.into_iter().chain(release) {
+            // SAFETY: each descriptor was created by pipe and is no longer needed.
+            unsafe { libc::close(descriptor) };
+        }
+        for (_, slave) in terminals.iter().take(64) {
+            crate::terminal_termios_flush_unregister(slave.as_raw_fd());
+        }
     }
 
     fn dynamic_image(interpreter: &[u8], isa: u32) -> Vec<u8> {

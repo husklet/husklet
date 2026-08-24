@@ -235,6 +235,37 @@ pub(super) fn hl_c_backend_terminal_termios_generation() -> u64 {
         .map_or(0, |function| unsafe { function() })
 }
 
+pub(super) fn hl_c_backend_terminal_termios_flush_generation(native_fd: c_int) -> u64 {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_flush_generation)
+        // SAFETY: the descriptor is borrowed and C only reads its terminal identity.
+        .map_or(0, |function| unsafe { function(native_fd) })
+}
+
+pub(super) fn hl_c_backend_terminal_termios_flush_register(native_fd: c_int) -> bool {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_flush_register)
+        // SAFETY: the descriptor is borrowed; C retains only its stable terminal identity.
+        .is_some_and(|function| unsafe { function(native_fd) == 1 })
+}
+
+pub(super) fn hl_c_backend_terminal_termios_flush_unregister(native_fd: c_int) {
+    if let Some(function) = crate::loader::api().ok().and_then(|api| api.terminal_termios_flush_unregister) {
+        // SAFETY: the descriptor remains live through this synchronous unregister.
+        unsafe { function(native_fd) };
+    }
+}
+
+pub(super) fn hl_c_backend_terminal_termios_flush_mark_test(native_fd: c_int, request: u64) -> u64 {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_flush_mark_test)
+        // SAFETY: the descriptor is borrowed and the test hook only publishes its terminal identity.
+        .map_or(0, |function| unsafe { function(native_fd, request) })
+}
+
 pub(super) fn hl_c_backend_terminal_termios(native_fd: c_int, out: &mut [u8; 36]) -> bool {
     crate::loader::api()
         .ok()

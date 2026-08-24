@@ -54,6 +54,8 @@ struct GuestDiscipline {
     /// The termios generation `state` was last synchronised at. One relaxed load per input batch
     /// decides whether the engine's store has to be read again.
     generation: AtomicU64,
+    /// Last input-flush event consumed from the fork-shared native ledger.
+    flush_generation: AtomicU64,
     /// What this pump last adopted, and the host projection it imposed in order to run it.
     ///
     /// The engine's termios store is a plain static, and the guest runs in a **fork child** of this
@@ -96,16 +98,19 @@ impl GuestDiscipline {
         // Re-pair that cooked image with the raw projection the host now holds, so the guest's own
         // TCGETS keeps answering with a cooked terminal instead of the raw mode imposed here.
         hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image).ok_or_else(missing)?;
+        hl_native::terminal_termios_flush_register(slave.as_raw_fd()).ok_or_else(missing)?;
         let adopted = Mutex::new(AdoptedTerminal {
             image,
             projection: host_projection(&slave),
         });
+        let flush_generation = hl_native::terminal_termios_flush_generation(slave.as_raw_fd());
         Ok(Arc::new(Self {
             slave,
             master,
             original,
             state: Mutex::new(LineDiscipline::new(Termios::from_image(&image))),
             generation: AtomicU64::new(hl_native::terminal_termios_generation()),
+            flush_generation: AtomicU64::new(flush_generation),
             adopted,
             output_stopped: AtomicBool::new(false),
         }))
@@ -152,6 +157,12 @@ impl GuestDiscipline {
     /// every host.
     fn synchronise(&self, effect: &mut line_discipline::Effect) {
         let generation = hl_native::terminal_termios_generation();
+        let flush_generation = hl_native::terminal_termios_flush_generation(self.slave.as_raw_fd());
+        let previous_flush = self.flush_generation.load(Ordering::Relaxed);
+        let flush_input = flush_generation > previous_flush;
+        if flush_generation > previous_flush {
+            self.flush_generation.store(flush_generation, Ordering::Relaxed);
+        }
         let mut host = [0_u8; 36];
         let read_host = hl_native::terminal_termios_capture(self.slave.as_raw_fd(), &mut host).is_some();
         let mut store = [0_u8; 36];
@@ -173,6 +184,11 @@ impl GuestDiscipline {
         };
         let Some(image) = image else {
             self.generation.store(generation, Ordering::Relaxed);
+            if flush_input {
+                let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let termios = state.termios();
+                state.set_termios(termios, true, effect);
+            }
             return;
         };
         // The guest's own TCSETS reached the host slave and undid the raw mode. Re-assert it before
@@ -193,7 +209,7 @@ impl GuestDiscipline {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .set_termios(Termios::from_image(&image), effect);
+            .set_termios(Termios::from_image(&image), flush_input, effect);
     }
 
     /// Puts the host termios back the way the pty was opened.
@@ -309,6 +325,15 @@ impl GuestDiscipline {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .end_of_file_character()
+    }
+}
+
+impl Drop for GuestDiscipline {
+    fn drop(&mut self) {
+        // Registration is acquired before the bridge attaches or starts either pump. Keeping its
+        // release in Drop makes every construction failure unwind it too; the Arc held by each pump
+        // also ensures it cannot be released while a pump can still consume its generation.
+        hl_native::terminal_termios_flush_unregister(self.slave.as_raw_fd());
     }
 }
 
@@ -863,6 +888,87 @@ mod tests {
         assert_eq!(seen.len(), 4096);
         assert_eq!(seen[4095], b'\n');
         assert!(seen[..4095].iter().all(|byte| *byte == b'b'));
+    }
+
+    #[test]
+    fn tcsetsf_discards_the_partial_line_owned_by_the_guest_discipline() {
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        let slave_fd = bridge.standard_fds()[0];
+        // SAFETY: dup returns a fresh descriptor and the result is checked.
+        let copy = unsafe { libc::dup(slave_fd) };
+        assert!(copy >= 0);
+        // SAFETY: the descriptor is live and F_SETFL only updates its status flags.
+        unsafe { libc::fcntl(copy, libc::F_SETFL, libc::O_NONBLOCK) };
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut slave = unsafe { std::fs::File::from_raw_fd(copy) };
+
+        {
+            let mut state = port.state.lock().unwrap();
+            state.0.extend(b"old");
+            port.changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.1.ends_with(b"old") && Instant::now() < deadline {
+                state = port.changed.wait_timeout(state, Duration::from_millis(20)).unwrap().0;
+            }
+            assert!(
+                state.1.ends_with(b"old"),
+                "the partial line never entered the real input pump"
+            );
+        }
+
+        let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: the slave is live and the output points at writable storage.
+        assert_eq!(unsafe { libc::tcgetattr(slave_fd, attributes.as_mut_ptr()) }, 0);
+        // SAFETY: successful tcgetattr initialized the structure.
+        let attributes = unsafe { attributes.assume_init() };
+        // SAFETY: the live slave and initialized attributes are borrowed for this synchronous call.
+        assert_eq!(
+            unsafe { libc::tcsetattr(slave_fd, libc::TCSAFLUSH, &raw const attributes) },
+            0
+        );
+        let _ = hl_native::terminal_termios_flush_mark_test(slave_fd, 0x5404);
+        {
+            let mut state = port.state.lock().unwrap();
+            state.0.extend(b"new\n");
+            port.changed.notify_all();
+        }
+        assert_eq!(read_exactly(&mut slave, 4), b"new\n");
+
+        {
+            let mut state = port.state.lock().unwrap();
+            state.0.extend(b"kept");
+            port.changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.1.ends_with(b"kept") && Instant::now() < deadline {
+                state = port.changed.wait_timeout(state, Duration::from_millis(20)).unwrap().0;
+            }
+            assert!(state.1.ends_with(b"kept"));
+        }
+        let _ = hl_native::terminal_termios_flush_mark_test(slave_fd, 0x5402);
+        let _ = hl_native::terminal_termios_flush_mark_test(slave_fd, 0x5403);
+        {
+            let mut state = port.state.lock().unwrap();
+            state.0.extend(b"line\n");
+            port.changed.notify_all();
+        }
+        assert_eq!(read_exactly(&mut slave, 9), b"keptline\n");
+    }
+
+    #[test]
+    fn failed_bridge_attachment_releases_its_flush_registration() {
+        let occupied_port = Arc::new(Port::default());
+        let occupied = Terminal::new(occupied_port, 24, 80).unwrap();
+        let _owner = NativeTerminalBridge::attach(occupied.clone(), InputDiscipline::Host).unwrap();
+        for _ in 0..65 {
+            assert!(NativeTerminalBridge::attach(occupied.clone(), InputDiscipline::Linux).is_err());
+        }
+
+        let fresh_port = Arc::new(Port::default());
+        let fresh = Terminal::new(fresh_port, 24, 80).unwrap();
+        let _bridge = NativeTerminalBridge::attach(fresh, InputDiscipline::Linux)
+            .expect("failed attachments leaked every flush registration");
     }
 
     /// Keystroke-to-echo latency through the whole input pump, reported as percentiles.

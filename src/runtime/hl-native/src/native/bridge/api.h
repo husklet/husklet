@@ -47,6 +47,10 @@ typedef struct hl_c_bridge_api {
     int32_t (*terminal_termios)(int32_t native_fd, uint8_t *out);
     int32_t (*terminal_termios_capture)(int32_t native_fd, uint8_t *out);
     int32_t (*terminal_termios_adopt)(int32_t native_fd, const uint8_t *image);
+    uint64_t (*terminal_termios_flush_generation)(int32_t native_fd);
+    int32_t (*terminal_termios_flush_register)(int32_t native_fd);
+    void (*terminal_termios_flush_unregister)(int32_t native_fd);
+    uint64_t (*terminal_termios_flush_mark_test)(int32_t native_fd, uint64_t request);
 } hl_c_bridge_api;
 
 HL_EXTERN_C_BEGIN
@@ -123,6 +127,10 @@ HL_API uint64_t hl_c_backend_terminal_termios_generation(void);
 HL_API int32_t hl_c_backend_terminal_termios(int32_t native_fd, uint8_t *out);
 HL_API int32_t hl_c_backend_terminal_termios_capture(int32_t native_fd, uint8_t *out);
 HL_API int32_t hl_c_backend_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+HL_API uint64_t hl_c_backend_terminal_termios_flush_generation(int32_t native_fd);
+HL_API int32_t hl_c_backend_terminal_termios_flush_register(int32_t native_fd);
+HL_API void hl_c_backend_terminal_termios_flush_unregister(int32_t native_fd);
+HL_API uint64_t hl_c_backend_terminal_termios_flush_mark_test(int32_t native_fd, uint64_t request);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 /* The content fingerprint of the C sources this artifact was compiled from. The Rust loader
  * compares it against the value Cargo baked into the calling crate and refuses a shared object

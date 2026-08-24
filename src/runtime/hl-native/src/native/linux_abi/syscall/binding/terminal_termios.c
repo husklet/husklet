@@ -25,8 +25,13 @@
  */
 
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#endif
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define TERMINAL_TERMIOS_IMAGE 36
 #define TERMINAL_TERMIOS_CAPACITY 16
@@ -39,6 +44,102 @@ typedef struct {
     uint8_t image[TERMINAL_TERMIOS_IMAGE];
     uint8_t mirror[TERMINAL_TERMIOS_IMAGE];
 } terminal_termios_entry;
+
+#define TERMINAL_FLUSH_CAPACITY 64
+/* TCSETSF's queue flush has no persistent representation in struct termios. Keep its generation in
+ * anonymous shared memory allocated before the launch fork, so the parent terminal pump can consume
+ * the action performed by the guest child. Registered slots are stable until the owning pump has
+ * stopped and unregisters; capacity exhaustion refuses a new Linux discipline instead of evicting
+ * an active terminal or conservatively discarding another terminal's input. */
+typedef struct {
+    /* Registration tag (high 32 bits) and flush counter (low 32 bits) move as one CAS word. */
+    _Atomic uint64_t state;
+    _Atomic uint64_t device;
+    _Atomic uint64_t inode;
+} terminal_flush_event;
+typedef struct {
+    terminal_flush_event events[TERMINAL_FLUSH_CAPACITY];
+} terminal_flush_ledger;
+typedef struct {
+    _Atomic uint64_t epoch;
+    _Atomic uint32_t slot;
+    _Atomic uint64_t device;
+    _Atomic uint64_t inode;
+} terminal_flush_registration;
+static terminal_flush_ledger *g_terminal_flushes;
+#if defined(_WIN32)
+static terminal_flush_ledger g_terminal_flush_storage;
+#endif
+static pthread_once_t g_terminal_flush_once = PTHREAD_ONCE_INIT;
+/* This index is deliberately process-private. A launch child inherits the exact registration epoch
+ * that existed at fork; later unregister/reuse in the parent is COW-isolated from it. Comparing that
+ * inherited epoch with the shared slot prevents a stale child from publishing into a recycled slot. */
+static terminal_flush_registration g_terminal_flush_registrations[TERMINAL_FLUSH_CAPACITY];
+static pthread_mutex_t g_terminal_flush_registration_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t g_terminal_flush_epoch = 1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic uint32_t g_terminal_flush_publish_barrier;
+#endif
+static int terminal_termios_identity(int native_fd, dev_t *device, ino_t *inode);
+
+static void terminal_flush_create(void) {
+#if defined(_WIN32)
+    g_terminal_flushes = &g_terminal_flush_storage;
+#else
+    void *memory = mmap(NULL, sizeof(terminal_flush_ledger), PROT_READ | PROT_WRITE,
+#if defined(__APPLE__)
+                        MAP_SHARED | MAP_ANON,
+#else
+                        MAP_SHARED | MAP_ANONYMOUS,
+#endif
+                        -1, 0);
+    if (memory != MAP_FAILED) g_terminal_flushes = memory;
+#endif
+}
+
+static terminal_flush_ledger *terminal_flushes(void) {
+    (void)pthread_once(&g_terminal_flush_once, terminal_flush_create);
+    return g_terminal_flushes;
+}
+
+static void terminal_flush_publish(int native_fd) {
+    dev_t device;
+    ino_t inode;
+    terminal_flush_ledger *ledger = terminal_flushes();
+    if (ledger == NULL || !terminal_termios_identity(native_fd, &device, &inode)) return;
+    for (int index = 0; index < TERMINAL_FLUSH_CAPACITY; ++index) {
+        terminal_flush_registration *registration = &g_terminal_flush_registrations[index];
+        uint64_t epoch = atomic_load_explicit(&registration->epoch, memory_order_acquire);
+        if (epoch == 0 || atomic_load_explicit(&registration->device, memory_order_relaxed) != (uint64_t)device ||
+            atomic_load_explicit(&registration->inode, memory_order_relaxed) != (uint64_t)inode)
+            continue;
+        terminal_flush_event *event = &ledger->events[atomic_load_explicit(&registration->slot, memory_order_relaxed)];
+        uint64_t state = atomic_load_explicit(&event->state, memory_order_acquire);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        uint32_t armed = 1;
+        if (atomic_compare_exchange_strong_explicit(&g_terminal_flush_publish_barrier, &armed, 2, memory_order_acq_rel,
+                                                    memory_order_acquire)) {
+            while (atomic_load_explicit(&g_terminal_flush_publish_barrier, memory_order_acquire) != 3) sched_yield();
+            atomic_store_explicit(&g_terminal_flush_publish_barrier, 0, memory_order_release);
+        }
+#endif
+        for (;;) {
+            if ((state >> 32) != epoch) return;
+            if ((uint32_t)state == UINT32_MAX) {
+                static const char exhausted[] = "[terminal] refuse: TCSETSF flush counter exhausted\n";
+                (void)write(STDERR_FILENO, exhausted, sizeof(exhausted) - 1);
+                return;
+            }
+            if (atomic_compare_exchange_weak_explicit(&event->state, &state, state + 1, memory_order_release,
+                                                      memory_order_acquire))
+                return;
+        }
+    }
+}
+
+static int terminal_termios_flush_request(unsigned long request) {
+    return request == 0x5404u || request == 0x402c542du;
+}
 
 static terminal_termios_entry g_terminal_termios[TERMINAL_TERMIOS_CAPACITY];
 static pthread_mutex_t g_terminal_termios_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -136,10 +237,119 @@ static int terminal_termios_host_image(int native_fd, uint8_t *out) {
 
 /* Record the outcome of a guest TCSETS: re-read what the host actually kept and
  * pair it with the image the guest asked for. */
-static void terminal_termios_observe_set(int native_fd, const uint8_t *image) {
+static void terminal_termios_observe_set(int native_fd, const uint8_t *image, int flush_input) {
     uint8_t host_image[TERMINAL_TERMIOS_IMAGE];
     if (terminal_termios_host_image(native_fd, host_image) == 0)
         terminal_termios_remember(native_fd, image, host_image);
+    if (flush_input) terminal_flush_publish(native_fd);
+}
+
+HL_API uint64_t HL_TARGET_LOCAL(terminal_termios_flush_generation)(int32_t native_fd) {
+    dev_t device;
+    ino_t inode;
+    if (!terminal_termios_identity((int)native_fd, &device, &inode)) return 0;
+    terminal_flush_ledger *ledger = terminal_flushes();
+    if (ledger == NULL) return 0;
+    uint64_t generation = 0;
+    pthread_mutex_lock(&g_terminal_flush_registration_lock);
+    for (int index = 0; index < TERMINAL_FLUSH_CAPACITY; ++index) {
+        terminal_flush_registration *registration = &g_terminal_flush_registrations[index];
+        uint64_t epoch = atomic_load_explicit(&registration->epoch, memory_order_acquire);
+        if (epoch == 0 || atomic_load_explicit(&registration->device, memory_order_relaxed) != (uint64_t)device ||
+            atomic_load_explicit(&registration->inode, memory_order_relaxed) != (uint64_t)inode)
+            continue;
+        terminal_flush_event *event = &ledger->events[atomic_load_explicit(&registration->slot, memory_order_relaxed)];
+        uint64_t state = atomic_load_explicit(&event->state, memory_order_acquire);
+        if ((state >> 32) == epoch) generation = (uint32_t)state;
+        break;
+    }
+    pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+    return generation;
+}
+
+HL_API int HL_TARGET_LOCAL(terminal_termios_flush_register)(int32_t native_fd) {
+    dev_t device;
+    ino_t inode;
+    if (!terminal_termios_identity((int)native_fd, &device, &inode)) return 0;
+    terminal_flush_ledger *ledger = terminal_flushes();
+    if (ledger == NULL) return 0;
+    pthread_mutex_lock(&g_terminal_flush_registration_lock);
+    terminal_flush_registration *registration = NULL;
+    for (int index = 0; index < TERMINAL_FLUSH_CAPACITY; ++index) {
+        terminal_flush_registration *candidate = &g_terminal_flush_registrations[index];
+        uint64_t candidate_epoch = atomic_load_explicit(&candidate->epoch, memory_order_acquire);
+        if (candidate_epoch != 0 && atomic_load_explicit(&candidate->device, memory_order_relaxed) == (uint64_t)device &&
+            atomic_load_explicit(&candidate->inode, memory_order_relaxed) == (uint64_t)inode) {
+            pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+            return 1;
+        }
+        if (candidate_epoch == 0 && registration == NULL) registration = candidate;
+    }
+    if (registration == NULL) {
+        pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+        return 0;
+    }
+    for (int index = 0; index < TERMINAL_FLUSH_CAPACITY; ++index) {
+        terminal_flush_event *event = &ledger->events[index];
+        if (atomic_load_explicit(&event->state, memory_order_acquire) != 0) continue;
+        if (g_terminal_flush_epoch == UINT32_MAX) {
+            pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+            return 0;
+        }
+        uint32_t epoch = ++g_terminal_flush_epoch;
+        atomic_store_explicit(&event->device, (uint64_t)device, memory_order_relaxed);
+        atomic_store_explicit(&event->inode, (uint64_t)inode, memory_order_relaxed);
+        atomic_store_explicit(&registration->slot, (uint32_t)index, memory_order_relaxed);
+        atomic_store_explicit(&registration->device, (uint64_t)device, memory_order_relaxed);
+        atomic_store_explicit(&registration->inode, (uint64_t)inode, memory_order_relaxed);
+        atomic_store_explicit(&event->state, (uint64_t)epoch << 32, memory_order_release);
+        atomic_store_explicit(&registration->epoch, epoch, memory_order_release);
+        pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+        return 1;
+    }
+    pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+    return 0;
+}
+
+HL_API void HL_TARGET_LOCAL(terminal_termios_flush_unregister)(int32_t native_fd) {
+    dev_t device;
+    ino_t inode;
+    if (!terminal_termios_identity((int)native_fd, &device, &inode)) return;
+    terminal_flush_ledger *ledger = terminal_flushes();
+    if (ledger == NULL) return;
+    pthread_mutex_lock(&g_terminal_flush_registration_lock);
+    for (int index = 0; index < TERMINAL_FLUSH_CAPACITY; ++index) {
+        terminal_flush_registration *registration = &g_terminal_flush_registrations[index];
+        uint64_t epoch = atomic_load_explicit(&registration->epoch, memory_order_acquire);
+        if (epoch == 0 || atomic_load_explicit(&registration->device, memory_order_relaxed) != (uint64_t)device ||
+            atomic_load_explicit(&registration->inode, memory_order_relaxed) != (uint64_t)inode)
+            continue;
+        terminal_flush_event *event = &ledger->events[atomic_load_explicit(&registration->slot, memory_order_relaxed)];
+        uint64_t state = atomic_load_explicit(&event->state, memory_order_acquire);
+        while ((state >> 32) == epoch && !atomic_compare_exchange_weak_explicit(
+                                                  &event->state, &state, 0, memory_order_acq_rel, memory_order_acquire)) {
+        }
+        atomic_store_explicit(&registration->epoch, 0, memory_order_release);
+        pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+        return;
+    }
+    pthread_mutex_unlock(&g_terminal_flush_registration_lock);
+}
+
+HL_API uint64_t HL_TARGET_LOCAL(terminal_termios_flush_mark_test)(int32_t native_fd, uint64_t request) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (request == UINT64_MAX) {
+        atomic_store_explicit(&g_terminal_flush_publish_barrier, 1, memory_order_release);
+        return 1;
+    }
+    if (request == UINT64_MAX - 1) return atomic_load_explicit(&g_terminal_flush_publish_barrier, memory_order_acquire);
+    if (request == UINT64_MAX - 2) {
+        atomic_store_explicit(&g_terminal_flush_publish_barrier, 3, memory_order_release);
+        return 3;
+    }
+#endif
+    if (terminal_termios_flush_request((unsigned long)request)) terminal_flush_publish((int)native_fd);
+    return 0;
 }
 
 /* Overwrite `argument`'s first 36 bytes with the guest-authored image when one
