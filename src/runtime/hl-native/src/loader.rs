@@ -214,6 +214,8 @@ pub(crate) struct TestApi {
     pub(crate) directory_stream_private: UnaryStatus,
     pub(crate) identity_registry: BinaryStatus,
     pub(crate) private_fork_lock: UnaryStatus,
+    #[cfg(target_os = "linux")]
+    pub(crate) linux_process_wait: UnaryStatus,
     pub(crate) aarch64_checkpoint_channel_notify: ScenarioTest,
     pub(crate) x86_64_checkpoint_channel_notify: ScenarioTest,
     pub(crate) aarch64_checkpoint_refusal_order: NoArgumentTest,
@@ -605,6 +607,8 @@ impl TestApi {
             directory_stream_private: symbol!("hl_c_backend_directory_stream_private_test", UnaryStatus),
             identity_registry: symbol!("hl_c_backend_identity_registry_test", BinaryStatus),
             private_fork_lock: symbol!("hl_c_backend_private_fork_lock_test", UnaryStatus),
+            #[cfg(target_os = "linux")]
+            linux_process_wait: symbol!("hl_c_backend_linux_process_wait_test", UnaryStatus),
             aarch64_checkpoint_channel_notify: symbol!("hl_aarch64_checkpoint_channel_notify_test", ScenarioTest),
             x86_64_checkpoint_channel_notify: symbol!("hl_x86_64_checkpoint_channel_notify_test", ScenarioTest),
             aarch64_checkpoint_refusal_order: symbol!("hl_aarch64_checkpoint_refusal_order_test", NoArgumentTest),

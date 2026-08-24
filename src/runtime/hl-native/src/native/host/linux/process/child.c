@@ -9,6 +9,7 @@
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic int hl_activation_ready_pause;
+static _Atomic uint64_t hl_linux_wait_test_attempts;
 
 HL_API void hl_c_backend_activation_ready_pause(int paused) {
     atomic_store_explicit(&hl_activation_ready_pause, paused != 0, memory_order_release);
@@ -135,6 +136,9 @@ static hl_host_result hl_linux_process_wait(void *context, hl_host_handle handle
          * this waiter.  A blocking wait therefore needs no millisecond WNOHANG poll. */
         pthread_mutex_unlock(&host->lock);
         do {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            atomic_fetch_add_explicit(&hl_linux_wait_test_attempts, 1, memory_order_relaxed);
+#endif
             waited = waitpid(pid, &status, 0);
         } while (waited < 0 && errno == EINTR);
         pthread_mutex_lock(&host->lock);
@@ -142,6 +146,9 @@ static hl_host_result hl_linux_process_wait(void *context, hl_host_handle handle
         options = WNOHANG;
         for (;;) {
             do {
+#if defined(HL_NATIVE_TEST_HOOKS)
+                atomic_fetch_add_explicit(&hl_linux_wait_test_attempts, 1, memory_order_relaxed);
+#endif
                 waited = waitpid(pid, &status, options);
             } while (waited < 0 && errno == EINTR);
             if (waited != 0) break;
@@ -240,6 +247,77 @@ static hl_host_result hl_linux_process_close(void *context, hl_host_handle handl
     pthread_mutex_unlock(&host->lock);
     return hl_linux_result(HL_STATUS_OK, 0, 0);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+typedef struct {
+    hl_host_linux *host;
+    hl_host_handle handle;
+    hl_host_result result;
+} hl_linux_wait_test_context;
+
+static int32_t hl_linux_wait_test_child(void *context) {
+    const uint64_t delay_ns = *(const uint64_t *)context;
+    struct timespec delay = {.tv_sec = (time_t)(delay_ns / UINT64_C(1000000000)),
+                             .tv_nsec = (long)(delay_ns % UINT64_C(1000000000))};
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {}
+    return 7;
+}
+
+static void *hl_linux_wait_test_thread(void *context) {
+    hl_linux_wait_test_context *waiter = context;
+    waiter->result = hl_linux_process_wait(waiter->host, waiter->handle, HL_HOST_DEADLINE_INFINITE);
+    return NULL;
+}
+
+HL_API int hl_c_backend_linux_process_wait_test(uint32_t scenario) {
+    hl_host_linux *host = NULL;
+    hl_host_services services;
+    hl_linux_wait_test_context first;
+    hl_linux_wait_test_context second;
+    hl_host_result spawned;
+    pthread_t one;
+    pthread_t two;
+    uint64_t delay_ns = scenario == 2 ? UINT64_C(5000000000) : UINT64_C(200000000);
+    struct timespec settle = {.tv_sec = 0, .tv_nsec = 50000000};
+    int status = 0;
+    if (scenario < 1 || scenario > 2) return EINVAL;
+    if (hl_host_linux_create(&host, &services) != HL_STATUS_OK) return 1;
+    atomic_store_explicit(&hl_linux_wait_test_attempts, 0, memory_order_relaxed);
+    spawned = hl_linux_process_spawn(host, hl_linux_wait_test_child, &delay_ns);
+    if (spawned.status != HL_STATUS_OK) {
+        hl_host_linux_destroy(host);
+        return 2;
+    }
+    first = (hl_linux_wait_test_context){host, spawned.value, {0}};
+    if (pthread_create(&one, NULL, hl_linux_wait_test_thread, &first) != 0) status = 3;
+    while (nanosleep(&settle, &settle) != 0 && errno == EINTR) {}
+    if (scenario == 1 && status == 0) {
+        second = (hl_linux_wait_test_context){host, spawned.value, {0}};
+        if (pthread_create(&two, NULL, hl_linux_wait_test_thread, &second) != 0)
+            status = 4;
+        else if (hl_linux_process_close(host, spawned.value).status != HL_STATUS_BUSY)
+            status = 5;
+        pthread_join(one, NULL);
+        if (status != 4) pthread_join(two, NULL);
+        if (status == 0 && (first.result.status != HL_STATUS_OK || second.result.status != HL_STATUS_OK ||
+                            first.result.value != 7 || second.result.value != 7))
+            status = 6;
+        if (status == 0 && hl_linux_process_close(host, spawned.value).status != HL_STATUS_OK) status = 7;
+        if (status == 0 && atomic_load_explicit(&hl_linux_wait_test_attempts, memory_order_relaxed) != 1) status = 8;
+        hl_host_linux_destroy(host);
+    } else if (status == 0) {
+        hl_host_linux_destroy(host);
+        pthread_join(one, NULL);
+        if (first.result.status != HL_STATUS_OK || first.result.detail != HL_HOST_PROCESS_EXIT_SIGNAL ||
+            first.result.value != SIGKILL)
+            status = 9;
+        if (status == 0 && atomic_load_explicit(&hl_linux_wait_test_attempts, memory_order_relaxed) != 1) status = 10;
+    } else {
+        hl_host_linux_destroy(host);
+    }
+    return status;
+}
+#endif
 
 /* --- terminal ---------------------------------------------------------------------------
  *

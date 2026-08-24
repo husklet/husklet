@@ -28,6 +28,14 @@ pub fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
     bindings::private_fork_lock_test(scenario)
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "linux"))]
+#[doc(hidden)]
+pub fn linux_process_wait_test(scenario: u32) -> Result<(), i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::linux_process_wait_test(scenario)
+}
+
 /// Drives the `/proc/<pid>/fdinfo` listing scenarios in the C engine, once per guest ISA.
 ///
 /// `isa` is 1 for aarch64 and 2 for x86-64: the producer is compiled once per target TU, and the two

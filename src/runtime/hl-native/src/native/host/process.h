@@ -9,6 +9,9 @@
 // Return a close-on-exec descriptor that becomes persistently readable when pid exits.
 // The caller owns the descriptor. Returns -1 with errno set when the host cannot watch pid.
 int hl_host_process_open(pid_t pid);
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(__linux__)
+HL_API int hl_c_backend_linux_process_wait_test(uint32_t scenario);
+#endif
 
 /* Mint a stable liveness capability for exactly one macOS process incarnation.
  * `expected_birth` is zero when the caller has not yet observed the process and

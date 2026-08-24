@@ -176,6 +176,13 @@ pub(crate) fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "linux"))]
+pub(crate) fn linux_process_wait_test(scenario: u32) -> Result<(), i32> {
+    // SAFETY: the Linux hook owns its host instance, children, and waiter threads and joins all of them.
+    let status = unsafe { (test_api().linux_process_wait)(scenario) };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_channel_notify_test(isa: u32, scenario: u32) -> Result<(), i32> {
     // SAFETY: the feature-gated native hook owns both ends of its socket fixture and returns a scalar.
