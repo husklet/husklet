@@ -381,6 +381,9 @@ struct interp_block {
     uint64_t guest_end;  // one past the last transliterated guest byte (== gpc + 1 when interpreted)
     uint32_t host_entry_off;
     uint32_t host_len;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    uint8_t profile_jcc_fall_stitches;
+#endif
 };
 
 #include "../translit.inc"
@@ -401,6 +404,9 @@ static void *translate_block(uint64_t gpc) {
     block->guest_end = gpc + 1;
     block->host_entry_off = 0;
     block->host_len = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    block->profile_jcc_fall_stitches = 0;
+#endif
     (void)translit_build(block, gpc);
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an

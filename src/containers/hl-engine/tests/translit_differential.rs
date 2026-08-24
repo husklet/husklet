@@ -63,6 +63,8 @@ struct Backend {
     jcc_fall_candidates: u64,
     jcc_fall_admitted: u64,
     jcc_fall_page_refused: u64,
+    jcc_fall_successor_page_refused: u64,
+    jcc_fall_executed: u64,
     operand_declined: u64,
     riprel_lowered: u64,
     scratch_lowered: u64,
@@ -106,6 +108,8 @@ fn backend(stderr: &[u8]) -> Backend {
         jcc_fall_candidates: counter("jcc_fall_candidates="),
         jcc_fall_admitted: counter("jcc_fall_admitted="),
         jcc_fall_page_refused: counter("jcc_fall_page_refused="),
+        jcc_fall_successor_page_refused: counter("jcc_fall_successor_page_refused="),
+        jcc_fall_executed: counter("jcc_fall_executed="),
         operand_declined: counter("operand_declined="),
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
@@ -407,6 +411,7 @@ fn a_same_page_conditional_fallthrough_stays_in_the_descriptor() {
     assert_eq!(selected, b"fall=42 taken=41\n");
     assert!(selected_backend.jcc_fall_candidates > 0, "{}", selected_backend.line);
     assert!(selected_backend.jcc_fall_admitted > 0, "{}", selected_backend.line);
+    assert!(selected_backend.jcc_fall_executed > 0, "{}", selected_backend.line);
     assert!(
         selected_backend.jcc_fall_admitted <= selected_backend.jcc_fall_candidates,
         "{}",
@@ -422,8 +427,13 @@ fn a_cross_page_conditional_fallthrough_keeps_the_dispatch_boundary() {
     let (selected, selected_status, selected_backend) = run(&executable, "1");
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
-    assert_eq!(selected, b"fall=5 taken=6\n");
+    assert_eq!(selected, b"fall=5 taken=6 straddle=5\n");
     assert!(selected_backend.jcc_fall_page_refused > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.jcc_fall_successor_page_refused > 0,
+        "{}",
+        selected_backend.line
+    );
 }
 
 #[test]

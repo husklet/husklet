@@ -7,7 +7,9 @@ __attribute__((naked, noinline, aligned(4096))) static long conditional(long tak
     __asm__ volatile("mov $40, %eax\n"
                      "test %rdi, %rdi\n"
                      "jnz 1f\n"
-                     "add $1, %eax\n"
+                     "sete %cl\n"
+                     "movzbl %cl, %ecx\n"
+                     "add %ecx, %eax\n"
                      "1: add $1, %eax\n"
                      "ret\n");
 }

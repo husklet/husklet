@@ -149,6 +149,11 @@ static uint64_t translit_stitch_admitted;
 static uint64_t translit_jcc_fall_candidates;
 static uint64_t translit_jcc_fall_admitted;
 static uint64_t translit_jcc_fall_page_refused;
+static uint64_t translit_jcc_fall_successor_page_refused;
+static uint64_t translit_jcc_fall_decode_refused;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t translit_jcc_fall_executed;
+#endif
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
 static uint64_t translit_provenance_fallback;
@@ -500,6 +505,12 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
     return 1;
 }
 
+enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED };
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t translit_test_decode_refuse_pc;
+#endif
+static int translit_jcc_successor(uint64_t source, uint64_t next, struct insn *successor);
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
@@ -592,6 +603,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             return 22;
         return 0;
     }
+    if (scenario == 20) {
+        uint8_t code[] = {0x90};
+        uint64_t next = (uint64_t)(uintptr_t)code;
+        struct insn successor;
+        translit_test_decode_refuse_pc = next;
+        int refused = translit_jcc_successor(next, next, &successor) == TL_SUCCESSOR_DECODE_REFUSED;
+        translit_test_decode_refuse_pc = 0;
+        return refused ? 0 : 23;
+    }
     return 6;
 }
 #endif
@@ -599,6 +619,17 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
 // Both jcc encodings (7x rel8 and 0F 8x rel32) carry the condition in the opcode's low nibble.
 static int translit_condition(const struct insn *insn) {
     return insn->op & 0xF;
+}
+
+static int translit_jcc_successor(uint64_t source, uint64_t next, struct insn *successor) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (next == translit_test_decode_refuse_pc) return TL_SUCCESSOR_DECODE_REFUSED;
+#endif
+    if (hl_x86_decode(next, successor) <= 0 || successor->len <= 0) return TL_SUCCESSOR_DECODE_REFUSED;
+    if (next > UINT64_MAX - (uint64_t)successor->len ||
+        ((next + (uint64_t)successor->len - 1) >> 12) != (source >> 12))
+        return TL_SUCCESSOR_PAGE_REFUSED;
+    return TL_SUCCESSOR_OK;
 }
 
 static void *translit_build(struct interp_block *block, uint64_t gpc) {
@@ -614,6 +645,9 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
 
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    int jcc_fall_stitched = 0;
+#endif
     uint8_t bytes[16];
 
     while (count < TL_MAX_INSNS && !a->overflow) {
@@ -674,22 +708,32 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             (void)__atomic_fetch_add(&translit_jcc_fall_page_refused, 1, __ATOMIC_RELAXED);
         if (kind == TL_JCC && (next >> 12) == (pc >> 12)) {
             (void)__atomic_fetch_add(&translit_jcc_fall_candidates, 1, __ATOMIC_RELAXED);
-            struct insn successor;
-            if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode(next, &successor) > 0 && successor.len > 0) {
-                uint8_t *fall = hl_x64_jcc_rel32(a, translit_condition(&insn) ^ 1);
-                translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
-                hl_x64_patch_rel32(a, fall, a->cursor);
-                if (a->overflow) {
-                    a->cursor = instruction_start;
-                    break;
+            if (stitched < TL_STITCH_MAX_JMPS) {
+                struct insn successor;
+                int successor_status = translit_jcc_successor(pc, next, &successor);
+                if (successor_status == TL_SUCCESSOR_DECODE_REFUSED) {
+                    (void)__atomic_fetch_add(&translit_jcc_fall_decode_refused, 1, __ATOMIC_RELAXED);
+                } else if (successor_status == TL_SUCCESSOR_PAGE_REFUSED) {
+                    (void)__atomic_fetch_add(&translit_jcc_fall_successor_page_refused, 1, __ATOMIC_RELAXED);
+                } else {
+                    uint8_t *fall = hl_x64_jcc_rel32(a, translit_condition(&insn) ^ 1);
+                    translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
+                    hl_x64_patch_rel32(a, fall, a->cursor);
+                    if (a->overflow) {
+                        a->cursor = instruction_start;
+                        break;
+                    }
+                    jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start,
+                                            (uint64_t)(uintptr_t)a->cursor, pc);
+                    pc = next;
+                    count++;
+                    stitched++;
+#if defined(HL_NATIVE_TEST_HOOKS)
+                    jcc_fall_stitched++;
+#endif
+                    (void)__atomic_fetch_add(&translit_jcc_fall_admitted, 1, __ATOMIC_RELAXED);
+                    continue;
                 }
-                jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start,
-                                        (uint64_t)(uintptr_t)a->cursor, pc);
-                pc = next;
-                count++;
-                stitched++;
-                (void)__atomic_fetch_add(&translit_jcc_fall_admitted, 1, __ATOMIC_RELAXED);
-                continue;
             }
         }
 
@@ -831,6 +875,9 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
     block->host_len = (uint32_t)(a->cursor - start);
     block->guest_end = pc;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
+#endif
     g_cp = a->cursor;
     (void)__atomic_fetch_add(&translit_blocks, 1, __ATOMIC_RELAXED);
     if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_blocks, 1, __ATOMIC_RELAXED);
@@ -847,6 +894,10 @@ static void translit_run(struct cpu *cpu, struct interp_block *block) {
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (block->profile_jcc_fall_stitches != 0)
+        (void)__atomic_fetch_add(&translit_jcc_fall_executed, block->profile_jcc_fall_stitches, __ATOMIC_RELAXED);
+#endif
 }
 
 // One line of the [prof] report (engine/target/x86_64.c), and the only place an operator can learn that
@@ -861,6 +912,14 @@ static int translit_report(char *out, size_t size) {
     uint64_t jcc_fall_candidates = __atomic_load_n(&translit_jcc_fall_candidates, __ATOMIC_RELAXED);
     uint64_t jcc_fall_admitted = __atomic_load_n(&translit_jcc_fall_admitted, __ATOMIC_RELAXED);
     uint64_t jcc_fall_page_refused = __atomic_load_n(&translit_jcc_fall_page_refused, __ATOMIC_RELAXED);
+    uint64_t jcc_fall_successor_page_refused =
+        __atomic_load_n(&translit_jcc_fall_successor_page_refused, __ATOMIC_RELAXED);
+    uint64_t jcc_fall_decode_refused = __atomic_load_n(&translit_jcc_fall_decode_refused, __ATOMIC_RELAXED);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    uint64_t jcc_fall_executed = __atomic_load_n(&translit_jcc_fall_executed, __ATOMIC_RELAXED);
+#else
+    uint64_t jcc_fall_executed = 0;
+#endif
     uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
     uint64_t provenance_fallback = __atomic_load_n(&translit_provenance_fallback, __ATOMIC_RELAXED);
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
@@ -899,7 +958,8 @@ static int translit_report(char *out, size_t size) {
                         " refusal_key=%u refusal_count=%llu refusal_prefix=%llu refusal_width=%llu"
                         " refusal_rsp=%llu refusal_opcode=%llu stitch_candidates=%llu stitch_admitted=%llu"
                         " rip_indirect_lowered=%llu jcc_fall_candidates=%llu jcc_fall_admitted=%llu"
-                        " jcc_fall_page_refused=%llu\n",
+                        " jcc_fall_page_refused=%llu jcc_fall_successor_page_refused=%llu"
+                        " jcc_fall_decode_refused=%llu jcc_fall_executed=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -913,7 +973,9 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)displaced_refusal_opcode_other, (unsigned long long)stitch_candidates,
                         (unsigned long long)stitch_admitted, (unsigned long long)rip_indirect_lowered,
                         (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
-                        (unsigned long long)jcc_fall_page_refused);
+                        (unsigned long long)jcc_fall_page_refused,
+                        (unsigned long long)jcc_fall_successor_page_refused,
+                        (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
@@ -923,12 +985,16 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
-                    " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu\n",
+                    " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
+                    " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
+                    " jcc_fall_executed=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
-                    (unsigned long long)jcc_fall_page_refused);
+                    (unsigned long long)jcc_fall_page_refused,
+                    (unsigned long long)jcc_fall_successor_page_refused,
+                    (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.
