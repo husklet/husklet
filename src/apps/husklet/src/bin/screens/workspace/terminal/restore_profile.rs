@@ -124,8 +124,11 @@ fn characterize(panes: usize) {
     }
 
     for pid in pids {
-        // SAFETY: these are child PIDs returned by this fixture's own spawn.
-        unsafe { libc::kill(pid, libc::SIGTERM) };
+        let status = std::process::Command::new("/bin/kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("run the host signal utility");
+        assert!(status.success(), "terminate restore-profile child {pid}");
     }
     tw.closing.set(true);
     let root = tw.stack.root().and_then(|root| root.downcast::<gtk::Window>().ok());
@@ -147,19 +150,20 @@ fn await_cleanup(window: &TermWin, pty_baseline: usize) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         while glib::MainContext::default().iteration(false) {}
-        let children_reaped = window
-            .pids
-            .borrow()
-            .values()
-            .flatten()
-            .all(|pid| pid.get() == 0);
+        let children_reaped = window.pids.borrow().values().flatten().all(|pid| pid.get() == 0);
         if children_reaped && open_pty_count() <= pty_baseline {
             return;
         }
         assert!(
             std::time::Instant::now() < deadline,
             "restore fixture leaked child or PTY: live_pids={} ptys={} baseline={pty_baseline}",
-            window.pids.borrow().values().flatten().filter(|pid| pid.get() != 0).count(),
+            window
+                .pids
+                .borrow()
+                .values()
+                .flatten()
+                .filter(|pid| pid.get() != 0)
+                .count(),
             open_pty_count()
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -181,9 +185,9 @@ fn await_prompts(window: &TermWin, panes: usize) {
     loop {
         while glib::MainContext::default().iteration(false) {}
         let ready = window.panes.borrow().iter().all(|pane| {
-            pane.terminal.upgrade().is_some_and(|terminal| {
-                Terminal::new(&terminal).history().contains("HL_RESTORE_PROMPT_")
-            })
+            pane.terminal
+                .upgrade()
+                .is_some_and(|terminal| Terminal::new(&terminal).history().contains("HL_RESTORE_PROMPT_"))
         });
         if ready {
             return;

@@ -665,7 +665,8 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneSplit, Panes, Reading, Slots, Surface, Tabs, TermWin, Window, WindowSession, ABSENCE,
+        Adjustment, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin, Window,
+        WindowSession, ABSENCE,
     };
     use super::super::Gallery;
     use hl::config::WorkspaceConfig;
@@ -872,7 +873,12 @@ mod panes {
         });
 
         let mut pids = Vec::new();
-        let (widget, terminal) = WindowSession::new(&bench.window).build_pane_widget(&node, storage.path(), &mut pids);
+        let (widget, terminal) = WindowSession::new(&bench.window).build_pane_widget(
+            &node,
+            storage.path(),
+            &mut pids,
+            &ProductionPaneLauncher,
+        );
         bench.page.append(&widget);
 
         assert!(terminal.is_none(), "an absent extension is never replaced by a shell");
