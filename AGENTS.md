@@ -273,9 +273,8 @@ Six things to know before you trust — or debug — this loop:
   `xvfb-run -a -s '-screen 0 1600x1000x24' -- cargo test …` the skip lines are gone and
   all 88 pass. Proven non-vacuous by planting a false assertion in one of those
   scenarios: **87 passed / 1 failed under `xvfb-run`, 88 passed without a display.**
-  Wrapping the CI step is a decision for whoever owns the workflow, not a repair to make
-  silently — but do not read that step's green as covering the extension page or the
-  extension shelf until it is.
+  Linux CI now runs both the application-bin scenarios and the toolkit adapter suites under
+  Xvfb; do not move either command outside that display or replace execution with a test count.
 - `TermConfig::default().font_family` is `Menlo`, which exists only on macOS. On Linux
   Pango falls back and VTE takes its cell metrics from the fallback, so the grid renders
   visibly letter-spaced until a workspace sets `font_family` to a font the host has

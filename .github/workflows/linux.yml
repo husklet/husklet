@@ -321,6 +321,33 @@ jobs:
           xvfb-run -a -s '-screen 0 1600x1000x24'
           cargo test -p husklet --bins --features gui --locked --offline
 
+      # The test suites above exercise widgets, but they do not start the product binary or cross its
+      # scheduled screenshot hook. Preplanting a non-PNG makes this fail if the hook never runs: mere
+      # file existence, a stale artifact, or a toolkit test cannot satisfy the receipt.
+      - name: Launch and render the GUI application
+        run: |
+          set -euo pipefail
+          smoke_root="$(mktemp -d "$RUNNER_TEMP/husklet-gui-smoke.XXXXXX")"
+          trap 'rm -rf -- "$smoke_root"' EXIT
+          shot="$smoke_root/manager.png"
+          printf 'hook-did-not-run\n' >"$shot"
+          mkdir -p "$smoke_root/home" "$smoke_root/cache"
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            bash -euo pipefail -c '
+              cargo build -p husklet --bin husklet --features gui --locked --offline
+              timeout 30s env -u HL_TERM_WS -u HL_TERM_SCRIPT -u HL_TERM_RESIZE -u HL_TERM_LIVE_ACTIONS \
+                HOME="$1/home" XDG_CACHE_HOME="$1/cache" GTK_A11Y=none \
+                HL_TERM_VIEW=manager HL_TERM_SHOT="$2" HL_TERM_SHOT_MS=500 \
+                xvfb-run -a -s "-screen 0 1600x1000x24" -- ./target/debug/husklet
+            ' bash "$smoke_root" "$shot"
+          test -f "$shot" && test ! -L "$shot"
+          test "$(stat -c %s "$shot")" -gt 24
+          test "$(od -An -tx1 -N8 "$shot" | tr -d ' \n')" = 89504e470d0a1a0a
+          width="$(od -An -tx1 -j16 -N4 "$shot" | tr -d ' \n')"
+          height="$(od -An -tx1 -j20 -N4 "$shot" | tr -d ' \n')"
+          [[ "$width" =~ ^[0-9a-f]{8}$ && "$width" != 00000000 ]]
+          [[ "$height" =~ ^[0-9a-f]{8}$ && "$height" != 00000000 ]]
+
       # THE FIVE FILES THE STEP ABOVE COULD NOT REACH. `hl-gui-gtk/tests/` holds five
       # more suites that skip on `no display connection`, and until this step nothing
       # RAN them on any host: `cargo check --workspace --all-targets` compiles without
