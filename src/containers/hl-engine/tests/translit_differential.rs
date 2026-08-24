@@ -101,9 +101,12 @@ static NONPIE_LINK_RANGE: Mutex<()> = Mutex::new(());
 
 struct LinkPage(*mut libc::c_void);
 
+#[allow(unsafe_code)]
 impl LinkPage {
     fn occupy() -> Self {
         const LINK_BASE: usize = 0x0040_0000;
+        // SAFETY: MAP_FIXED_NOREPLACE either claims exactly this otherwise-unused page or fails; unlike
+        // MAP_FIXED it cannot replace a mapping owned by this test process.
         let page = unsafe {
             libc::mmap(
                 LINK_BASE as *mut libc::c_void,
@@ -118,13 +121,16 @@ impl LinkPage {
             page, LINK_BASE as *mut libc::c_void,
             "the test could not reserve the ET_EXEC link page without replacement"
         );
+        // SAFETY: the successful writable one-page mapping above remains owned by this guard.
         unsafe { *(page as *mut u8) = 0xa5 };
         Self(page)
     }
 }
 
+#[allow(unsafe_code)]
 impl Drop for LinkPage {
     fn drop(&mut self) {
+        // SAFETY: this guard exclusively owns the still-live page until the munmap below.
         assert_eq!(
             unsafe { *(self.0 as *const u8) },
             0xa5,
