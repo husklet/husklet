@@ -30,6 +30,8 @@ __asm__(".pushsection .rip_indirect_boundary,\"aw\",@progbits\n"
         ".space 4092\n"
         ".popsection\n");
 extern function boundary_slot;
+extern char faulting_call_pc;
+extern char faulting_resume_pc;
 
 __attribute__((naked, noinline)) static uint64_t valid_call(uint64_t value) {
     (void)value;
@@ -42,13 +44,11 @@ __attribute__((naked, noinline)) static uint64_t valid_jump(uint64_t value) {
 }
 
 __attribute__((naked, noinline)) static void faulting_call(void) {
-    __asm__ volatile("lea 2f(%rip),%r11\n\t"
-                     "mov %r11,fault_pc(%rip)\n\t"
-                     "lea 1f(%rip),%r11\n\t"
-                     "mov %r11,resume_pc(%rip)\n\t"
-                     "movabs $0x8877665544332211,%r11\n\t"
-                     "2: call *boundary_slot(%rip)\n\t"
-                     "1: ret");
+    __asm__ volatile("movabs $0x8877665544332211,%r11\n\t"
+                     ".global faulting_call_pc\n"
+                     "faulting_call_pc: call *boundary_slot(%rip)\n\t"
+                     ".global faulting_resume_pc\n"
+                     "faulting_resume_pc: ret");
 }
 
 static void fault(int signal, siginfo_t *info, void *context) {
@@ -73,6 +73,8 @@ int main(void) {
     uintptr_t slot = (uintptr_t)&boundary_slot;
     if (page <= 0 || (slot & ((uintptr_t)page - 1)) != (uintptr_t)page - 4) return 3;
     uintptr_t second = (slot & ~((uintptr_t)page - 1)) + (uintptr_t)page;
+    fault_pc = (uintptr_t)&faulting_call_pc;
+    resume_pc = (uintptr_t)&faulting_resume_pc;
     if (mprotect((void *)second, (size_t)page, PROT_NONE) != 0) return 4;
     faulting_call();
     if (mprotect((void *)second, (size_t)page, PROT_READ | PROT_WRITE) != 0) return 5;
