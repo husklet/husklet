@@ -1111,6 +1111,10 @@ HL_API int hl_aarch64_imported_path_guard_test(void) {
 }
 
 HL_API int hl_aarch64_clone3_extended_args_test(uint32_t scenario) {
+#if defined(_WIN32)
     return clone3_extended_args_test(HL_LINUX_GUEST_AARCH64, 435, scenario);
+#else
+    return clone3_extended_args_test_guarded(HL_LINUX_GUEST_AARCH64, 435, scenario, nonpie_guard);
+#endif
 }
 #endif

@@ -294,6 +294,8 @@ pub(crate) fn dispatch_profile_test(isa: u32) -> i32 {
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn clone3_extended_args_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    static FAULT_HANDLER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _handler = FAULT_HANDLER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     scenario_status(
         isa,
         test_api().aarch64_clone3_extended_args,

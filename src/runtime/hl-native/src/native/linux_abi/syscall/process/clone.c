@@ -587,4 +587,31 @@ static int clone3_extended_args_test(enum hl_linux_guest_isa isa, uint64_t raw_n
     if (scenario == 16) return actual == -E2BIG ? 0 : 20;
     return 21;
 }
+
+#if !defined(_WIN32)
+static pthread_mutex_t g_clone3_extended_args_fault_handler_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int clone3_extended_args_test_guarded(enum hl_linux_guest_isa isa, uint64_t raw_number, uint32_t scenario,
+                                             void (*handler)(int, siginfo_t *, void *)) {
+    struct sigaction action = {0}, previous_segv, previous_bus;
+    pthread_mutex_lock(&g_clone3_extended_args_fault_handler_lock);
+    action.sa_flags = SA_SIGINFO;
+    action.sa_sigaction = handler;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGSEGV, &action, &previous_segv) != 0) {
+        pthread_mutex_unlock(&g_clone3_extended_args_fault_handler_lock);
+        return 22;
+    }
+    if (sigaction(SIGBUS, &action, &previous_bus) != 0) {
+        (void)sigaction(SIGSEGV, &previous_segv, NULL);
+        pthread_mutex_unlock(&g_clone3_extended_args_fault_handler_lock);
+        return 23;
+    }
+    int result = clone3_extended_args_test(isa, raw_number, scenario);
+    int bus_status = sigaction(SIGBUS, &previous_bus, NULL);
+    int segv_status = sigaction(SIGSEGV, &previous_segv, NULL);
+    pthread_mutex_unlock(&g_clone3_extended_args_fault_handler_lock);
+    return bus_status == 0 && segv_status == 0 ? result : 24;
+}
+#endif
 #endif
