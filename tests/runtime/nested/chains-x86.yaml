@@ -1,0 +1,34 @@
+version: 1
+chains:
+  - id: nested/amd64-arm64-amd64
+    layers:
+      - artifact:
+          path: target/nested/host/hl-engine-linux-x86_64
+          build:
+            package: engine
+            target: x86_64-unknown-linux-gnu
+            binary: hl-engine
+        guest_isa: arm64
+      - artifact:
+          path: target/nested/foreign/hl-engine-linux-aarch64
+          source: foreign-build
+          build:
+            package: engine
+            target: aarch64-unknown-linux-gnu
+            binary: hl-engine
+        guest_isa: amd64
+      - artifact:
+          path: target/nested/foreign/hl-engine-linux-x86_64
+          source: foreign-build
+          build:
+            package: engine
+            target: x86_64-unknown-linux-gnu
+            binary: hl-engine
+        guest_isa: amd64
+    guest:
+      path: target/testing/runtime/abi-core/amd64/hello
+    timeout_seconds: 300
+    capture_limit_bytes: 1048576
+    expect:
+      exit: 42
+      stdout: golden/hello.txt

@@ -398,13 +398,14 @@ impl Workspace {
     }
 
     fn command(&self, chain: &Chain) -> Vec<String> {
-        let mut arguments = Vec::new();
-        for layer in &chain.layers {
-            arguments.push(self.root.join(&layer.artifact.path).display().to_string());
+        let mut arguments = vec![self.root.join(&chain.layers[0].artifact.path).display().to_string()];
+        for (index, layer) in chain.layers.iter().enumerate() {
             arguments.push("--report-exit".into());
             arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
+            arguments.push("--".into());
+            let next = chain.layers.get(index + 1).map_or(&chain.guest, |next| &next.artifact);
+            arguments.push(self.root.join(&next.path).display().to_string());
         }
-        arguments.push(self.root.join(&chain.guest.path).display().to_string());
         arguments.extend(chain.arguments.iter().cloned());
         arguments
     }
@@ -506,10 +507,12 @@ expect: { exit: 42, stdout: hello.txt }
                 "--report-exit",
                 "--guest-isa",
                 "aarch64",
+                "--",
                 "/tree/inner",
                 "--report-exit",
                 "--guest-isa",
                 "x86_64",
+                "--",
                 "/tree/hello"
             ]
         );
