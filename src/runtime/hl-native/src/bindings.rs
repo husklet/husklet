@@ -338,6 +338,12 @@ mod tests {
 
     const STATUS_NOT_SUPPORTED: i32 = 3;
 
+    #[cfg(all(feature = "native-test-hooks", target_arch = "x86_64"))]
+    #[test]
+    fn bound_x86_dispatch_slot_tracks_register_unregister_and_fork_survivor() {
+        assert_eq!(stw_cpu_slot_lifecycle_test(), 0);
+    }
+
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn descriptor_path_publication_copies_and_clears_on_both_guest_isas() {

@@ -172,6 +172,7 @@ static const hl_x86_avx_state g_avx_state = {&g_nonpie_lo, &g_nonpie_hi, &g_nonp
 #include "../../translator/guest/x86_64/glue.h" // independently compiled x86 target state
 #include "../../translator/guest_fetch.h"
 #include "../../translator/guest/x86_64/rep_runtime.h" // string-op helpers + the hooks engine_global_init sets
+#define G_STW_CPU_SLOT 1
 #include "../../translator/cache.c"                    // SHARED translator: code cache + block map
 
 uint64_t hl_x86_guest_pointer(uint64_t address) {
@@ -1810,6 +1811,10 @@ uint64_t hl_run_linux_guest_translations(void) {
 HL_API int hl_x86_64_dispatch_profile_test(void) {
     int result = hl_dispatch_profile_accumulator_test();
     return result == 0 ? dispatch_profile_thread_stress_test() : result;
+}
+
+HL_API int hl_x86_64_stw_cpu_slot_lifecycle_test(void) {
+    return stw_cpu_slot_lifecycle_test();
 }
 
 /* See hl_linux_imported_path_guard_probe (linux_abi/syscall/fs.c): the pathname operand a handler

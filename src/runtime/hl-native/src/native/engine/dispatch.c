@@ -264,7 +264,7 @@ static void run_guest(struct cpu *c) {
         // this already-spilled dispatcher boundary BEFORE cache lookup attempts to acquire that same lock.
         // The threaded gate is also the precise boundary needed by mapping activation; single-threaded runs
         // retain their zero-overhead path.
-        if (g_threaded) stw_dispatch_safepoint();
+        if (g_threaded) stw_dispatch_safepoint_slot(STW_SLOT(c));
 #ifdef G_CKPT_POLL
         // Checkpoint safepoint: all guest architectural state is spilled into `c` here, so a pending
         // control-triggered checkpoint writes a coherent snapshot and _exit()s. Both guest targets define
@@ -420,7 +420,8 @@ static void run_guest(struct cpu *c) {
         // reclaim a retired cache only once no thread is still running in it (see reclaim_retired). Done
         // under g_jit_lock (a flush holds it) so the value is consistent with g_cache_gen; threaded-only,
         // so the single-thread hot path stays zero-overhead.
-        if (g_threaded) atomic_store_explicit(g_my_exec_gen, selected_cache_gen, memory_order_relaxed);
+        if (g_threaded)
+            atomic_store_explicit(STW_EXEC_GEN(c), selected_cache_gen, memory_order_relaxed);
         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
         // Frontend hook: per-block JT trace dump (per-arch register/flag layout). See §A.3 (5th divergence).
         G_TRACE_DUMP(c);
@@ -434,7 +435,7 @@ static void run_guest(struct cpu *c) {
             profile_stw_start = now;
             __atomic_fetch_add(&g_dispatch_profile.sampled, 1, __ATOMIC_RELAXED);
         }
-        if (!stw_before_translated(selected_bus_epoch)) {
+        if (!stw_before_translated(c, selected_bus_epoch)) {
             if (profile_sample)
                 hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_STW, profile_stw_start, now_ns());
             hl_dispatch_profile_reason(&g_dispatch_profile, 0, 1);
@@ -455,7 +456,7 @@ static void run_guest(struct cpu *c) {
         if (profile_sample)
             hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_BLOCK, profile_block_start,
                                       profile_after_block);
-        stw_after_translated();
+        stw_after_translated(c);
         if (profile_sample) {
             uint64_t now = now_ns();
             hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_STW, profile_after_block, now);
@@ -487,13 +488,13 @@ static void run_guest(struct cpu *c) {
        with architectural state spilled; otherwise checkpoint holds the
        registry lock while waiting on an old ack and unregister waits on that
        same lock forever. */
-    if (g_threaded && g_my_stw_slot >= 0) {
-        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].departing, 1, memory_order_seq_cst);
-        stw_dispatch_safepoint();
+    if (g_threaded && STW_SLOT(c) >= 0) {
+        atomic_store_explicit(&g_stw_threads[STW_SLOT(c)].departing, 1, memory_order_seq_cst);
+        stw_dispatch_safepoint_slot(STW_SLOT(c));
     }
     // Leave the registries: this thread will never execute in the cache again, nor be a signal target.
     thread_unregister(c);
-    stw_unregister();
+    stw_unregister(c);
     uninstall_host_sigaltstack(); // release this thread's alternate signal stack
 }
 

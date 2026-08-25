@@ -1347,6 +1347,13 @@ static uint64_t g_stw_flushes;   // PROF: stop-the-world flushes performed
 // that corrupted parked peers.
 static __thread _Atomic uint64_t *g_my_exec_gen; // this thread's exec_gen slot (NULL until registered)
 static __thread int g_my_stw_slot = -1;
+#ifdef G_STW_CPU_SLOT
+#define STW_SLOT(cpu) ((cpu)->stw_slot)
+#define STW_EXEC_GEN(cpu) (&g_stw_threads[(cpu)->stw_slot].exec_gen)
+#else
+#define STW_SLOT(cpu) (g_my_stw_slot)
+#define STW_EXEC_GEN(cpu) (g_my_exec_gen)
+#endif
 static __thread unsigned g_mapping_stw_depth;
 static _Atomic uint64_t g_dispatch_request;
 static _Atomic int g_dispatch_gate;
@@ -1540,13 +1547,16 @@ static void stw_register(struct cpu *cpu) {
 #endif
             g_my_exec_gen = &g_stw_threads[i].exec_gen;
             g_my_stw_slot = i;
+#ifdef G_STW_CPU_SLOT
+            cpu->stw_slot = i;
+#endif
             atomic_store_explicit(&g_stw_threads[i].used, 1, memory_order_release);
             break;
         }
     pthread_mutex_unlock(&g_stw_reg_lock);
 }
 
-static void stw_unregister(void) {
+static void stw_unregister(struct cpu *cpu) {
     pthread_t me = pthread_self();
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++)
@@ -1555,6 +1565,9 @@ static void stw_unregister(void) {
             atomic_store_explicit(&g_stw_threads[i].used, 0, memory_order_release);
             g_stw_threads[i].cpu = NULL;
             g_my_stw_slot = -1;
+#ifdef G_STW_CPU_SLOT
+            cpu->stw_slot = -1;
+#endif
             break;
         }
     pthread_mutex_unlock(&g_stw_reg_lock);
@@ -1563,17 +1576,21 @@ static void stw_unregister(void) {
 /* Publish a precise dispatcher safepoint.  A BUS prepare waits for this
    generation acknowledgement before publishing a shortened file mapping, so
    no peer can enter an old, unguarded translation after the prepare returns. */
-static void stw_dispatch_safepoint(void) {
-    if (g_my_stw_slot < 0) return;
+static void stw_dispatch_safepoint_slot(int slot) {
+    if (slot < 0) return;
     /* Read the gate before its request. Reading request first permits a
        publisher to advance the epoch and raise the gate between the ack and
        this load: the peer then parks with a stale ack forever. Q keeps the
        active request stable until the gate is released. */
     while (atomic_load_explicit(&g_dispatch_gate, memory_order_seq_cst)) {
         uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
-        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].dispatch_ack, request, memory_order_release);
+        atomic_store_explicit(&g_stw_threads[slot].dispatch_ack, request, memory_order_release);
         jit_backoff_ns(UINT64_C(50000));
     }
+}
+
+static void stw_dispatch_safepoint(void) {
+    stw_dispatch_safepoint_slot(g_my_stw_slot);
 }
 
 /* A peer may reach cache lookup immediately before a quiescer publishes its
@@ -1604,35 +1621,37 @@ static void stw_quiesce_lock(void) {
     }
 }
 
-static int stw_before_translated(uint64_t selected_epoch) {
-    if (g_my_stw_slot < 0) return 1;
+static int stw_before_translated(struct cpu *cpu, uint64_t selected_epoch) {
+    int slot = STW_SLOT(cpu);
+    if (slot < 0) return 1;
     for (;;) {
-        stw_dispatch_safepoint();
+        stw_dispatch_safepoint_slot(slot);
         if (atomic_load_explicit(&g_dispatch_request, memory_order_acquire) != selected_epoch) return 0;
         /* seq_cst, not release/acquire: this store and the gate load below form a
            StoreLoad handshake with a quiescing peer's store-gate-then-load-
            in_translated.  Under release/acquire BOTH sides may miss -- we enter
            translated code believing there is no gate while the quiesce believes we
            are not translated, so it never interrupts us and waits forever. */
-        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].in_translated, 1, memory_order_seq_cst);
+        atomic_store_explicit(&g_stw_threads[slot].in_translated, 1, memory_order_seq_cst);
         /* Close activation's phase-transition race: once the gate is visible we
            withdraw from translated execution and acknowledge at the dispatcher. */
         if (!atomic_load_explicit(&g_dispatch_gate, memory_order_seq_cst) &&
             atomic_load_explicit(&g_dispatch_request, memory_order_acquire) == selected_epoch)
             return 1;
-        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].in_translated, 0, memory_order_release);
+        atomic_store_explicit(&g_stw_threads[slot].in_translated, 0, memory_order_release);
         if (atomic_load_explicit(&g_dispatch_request, memory_order_acquire) != selected_epoch) return 0;
     }
 }
 
-static void stw_after_translated(void) {
-    if (g_my_stw_slot >= 0) {
-        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].in_translated, 0, memory_order_release);
+static void stw_after_translated(struct cpu *cpu) {
+    int slot = STW_SLOT(cpu);
+    if (slot >= 0) {
+        atomic_store_explicit(&g_stw_threads[slot].in_translated, 0, memory_order_release);
         /* Dispatcher/service state holds no code-cache PC.  Drop the generation
            pin now so repeated BUS activations can reclaim retired arenas. */
-        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].exec_gen, 0, memory_order_release);
+        atomic_store_explicit(&g_stw_threads[slot].exec_gen, 0, memory_order_release);
     }
-    stw_dispatch_safepoint();
+    stw_dispatch_safepoint_slot(slot);
 }
 
 /* Wait until every peer still executing translated code has acknowledged `request`
@@ -2046,7 +2065,44 @@ static void stw_after_fork(void) {
     atomic_store_explicit(&g_stw_threads[0].used, 1, memory_order_relaxed);
     g_my_exec_gen = &g_stw_threads[0].exec_gen;
     g_my_stw_slot = 0;
+#ifdef G_STW_CPU_SLOT
+    if (survivor != NULL) survivor->stw_slot = 0;
+#endif
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(G_STW_CPU_SLOT)
+/* Exercise the x86 bound-dispatch slot independently of the thread-local copy.
+   The signal/unbound entry point intentionally remains stw_dispatch_safepoint(),
+   whose only source is g_my_stw_slot. */
+static int stw_cpu_slot_lifecycle_test(void) {
+    struct cpu cpu = { .stw_slot = -1 };
+    stw_register(&cpu);
+    int slot = cpu.stw_slot;
+    if (slot < 0 || g_my_stw_slot != slot || g_stw_threads[slot].cpu != &cpu) return 30;
+
+    /* A bound dispatcher must not consult TLS: make the two sources disagree. */
+    g_my_stw_slot = -1;
+    uint64_t epoch = atomic_load_explicit(&g_dispatch_request, memory_order_relaxed);
+    if (!stw_before_translated(&cpu, epoch) ||
+        !atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed))
+        return 31;
+    stw_after_translated(&cpu);
+    if (atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed)) return 32;
+
+    /* The unbound/async entry point retains TLS and therefore ignores cpu.stw_slot. */
+    stw_dispatch_safepoint();
+    if (g_my_stw_slot != -1 || cpu.stw_slot != slot) return 33;
+
+    g_my_stw_slot = slot;
+    stw_after_fork();
+    if (cpu.stw_slot != 0 || g_my_stw_slot != 0 || g_stw_threads[0].cpu != &cpu) return 34;
+    stw_unregister(&cpu);
+    if (cpu.stw_slot != -1 || g_my_stw_slot != -1 ||
+        atomic_load_explicit(&g_stw_threads[0].used, memory_order_relaxed))
+        return 35;
+    return 0;
+}
+#endif
 
 // fork() and the dual-mapped cache. Left alone, fork() would COW the RW and RX aliases independently and
 // the child's two views of the SAME cache would silently diverge (writes through RW never reach the COW'd

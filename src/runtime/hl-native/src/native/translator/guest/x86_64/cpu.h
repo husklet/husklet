@@ -102,6 +102,7 @@ struct cpu {
     // gettid()/tgkill() identity (shared os/linux/{thread,proc,signal}.c): the guest thread id this cpu
     // runs as. 0 on the init thread (reports container_pid()==1); each spawned thread gets a unique id.
     int tid;
+    int stw_slot; // host-private registry index; occupies the existing alignment hole
     /* Per-task seccomp state.  The filter chain is immutable after
        publication, so clone can inherit this pointer byte-for-byte. */
     void *seccomp_filters;
@@ -200,6 +201,12 @@ struct cpu {
        offset out of range. */
     _Alignas(32) struct hl_soft_tlb_entry soft_tlb[SOFT_TLB_ENTRIES];
 };
+
+_Static_assert(__builtin_offsetof(struct cpu, stw_slot) == __builtin_offsetof(struct cpu, tid) + 4,
+               "stw_slot must occupy the existing post-tid padding");
+_Static_assert(__builtin_offsetof(struct cpu, seccomp_filters) == __builtin_offsetof(struct cpu, tid) + 8,
+               "stw_slot must not move serialized CPU fields");
+_Static_assert(sizeof(struct cpu) == 0x54e0, "stw_slot must not change the x86 CPU checkpoint size");
 
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
 #define OFF_FCRES ((int)__builtin_offsetof(struct cpu, fastclk_resume))

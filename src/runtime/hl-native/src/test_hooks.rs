@@ -299,6 +299,13 @@ pub(crate) fn dispatch_profile_test(isa: u32) -> i32 {
     }
 }
 
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(crate) fn stw_cpu_slot_lifecycle_test() -> i32 {
+    // SAFETY: the native hook owns its private zeroed CPU fixture and restores the STW registry
+    // before returning; it accepts and returns only scalars.
+    unsafe { (test_api().x86_64_stw_cpu_slot_lifecycle)() }
+}
+
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn clone3_extended_args_test(isa: u32, scenario: u32) -> Result<(), i32> {
     static FAULT_HANDLER: std::sync::Mutex<()> = std::sync::Mutex::new(());
