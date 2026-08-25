@@ -59,6 +59,7 @@ static int fdvis_self(int *pid, uint64_t *token);
 static int fdvis_after_fork_rollback_test(void);
 static int fdvis_stalled_parent_test(void);
 static int fdvis_corpse_holder_test(void);
+static int fdvis_recursive_identity_test(void);
 #endif
 
 static struct fdpath_slot *fdpath_find(uint64_t key, uint64_t owner_start_ns, int claim) {
@@ -254,6 +255,7 @@ static int fdvis_reservation_sweep_test(uint32_t scenario) {
 }
 
 HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
+    if (scenario == 12) return fdvis_recursive_identity_test();
     if (scenario >= 8 && scenario <= 11) return fdvis_reservation_sweep_test(scenario);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdpath_slot *saved_paths = g_fdpaths;
@@ -737,11 +739,53 @@ static void proc_fdvis_publish_path(int guest_fd) {
     fdvis_unlock();
 }
 
+static int fdvis_native_detail(int guest_fd, hl_host_process_fd *detail, int force_fallback) {
+    size_t ignored = 0;
+    if (guest_fd < 0) return -EBADF;
+    if (!force_fallback && hl_host_process_fd_read(getpid(), guest_fd, detail, NULL, 0, &ignored)) return 0;
+    struct stat status;
+    if (fstat(guest_fd, &status) != 0) return -EBADF;
+    detail->kind = S_ISREG(status.st_mode) || S_ISDIR(status.st_mode) || S_ISLNK(status.st_mode) ||
+                           S_ISCHR(status.st_mode) || S_ISBLK(status.st_mode)
+                       ? HL_HOST_FD_FILE
+                   : S_ISFIFO(status.st_mode) ? HL_HOST_FD_PIPE
+                   : S_ISSOCK(status.st_mode) ? HL_HOST_FD_SOCKET
+                                              : HL_HOST_FD_OTHER;
+    detail->stable_device = (uint64_t)status.st_dev;
+    detail->stable_object = (uint64_t)status.st_ino;
+    return 0;
+}
+
 static int proc_fdvis_publish_native_fd(int guest_fd) {
     hl_host_process_fd detail;
-    size_t ignored = 0;
-    if (guest_fd < 0 || !hl_host_process_fd_read(getpid(), guest_fd, &detail, NULL, 0, &ignored)) return -EBADF;
+    /* Under recursive execution an ambient descriptor can be a guest descriptor of the outer engine,
+     * not an entry in this process's native fd table.  fstat follows that descriptor through the normal
+     * syscall route and therefore remains authoritative at every nesting depth. */
+    if (fdvis_native_detail(guest_fd, &detail, 0) != 0) return -EBADF;
     return proc_fdvis_publish(guest_fd, detail.kind, detail.stable_device, detail.stable_object);
+}
+
+static int fdvis_recursive_identity_test(void) {
+    FILE *first = tmpfile();
+    FILE *second = tmpfile();
+    if (first == NULL || second == NULL) {
+        if (first) fclose(first);
+        if (second) fclose(second);
+        return 0;
+    }
+    int descriptor = fileno(first);
+    struct stat before, expected;
+    int verdict = fstat(descriptor, &before) == 0 && fstat(fileno(second), &expected) == 0 &&
+                  dup2(fileno(second), descriptor) == descriptor;
+    /* Force the same fallback operation recursive execution uses, after the number changed owners. */
+    hl_host_process_fd observed = {0};
+    verdict = verdict && fdvis_native_detail(descriptor, &observed, 1) == 0 &&
+              observed.stable_device == (uint64_t)expected.st_dev &&
+              observed.stable_object == (uint64_t)expected.st_ino &&
+              (observed.stable_device != (uint64_t)before.st_dev || observed.stable_object != (uint64_t)before.st_ino);
+    fclose(first);
+    fclose(second);
+    return verdict;
 }
 
 static int proc_fdvis_publish_pipe_pair(int first, int second) {

@@ -326,7 +326,14 @@ static void hl_private_configure_limit(void) {
      * a soft limit to its existing hard limit, and the 4096-slot band covers two backing descriptors for every
      * guest-visible slot plus process-wide engine handles. The raise is intentionally process-wide: every
      * sibling shares this private namespace, while the emulated guest limit remains separately captured. */
-    rlim_t desired = guest + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
+    /* A host-backed engine can itself run as a guest of another engine. In that
+     * shape every descriptor it places in its private band is represented by a
+     * descriptor in the outer engine's private band too. Raising only enough
+     * for this layer (`guest + reserve`) leaves the outer relocation floor above
+     * the physical soft limit. When the inherited hard limit permits it, make
+     * the complete guest interval plus one private band physically addressable;
+     * the guest-visible ceiling below remains the pre-raise value. */
+    rlim_t desired = (rlim_t)HL_LINUX_FD_LIMIT + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
     if (limit.rlim_cur < desired && (limit.rlim_max == RLIM_INFINITY || limit.rlim_max >= desired)) {
         rlim_t inherited = limit.rlim_cur;
         limit.rlim_cur = desired;
@@ -792,7 +799,10 @@ HL_API int hl_c_backend_private_fork_lock_test(uint32_t scenario) {
             if (getrlimit(RLIMIT_NOFILE, &limit) != 0) _exit(4);
             uint32_t guest = hl_engine_guest_fd_limit();
             int floor = hl_host_process_fd_private_floor();
-            _exit(guest == 960u && floor == 960 && limit.rlim_cur >= 5056u ? 0 : 5);
+            _exit(guest == 960u && floor == 960 &&
+                          limit.rlim_cur >= (rlim_t)HL_LINUX_FD_LIMIT + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM
+                      ? 0
+                      : 5);
         }
         int status = 0;
         if (child < 0 || waitpid(child, &status, 0) != child) return -errno;

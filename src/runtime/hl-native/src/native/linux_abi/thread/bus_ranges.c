@@ -761,6 +761,7 @@ static int guest_exec_direct_valid(uint64_t guest, size_t length) {
 #if HL_NATIVE_TEST_HOOKS
 static void *g_nonpie_collision_mapping;
 static int g_nonpie_collision_active;
+int HL_TARGET_LOCAL(jit_rollover_mapping_test)(uint64_t *result);
 
 static int nonpie_collision_finish_release(int released) {
     if (released != 0) return -EIO;
@@ -868,6 +869,7 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 15:
     case 16:
     case 17: result = map_host_cache_test(scenario, scans); break;
+    case 18: result = HL_TARGET_LOCAL(jit_rollover_mapping_test)(scans); break;
     default: result = -10;
     }
     if (scenario <= 4) *scans = g_gnx_scan_count;

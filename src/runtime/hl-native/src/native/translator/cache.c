@@ -111,6 +111,59 @@ static int code_mapping_reserve(hl_host_code_mapping *mapping, int dual_alias) {
     return hl_arena_reserve(&g_jit_services, CACHE_SZ, alignment, dual_alias, mapping);
 }
 
+/* A dual alias is an optimization, not an allocation invariant.  Apply the same fallback at every
+   arena allocation site: a long-running threaded guest reaches this path again at rollover, where
+   address-space fragmentation can reject the second alias even though one executable mapping still fits. */
+typedef int (*hl_code_mapping_reserve_fn)(hl_host_code_mapping *, int, void *);
+
+static int code_mapping_reserve_adapter(hl_host_code_mapping *mapping, int dual_alias, void *opaque) {
+    (void)opaque;
+    return code_mapping_reserve(mapping, dual_alias);
+}
+
+static int code_mapping_reserve_preferred_with(hl_host_code_mapping *mapping, int dual_alias,
+                                                hl_code_mapping_reserve_fn reserve, void *opaque) {
+    if (reserve(mapping, dual_alias, opaque) == 0) return 0;
+    return dual_alias ? reserve(mapping, 0, opaque) : -1;
+}
+
+static int code_mapping_reserve_preferred(hl_host_code_mapping *mapping, int dual_alias) {
+    return code_mapping_reserve_preferred_with(mapping, dual_alias, code_mapping_reserve_adapter, NULL);
+}
+
+#if HL_NATIVE_TEST_HOOKS
+typedef struct {
+    int attempts;
+} hl_rollover_mapping_test_state;
+
+static int rollover_mapping_test_entry(void) { return 42; }
+
+static int rollover_mapping_test_reserve(hl_host_code_mapping *mapping, int dual_alias, void *opaque) {
+    hl_rollover_mapping_test_state *state = opaque;
+    state->attempts++;
+    if (dual_alias) return -1;
+    memset(mapping, 0, sizeof *mapping);
+    mapping->abi = 1;
+    mapping->size = sizeof *mapping;
+    mapping->writable_address = (uint64_t)(uintptr_t)rollover_mapping_test_entry;
+    mapping->executable_address = mapping->writable_address;
+    return 0;
+}
+
+/* Exercises the exact allocator decision used by threaded rollover.  The injected first attempt
+   deterministically rejects the dual alias; the fallback must return a single executable target. */
+int HL_TARGET_LOCAL(jit_rollover_mapping_test)(uint64_t *result) {
+    hl_host_code_mapping mapping;
+    hl_rollover_mapping_test_state state = {0};
+    if (code_mapping_reserve_preferred_with(&mapping, 1, rollover_mapping_test_reserve, &state) != 0) return -ENOMEM;
+    if (state.attempts != 2 || mapping.writable_address != mapping.executable_address ||
+        mapping.executable_address != (uint64_t)(uintptr_t)rollover_mapping_test_entry)
+        return -EUCLEAN;
+    *result = (uint64_t)rollover_mapping_test_entry();
+    return *result == 42 ? 0 : -EUCLEAN;
+}
+#endif
+
 static int jit_cache_init(void) {
     hl_fatal_context_init(&g_jit_fatal, &g_jit_services);
     // Dual aliases avoid global W^X flips. Hosts that cannot create them still have a correct MAP_JIT
@@ -130,7 +183,7 @@ static int jit_cache_init(void) {
         return -1;
     }
 #else
-    if (code_mapping_reserve(&g_code_mapping, 1) != 0 && code_mapping_reserve(&g_code_mapping, 0) != 0) {
+    if (code_mapping_reserve_preferred(&g_code_mapping, 1) != 0) {
         (void)cache_oom_fail();
         return -1;
     }
@@ -1898,7 +1951,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
     if (retain_generations && g_cache_gen >= 3) (void)map_invalidate_cache_generation(g_cache_gen - 3);
 #endif
     reclaim_retired(); // free retired caches no peer is still in -> bound VA + free space for the new alloc
-    if (code_mapping_reserve(&mapping, g_dualmap) != 0) return cache_oom_fail();
+    if (code_mapping_reserve_preferred(&mapping, g_dualmap) != 0) return cache_oom_fail();
     if (!retire_current()) {
         hl_arena_release(&g_jit_services, mapping.handle);
         return 0;

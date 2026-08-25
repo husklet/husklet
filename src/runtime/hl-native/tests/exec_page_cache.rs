@@ -51,3 +51,10 @@ fn alternating_translation_targets_expose_every_authoritative_map_probe() {
         assert_eq!(exec_page_cache_test(isa, 17), Ok(2));
     }
 }
+
+#[test]
+fn jit_rollover_falls_back_to_an_executable_single_mapping() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 18), Ok(42), "isa={isa}");
+    }
+}
