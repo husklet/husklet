@@ -7,9 +7,14 @@
 #include <string.h>
 
 static hl_guest_fetch_direct_validator g_direct_validator;
+static const _Atomic uint64_t *g_direct_generation;
 
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator validator) {
     g_direct_validator = validator;
+}
+
+void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation) {
+    g_direct_generation = generation;
 }
 
 /*
@@ -27,36 +32,43 @@ void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator validat
  * freed at the next quiescent reclaim and malloc can hand the same address back
  * to the next publication (ABA), which would make a stale entry look fresh.
  *
- * The ordinary/direct verdict is deliberately NOT cached.  Guest munmap,
- * MAP_FIXED, mremap and mprotect(PROT_NONE) over ordinary memory change host
- * mappings without touching the ledger, so the direct validator still runs on
- * every fetch and those paths need no hook (G_SMC_UNMAP included).
+ * The ordinary/direct verdict carries its own independent generation below.
+ * Guest munmap, MAP_FIXED, mremap and mprotect(PROT_NONE) over ordinary memory
+ * do not necessarily touch the logical ledger, so a mapping-span hit may reuse
+ * execute validity only while that second authority is unchanged.
  */
 typedef struct {
     uint64_t generation;
     uint64_t first; /* half-open guest interval over which the resolution holds */
     uint64_t last;
     uint64_t delta; /* host = guest + delta; zero for the ordinary case */
+    uint64_t direct_generation;
+    uint64_t direct_first;
+    uint64_t direct_last;
     int indirect;
 } fetch_span;
 
 static _Thread_local fetch_span g_span;
 
 /* The whole point: a hit is two compares and one load, with no call. */
-static const fetch_span *span_hit(uint64_t guest) {
+static fetch_span *span_hit(uint64_t guest) {
     const _Atomic uint64_t *generation = hl_guest_memory_generation;
     if (generation == NULL || guest < g_span.first || guest >= g_span.last) return NULL;
     return g_span.generation == atomic_load_explicit(generation, memory_order_acquire) ? &g_span : NULL;
 }
 
-static const fetch_span *span_for(uint64_t guest, size_t length, fetch_span *scratch) {
-    const fetch_span *hit = span_hit(guest);
+static fetch_span *span_for(uint64_t guest, size_t length, fetch_span *scratch) {
+    fetch_span *hit = span_hit(guest);
     if (hit != NULL) return hit;
     uint64_t resolved = 0, first = 0, last = 0, delta = 0;
     int resolution = hl_guest_memory_resolve_exec_span(guest, length, &resolved, &first, &last, &delta);
     if (resolution < 0) return NULL;
-    *scratch = (fetch_span){resolved, first, last, delta, resolution > 0};
-    if (hl_guest_memory_generation != NULL) g_span = *scratch;
+    *scratch = (fetch_span){.generation = resolved, .first = first, .last = last, .delta = delta,
+                            .indirect = resolution > 0};
+    if (hl_guest_memory_generation != NULL) {
+        g_span = *scratch;
+        return &g_span;
+    }
     return scratch;
 }
 
@@ -65,13 +77,32 @@ static const fetch_span *span_for(uint64_t guest, size_t length, fetch_span *scr
  * logical hole resolves as "ordinary" from inside the hole, and treating that
  * as a direct host VA would crash the translator.
  */
-static int chunk_valid(uint64_t guest, const fetch_span *span, size_t chunk) {
+static int chunk_valid(uint64_t guest, fetch_span *span, size_t chunk) {
     if (span->indirect) {
         if (span->last - guest >= (uint64_t)chunk) return 1;
         errno = EFAULT; /* the VMA ends inside this chunk: not one executable mapping */
         return 0;
     }
-    if (g_direct_validator == NULL || g_direct_validator(guest, chunk)) return 1;
+    if (g_direct_validator == NULL) return 1;
+    uint64_t end = guest + chunk;
+    const _Atomic uint64_t *authority = g_direct_generation;
+    if (authority != NULL) {
+        uint64_t generation = atomic_load_explicit(authority, memory_order_acquire);
+        if (!(generation & 1) && span->direct_generation == generation && guest >= span->direct_first &&
+            end <= span->direct_last)
+            return 1;
+        uint64_t first = guest & ~UINT64_C(4095);
+        if (first <= UINT64_MAX - UINT64_C(4096) && g_direct_validator(first, 4096)) {
+            uint64_t confirmed = atomic_load_explicit(authority, memory_order_acquire);
+            if (confirmed == generation && !(confirmed & 1)) {
+                span->direct_generation = confirmed;
+                span->direct_first = first;
+                span->direct_last = first + UINT64_C(4096);
+                return 1;
+            }
+        }
+    }
+    if (g_direct_validator(guest, chunk)) return 1;
     errno = EFAULT;
     return 0;
 }
@@ -83,7 +114,7 @@ static int fetch_walk(uint64_t guest, unsigned char *output, size_t length) {
         size_t page_left = (size_t)(4096u - (guest & UINT64_C(4095)));
         size_t chunk = length < page_left ? length : page_left;
         fetch_span scratch;
-        const fetch_span *span = span_for(guest, chunk, &scratch);
+        fetch_span *span = span_for(guest, chunk, &scratch);
         if (span == NULL || !chunk_valid(guest, span, chunk)) return -1;
         if (output != NULL) {
             memcpy(output, (const void *)(uintptr_t)(guest + span->delta), chunk);
@@ -103,7 +134,7 @@ int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
     /* One page, one cached mapping: the shape of every guest instruction fetch
        that is not straddling something.  Nothing to stage, so copy in place. */
     if (length <= 4096u - (size_t)(guest & UINT64_C(4095))) {
-        const fetch_span *span = span_hit(guest);
+        fetch_span *span = span_hit(guest);
         if (span != NULL) {
             if (!chunk_valid(guest, span, length)) return -1;
             memcpy(destination, (const void *)(uintptr_t)(guest + span->delta), length);

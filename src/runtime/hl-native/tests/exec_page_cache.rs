@@ -58,3 +58,11 @@ fn jit_rollover_falls_back_to_an_executable_single_mapping() {
         assert_eq!(exec_page_cache_test(isa, 18), Ok(42), "isa={isa}");
     }
 }
+
+#[test]
+fn fetch_span_hits_reuse_the_authoritative_execute_page_verdict() {
+    for isa in [1, 2] {
+        let validations = exec_page_cache_test(isa, 19).unwrap();
+        assert!(validations <= 1, "isa={isa} validated {validations} times");
+    }
+}

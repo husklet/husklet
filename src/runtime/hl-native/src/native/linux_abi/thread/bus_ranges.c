@@ -707,6 +707,7 @@ typedef struct {
 static _Thread_local guest_exec_page g_exec_page;
 #if HL_NATIVE_TEST_HOOKS
 static _Thread_local uint64_t g_gnx_scan_count;
+static _Thread_local uint64_t g_guest_exec_validation_count;
 #endif
 
 static int gnx_hit(uint64_t a, uint64_t len) {
@@ -739,6 +740,9 @@ static int gnx_hit(uint64_t a, uint64_t len) {
 }
 
 static int guest_exec_direct_valid(uint64_t guest, size_t length) {
+#if HL_NATIVE_TEST_HOOKS
+    g_guest_exec_validation_count++;
+#endif
     if (length == 0) return 1;
     if (guest > UINT64_MAX - length) return 0;
     uint64_t generation = atomic_load_explicit(&g_gnx_generation, memory_order_acquire);
@@ -870,6 +874,23 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 16:
     case 17: result = map_host_cache_test(scenario, scans); break;
     case 18: result = HL_TARGET_LOCAL(jit_rollover_mapping_test)(scans); break;
+    case 19: { // Fetch-span hits reuse the page verdict until its authority changes.
+        _Alignas(4096) unsigned char page_bytes[4096] = {0};
+        unsigned char byte = 0;
+        hl_guest_memory_bind(&g_guest_memory_ops);
+        hl_guest_fetch_set_direct_validator(guest_exec_direct_valid);
+        hl_guest_fetch_set_direct_generation(&g_gnx_generation);
+        g_exec_page = (guest_exec_page){0};
+        g_guest_exec_validation_count = 0;
+        for (size_t i = 0; i < 32; ++i) {
+            if (hl_guest_fetch_exec((uint64_t)(uintptr_t)&page_bytes[i], &byte, 1) != 0 || byte != 0) {
+                result = -EIO;
+                break;
+            }
+        }
+        *scans = g_guest_exec_validation_count;
+        break;
+    }
     default: result = -10;
     }
     if (scenario <= 4) *scans = g_gnx_scan_count;

@@ -2,6 +2,7 @@
 #define HL_TRANSLATOR_GUEST_FETCH_H
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 /*
@@ -17,5 +18,6 @@ int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
 int hl_guest_fetch_u32(uint64_t guest, uint32_t *instruction);
 typedef int (*hl_guest_fetch_direct_validator)(uint64_t, size_t);
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator);
+void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation);
 
 #endif

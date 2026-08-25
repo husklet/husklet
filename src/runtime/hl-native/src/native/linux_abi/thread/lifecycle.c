@@ -292,6 +292,7 @@ static pthread_once_t g_thread_int_once = PTHREAD_ONCE_INIT;
 
 static void thread_int_install(void) {
     hl_guest_fetch_set_direct_validator(guest_exec_direct_valid);
+    hl_guest_fetch_set_direct_generation(&g_gnx_generation);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = thread_int_handler;
