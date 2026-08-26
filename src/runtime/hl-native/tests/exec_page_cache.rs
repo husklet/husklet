@@ -9,6 +9,13 @@ fn stable_executable_pages_scan_the_nonexec_registry_once_per_thread() {
     }
 }
 
+#[test]
+fn alternating_executable_pages_keep_independent_generation_bound_verdicts() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 20), Ok(2));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_fork_child_revalidates_an_inherited_decoded_pc() {

@@ -705,6 +705,8 @@ typedef struct {
 } guest_exec_page;
 
 static _Thread_local guest_exec_page g_exec_page;
+#define GUEST_EXEC_PAGE_CACHE_N 64u
+static _Thread_local guest_exec_page g_exec_pages[GUEST_EXEC_PAGE_CACHE_N];
 #if HL_NATIVE_TEST_HOOKS
 static _Thread_local uint64_t g_gnx_scan_count;
 static _Thread_local uint64_t g_guest_exec_validation_count;
@@ -747,15 +749,19 @@ static int guest_exec_direct_valid(uint64_t guest, size_t length) {
     if (guest > UINT64_MAX - length) return 0;
     uint64_t generation = atomic_load_explicit(&g_gnx_generation, memory_order_acquire);
     uint64_t end = guest + length;
+    uint64_t first = guest & ~UINT64_C(4095);
+    guest_exec_page *cached = &g_exec_pages[(first >> 12) & (GUEST_EXEC_PAGE_CACHE_N - 1u)];
+    if (!(generation & 1) && cached->generation == generation && guest >= cached->first && end <= cached->last)
+        return 1;
     if (!(generation & 1) && g_exec_page.generation == generation && guest >= g_exec_page.first &&
         end <= g_exec_page.last)
         return 1;
 
-    uint64_t first = guest & ~UINT64_C(4095);
     if (first <= UINT64_MAX - UINT64_C(4096) && !gnx_hit(first, 4096)) {
         uint64_t confirmed = atomic_load_explicit(&g_gnx_generation, memory_order_acquire);
         if (confirmed == generation && !(confirmed & 1)) {
             g_exec_page = (guest_exec_page){confirmed, first, first + UINT64_C(4096)};
+            *cached = g_exec_page;
             return 1;
         }
     }
@@ -889,6 +895,17 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
             }
         }
         *scans = g_guest_exec_validation_count;
+        break;
+    }
+    case 20: { // Two hot executable pages retain independent generation-bound verdicts.
+        for (int i = 0; i < 32; ++i) {
+            uint64_t address = page + ((uint64_t)(i & 1) << 12);
+            if (!guest_exec_direct_valid(address, 15)) {
+                result = -EIO;
+                break;
+            }
+        }
+        *scans = g_gnx_scan_count;
         break;
     }
     default: result = -10;
