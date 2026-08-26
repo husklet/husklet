@@ -38,6 +38,11 @@ static inline int smc_seen(void) {
 
 // interp.c supplies run_block/block_return: core/dispatch.c must not emit its AArch64 trampolines.
 #define G_OWN_TRAMPOLINES 1
+#define G_HOT_CONTEXT_TYPE hl_x86_hot_context
+#define G_HOT_CONTEXT_CREATE() hl_x86_hot_context_create(x86_guest_fetch_exec_context, NULL)
+#define G_HOT_CONTEXT_DESTROY(context) hl_x86_hot_context_destroy(context)
+#define G_TRANSLATE_BLOCK(context, pc) translate_block(context, pc)
+#define G_RUN_BLOCK(context, cpu, code) run_block(context, cpu, code)
 
 // Publish the absence of an IBTC base (header note).
 #define G_DISPATCH_ENTER(c) ((c)->ibtc_base = 0)

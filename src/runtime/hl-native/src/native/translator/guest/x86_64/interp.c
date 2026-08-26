@@ -418,11 +418,11 @@ static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t
 
 // Every guest control transfer ends the block, keeping run_guest's per-iteration work (signal poll,
 // safepoints) at block granularity.
-static void interp_execute(struct cpu *cpu) {
+static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
     for (;;) {
         uint64_t pc = cpu->rip; // a fault below reports precisely this PC
         struct insn insn;
-        if (hl_x86_decode(pc, &insn) < 0) {
+        if (hl_x86_decode_context(context, pc, &insn) < 0) {
             // Fetch failed the executable-mapping check: a guest fault, not an engine crash.
             (void)interp_guest_trap(cpu, pc, 11, 2);
             return;
@@ -437,10 +437,10 @@ static void interp_execute(struct cpu *cpu) {
 //
 // STATIC is load-bearing: the dual archive links BOTH target objects and namespace.h does not cover these
 // two, so an external definition collides at link time (findings 3.7). Every caller is in this TU.
-static void run_block(struct cpu *cpu, void *code);
+static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 static void block_return(void);
 
-static void run_block(struct cpu *cpu, void *code) {
+static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) {
     struct interp_block *block = (struct interp_block *)code;
     if (block == NULL || block->magic != INTERP_BLOCK_MAGIC) {
         static const char message[] = "interpreter received an invalid block descriptor";
@@ -473,7 +473,7 @@ static void run_block(struct cpu *cpu, void *code) {
     if (block->host_entry_off != 0 && translit_image_ok() && translit_bind_cpu(cpu)) {
         translit_run(cpu, block);
     } else {
-        interp_execute(cpu);
+        interp_execute(context, cpu);
     }
     g_interp_pad_armed = previous;
     g_interp_pad_cpu = previous_cpu;

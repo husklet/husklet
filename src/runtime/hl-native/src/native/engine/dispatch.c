@@ -214,9 +214,22 @@ static void block_return(void) {
 #ifndef G_TRACE_DUMP
 #define G_TRACE_DUMP(c) ((void)(c))
 #endif
+#ifndef G_HOT_CONTEXT_TYPE
+#define G_HOT_CONTEXT_TYPE void
+#define G_HOT_CONTEXT_CREATE() ((void *)(uintptr_t)1)
+#define G_HOT_CONTEXT_DESTROY(context) ((void)(context))
+#define G_TRANSLATE_BLOCK(context, pc) translate_block(pc)
+#define G_RUN_BLOCK(context, cpu, code) run_block(cpu, code)
+#endif
 
 // ---------------- dispatcher ----------------
 static void run_guest(struct cpu *c) {
+    G_HOT_CONTEXT_TYPE *hot_context = G_HOT_CONTEXT_CREATE();
+    if (hot_context == NULL) {
+        c->exit_code = 70;
+        c->exited = 1;
+        return;
+    }
     // this thread's cpu, for emitted block exits
     pthread_setspecific(g_cpu_key, c);
     // Join the stop-the-world thread registry so a peer's cache-full flush can quiesce us at a safepoint
@@ -363,7 +376,7 @@ static void run_guest(struct cpu *c) {
                 while ((uintptr_t)g_cp & 15)
                     emit32(0xD503201Fu); // nop
             g_emit_start = g_cp;
-            code = translate_block(G_PC(c));
+            code = G_TRANSLATE_BLOCK(hot_context, G_PC(c));
             hl_dispatch_profile_translation(&g_dispatch_profile);
             // new block coherent on all cores FIRST (icache is on the RX alias under dual map)
             if (!jit_publish_code(J_RX(g_emit_start), (size_t)(g_cp - g_emit_start))) {
@@ -448,7 +461,7 @@ static void run_guest(struct cpu *c) {
             profile_block_start = now;
         }
         // map_host()/translate_block() return RW-alias addresses; execute via the RX alias.
-        run_block(c, rxcode);
+        G_RUN_BLOCK(hot_context, c, rxcode);
         // The translated image is fully spilled at block return. Release STW ownership before reason handling:
         // clone and mapping syscalls may themselves initiate a stop-the-world operation and must not wait on
         // their own caller. Checkpoint capture still occurs at the next loop-top dispatcher safepoint.
@@ -496,6 +509,7 @@ static void run_guest(struct cpu *c) {
     thread_unregister(c);
     stw_unregister(c);
     uninstall_host_sigaltstack(); // release this thread's alternate signal stack
+    G_HOT_CONTEXT_DESTROY(hot_context);
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)

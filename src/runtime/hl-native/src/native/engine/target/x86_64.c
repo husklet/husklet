@@ -499,6 +499,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
 #else
 // interp.c defines the same names emit.c/translate.c/cache.c do, so everything below is host-identical.
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
+static int x86_guest_fetch_exec_context(void *opaque, uint64_t guest, void *destination, size_t length);
 #include "../../translator/guest/x86_64/interp.c"
 
 // The interpreter does not protect translated source pages because it emits
@@ -1445,6 +1446,10 @@ static int guest_store_direct_valid(uint64_t address, size_t length) {
 
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
     return hl_guest_fetch_exec(nonpie_fold(guest), destination, length);
+}
+
+static int x86_guest_fetch_exec_context(void *opaque, uint64_t guest, void *destination, size_t length) {
+    return hl_guest_fetch_exec_context(opaque, nonpie_fold(guest), destination, length);
 }
 
 static int guest_rep_access_special(uint64_t address, size_t length, int write) {

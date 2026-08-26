@@ -3,6 +3,7 @@
 #include "decoder.h"
 
 #include <string.h>
+#include <stdlib.h>
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 #include <sys/wait.h>
 #include <unistd.h>
@@ -10,15 +11,8 @@
 
 static hl_x86_instruction_fetch_fn g_instruction_fetch;
 
-enum { DECODE_MEMO_SLOTS = 1024, X86_MAX_INSN = 15 };
-
-typedef struct {
-    uint64_t pc;
-    hl_x86_insn instruction;
-    uint8_t bytes[X86_MAX_INSN];
-    uint8_t length;
-    uint8_t valid;
-} decode_memo_entry;
+enum { DECODE_MEMO_SLOTS = HL_X86_DECODE_MEMO_SLOTS, X86_MAX_INSN = HL_X86_MAX_INSN };
+typedef hl_x86_decode_memo_entry decode_memo_entry;
 
 static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 
@@ -323,10 +317,14 @@ static int decode_bytes(const uint8_t bytes[15], hl_x86_insn *I) {
     return n;
 }
 
-int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
+static int decode_with(uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
+                       hl_x86_context_fetch_fn context_fetch, void *fetch_opaque) {
     uint8_t bytes[X86_MAX_INSN] = {0};
-    decode_memo_entry *memo = &g_decode_memo[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
-    if (memo->valid && memo->pc == pc && instruction_fetch(pc, bytes, memo->length) == 0 &&
+    decode_memo_entry *memo = &entries[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
+#define FETCH(address, destination, length)                                                                            \
+    (context_fetch != NULL ? context_fetch(fetch_opaque, address, destination, length)                                \
+                           : instruction_fetch(address, destination, length))
+    if (memo->valid && memo->pc == pc && FETCH(pc, bytes, memo->length) == 0 &&
         memcmp(bytes, memo->bytes, memo->length) == 0) {
         *I = memo->instruction;
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -337,7 +335,7 @@ int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
 
     size_t available = 4096u - (size_t)(pc & UINT64_C(4095));
     if (available > sizeof bytes) available = sizeof bytes;
-    if (instruction_fetch(pc, bytes, available) != 0) {
+    if (FETCH(pc, bytes, available) != 0) {
         memset(I, 0, sizeof *I);
         return -1;
     }
@@ -349,7 +347,7 @@ int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
          * would incorrectly fault a short instruction at the end of an executable
          * VMA merely because the following page is inaccessible.
          */
-        if (instruction_fetch(pc, bytes, sizeof bytes) != 0) {
+        if (FETCH(pc, bytes, sizeof bytes) != 0) {
             memset(I, 0, sizeof *I);
             return -1;
         }
@@ -367,6 +365,26 @@ int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
 #endif
     }
     return length;
+#undef FETCH
+}
+
+int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
+    return decode_with(pc, I, g_decode_memo, NULL, NULL);
+}
+
+hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque) {
+    hl_x86_hot_context *context = calloc(1, sizeof *context);
+    if (context != NULL) {
+        context->fetch_fn = fetch;
+        context->fetch_opaque = opaque != NULL ? opaque : &context->fetch;
+    }
+    return context;
+}
+
+void hl_x86_hot_context_destroy(hl_x86_hot_context *context) { free(context); }
+
+int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I) {
+    return decode_with(pc, I, context->memo, context->fetch_fn, context->fetch_opaque);
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -387,6 +405,52 @@ static int decode_memo_fetch(uint64_t guest, void *destination, size_t length) {
     if (length > first_page && !fixture->second_page_executable) return -1;
     memcpy(destination, fixture->bytes, length);
     return 0;
+}
+
+static int decode_context_fixture_fetch(void *opaque, uint64_t guest, void *destination, size_t length) {
+    decode_memo_fixture *fixture = opaque;
+    decode_memo_fixture *saved = g_decode_memo_fixture;
+    g_decode_memo_fixture = fixture;
+    int result = decode_memo_fetch(guest, destination, length);
+    g_decode_memo_fixture = saved;
+    return result;
+}
+
+int hl_x86_hot_context_test(void) {
+    decode_memo_fixture first_fixture = {.pc = UINT64_C(0x50000100), .bytes = {0x90},
+                                         .first_page_executable = 1, .second_page_executable = 1};
+    decode_memo_fixture second_fixture = first_fixture;
+    second_fixture.bytes[0] = 0xc3;
+    hl_x86_hot_context *first = hl_x86_hot_context_create(decode_context_fixture_fetch, &first_fixture);
+    hl_x86_hot_context *second = hl_x86_hot_context_create(decode_context_fixture_fetch, &second_fixture);
+    if (first == NULL || second == NULL) {
+        hl_x86_hot_context_destroy(first);
+        hl_x86_hot_context_destroy(second);
+        return -40;
+    }
+    hl_x86_insn a, b;
+    int result = 0;
+    if (hl_x86_decode_context(first, first_fixture.pc, &a) != 1 || a.op != 0x90 ||
+        hl_x86_decode_context(second, second_fixture.pc, &b) != 1 || b.op != 0xc3)
+        result = -41;
+    first_fixture.bytes[0] = 0xc3;
+    if (result == 0 && (hl_x86_decode_context(first, first_fixture.pc, &a) != 1 || a.op != 0xc3)) result = -42;
+#if !defined(_WIN32)
+    if (result == 0) {
+        pid_t child = fork();
+        if (child < 0) result = -43;
+        else if (child == 0) {
+            first_fixture.bytes[0] = 0x90;
+            _exit(hl_x86_decode_context(first, first_fixture.pc, &a) == 1 && a.op == 0x90 ? 0 : 1);
+        } else {
+            int status = 0;
+            if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -44;
+        }
+    }
+#endif
+    hl_x86_hot_context_destroy(first);
+    hl_x86_hot_context_destroy(second);
+    return result;
 }
 
 /* Invoked through the existing target-local scenario/count hook. */

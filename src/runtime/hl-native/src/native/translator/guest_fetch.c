@@ -37,28 +37,20 @@ void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation) {
  * do not necessarily touch the logical ledger, so a mapping-span hit may reuse
  * execute validity only while that second authority is unchanged.
  */
-typedef struct {
-    uint64_t generation;
-    uint64_t first; /* half-open guest interval over which the resolution holds */
-    uint64_t last;
-    uint64_t delta; /* host = guest + delta; zero for the ordinary case */
-    uint64_t direct_generation;
-    uint64_t direct_first;
-    uint64_t direct_last;
-    int indirect;
-} fetch_span;
+typedef hl_guest_fetch_context fetch_span;
 
 static _Thread_local fetch_span g_span;
+hl_guest_fetch_context *hl_guest_fetch_context_current(void) { return &g_span; }
 
 /* The whole point: a hit is two compares and one load, with no call. */
-static fetch_span *span_hit(uint64_t guest) {
+static fetch_span *span_hit(fetch_span *context, uint64_t guest) {
     const _Atomic uint64_t *generation = hl_guest_memory_generation;
-    if (generation == NULL || guest < g_span.first || guest >= g_span.last) return NULL;
-    return g_span.generation == atomic_load_explicit(generation, memory_order_acquire) ? &g_span : NULL;
+    if (generation == NULL || guest < context->first || guest >= context->last) return NULL;
+    return context->generation == atomic_load_explicit(generation, memory_order_acquire) ? context : NULL;
 }
 
-static fetch_span *span_for(uint64_t guest, size_t length, fetch_span *scratch) {
-    fetch_span *hit = span_hit(guest);
+static fetch_span *span_for(fetch_span *context, uint64_t guest, size_t length, fetch_span *scratch) {
+    fetch_span *hit = span_hit(context, guest);
     if (hit != NULL) return hit;
     uint64_t resolved = 0, first = 0, last = 0, delta = 0;
     int resolution = hl_guest_memory_resolve_exec_span(guest, length, &resolved, &first, &last, &delta);
@@ -66,8 +58,8 @@ static fetch_span *span_for(uint64_t guest, size_t length, fetch_span *scratch) 
     *scratch = (fetch_span){.generation = resolved, .first = first, .last = last, .delta = delta,
                             .indirect = resolution > 0};
     if (hl_guest_memory_generation != NULL) {
-        g_span = *scratch;
-        return &g_span;
+        *context = *scratch;
+        return context;
     }
     return scratch;
 }
@@ -109,12 +101,12 @@ static int chunk_valid(uint64_t guest, fetch_span *span, size_t chunk) {
 
 /* Validate and copy in one pass, page-chunked because the direct validator's
    verdict is only meaningful per page.  output == NULL validates only. */
-static int fetch_walk(uint64_t guest, unsigned char *output, size_t length) {
+static int fetch_walk(fetch_span *context, uint64_t guest, unsigned char *output, size_t length) {
     while (length != 0) {
         size_t page_left = (size_t)(4096u - (guest & UINT64_C(4095)));
         size_t chunk = length < page_left ? length : page_left;
         fetch_span scratch;
-        fetch_span *span = span_for(guest, chunk, &scratch);
+        fetch_span *span = span_for(context, guest, chunk, &scratch);
         if (span == NULL || !chunk_valid(guest, span, chunk)) return -1;
         if (output != NULL) {
             memcpy(output, (const void *)(uintptr_t)(guest + span->delta), chunk);
@@ -126,7 +118,7 @@ static int fetch_walk(uint64_t guest, unsigned char *output, size_t length) {
     return 0;
 }
 
-int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
+int hl_guest_fetch_exec_context(fetch_span *context, uint64_t guest, void *destination, size_t length) {
     if (length != 0 && guest > UINT64_MAX - length) {
         errno = EFAULT;
         return -1;
@@ -134,7 +126,7 @@ int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
     /* One page, one cached mapping: the shape of every guest instruction fetch
        that is not straddling something.  Nothing to stage, so copy in place. */
     if (length <= 4096u - (size_t)(guest & UINT64_C(4095))) {
-        fetch_span *span = span_hit(guest);
+        fetch_span *span = span_hit(context, guest);
         if (span != NULL) {
             if (!chunk_valid(guest, span, length)) return -1;
             memcpy(destination, (const void *)(uintptr_t)(guest + span->delta), length);
@@ -146,12 +138,16 @@ int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
        code line and fits. */
     unsigned char staging[64];
     if (length <= sizeof staging) {
-        if (fetch_walk(guest, staging, length) != 0) return -1;
+        if (fetch_walk(context, guest, staging, length) != 0) return -1;
         memcpy(destination, staging, length);
         return 0;
     }
-    if (fetch_walk(guest, NULL, length) != 0) return -1;
-    return fetch_walk(guest, destination, length);
+    if (fetch_walk(context, guest, NULL, length) != 0) return -1;
+    return fetch_walk(context, guest, destination, length);
+}
+
+int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
+    return hl_guest_fetch_exec_context(&g_span, guest, destination, length);
 }
 
 int hl_guest_fetch_u32(uint64_t guest, uint32_t *instruction) {

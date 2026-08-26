@@ -389,7 +389,7 @@ struct interp_block {
 #include "../translit.inc"
 
 // Must return a distinct non-NULL pointer per guest PC: non-NULL from map_host() suppresses re-translation.
-static void *translate_block(uint64_t gpc) {
+static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // Pick up writes made through another MAP_SHARED alias before reading an emulated executable view.
     uint64_t source_page = gpc & ~UINT64_C(0xfff);
     filemap_refresh_emulated(source_page, source_page + UINT64_C(0x1000));
@@ -407,7 +407,7 @@ static void *translate_block(uint64_t gpc) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
 #endif
-    (void)translit_build(block, gpc);
+    (void)translit_build(context, block, gpc);
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.

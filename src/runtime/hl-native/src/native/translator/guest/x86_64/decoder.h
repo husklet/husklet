@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../../guest_fetch.h"
 
 typedef struct insn {
     int len;
@@ -31,11 +32,32 @@ typedef struct insn {
     int evex_mask, evex_z, evex_b;
 } hl_x86_insn;
 
+enum { HL_X86_DECODE_MEMO_SLOTS = 1024, HL_X86_MAX_INSN = 15 };
+typedef struct {
+    uint64_t pc;
+    hl_x86_insn instruction;
+    uint8_t bytes[HL_X86_MAX_INSN];
+    uint8_t length;
+    uint8_t valid;
+} hl_x86_decode_memo_entry;
+typedef int (*hl_x86_context_fetch_fn)(void *, uint64_t, void *, size_t);
+typedef struct {
+    hl_x86_decode_memo_entry memo[HL_X86_DECODE_MEMO_SLOTS];
+    hl_guest_fetch_context fetch;
+    hl_x86_context_fetch_fn fetch_fn;
+    void *fetch_opaque;
+} hl_x86_hot_context;
+
+hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque);
+void hl_x86_hot_context_destroy(hl_x86_hot_context *context);
+int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn);
+
 int hl_x86_decode(uint64_t pc, hl_x86_insn *insn);
 typedef int (*hl_x86_instruction_fetch_fn)(uint64_t, void *, size_t);
 void hl_x86_decode_set_instruction_fetch(hl_x86_instruction_fetch_fn);
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_x86_decode_memo_test(uint32_t scenario, uint64_t *decodes);
+int hl_x86_hot_context_test(void);
 #endif
 
 #endif

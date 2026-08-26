@@ -16,6 +16,13 @@
  */
 int hl_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
 int hl_guest_fetch_u32(uint64_t guest, uint32_t *instruction);
+typedef struct {
+    uint64_t generation, first, last, delta;
+    uint64_t direct_generation, direct_first, direct_last;
+    int indirect;
+} hl_guest_fetch_context;
+hl_guest_fetch_context *hl_guest_fetch_context_current(void);
+int hl_guest_fetch_exec_context(hl_guest_fetch_context *, uint64_t, void *, size_t);
 typedef int (*hl_guest_fetch_direct_validator)(uint64_t, size_t);
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator);
 void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation);

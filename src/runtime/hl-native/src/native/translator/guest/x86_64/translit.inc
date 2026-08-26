@@ -534,7 +534,7 @@ enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED }
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_test_decode_refuse_pc;
 #endif
-static int translit_jcc_successor(uint64_t source, uint64_t next, struct insn *successor);
+static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next, struct insn *successor);
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
@@ -633,7 +633,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         uint64_t next = (uint64_t)(uintptr_t)code;
         struct insn successor;
         translit_test_decode_refuse_pc = next;
-        int refused = translit_jcc_successor(next, next, &successor) == TL_SUCCESSOR_DECODE_REFUSED;
+        int refused = translit_jcc_successor(NULL, next, next, &successor) == TL_SUCCESSOR_DECODE_REFUSED;
         translit_test_decode_refuse_pc = 0;
         return refused ? 0 : 23;
     }
@@ -672,18 +672,20 @@ static int translit_condition(const struct insn *insn) {
     return insn->op & 0xF;
 }
 
-static int translit_jcc_successor(uint64_t source, uint64_t next, struct insn *successor) {
+static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next,
+                                  struct insn *successor) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (next == translit_test_decode_refuse_pc) return TL_SUCCESSOR_DECODE_REFUSED;
 #endif
-    if (hl_x86_decode(next, successor) <= 0 || successor->len <= 0) return TL_SUCCESSOR_DECODE_REFUSED;
+    int decoded = context != NULL ? hl_x86_decode_context(context, next, successor) : hl_x86_decode(next, successor);
+    if (decoded <= 0 || successor->len <= 0) return TL_SUCCESSOR_DECODE_REFUSED;
     if (next > UINT64_MAX - (uint64_t)successor->len ||
         ((next + (uint64_t)successor->len - 1) >> 12) != (source >> 12))
         return TL_SUCCESSOR_PAGE_REFUSED;
     return TL_SUCCESSOR_OK;
 }
 
-static void *translit_build(struct interp_block *block, uint64_t gpc) {
+static void *translit_build(hl_x86_hot_context *context, struct interp_block *block, uint64_t gpc) {
     if (!translit_image_ok()) {
         if (translit_enabled()) (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
         return NULL;
@@ -703,7 +705,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
-        if (hl_x86_decode(pc, &insn) <= 0) break;
+        if (hl_x86_decode_context(context, pc, &insn) <= 0) break;
         int kind = translit_classify(&insn);
         if (kind == TL_NO) break;
         if (!translit_displaced_safe(&insn, kind)) {
@@ -766,7 +768,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             (void)__atomic_fetch_add(&translit_jcc_fall_candidates, 1, __ATOMIC_RELAXED);
             if (stitched < TL_STITCH_MAX_JMPS) {
                 struct insn successor;
-                int successor_status = translit_jcc_successor(pc, next, &successor);
+                int successor_status = translit_jcc_successor(context, pc, next, &successor);
                 if (successor_status == TL_SUCCESSOR_DECODE_REFUSED) {
                     (void)__atomic_fetch_add(&translit_jcc_fall_decode_refused, 1, __ATOMIC_RELAXED);
                 } else if (successor_status == TL_SUCCESSOR_PAGE_REFUSED) {
@@ -803,7 +805,8 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
             if (target > next && (target >> 12) == (pc >> 12)) {
                 (void)__atomic_fetch_add(&translit_stitch_candidates, 1, __ATOMIC_RELAXED);
                 struct insn successor;
-                if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode(target, &successor) > 0 && successor.len > 0) {
+                if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode_context(context, target, &successor) > 0 &&
+                    successor.len > 0) {
                     pc = target;
                     count++;
                     stitched++;
@@ -1109,7 +1112,8 @@ static int translit_bind_cpu(struct cpu *cpu) {
     return 0;
 }
 
-static void *translit_build(struct interp_block *block, uint64_t gpc) {
+static void *translit_build(hl_x86_hot_context *context, struct interp_block *block, uint64_t gpc) {
+    (void)context;
     (void)block;
     (void)gpc;
     return NULL;

@@ -50,6 +50,12 @@ fn x86_decoded_pc_memo_revalidates_bytes_and_execute_permission() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn x86_explicit_hot_contexts_isolate_and_revalidate_across_fork() {
+    assert!(exec_page_cache_test(2, 21).is_ok());
+}
+
 #[test]
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
