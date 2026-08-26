@@ -131,6 +131,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_BODY_OWNER_EXHAUST",
+        "test-only exhaust immutable same-ISA body-owner capacity",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",
         Flag

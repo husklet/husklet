@@ -506,11 +506,11 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
-    fn displaced_transliteration_projects_dereferences_but_not_lea() {
+    fn transliteration_lowering_and_nonwrapping_body_owners_are_exact() {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 1..=23 {
+        for scenario in 1..=33 {
             // SAFETY: the hook accepts one bounded scalar selector and owns no external state.
             assert_eq!(unsafe { hook(scenario) }, 0, "scenario {scenario}");
         }

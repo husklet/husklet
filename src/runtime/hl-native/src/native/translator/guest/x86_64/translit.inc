@@ -157,6 +157,10 @@ static uint64_t translit_jcc_fall_executed;
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
 static uint64_t translit_provenance_fallback;
+static uint64_t translit_body_owner_recovered;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t translit_body_owner_published;
+#endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
 static uint64_t translit_displaced_riprel_projected;
@@ -663,6 +667,140 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 25;
     }
+    if (scenario == 24) {
+        const uint64_t generation = UINT64_MAX - 24;
+        uint64_t base = (uint64_t)(uintptr_t)g_cache + CACHE_SZ - 0x1000;
+        uint32_t token;
+        uint64_t owner = 0;
+        jit_body_owner_drop_generation(generation);
+        if (!jit_body_owner_reserve(generation, &token) || token != 0 ||
+            !jit_body_owner_publish(generation, token, base, base + 0x20, UINT64_C(0x1111)) ||
+            !jit_body_owner_reserve(generation, &token) || token != 1 ||
+            !jit_body_owner_publish(generation, token, base + 0x20, base + 0x40, UINT64_C(0x2222)))
+            return 26;
+        int ok = jit_body_owner_lookup(base + g_rw2rx + 0x1f, &owner) && owner == UINT64_C(0x1111) &&
+                 jit_body_owner_lookup(base + g_rw2rx + 0x20, &owner) && owner == UINT64_C(0x2222) &&
+                 !jit_body_owner_lookup(base + g_rw2rx + 0x40, &owner);
+        jit_body_owner_drop_generation(generation);
+        return ok ? 0 : 27;
+    }
+    if (scenario == 25) {
+        const uint64_t generation = UINT64_MAX - 25;
+        uint32_t token;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 28;
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N, memory_order_relaxed);
+        int refused = !jit_body_owner_reserve(generation, &token);
+        jit_body_owner_drop_generation(generation);
+        return refused ? 0 : 29;
+    }
+    if (scenario == 26) {
+        const uint64_t generation = UINT64_MAX - 26;
+        uint64_t base = (uint64_t)(uintptr_t)g_cache + CACHE_SZ - 0x800;
+        uint32_t token;
+        jit_body_owner_drop_generation(generation);
+        int reserved = jit_body_owner_reserve(generation, &token);
+        int rejected = reserved && !jit_body_owner_publish(generation, token + 1, base, base + 1, 3);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
+        int unchanged = set != NULL && atomic_load_explicit(&set->count, memory_order_relaxed) == 0;
+        jit_body_owner_drop_generation(generation);
+        return rejected && unchanged ? 0 : 30;
+    }
+    if (scenario == 27) {
+        const uint64_t generation = UINT64_MAX - 27;
+        const uint64_t rw = UINT64_C(0x100000000);
+        const ptrdiff_t alias = (ptrdiff_t)(CACHE_SZ * 2u);
+        uint32_t token;
+        uint64_t owner = 0;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 31;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = alias;
+        if (!jit_body_owner_reserve(generation, &token) ||
+            !jit_body_owner_publish(generation, token, rw + 0x80, rw + 0x90, UINT64_C(0x3333)))
+            return 32;
+        int ok = jit_body_owner_lookup(rw + 0x88, &owner) && owner == UINT64_C(0x3333) &&
+                 jit_body_owner_lookup(rw + alias + 0x88, &owner) && owner == UINT64_C(0x3333);
+        jit_body_owner_drop_generation(generation);
+        return ok ? 0 : 33;
+    }
+    if (scenario == 28) {
+        const uint64_t generation = UINT64_MAX - 28;
+        const uint64_t rw = UINT64_C(0x200000000);
+        uint32_t token;
+        uint64_t owner = 0;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 34;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = 0;
+        if (!jit_body_owner_reserve(generation, &token) ||
+            !jit_body_owner_publish(generation, token, rw + 1, rw + 2, UINT64_C(0x4444)) ||
+            !jit_body_owner_lookup(rw + 1, &owner) || owner != UINT64_C(0x4444))
+            return 35;
+        // Arena retirement, unlike ordinary map invalidation, removes the immutable owner set.
+        jit_body_owner_drop_generation(generation);
+        return !jit_body_owner_lookup(rw + 1, &owner) ? 0 : 36;
+    }
+    if (scenario == 29 || scenario == 30) {
+        uint64_t generation = UINT64_MAX - scenario;
+        const uint64_t rw = UINT64_C(0x300000000);
+        uint32_t token;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 37;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = 0;
+        if (!jit_body_owner_reserve(generation, &token) ||
+            !jit_body_owner_publish(generation, token, rw + 0x20, rw + 0x40, 1) ||
+            !jit_body_owner_reserve(generation, &token))
+            return 38;
+        uint64_t lo = scenario == 29 ? rw + 0x30 : rw + 0x10;
+        int rejected = !jit_body_owner_publish(generation, token, lo, lo + 0x10, 2);
+        int unchanged = atomic_load_explicit(&set->count, memory_order_relaxed) == 1;
+        jit_body_owner_drop_generation(generation);
+        return rejected && unchanged ? 0 : 39;
+    }
+    if (scenario == 31 || scenario == 32) {
+        uint64_t generation = UINT64_MAX - scenario;
+        const uint64_t rw = UINT64_C(0x400000000);
+        uint32_t token;
+        uint64_t owner = 0;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 40;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = 0;
+        if (!jit_body_owner_reserve(generation, &token) ||
+            !jit_body_owner_publish(generation, token, rw + 1, rw + 2, 5))
+            return 41;
+        jit_body_owner_after_fork(scenario == 31);
+        int found = jit_body_owner_lookup(rw + 1, &owner) && owner == 5;
+        jit_body_owner_drop_generation(generation);
+        return found == (scenario == 31) ? 0 : 42;
+    }
+    if (scenario == 33) {
+        const uint64_t generation = UINT64_MAX - 33;
+        const uint64_t rw = UINT64_C(0x500000000);
+        uint32_t token;
+        uint64_t owner = 0;
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 43;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = 0;
+        if (!jit_body_owner_reserve(generation, &token) ||
+            !jit_body_owner_publish(generation, token, rw + 1, rw + 2, 6))
+            return 44;
+        if (jit_body_owner_reclaim_if_unused(generation, 1, 0) ||
+            !jit_body_owner_lookup(rw + 1, &owner) || owner != 6 ||
+            jit_body_owner_reclaim_if_unused(generation, 0, 1) ||
+            !jit_body_owner_lookup(rw + 1, &owner) || owner != 6)
+            return 45;
+        if (!jit_body_owner_reclaim_if_unused(generation, 0, 0)) return 46;
+        return !jit_body_owner_lookup(rw + 1, &owner) ? 0 : 47;
+    }
     return 6;
 }
 #endif
@@ -688,6 +826,15 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         if (translit_enabled()) (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
         return NULL;
     }
+    uint32_t owner_token;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *exhaust = hl_option_get("HL_TRANSLIT_BODY_OWNER_EXHAUST");
+    if (exhaust != NULL && exhaust[0] != '0' && exhaust[0] != 0) {
+        jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
+        if (set != NULL) atomic_store_explicit(&set->count, JIT_BODY_OWNER_N, memory_order_relaxed);
+    }
+#endif
+    if (!jit_body_owner_reserve(g_cache_gen, &owner_token)) return NULL;
     uint8_t *arena_limit = (uint8_t *)g_cache + CACHE_SZ - CACHE_EMIT_HEADROOM;
     uint8_t *start = g_cp;
     if (start + TL_MAX_BYTES > arena_limit) return NULL;
@@ -928,6 +1075,12 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         if (a->overflow) return NULL;
     }
 
+    if (!jit_body_owner_publish(g_cache_gen, owner_token, (uint64_t)(uintptr_t)start,
+                                (uint64_t)(uintptr_t)a->cursor, gpc))
+        return NULL;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
+#endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
     block->host_len = (uint32_t)(a->cursor - start);
     block->guest_end = pc;
@@ -978,6 +1131,12 @@ static int translit_report(char *out, size_t size) {
 #endif
     uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
     uint64_t provenance_fallback = __atomic_load_n(&translit_provenance_fallback, __ATOMIC_RELAXED);
+    uint64_t body_owner_recovered = __atomic_load_n(&translit_body_owner_recovered, __ATOMIC_RELAXED);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    uint64_t body_owner_published = __atomic_load_n(&translit_body_owner_published, __ATOMIC_RELAXED);
+#else
+    uint64_t body_owner_published = 0;
+#endif
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
     uint64_t displaced_operand_declined =
@@ -1043,6 +1202,7 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
+                    " body_owner_recovered=%llu body_owner_published=%llu"
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -1051,6 +1211,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
+                    (unsigned long long)body_owner_recovered, (unsigned long long)body_owner_published,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
@@ -1089,6 +1250,11 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         (void)__atomic_fetch_add(&translit_provenance_fallback, 1, __ATOMIC_RELAXED);
     }
 #endif
+    if (!exact_pc && jit_body_owner_lookup(host_pc, &guest_pc)) {
+        exact_pc = 1;
+        preserve_registers = 0;
+        (void)__atomic_fetch_add(&translit_body_owner_recovered, 1, __ATOMIC_RELAXED);
+    }
     for (int i = 0; i < 16; i++) {
         if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
     }

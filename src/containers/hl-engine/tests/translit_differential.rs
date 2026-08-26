@@ -73,6 +73,8 @@ struct Backend {
     natural_lea_lowered: u64,
     rip_indirect_lowered: u64,
     provenance_fallback: u64,
+    body_owner_recovered: u64,
+    body_owner_published: u64,
     translations: u64,
 }
 
@@ -120,6 +122,8 @@ fn backend(stderr: &[u8]) -> Backend {
         natural_lea_lowered: counter("natural_lea_lowered="),
         rip_indirect_lowered: counter("rip_indirect_lowered="),
         provenance_fallback: counter("provenance_fallback="),
+        body_owner_recovered: counter("body_owner_recovered="),
+        body_owner_published: counter("body_owner_published="),
         translations,
         line,
     }
@@ -266,6 +270,7 @@ fn run_with_arguments(
     translit: &str,
     extra: &[&[u8]],
     force_provenance_miss: bool,
+    exhaust_body_owners: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -275,6 +280,11 @@ fn run_with_arguments(
         options
             .set("HL_TRANSLIT_PROVENANCE_FALLBACK", "1", true)
             .expect("HL_TRANSLIT_PROVENANCE_FALLBACK");
+    }
+    if exhaust_body_owners {
+        options
+            .set("HL_TRANSLIT_BODY_OWNER_EXHAUST", "1", true)
+            .expect("HL_TRANSLIT_BODY_OWNER_EXHAUST");
     }
     let plan = RuntimePlan {
         rootfs: None,
@@ -298,7 +308,7 @@ fn run_with_arguments(
 }
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
-    run_with_arguments(executable, translit, &[], false)
+    run_with_arguments(executable, translit, &[], false, false)
 }
 
 /// The whole contract: the backend selection must not be observable in the guest's output.
@@ -356,6 +366,19 @@ fn agrees(name: &str) {
 #[test]
 fn flag_state_survives_every_transliterated_block_boundary() {
     agrees("flags");
+}
+
+#[test]
+fn exhausted_body_owner_capacity_falls_back_to_the_interpreter() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "flags");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true);
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected_backend.entries, 0, "{}", selected_backend.line);
+    assert_eq!(selected_backend.body_owner_recovered, 0, "{}", selected_backend.line);
+    assert_eq!(selected_backend.body_owner_published, 0, "{}", selected_backend.line);
 }
 
 /// A guest that writes its own code at runtime.
@@ -477,7 +500,7 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     // path pinned to native architectural behaviour without making that older compatibility defect the
     // oracle for this lowering.
     let (selected_stack, selected_stack_status, selected_stack_backend) =
-        run_with_arguments(&executable, "1", &[b"stack"], true);
+        run_with_arguments(&executable, "1", &[b"stack"], true, false);
     assert!(
         selected_stack_backend.rip_indirect_lowered >= 4,
         "{}",
@@ -486,6 +509,11 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     assert_eq!(
         selected_stack_backend.provenance_fallback, 1,
         "{}",
+        selected_stack_backend.line
+    );
+    assert_eq!(
+        selected_stack_backend.body_owner_recovered, 1,
+        "the forced instruction-ring miss did not recover through the immutable body owner -- {}",
         selected_stack_backend.line
     );
     let native_stack = std::process::Command::new(&executable)
