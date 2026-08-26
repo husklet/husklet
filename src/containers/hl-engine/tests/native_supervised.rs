@@ -4,6 +4,7 @@ use hl_engine::{
     activation::GuestIsa,
     composition::{StandardStream, StandardStreamPort, StandardStreams},
     launcher::plan::RuntimePlan,
+    engine::ExitKind,
     options::Options,
     runtime::Engine,
 };
@@ -165,4 +166,24 @@ fn readiness_precedes_exec_permission_failure_and_result_reports_126() {
     let executable = fixture(work.path());
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(run(&executable, &[], true), (126, Vec::new(), Vec::new()));
+}
+
+#[test]
+fn supervised_tracee_signal_keeps_public_signal_kind() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"signal".to_vec()],
+        environment: Vec::new(), result_path: None, options,
+    };
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    assert_eq!(exit.kind, ExitKind::Signal);
+    assert_eq!(exit.guest_status, libc::SIGTERM);
+    engine.destroy().unwrap();
 }

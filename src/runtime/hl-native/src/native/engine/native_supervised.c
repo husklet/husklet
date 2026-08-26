@@ -133,7 +133,7 @@ static void hl_native_supervised_environment_free(char **environment) {
     free(environment);
 }
 
-static int hl_native_supervised_wait(int listener, pid_t leader, const hl_options *options) {
+static int hl_native_supervised_wait(int listener, pid_t leader, const hl_options *options, int *guest_signal) {
     int refused_number, refused_error;
     if (hl_native_supervised_refusal(options, &refused_number, &refused_error) != 0) return 70;
     struct seccomp_notif_sizes sizes = {0};
@@ -142,13 +142,19 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
     struct seccomp_notif_resp *response = calloc(1, sizes.seccomp_notif_resp);
     if (request == NULL || response == NULL) { free(request); free(response); return 70; }
     int leader_result = 70, leader_done = 0;
+    *guest_signal = 0;
     for (;;) {
         int status;
         pid_t waited;
         while ((waited = waitpid(-1, &status, WNOHANG)) > 0) {
             if (waited == leader) {
                 leader_done = 1;
-                leader_result = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+                if (WIFEXITED(status)) leader_result = WEXITSTATUS(status);
+                else if (WIFSIGNALED(status)) {
+                    *guest_signal = WTERMSIG(status);
+                    /* finish_process authenticates the signal record against this worker status. */
+                    leader_result = 128 + *guest_signal;
+                }
             }
         }
         if (waited < 0 && errno == ECHILD && leader_done) {
@@ -179,7 +185,7 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
 
 static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box, const char *rootfs,
                                         char *const argv[],
-                                        const hl_options *options, int activation_ready) {
+                                        const hl_options *options, int activation_ready, int *guest_signal) {
     if (argv == NULL || argv[0] == NULL) return 70;
     if (rootfs == NULL) rootfs = "/";
     if (host == NULL || host->posix_attachment == NULL || host->posix_attachment->borrow_file == NULL ||
@@ -232,7 +238,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         close(listener); (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
         hl_native_supervised_environment_free(environment); return 70;
     }
-    int result = hl_native_supervised_wait(listener, child, options);
+    int result = hl_native_supervised_wait(listener, child, options, guest_signal);
     close(listener);
     hl_native_supervised_environment_free(environment);
     return result;
@@ -246,7 +252,8 @@ attachment_failed:
 static int hl_native_supervised_available(void) { return 0; }
 static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box, const char *rootfs,
                                         char *const argv[],
-                                        const hl_options *options, int activation_ready) {
-    (void)host; (void)box; (void)rootfs; (void)argv; (void)options; (void)activation_ready; return 70;
+                                        const hl_options *options, int activation_ready, int *guest_signal) {
+    (void)host; (void)box; (void)rootfs; (void)argv; (void)options; (void)activation_ready;
+    *guest_signal = 0; return 70;
 }
 #endif

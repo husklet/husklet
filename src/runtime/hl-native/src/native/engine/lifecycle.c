@@ -719,10 +719,11 @@ static int32_t hl_production_entry(void *opaque) {
      * until process exit instead of making success depend on close(2)'s ambiguous EINTR state. It is above
      * the guest interval, excluded from checkpoint descriptor capture, and has one explicit lifetime owner. */
     int32_t result;
+    int native_supervised_signal = 0;
     if (hl_native_supervised_selected(context->options)) {
         result = hl_native_supervised_run(context->host, context->box, context->config->rootfs,
                                           (char *const *)(uintptr_t)context->argv, context->options,
-                                          activation_ready_write);
+                                          activation_ready_write, &native_supervised_signal);
     } else {
         if (write(activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
             return HL_STATUS_PLATFORM_FAILURE;
@@ -734,7 +735,8 @@ static int32_t hl_production_entry(void *opaque) {
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
-    hl_engine_child_result_publish(result, hl_run_linux_guest_status(), 0);
+    if (native_supervised_signal != 0) hl_engine_child_result_publish_signal(native_supervised_signal);
+    else hl_engine_child_result_publish(result, hl_run_linux_guest_status(), 0);
     return result;
 }
 #endif

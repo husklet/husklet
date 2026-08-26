@@ -6,6 +6,7 @@
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <signal.h>
 
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "output")) {
@@ -50,5 +51,6 @@ int main(int argc, char **argv) {
         if (write(2, "stderr", 6) != 6) return 53;
         if (dup2(1, 7) != 7 || write(7, "-dup", 4) != 4) return 54;
     }
+    if (argc > 1 && !strcmp(argv[1], "signal")) raise(SIGTERM);
     return 0;
 }
