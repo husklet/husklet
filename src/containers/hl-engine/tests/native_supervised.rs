@@ -257,6 +257,63 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     assert_eq!(*output.stdout.lock().unwrap(), b"root-contract");
 }
 
+#[test]
+fn supervised_projector_mounts_read_only_source_and_read_write_output() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    let source = work.path().join("source");
+    let output_directory = work.path().join("output");
+    for path in [root.join("bin"), root.join("proc"), root.join("src"), root.join("out"), source.clone(), output_directory.clone()] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(source.join("input.c"), b"source\n").unwrap();
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"volumes".to_vec());
+    plan.box_policy.volumes = Some(
+        format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes(),
+    );
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"volumes");
+    assert_eq!(std::fs::read(output_directory.join("result.o")).unwrap(), b"object\n");
+    assert!(!source.join("blocked").exists());
+}
+
+#[test]
+fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let source = work.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let symlink = work.path().join("source-link");
+    std::os::unix::fs::symlink(&source, &symlink).unwrap();
+    let specifications = [
+        format!("rw:/tmp/../escape:{}", source.display()),
+        format!("rw:/tmp:{}", symlink.display()),
+    ];
+    for specification in specifications {
+        let mut plan = selected_plan(&executable);
+        plan.box_policy.volumes = Some(specification.into_bytes());
+        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        if engine.start().is_ok() {
+            assert!(engine.wait().is_err());
+        }
+        engine.destroy().unwrap();
+    }
+}
+
 struct Checkpoints;
 impl CheckpointSink for Checkpoints {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
@@ -309,7 +366,6 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let mut policy = isolated_policy(); policy.uid = 1; policies.push(policy);
     let mut policy = isolated_policy(); policy.gid = 1; policies.push(policy);
     let mut policy = isolated_policy(); policy.limits = Some(b"nofile=32".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.volumes = Some(b"/a:/b".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);

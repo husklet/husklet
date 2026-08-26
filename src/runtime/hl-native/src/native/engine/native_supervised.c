@@ -9,6 +9,8 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <linux/seccomp.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
+#include <linux/openat2.h>
+#include <linux/mount.h>
 #include <sched.h>
 #include <grp.h>
 #include <poll.h>
@@ -17,6 +19,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -31,6 +34,17 @@ typedef struct {
     _Atomic int acknowledged;
     _Atomic int result_signal;
 } hl_native_supervised_bootstrap;
+
+typedef struct {
+    int source;
+    int read_only;
+    char guest[PATH_MAX];
+} hl_native_supervised_volume;
+
+typedef struct {
+    hl_native_supervised_volume entries[32];
+    size_t count;
+} hl_native_supervised_volumes;
 
 static int hl_native_supervised_write_text(const char *path, const char *text) {
     int fd = open(path, O_WRONLY | O_CLOEXEC);
@@ -61,12 +75,95 @@ static int hl_native_supervised_close_except(int keep) {
     return closedir(directory);
 }
 
+static int hl_native_supervised_guest_path_valid(const char *path) {
+    if (path == NULL || path[0] != '/' || path[1] == 0) return 0;
+    for (const char *part = path + 1; *part;) {
+        const char *end = strchr(part, '/');
+        size_t length = end == NULL ? strlen(part) : (size_t)(end - part);
+        if (length == 0 || (length == 1 && part[0] == '.') ||
+            (length == 2 && part[0] == '.' && part[1] == '.'))
+            return 0;
+        if (end == NULL) break;
+        part = end + 1;
+    }
+    return 1;
+}
+
+static int hl_native_supervised_volumes_open(const char *spec, hl_native_supervised_volumes *volumes) {
+    memset(volumes, 0, sizeof(*volumes));
+    if (spec == NULL) return 0;
+    char *copy = strdup(spec);
+    if (copy == NULL) return -1;
+    char *save = NULL;
+    for (char *record = strtok_r(copy, ",", &save); record != NULL; record = strtok_r(NULL, ",", &save)) {
+        if (volumes->count == 32) goto failed;
+        int read_only = 0;
+        if (strncmp(record, "ro:", 3) == 0) { read_only = 1; record += 3; }
+        else if (strncmp(record, "rw:", 3) == 0) record += 3;
+        char *colon = strchr(record, ':');
+        if (colon == NULL) goto failed;
+        *colon++ = 0;
+        if (!hl_native_supervised_guest_path_valid(record) || colon[0] != '/' || strchr(colon, ':') != NULL ||
+            strlen(record) >= sizeof(volumes->entries[0].guest))
+            goto failed;
+        int host_root = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+        struct open_how source_how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+                                      .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
+        int source = host_root < 0 ? -1 : (int)syscall(SYS_openat2, host_root, colon + 1, &source_how, sizeof(source_how));
+        if (host_root >= 0) close(host_root);
+        if (source < 0) goto failed;
+        int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC);
+        struct stat source_status, tree_status;
+        if (tree < 0 || fstat(source, &source_status) != 0 || fstat(tree, &tree_status) != 0 ||
+            source_status.st_dev != tree_status.st_dev || source_status.st_ino != tree_status.st_ino) {
+            if (tree >= 0) close(tree);
+            close(source);
+            goto failed;
+        }
+        close(source);
+        hl_native_supervised_volume *volume = &volumes->entries[volumes->count++];
+        volume->source = tree;
+        volume->read_only = read_only;
+        strcpy(volume->guest, record);
+    }
+    free(copy);
+    return 0;
+failed:
+    for (size_t index = 0; index < volumes->count; ++index) close(volumes->entries[index].source);
+    free(copy);
+    return -1;
+}
+
+static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes) {
+    int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (root < 0) return -1;
+    for (size_t index = 0; index < volumes->count; ++index) {
+        const hl_native_supervised_volume *volume = &volumes->entries[index];
+        struct open_how how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+                               .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
+        int target = (int)syscall(SYS_openat2, root, volume->guest + 1, &how, sizeof(how));
+        if (target < 0) { close(root); return -1; }
+        int tree = volume->source;
+        struct mount_attr attributes = {.attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV |
+                                                     (volume->read_only ? MOUNT_ATTR_RDONLY : 0)};
+        if (tree < 0 || syscall(SYS_mount_setattr, tree, "", AT_EMPTY_PATH, &attributes, sizeof(attributes)) != 0 ||
+            syscall(SYS_move_mount, tree, "", target, "", MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH) != 0) {
+            if (tree >= 0) close(tree);
+            close(target); close(root); return -1;
+        }
+        close(tree);
+        close(target);
+    }
+    close(root);
+    return 0;
+}
+
 static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
     if (geteuid() != 0 || getegid() != 0 || config->rootfs == NULL || box == NULL ||
         config->memory_limit != 0 || config->pid_limit != 0 ||
         config->cpu_limit != 0 || box->uid != -1 || box->gid != -1 || box->lower_layers != NULL ||
-        box->publish_count != 0 || box->volumes != NULL || box->limits != NULL || box->network_bridge != NULL ||
+        box->publish_count != 0 || box->limits != NULL || box->network_bridge != NULL ||
         box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||
         box->filesystem_generation != NULL || box->file_owners != NULL || box->checkpoint_mode != 0 ||
         box->checkpoint_policy != 0 ||
@@ -77,20 +174,12 @@ static int hl_native_supervised_policy_supported(const hl_engine_config *config)
 }
 
 static int hl_native_supervised_project_container(const hl_engine_config *config,
-                                                  hl_native_supervised_bootstrap *bootstrap) {
+                                                  hl_native_supervised_bootstrap *bootstrap,
+                                                  const hl_native_supervised_volumes *volumes) {
     const hl_engine_box_config *box = config->box;
     uid_t host_uid = geteuid();
     gid_t host_gid = getegid();
-    if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
-        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0)
-        return -1;
-    char uid_map[64], gid_map[64];
-    if (snprintf(uid_map, sizeof(uid_map), "0 %u 1\n", (unsigned)host_uid) <= 0 ||
-        snprintf(gid_map, sizeof(gid_map), "0 %u 1\n", (unsigned)host_gid) <= 0 ||
-        hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
-        hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
-        hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0 ||
-        unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC) != 0)
+    if (unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC) != 0)
         return -1;
     pid_t init = fork();
     if (init < 0) return -1;
@@ -111,14 +200,27 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     }
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
     if (strcmp(config->rootfs, "/") != 0 && mount(config->rootfs, config->rootfs, NULL, MS_BIND, NULL) != 0) return -1;
-    if (chroot(config->rootfs) != 0) return -1;
-    if (umount2("/proc", MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) return -1;
-    if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) return -1;
+    if (hl_native_supervised_volumes_mount(config->rootfs, volumes) != 0) return -1;
+    char proc_target[PATH_MAX];
+    if (snprintf(proc_target, sizeof(proc_target), "%s%s", config->rootfs, "/proc") >= (int)sizeof(proc_target)) return -1;
+    if (umount2(proc_target, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) return -1;
+    if (mount("proc", proc_target, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0 &&
-        mount(NULL, "/", NULL, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_REC, NULL) != 0)
+        mount(NULL, config->rootfs, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0)
         return -1;
-    if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
     if (box->hostname != NULL && sethostname(box->hostname, strlen(box->hostname)) != 0) return -1;
+    if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
+        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0)
+        return -1;
+    char uid_map[64], gid_map[64];
+    if (snprintf(uid_map, sizeof(uid_map), "0 %u 1\n", (unsigned)host_uid) <= 0 ||
+        snprintf(gid_map, sizeof(gid_map), "0 %u 1\n", (unsigned)host_gid) <= 0 ||
+        hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
+        hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
+        hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0)
+        return -1;
+    if (chroot(config->rootfs) != 0) return -1;
+    if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
     for (int capability = 0; capability <= CAP_LAST_CAP; ++capability)
         if (prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) != 0) return -1;
     if (setresgid(box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid) != 0 ||
@@ -210,20 +312,6 @@ static int hl_native_supervised_ioctl_allowed(uint64_t request) {
            request == FIONREAD || request == TIOCGPTN || request == TIOCSPTLCK;
 }
 
-static int hl_native_supervised_clone3_namespaces(const struct seccomp_notif *request) {
-#ifdef SYS_clone3
-    if (request->data.args[1] < sizeof(struct clone_args)) return 1;
-    struct clone_args arguments = {0};
-    struct iovec local = {&arguments, sizeof(arguments)};
-    struct iovec remote = {(void *)(uintptr_t)request->data.args[0], sizeof(arguments)};
-    if (process_vm_readv((pid_t)request->pid, &local, 1, &remote, 1, 0) != (ssize_t)sizeof(arguments)) return 1;
-    return hl_native_supervised_clone_namespaces(arguments.flags);
-#else
-    (void)request;
-    return 1;
-#endif
-}
-
 static char **hl_native_supervised_environment(const hl_options *options) {
     const char *encoded = hl_options_get(options, "HL_GUEST_ENV");
     int escaped = hl_options_get(options, "HL_GUEST_ENV_ESC") != NULL;
@@ -307,7 +395,7 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
                    (number == SYS_ioctl && !hl_native_supervised_ioctl_allowed(request->data.args[1])) ||
                    (number == SYS_clone && hl_native_supervised_clone_namespaces(request->data.args[0]))
 #ifdef SYS_clone3
-                   || (number == SYS_clone3 && hl_native_supervised_clone3_namespaces(request))
+                   || number == SYS_clone3
 #endif
                    ) {
             response->error = -EPERM;
@@ -369,7 +457,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
         if (hl_native_supervised_close_except(executable) != 0) _exit(70);
-        if (hl_native_supervised_project_container(config, bootstrap) != 0) {
+        hl_native_supervised_volumes volumes;
+        if (hl_native_supervised_volumes_open(config->box->volumes, &volumes) != 0 ||
+            hl_native_supervised_project_container(config, bootstrap, &volumes) != 0) {
             if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
             _exit(70);

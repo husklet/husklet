@@ -124,5 +124,16 @@ int main(int argc, char **argv) {
         if (open("/blocked", O_WRONLY | O_CREAT, 0600) != -1 || errno != EROFS) return 85;
         fputs("root-contract", stdout);
     }
+    if (argc > 1 && !strcmp(argv[1], "volumes")) {
+        char source[16] = {0};
+        int input = open("/src/input.c", O_RDONLY);
+        if (input < 0 || read(input, source, sizeof(source)) != 7 || memcmp(source, "source\n", 7)) return 91;
+        close(input);
+        errno = 0;
+        if (open("/src/blocked", O_WRONLY | O_CREAT, 0600) != -1 || errno != EROFS) return 92;
+        int output = open("/out/result.o", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (output < 0 || write(output, "object\n", 7) != 7 || close(output) != 0) return 93;
+        fputs("volumes", stdout);
+    }
     return 0;
 }
