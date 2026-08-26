@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -40,6 +41,14 @@ int main(int argc, char **argv) {
         const char *leak = getenv("HOME");
         if (value == NULL || strcmp(value, "line1\nline2\\tail") || leak != NULL) return 42;
         fputs("environment-exact", stdout);
+    }
+    if (argc > 1 && !strcmp(argv[1], "streams")) {
+        char input[5] = {0};
+        if (read(0, input, 4) != 4 || memcmp(input, "pipe", 4)) return 51;
+        struct iovec output[] = {{"write", 5}, {"v", 1}};
+        if (writev(1, output, 2) != 6) return 52;
+        if (write(2, "stderr", 6) != 6) return 53;
+        if (dup2(1, 7) != 7 || write(7, "-dup", 4) != 4) return 54;
     }
     return 0;
 }
