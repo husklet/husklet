@@ -20,6 +20,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -57,6 +58,12 @@ static int hl_native_supervised_write_text(const char *path, const char *text) {
     int result = write(fd, text, length) == (ssize_t)length ? 0 : -1;
     close(fd);
     return result;
+}
+
+static int hl_native_supervised_write_process_text(pid_t process, const char *name, const char *text) {
+    char path[64];
+    if (snprintf(path, sizeof(path), "/proc/%d/%s", process, name) >= (int)sizeof(path)) return -1;
+    return hl_native_supervised_write_text(path, text);
 }
 
 static int hl_native_supervised_close_except(int keep) {
@@ -172,20 +179,124 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
     return 0;
 }
 
+static int hl_native_supervised_overlay_mount(const hl_engine_config *config, const hl_options *options,
+                                              char target[PATH_MAX]) {
+    const char *lower = config->box->lower_layers;
+    const char *work = hl_options_get(options, "HL_OVERLAY_WORK");
+    if (lower == NULL) {
+        if (snprintf(target, PATH_MAX, "%s", config->rootfs) >= PATH_MAX) return -1;
+        return 0;
+    }
+    if (work == NULL || strchr(lower, '\n') != NULL) return -1;
+    if (snprintf(target, PATH_MAX, "/var/tmp/husklet-native-overlay.XXXXXX") >= PATH_MAX || mkdtemp(target) == NULL)
+        return -1;
+    int filesystem = (int)syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC);
+    int mounted = -1;
+    if (filesystem >= 0 && syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "lowerdir", lower, 0) == 0 &&
+        syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "upperdir", config->rootfs, 0) == 0 &&
+        syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "workdir", work, 0) == 0 &&
+        syscall(SYS_fsconfig, filesystem, FSCONFIG_CMD_CREATE, NULL, NULL, 0) == 0) {
+        int tree = (int)syscall(SYS_fsmount, filesystem, FSMOUNT_CLOEXEC, 0);
+        int directory = open(target, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (tree >= 0 && directory >= 0 &&
+            syscall(SYS_move_mount, tree, "", directory, "", MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH) == 0)
+            mounted = 0;
+        if (directory >= 0) close(directory);
+        if (tree >= 0) close(tree);
+    }
+    if (filesystem >= 0) close(filesystem);
+    if (mounted != 0) rmdir(target);
+    return mounted;
+}
+
+static int hl_native_supervised_owners_apply(const char *rootfs, const char *records) {
+    if (records == NULL) return 0;
+    int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    char *copy = strdup(records);
+    if (root < 0 || copy == NULL) { if (root >= 0) close(root); free(copy); return -1; }
+    char *save = NULL;
+    for (char *record = strtok_r(copy, "\n", &save); record != NULL; record = strtok_r(NULL, "\n", &save)) {
+        char *uid_text = strchr(record, '\t');
+        char *gid_text = uid_text == NULL ? NULL : strchr(uid_text + 1, '\t');
+        char *end_uid = NULL, *end_gid = NULL;
+        if (uid_text == NULL || gid_text == NULL) { close(root); free(copy); return -1; }
+        *uid_text++ = 0; *gid_text++ = 0;
+        unsigned long uid = strtoul(uid_text, &end_uid, 10), gid = strtoul(gid_text, &end_gid, 10);
+        struct open_how how = {.flags = O_PATH | O_CLOEXEC | O_NOFOLLOW,
+                               .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS};
+        int entry = (int)syscall(SYS_openat2, root, record, &how, sizeof(how));
+        if (record[0] == 0 || *end_uid != 0 || *end_gid != 0 || uid > UINT_MAX || gid > UINT_MAX || entry < 0 ||
+            fchownat(entry, "", (uid_t)uid, (gid_t)gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0) {
+            if (entry >= 0) close(entry);
+            close(root);
+            free(copy);
+            return -1;
+        }
+        close(entry);
+    }
+    close(root); free(copy); return 0;
+}
+
+static int hl_native_supervised_id_compare(const void *left, const void *right) {
+    uint32_t a = *(const uint32_t *)left, b = *(const uint32_t *)right;
+    return a > b ? 1 : a < b ? -1 : 0;
+}
+
+static int hl_native_supervised_id_map(char *output, size_t capacity, uint32_t process_id, const char *records,
+                                       int gid_column) {
+    size_t count = 1, allocated = 16;
+    uint32_t *ids = malloc(allocated * sizeof(*ids));
+    char *copy = records == NULL ? NULL : strdup(records);
+    if (ids == NULL || (records != NULL && copy == NULL)) { free(ids); free(copy); return -1; }
+    ids[0] = process_id;
+    char *save = NULL;
+    for (char *record = copy == NULL ? NULL : strtok_r(copy, "\n", &save); record != NULL;
+         record = strtok_r(NULL, "\n", &save)) {
+        char *uid_text = strchr(record, '\t');
+        char *gid_text = uid_text == NULL ? NULL : strchr(uid_text + 1, '\t');
+        char *text = gid_column ? (gid_text == NULL ? NULL : gid_text + 1) : (uid_text == NULL ? NULL : uid_text + 1);
+        char *end = NULL;
+        unsigned long value = text == NULL ? ULONG_MAX : strtoul(text, &end, 10);
+        if (!gid_column && gid_text != NULL) *gid_text = 0;
+        if (text == NULL || *end != 0 || value > UINT_MAX) { free(ids); free(copy); return -1; }
+        if (count == allocated) {
+            allocated *= 2;
+            uint32_t *grown = realloc(ids, allocated * sizeof(*ids));
+            if (grown == NULL) { free(ids); free(copy); return -1; }
+            ids = grown;
+        }
+        ids[count++] = (uint32_t)value;
+    }
+    qsort(ids, count, sizeof(*ids), hl_native_supervised_id_compare);
+    size_t used = 0, extents = 0;
+    for (size_t index = 0; index < count;) {
+        uint32_t first = ids[index], last = first;
+        while (++index < count && (ids[index] == last || (last != UINT_MAX && ids[index] == last + 1)))
+            if (ids[index] != last) last = ids[index];
+        int length = snprintf(output + used, capacity - used, "%u %u %llu\n", first, first,
+                              (unsigned long long)last - first + 1);
+        if (length <= 0 || (size_t)length >= capacity - used || ++extents > 340) {
+            free(ids); free(copy); return -1;
+        }
+        used += (size_t)length;
+    }
+    free(ids); free(copy); return 0;
+}
+
 static const char *hl_native_supervised_policy_rejection(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
     if (geteuid() != 0 || getegid() != 0) return "host-root-required";
     if (config->rootfs == NULL || box == NULL) return "typed-box-and-rootfs-required";
     if (config->memory_limit != 0 || config->pid_limit != 0 || config->cpu_limit != 0) return "cgroup-limits";
     if (box->uid < -1 || box->gid < -1) return "identity";
-    if (box->lower_layers != NULL) return "lower-layers";
+    if (box->lower_layers != NULL && strchr(box->lower_layers, '\n') != NULL) return "multiple-lower-layers";
     if (box->publish_count != 0) return "published-network";
     if (box->network_bridge != NULL || box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL)
         return "host-or-shared-network";
     /* The generation file invalidates the translated backend's user-space pathname caches after a
      * daemon-side write.  Native-supervised has no such cache: every lookup goes through the kernel
      * VFS, so retaining the typed field is semantics-preserving and requires no poll or mapping. */
-    if (box->file_owners != NULL) return "live-filesystem-overlay-ownership";
+    if (box->file_owners != NULL && box->lower_layers == NULL) return "ownership-without-overlay";
     if (box->checkpoint_mode != 0 || box->checkpoint_policy != 0) return "checkpoint";
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0) return "network-isolated-required";
     if ((box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
@@ -240,20 +351,56 @@ static int hl_native_supervised_limits_apply(const char *spec) {
     return 0;
 }
 
-static int hl_native_supervised_project_container(const hl_engine_config *config,
+static int hl_native_supervised_project_container(const hl_engine_config *config, const hl_options *options,
                                                   hl_native_supervised_bootstrap *bootstrap,
                                                   const hl_native_supervised_volumes *volumes) {
     const hl_engine_box_config *box = config->box;
-    uid_t host_uid = geteuid();
-    gid_t host_gid = getegid();
     if (unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC) != 0)
         return -1;
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
+    char projected_root[PATH_MAX];
+    if (hl_native_supervised_overlay_mount(config, options, projected_root) != 0) return -1;
+    if (hl_native_supervised_owners_apply(projected_root, box->file_owners) != 0) return -1;
+    unsigned guest_uid = (unsigned)(box->uid < 0 ? 0 : box->uid);
+    unsigned guest_gid = (unsigned)(box->gid < 0 ? 0 : box->gid);
+    char uid_map[16384], gid_map[16384];
+    if (box->file_owners == NULL) {
+        if (snprintf(uid_map, sizeof(uid_map), "%u %u 1\n", guest_uid, (unsigned)geteuid()) <= 0 ||
+            snprintf(gid_map, sizeof(gid_map), "%u %u 1\n", guest_gid, (unsigned)getegid()) <= 0)
+            return -1;
+    } else if (hl_native_supervised_id_map(uid_map, sizeof(uid_map), guest_uid, box->file_owners, 0) != 0 ||
+               hl_native_supervised_id_map(gid_map, sizeof(gid_map), guest_gid, box->file_owners, 1) != 0) {
+        return -1;
+    }
+    int mapping[2] = {-1, -1};
+    if (box->file_owners != NULL && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, mapping) != 0) return -1;
+    char byte;
     pid_t init = fork();
-    if (init < 0) return -1;
+    if (init < 0) {
+        close(mapping[0]);
+        close(mapping[1]);
+        if (box->lower_layers != NULL) { umount2(projected_root, MNT_DETACH); rmdir(projected_root); }
+        return -1;
+    }
     if (init > 0) {
+        if (mapping[1] >= 0) close(mapping[1]);
         atomic_store_explicit(&bootstrap->target_pid, init, memory_order_release);
+        struct pollfd ready = {.fd = mapping[0], .events = POLLIN};
+        if (mapping[0] >= 0 &&
+            (poll(&ready, 1, 10000) != 1 || read(mapping[0], &byte, 1) != 1 ||
+             hl_native_supervised_write_process_text(init, "setgroups", "deny") != 0 ||
+             hl_native_supervised_write_process_text(init, "uid_map", uid_map) != 0 ||
+             hl_native_supervised_write_process_text(init, "gid_map", gid_map) != 0 || write(mapping[0], "1", 1) != 1)) {
+            kill(init, SIGKILL);
+            waitpid(init, NULL, 0);
+            close(mapping[0]);
+            if (box->lower_layers != NULL) { umount2(projected_root, MNT_DETACH); rmdir(projected_root); }
+            _exit(70);
+        }
+        if (mapping[0] >= 0) close(mapping[0]);
         int status;
         if (waitpid(init, &status, 0) != init) _exit(70);
+        if (box->lower_layers != NULL) { umount2(projected_root, MNT_DETACH); rmdir(projected_root); }
         int result_signal = atomic_load_explicit(&bootstrap->result_signal, memory_order_acquire);
         if (result_signal != 0) {
             sigset_t signals;
@@ -265,30 +412,28 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         }
         _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 70);
     }
-    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
-    if (strcmp(config->rootfs, "/") != 0 && mount(config->rootfs, config->rootfs, NULL, MS_BIND, NULL) != 0) return -1;
-    if (hl_native_supervised_volumes_mount(config->rootfs, volumes) != 0) return -1;
+    if (mapping[0] >= 0) close(mapping[0]);
+    if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
+        mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
+    if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
     char proc_target[PATH_MAX];
-    if (snprintf(proc_target, sizeof(proc_target), "%s%s", config->rootfs, "/proc") >= (int)sizeof(proc_target)) return -1;
+    if (snprintf(proc_target, sizeof(proc_target), "%s%s", projected_root, "/proc") >= (int)sizeof(proc_target)) return -1;
     if (umount2(proc_target, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) return -1;
     if (mount("proc", proc_target, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0 &&
-        mount(NULL, config->rootfs, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0)
+        mount(NULL, projected_root, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0)
         return -1;
     if (box->hostname != NULL && sethostname(box->hostname, strlen(box->hostname)) != 0) return -1;
     if (setgroups(0, NULL) != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
+        (mapping[1] >= 0
+             ? (write(mapping[1], "1", 1) != 1 || read(mapping[1], &byte, 1) != 1)
+             : (hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
+                hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
+                hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0)) ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0)
         return -1;
-    unsigned guest_uid = (unsigned)(box->uid < 0 ? 0 : box->uid);
-    unsigned guest_gid = (unsigned)(box->gid < 0 ? 0 : box->gid);
-    char uid_map[64], gid_map[64];
-    if (snprintf(uid_map, sizeof(uid_map), "%u %u 1\n", guest_uid, (unsigned)host_uid) <= 0 ||
-        snprintf(gid_map, sizeof(gid_map), "%u %u 1\n", guest_gid, (unsigned)host_gid) <= 0 ||
-        hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
-        hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
-        hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0)
-        return -1;
-    if (chroot(config->rootfs) != 0) return -1;
+    if (mapping[1] >= 0) close(mapping[1]);
+    if (chroot(projected_root) != 0) return -1;
     if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
     if (hl_native_supervised_limits_apply(box->limits) != 0) return -1;
     for (int capability = 0; capability <= CAP_LAST_CAP; ++capability)
@@ -563,7 +708,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         if (hl_native_supervised_close_except(executable) != 0) _exit(70);
         hl_native_supervised_volumes volumes;
         if (hl_native_supervised_volumes_open(config->box->volumes, &volumes) != 0 ||
-            hl_native_supervised_project_container(config, bootstrap, &volumes) != 0) {
+            hl_native_supervised_project_container(config, options, bootstrap, &volumes) != 0) {
             if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
             _exit(70);

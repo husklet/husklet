@@ -422,6 +422,23 @@ mod tests {
     }
 
     #[test]
+    fn overlay_and_ownership_reach_the_typed_engine_policy() {
+        let mut launch = launch();
+        launch.overlay = Some(crate::service::OverlayConfig {
+            lower: "/lower".into(),
+            upper: "/upper".into(),
+            work: "/work".into(),
+        });
+        launch.owners = vec![("bin/tool".into(), 123, 456)];
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.box_policy.lower_layers.as_deref(), Some(b"/lower".as_slice()));
+        assert_eq!(
+            spec.plan.box_policy.file_owners.as_deref(),
+            Some(b"bin/tool\t123\t456".as_slice())
+        );
+    }
+
+    #[test]
     fn network_interfaces_preserve_attachment_order_and_prefixes() {
         let mut launch = launch();
         launch.networks = vec![bridge("front", "172.29.0.2", 24), bridge("back", "10.7.0.9", 19)];

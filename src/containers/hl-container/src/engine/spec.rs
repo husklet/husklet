@@ -63,6 +63,14 @@ impl TryFrom<&ProcessConfig> for Spec {
             // option. Native execution relies on kernel VFS coherence; translated execution maps
             // this file to invalidate its user-space caches.
             filesystem_generation: Some(launch.filesystem_generation.as_os_str().as_encoded_bytes().to_vec()),
+            lower_layers: launch
+                .overlay
+                .as_ref()
+                .map(|overlay| overlay.lower.as_os_str().as_encoded_bytes().to_vec()),
+            file_owners: {
+                let owners = Self::owner_records(launch);
+                (!owners.is_empty()).then(|| owners.into_bytes())
+            },
             ..Default::default()
         };
         Ok(Self {
@@ -156,6 +164,15 @@ impl Spec {
         Ok(())
     }
 
+    fn owner_records(launch: &ProcessConfig) -> String {
+        launch
+            .owners
+            .iter()
+            .map(|(path, uid, gid)| format!("{}\t{uid}\t{gid}", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn process(options: &mut Options, launch: &ProcessConfig, domain: hl_engine::Domain) -> Result<()> {
         Self::set(
             options,
@@ -212,12 +229,7 @@ impl Spec {
             )?;
             Self::set(options, "HL_OVERLAY_WORK", overlay.work.as_os_str().as_encoded_bytes())?;
         }
-        let owners = launch
-            .owners
-            .iter()
-            .map(|(path, uid, gid)| format!("{}\t{uid}\t{gid}", path.display()))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let owners = Self::owner_records(launch);
         if !owners.is_empty() {
             Self::set(options, "HL_FILE_OWNERS", owners)?;
         }

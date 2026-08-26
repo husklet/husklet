@@ -11,7 +11,7 @@ use hl_engine::{
     runtime::Engine,
 };
 use std::num::NonZeroU64;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -180,6 +180,54 @@ fn supervised_generation_policy_keeps_daemon_writes_kernel_coherent() {
     engine.destroy().unwrap();
     assert_eq!(exit.guest_status, 0);
     assert_eq!(*output.stdout.lock().unwrap(), b"filesystem-coherent");
+}
+
+#[test]
+fn supervised_overlay_preserves_lower_upper_and_declared_ownership() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let lower = work.path().join("lower");
+    let upper = work.path().join("upper");
+    let overlay_work = work.path().join("work");
+    for directory in [&lower, &upper, &overlay_work, &lower.join("bin"), &lower.join("proc")] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let executable = lower.join("bin/fixture");
+    std::fs::copy(&built, &executable).unwrap();
+    std::fs::write(lower.join("lower.txt"), b"lower\n").unwrap();
+    std::fs::write(lower.join("owned"), b"owned\n").unwrap();
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    options
+        .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
+        .unwrap();
+    let output = Arc::new(Output::default());
+    let plan = RuntimePlan {
+        rootfs: Some(upper.as_os_str().as_encoded_bytes().to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"overlay".to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: RuntimeBoxPolicy {
+            lower_layers: Some(lower.as_os_str().as_encoded_bytes().to_vec()),
+            file_owners: Some(b"owned\t123\t456".to_vec()),
+            ..isolated_policy()
+        },
+    };
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    assert_eq!(exit.guest_status, 0);
+    assert_eq!(*output.stdout.lock().unwrap(), b"overlay-owned");
+    assert_eq!(std::fs::read(upper.join("upper.txt")).unwrap(), b"upper\n");
+    assert_eq!(std::fs::metadata(&lower.join("owned")).unwrap().uid(), 0);
 }
 
 #[test]
@@ -463,7 +511,7 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let mut policy = isolated_policy(); policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);
-    let mut policy = isolated_policy(); policy.lower_layers = Some(b"/lower".to_vec()); policies.push(policy);
+    let mut policy = isolated_policy(); policy.lower_layers = Some(b"/one\n/two".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.ip = Some(b"10.0.0.2".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.egress_proxy = Some(b"proxy".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.file_owners = Some(b"owners".to_vec()); policies.push(policy);

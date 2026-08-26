@@ -12,6 +12,7 @@
 #include <sys/ptrace.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
@@ -24,6 +25,19 @@
 static void *thread_return(void *argument) { return argument; }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "overlay")) {
+        char value[16] = {0};
+        int fd = open("/lower.txt", O_RDONLY);
+        if (fd < 0 || read(fd, value, sizeof(value)) != 6 || memcmp(value, "lower\n", 6)) return 90;
+        if (fd >= 0) close(fd);
+        struct stat owner;
+        if (lstat("/owned", &owner) != 0 || owner.st_uid != 123 || owner.st_gid != 456) return 91;
+        fd = open("/upper.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || write(fd, "upper\n", 6) != 6) return 92;
+        close(fd);
+        fputs("overlay-owned", stdout);
+        return 0;
+    }
     if (argc > 2 && !strcmp(argv[1], "filesystem-generation")) {
         char value[16] = {0};
         for (int attempt = 0; attempt < 400; ++attempt) {
