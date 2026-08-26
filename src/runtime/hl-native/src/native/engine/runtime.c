@@ -428,6 +428,14 @@ static void hl_engine_checkpoint_arena_stop(hl_engine *engine) {
 #if defined(_WIN32)
     (void)engine;
 #else
+    const char *native = hl_options_get(&engine->options, "HL_NATIVE_SUPERVISED");
+    if (native != NULL && native[0] != '\0' && strcmp(native, "0") != 0) {
+        /* Native supervision returns only after namespace PID1 drained every descendant. Retain the
+         * control socket authority for the next run, but require that run's fresh control thread to
+         * publish its readiness byte before any checkpoint command can be sent. */
+        engine->checkpoint_control_ready = 0;
+        return;
+    }
     if (engine->checkpoint_control_parent >= 0) (void)shutdown(engine->checkpoint_control_parent, SHUT_RDWR);
 #endif
 }

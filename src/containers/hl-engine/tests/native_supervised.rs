@@ -10,10 +10,10 @@ use hl_engine::{
     options::Options,
     runtime::Engine,
 };
-use std::num::NonZeroU64;
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
 use std::io::Read as _;
 use std::net::TcpListener;
+use std::num::NonZeroU64;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -161,12 +161,18 @@ fn retained_native_session_restarts_only_after_complete_wait() {
     .unwrap();
 
     engine.start().unwrap();
-    assert!(engine.start().is_err(), "a running retained session accepted a concurrent launch");
+    assert!(
+        engine.start().is_err(),
+        "a running retained session accepted a concurrent launch"
+    );
     assert_eq!(engine.wait().unwrap().guest_status, 23);
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 23);
     engine.destroy().unwrap();
-    assert_eq!(output.stdout.lock().unwrap().as_slice(), b"native-supervisednative-supervised");
+    assert_eq!(
+        output.stdout.lock().unwrap().as_slice(),
+        b"native-supervisednative-supervised"
+    );
 }
 
 fn run_policy(executable: &Path, arguments: &[&str], policy: RuntimeBoxPolicy) -> (i32, Vec<u8>, Vec<u8>) {
@@ -457,7 +463,12 @@ fn supervised_none_network_has_private_netns_live_loopback_and_no_external_route
     policy.network_namespace = Some(b"stable-none-identity".to_vec());
     let (status, output, error) = run_policy(&executable, &["network-none"], policy);
     assert_eq!(status, 0, "{}", String::from_utf8_lossy(&error));
-    let inode = std::str::from_utf8(&output).unwrap().strip_prefix("none:").unwrap().parse::<u64>().unwrap();
+    let inode = std::str::from_utf8(&output)
+        .unwrap()
+        .strip_prefix("none:")
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
     assert_ne!(inode, host_inode);
 }
 
@@ -473,11 +484,25 @@ fn supervised_host_network_reuses_host_netns_and_reaches_host_loopback() {
     let plan = RuntimePlan {
         rootfs: Some(b"/".to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"network-host".to_vec(), port.into_bytes()],
-        environment: Vec::new(), result_path: None, options,
-        box_policy: RuntimeBoxPolicy { network_mode: 2, ..Default::default() },
+        arguments: vec![
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            b"network-host".to_vec(),
+            port.into_bytes(),
+        ],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: RuntimeBoxPolicy {
+            network_mode: 2,
+            ..Default::default()
+        },
     };
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default().with_output(output.clone())).unwrap();
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
     engine.start().unwrap();
     let (mut connection, _) = listener.accept().unwrap();
     let mut payload = [0; 4];
@@ -486,7 +511,12 @@ fn supervised_host_network_reuses_host_netns_and_reaches_host_loopback() {
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
     let stdout = output.stdout.lock().unwrap().clone();
-    let inode = std::str::from_utf8(&stdout).unwrap().strip_prefix("host:").unwrap().parse::<u64>().unwrap();
+    let inode = std::str::from_utf8(&stdout)
+        .unwrap()
+        .strip_prefix("host:")
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
     assert_eq!(inode, std::fs::metadata("/proc/self/ns/net").unwrap().ino());
 }
 
@@ -688,7 +718,7 @@ impl CheckpointSource for Checkpoints {
     }
 }
 
-fn checkpoint_phase1(mode: &str, expected_receipt: &str) {
+fn checkpoint_phase1(mode: &str, expected_receipt: &str, rounds: usize) {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let ready = work.path().join("ready");
@@ -720,45 +750,59 @@ fn checkpoint_phase1(mode: &str, expected_receipt: &str) {
         store,
     )
     .unwrap();
-    engine.start().unwrap();
-    for _ in 0..5000 {
-        if ready.exists() && progress.exists() {
-            break;
+    for _ in 0..rounds {
+        for path in [&ready, &release, &progress] {
+            let _ = std::fs::remove_file(path);
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    assert!(ready.exists() && progress.exists());
-    let before: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
-    assert!(
-        engine.capture_checkpoint().is_err(),
-        "phase 1 must refuse image capture"
-    );
-    for _ in 0..5000 {
-        let after = std::fs::read_to_string(&progress)
-            .ok()
-            .and_then(|value| value.trim().parse::<u32>().ok());
-        if after.is_some_and(|value| value > before) {
-            break;
+        std::fs::write(&receipt, b"").unwrap();
+        engine.start().unwrap();
+        for _ in 0..5000 {
+            if ready.exists() && progress.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        if !ready.exists() || !progress.exists() {
+            panic!("retained checkpoint run never became ready: {:?}", engine.wait());
+        }
+        let before: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
+        let capture = engine.capture_checkpoint();
+        assert!(capture.is_err(), "phase 1 must refuse image capture");
+        for _ in 0..5000 {
+            let after = std::fs::read_to_string(&progress)
+                .ok()
+                .and_then(|value| value.trim().parse::<u32>().ok());
+            if after.is_some_and(|value| value > before) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let after: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
+        assert!(after > before, "workload did not continue after bounded thaw");
+        std::fs::write(&release, b"release").unwrap();
+        assert_eq!(engine.wait().unwrap().guest_status, 0);
+        assert!(
+            std::fs::read_to_string(&receipt).unwrap().contains(expected_receipt),
+            "capture result {capture:?} did not reach native receipt"
+        );
     }
-    let after: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
-    assert!(after > before, "workload did not continue after bounded thaw");
-    std::fs::write(&release, b"release").unwrap();
-    assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
-    assert!(std::fs::read_to_string(receipt).unwrap().contains(expected_receipt));
 }
 
 #[test]
 fn supervised_checkpoint_phase1_registers_freezes_and_resumes_one_workload() {
-    checkpoint_phase1("checkpoint-phase1", "registered=1 frozen=1 thawed=1");
+    checkpoint_phase1("checkpoint-phase1", "registered=1 frozen=1 thawed=1", 1);
+}
+
+#[test]
+fn supervised_checkpoint_phase1_resets_generation_and_registration_across_retained_runs() {
+    checkpoint_phase1("checkpoint-phase1", "registered=1 frozen=1 thawed=1", 2);
 }
 
 #[test]
 fn supervised_checkpoint_phase1_refuses_descendants_and_multiple_threads() {
-    checkpoint_phase1("checkpoint-descendant", "refusal=unsupported-state");
-    checkpoint_phase1("checkpoint-thread", "refusal=unsupported-state");
+    checkpoint_phase1("checkpoint-descendant", "refusal=unsupported-state", 1);
+    checkpoint_phase1("checkpoint-thread", "refusal=unsupported-state", 1);
 }
 
 fn selected_plan(executable: &Path) -> RuntimePlan {

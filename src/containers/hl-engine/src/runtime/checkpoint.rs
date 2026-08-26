@@ -178,6 +178,33 @@ pub(crate) struct Server {
 }
 
 impl Server {
+    /// Opens a fresh capture generation after a native-supervised process refused the previous one.
+    /// The prior storage transaction is already discarded before `capture_result` is published; only
+    /// that typed refusal is recoverable. Every other poison remains terminal.
+    pub(crate) fn reset_native_refusal(&self) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        match capture.phase {
+            CapturePhase::Idle => return Ok(()),
+            CapturePhase::Poisoned
+                if capture.mutations == 0
+                    && matches!(capture.capture_result, Some((_, Err(CaptureFailure::Refused)))) =>
+            {
+                capture.phase = CapturePhase::Idle;
+                capture.capture_result = None;
+                capture.recovery_result = None;
+                capture.recovery_report_published = false;
+                self.capture_changed.notify_all();
+            }
+            CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+            _ => return Err(CaptureFailure::Busy),
+        }
+        drop(capture);
+        *self.participants.lock().map_err(|_| CaptureFailure::Poisoned)? = None;
+        *self.refusal.lock().map_err(|_| CaptureFailure::Poisoned)? = None;
+        *self.failure_diagnostic.lock().map_err(|_| CaptureFailure::Poisoned)? = None;
+        Ok(())
+    }
+
     pub(crate) fn new(sink: Arc<dyn CheckpointSink>, source: Arc<dyn CheckpointSource>) -> Self {
         Self {
             sink,

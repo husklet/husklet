@@ -448,6 +448,15 @@ fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
         #[cfg(unix)]
+        if self.native_supervised()
+            && let Some(checkpoint) = &self.checkpoint
+        {
+            checkpoint
+                .server
+                .reset_native_refusal()
+                .map_err(CheckpointControl::capture_failure)?;
+        }
+        #[cfg(unix)]
         let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
             let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
             // A refused recovery admission must name itself: the restore driver downstream is the only
