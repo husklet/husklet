@@ -168,18 +168,23 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
     return 0;
 }
 
-static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
+static const char *hl_native_supervised_policy_rejection(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
-    if (geteuid() != 0 || getegid() != 0 || config->rootfs == NULL || box == NULL ||
-        config->memory_limit != 0 || config->pid_limit != 0 || config->cpu_limit != 0 || box->uid < -1 ||
-        box->gid < -1 || box->lower_layers != NULL || box->publish_count != 0 || box->network_bridge != NULL ||
-        box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||
-        box->filesystem_generation != NULL || box->file_owners != NULL || box->checkpoint_mode != 0 ||
-        box->checkpoint_policy != 0 || (box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0 ||
-        (box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
+    if (geteuid() != 0 || getegid() != 0) return "host-root-required";
+    if (config->rootfs == NULL || box == NULL) return "typed-box-and-rootfs-required";
+    if (config->memory_limit != 0 || config->pid_limit != 0 || config->cpu_limit != 0) return "cgroup-limits";
+    if (box->uid < -1 || box->gid < -1) return "identity";
+    if (box->lower_layers != NULL) return "lower-layers";
+    if (box->publish_count != 0) return "published-network";
+    if (box->network_bridge != NULL || box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL)
+        return "host-or-shared-network";
+    if (box->filesystem_generation != NULL || box->file_owners != NULL) return "live-filesystem-overlay";
+    if (box->checkpoint_mode != 0 || box->checkpoint_policy != 0) return "checkpoint";
+    if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0) return "network-isolated-required";
+    if ((box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
                         HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
-        return 0;
-    return 1;
+        return "box-flags";
+    return NULL;
 }
 
 static int hl_native_supervised_limit_resource(const char *name) {
@@ -477,9 +482,10 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     char **exec_argv = calloc((size_t)argc + 1, sizeof(char *));
     if (exec_argv == NULL) return 70;
     for (uint32_t index = 0; index < argc; ++index) exec_argv[index] = argv[index];
-    if (!hl_native_supervised_policy_supported(config)) {
+    const char *policy_rejection = hl_native_supervised_policy_rejection(config);
+    if (policy_rejection != NULL) {
         if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
-            fprintf(stderr, "[hl-native-supervised]\tunsupported-policy=1 host-root-required=1\n");
+            fprintf(stderr, "[hl-native-supervised]\tunsupported-policy=%s\n", policy_rejection);
         return 70;
     }
     if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)

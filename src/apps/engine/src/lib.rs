@@ -331,7 +331,12 @@ fn rootfs_plan(
         ],
         result_path: None,
         options,
-        box_policy: Default::default(),
+        box_policy: hl_engine::launcher::plan::RuntimeBoxPolicy {
+            // Native supervision never inherits host networking. Selecting it at this developer CLI
+            // boundary is an explicit request for the backend's isolated-network contract.
+            flags: if launch.native_supervised { 1 << 2 } else { 0 },
+            ..Default::default()
+        },
     })
 }
 
@@ -529,6 +534,8 @@ mod tests {
         assert_eq!(selected.options.get("HL_C_DIAGNOSTICS"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT"), Some("1"));
         assert_eq!(selected.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
+        assert_eq!(selected.box_policy.flags & (1 << 2), 1 << 2);
+        assert_eq!(defaults.box_policy.flags & (1 << 2), 0);
     }
 
     /// A stock image ships `/bin/sh` as an **absolute** symbolic link, and the host path the plan
