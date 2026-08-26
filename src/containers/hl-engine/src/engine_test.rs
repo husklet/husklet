@@ -122,6 +122,7 @@ fn plan() -> RuntimePlan {
         environment: Vec::new(),
         result_path: None,
         options: Options::default(),
+        box_policy: Default::default(),
     }
 }
 

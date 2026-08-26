@@ -2,15 +2,17 @@
 
 use hl_engine::{
     activation::GuestIsa,
-    composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams},
-    launcher::plan::RuntimePlan,
+    composition::{
+        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams,
+    },
     engine::ExitKind,
+    launcher::plan::RuntimePlan,
     options::Options,
     runtime::Engine,
 };
-use std::path::{Path, PathBuf};
-use std::os::unix::fs::PermissionsExt;
 use std::num::NonZeroU64;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -22,7 +24,11 @@ struct Output {
 
 impl Default for Output {
     fn default() -> Self {
-        Self { stdout: Mutex::new(Vec::new()), stderr: Mutex::new(Vec::new()), input: Mutex::new(Vec::new()) }
+        Self {
+            stdout: Mutex::new(Vec::new()),
+            stderr: Mutex::new(Vec::new()),
+            input: Mutex::new(Vec::new()),
+        }
     }
 }
 
@@ -82,6 +88,7 @@ fn run_configured(
         environment,
         result_path: None,
         options,
+        box_policy: Default::default(),
     };
     let engine = Engine::with_streams(
         GuestIsa::X86_64,
@@ -97,7 +104,12 @@ fn run_configured(
     (status, stdout, stderr)
 }
 
-fn run_with_refusal(executable: &Path, arguments: &[&str], selected: bool, refusal: Option<&str>) -> (i32, Vec<u8>, Vec<u8>) {
+fn run_with_refusal(
+    executable: &Path,
+    arguments: &[&str],
+    selected: bool,
+    refusal: Option<&str>,
+) -> (i32, Vec<u8>, Vec<u8>) {
     run_configured(executable, arguments, selected, refusal, Vec::new())
 }
 
@@ -179,7 +191,10 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"signal".to_vec()],
-        environment: Vec::new(), result_path: None, options,
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
     };
     let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
     engine.start().unwrap();
@@ -201,16 +216,32 @@ fn supervised_filter_denies_sendmsg_after_listener_bootstrap() {
 
 struct Checkpoints;
 impl CheckpointSink for Checkpoints {
-    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> { Ok(()) }
-    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> { Ok(NonZeroU64::MIN) }
-    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> { Ok(()) }
-    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> { Ok(()) }
-    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> { Ok(()) }
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(NonZeroU64::MIN)
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
 }
 impl CheckpointSource for Checkpoints {
-    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> { Ok(Vec::new()) }
-    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> { Ok(Vec::new()) }
-    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> { Ok(Vec::new()) }
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Ok(Vec::new())
+    }
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Ok(Vec::new())
+    }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Ok(Vec::new())
+    }
 }
 
 fn selected_plan(executable: &Path) -> RuntimePlan {
@@ -220,7 +251,10 @@ fn selected_plan(executable: &Path) -> RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
-        environment: Vec::new(), result_path: None, options,
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
     }
 }
 
@@ -229,9 +263,16 @@ fn supervised_mode_refuses_checkpoint_capture_restore_and_join_at_construction()
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let store = Arc::new(Checkpoints);
-    assert!(Engine::with_checkpoint(
-        GuestIsa::X86_64, selected_plan(&executable), StandardStreams::default(), store.clone(), store.clone(),
-    ).is_err());
+    assert!(
+        Engine::with_checkpoint(
+            GuestIsa::X86_64,
+            selected_plan(&executable),
+            StandardStreams::default(),
+            store.clone(),
+            store.clone(),
+        )
+        .is_err()
+    );
 
     let mut restore = selected_plan(&executable);
     restore.options.set("HL_RESTORE", "1", true).unwrap();
@@ -239,12 +280,24 @@ fn supervised_mode_refuses_checkpoint_capture_restore_and_join_at_construction()
 
     let coordinator = Engine::with_checkpoint(
         GuestIsa::X86_64,
-        RuntimePlan { options: Options::default(), ..selected_plan(&executable) },
-        StandardStreams::default(), store.clone(), store,
-    ).unwrap();
+        RuntimePlan {
+            options: Options::default(),
+            ..selected_plan(&executable)
+        },
+        StandardStreams::default(),
+        store.clone(),
+        store,
+    )
+    .unwrap();
     let channel = coordinator.checkpoint_channel().unwrap();
-    assert!(Engine::with_checkpoint_channel(
-        GuestIsa::X86_64, selected_plan(&executable), StandardStreams::default(), channel,
-    ).is_err());
+    assert!(
+        Engine::with_checkpoint_channel(
+            GuestIsa::X86_64,
+            selected_plan(&executable),
+            StandardStreams::default(),
+            channel,
+        )
+        .is_err()
+    );
     coordinator.destroy().unwrap();
 }

@@ -18,6 +18,8 @@ use image::{resolve_layered_guest, resolve_through_merged_directory_symlink};
 mod layout;
 use layout::validate_elf_image;
 
+pub use crate::bindings::{EngineBoxConfig, EnginePublishRule};
+
 pub const STATUS_OK: i32 = 0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,6 +52,7 @@ pub struct EngineConfig<'a> {
     pub executable_fd: i32,
     pub option_names: &'a [*const c_char],
     pub option_values: &'a [*const c_char],
+    pub box_config: Option<&'a EngineBoxConfig>,
     pub standard_fds: [i32; 3],
     pub provider_fd: i32,
 }
@@ -141,6 +144,7 @@ impl Engine {
                 count,
                 config.option_names.as_ptr(),
                 config.option_values.as_ptr(),
+                config.box_config.map_or(std::ptr::null(), std::ptr::from_ref),
                 config.standard_fds.as_ptr(),
                 config.provider_fd,
                 std::ptr::null_mut(),
@@ -965,6 +969,7 @@ mod tests {
                 executable_fd: executable.as_raw_fd(),
                 option_names: &[],
                 option_values: &[],
+                box_config: None,
                 standard_fds: [slave.as_raw_fd(); 3],
                 provider_fd: -1,
             };
@@ -1180,6 +1185,7 @@ mod tests {
                     executable_fd: executable.as_raw_fd(),
                     option_names: &[],
                     option_values: &[],
+                    box_config: None,
                     standard_fds: [standard.as_raw_fd(); 3],
                     provider_fd: -1,
                 };
@@ -1265,6 +1271,7 @@ mod tests {
             executable_fd: executable.as_raw_fd(),
             option_names,
             option_values,
+            box_config: None,
             standard_fds: [standard.as_raw_fd(); 3],
             provider_fd: -1,
         };
@@ -1344,6 +1351,7 @@ mod tests {
             executable_fd: -1,
             option_names: &[],
             option_values: &[],
+            box_config: None,
             standard_fds: [standard.as_raw_fd(); 3],
             provider_fd: -1,
         };
@@ -1380,6 +1388,7 @@ mod tests {
                 executable_fd: -1,
                 option_names: &[],
                 option_values: &[],
+                box_config: None,
                 standard_fds: [standard.as_raw_fd(); 3],
                 provider_fd: -1,
             };
@@ -1417,6 +1426,7 @@ mod tests {
                 executable_fd: -1,
                 option_names: &[],
                 option_values: &[],
+                box_config: None,
                 standard_fds: [standard.as_raw_fd(); 3],
                 provider_fd: -1,
             };
@@ -1507,6 +1517,7 @@ int main(int argc, char **argv) {
                     executable_fd: -1,
                     option_names: &[],
                     option_values: &[],
+                    box_config: None,
                     standard_fds: [standard.as_raw_fd(); 3],
                     provider_fd: -1,
                 };
@@ -1639,6 +1650,7 @@ int main(int argc, char **argv) {
                     executable_fd: -1,
                     option_names: &[],
                     option_values: &[],
+                    box_config: None,
                     standard_fds: [standard.as_raw_fd(); 3],
                     provider_fd: -1,
                 };
@@ -1776,6 +1788,7 @@ int main(void) {
                 executable_fd: -1,
                 option_names: &[volumes.as_ptr()],
                 option_values: &[specification.as_ptr()],
+                box_config: None,
                 standard_fds: [standard.as_raw_fd(); 3],
                 provider_fd: -1,
             };
@@ -1911,6 +1924,7 @@ int main(void) {
             executable_fd: file.as_raw_fd(),
             option_names: &[],
             option_values: &[],
+            box_config: None,
             standard_fds: [-1; 3],
             provider_fd: -1,
         };

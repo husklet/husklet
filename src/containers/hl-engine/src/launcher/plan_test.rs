@@ -36,6 +36,12 @@ fn projects_scalars_credentials() {
         Some("00000000000000120000000000000034")
     );
     assert_eq!(plan.options.get("HL_NETNS"), plan.options.get("HL_PROCESS_DOMAIN"));
+    assert_eq!(plan.box_policy.flags, 0b101);
+    assert_eq!((plan.box_policy.uid, plan.box_policy.gid), (1000, 1001));
+    assert_eq!(
+        plan.box_policy.network_namespace.as_deref(),
+        plan.options.get_bytes("HL_NETNS")
+    );
 }
 
 #[test]
@@ -58,6 +64,8 @@ fn cache_disable_has() {
     assert_eq!(plan.options.get("HL_PCACHE_DIR"), None);
     assert_eq!(plan.options.get("HL_UNTRUSTED"), Some("1"));
     assert_eq!(plan.options.get("HL_SANDBOX"), None);
+    assert_eq!(plan.box_policy.flags, 0b11_0000);
+    assert_eq!(plan.box_policy.translation_cache.as_deref(), Some(b"/cache".as_slice()));
 }
 
 #[test]
@@ -72,6 +80,7 @@ fn projects_all_byte() {
     assert_eq!(plan.rootfs.as_deref(), Some(b"/root".as_slice()));
     assert_eq!(plan.options.get_bytes("HL_HOSTNAME"), Some([0xff].as_slice()));
     assert_eq!(plan.options.get("HL_LOG"), Some("syscall"));
+    assert_eq!(plan.box_policy.hostname.as_deref(), Some([0xff].as_slice()));
 }
 
 #[test]
@@ -93,6 +102,8 @@ fn formats_publish_and() {
     let plan = RuntimePlan::project(&config, DiagnosticsMode::Disabled).unwrap();
     assert_eq!(plan.options.get("HL_LOWER"), Some("/base\n/app"));
     assert_eq!(plan.options.get("HL_PUBLISH"), Some("8080:80,127.0.0.1:8443:443"));
+    assert_eq!(plan.box_policy.lower_layers.as_deref(), Some(b"/base\n/app".as_slice()));
+    assert_eq!(plan.box_policy.publish, config.publish);
 }
 
 /// Host ownership of the plan's writable root, which decides whether a launch can write at all.
@@ -113,6 +124,7 @@ mod rootfs_ownership {
             environment: Vec::new(),
             result_path: None,
             options: set,
+            box_policy: Default::default(),
         }
     }
 

@@ -25,6 +25,99 @@ pub struct RuntimePlan {
     pub environment: Vec<Vec<u8>>,
     pub result_path: Option<Vec<u8>>,
     pub options: Options,
+    /// Owned typed container policy retained beside the legacy option mirror.
+    pub box_policy: RuntimeBoxPolicy,
+}
+
+/// Owned form of the public `hl_engine_box_config` contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeBoxPolicy {
+    pub flags: u32,
+    pub uid: i32,
+    pub gid: i32,
+    pub working_directory: Option<Vec<u8>>,
+    pub hostname: Option<Vec<u8>>,
+    pub environment: Option<Vec<u8>>,
+    pub lower_layers: Option<Vec<u8>>,
+    pub publish: Vec<PortPublication>,
+    pub volumes: Option<Vec<u8>>,
+    pub limits: Option<Vec<u8>>,
+    pub network_namespace: Option<Vec<u8>>,
+    pub translation_cache: Option<Vec<u8>>,
+    pub network_bridge: Option<Vec<u8>>,
+    pub ip: Option<Vec<u8>>,
+    pub filesystem_generation: Option<Vec<u8>>,
+    pub egress_proxy: Option<Vec<u8>>,
+    pub file_owners: Option<Vec<u8>>,
+    pub checkpoint_mode: u32,
+    pub checkpoint_policy: u32,
+}
+
+impl Default for RuntimeBoxPolicy {
+    fn default() -> Self {
+        Self {
+            flags: 0,
+            uid: -1,
+            gid: -1,
+            working_directory: None,
+            hostname: None,
+            environment: None,
+            lower_layers: None,
+            publish: Vec::new(),
+            volumes: None,
+            limits: None,
+            network_namespace: None,
+            translation_cache: None,
+            network_bridge: None,
+            ip: None,
+            filesystem_generation: None,
+            egress_proxy: None,
+            file_owners: None,
+            checkpoint_mode: 0,
+            checkpoint_policy: 0,
+        }
+    }
+}
+
+impl RuntimeBoxPolicy {
+    fn project(config: &LaunchConfig, lower_layers: Vec<u8>, network_namespace: Option<Vec<u8>>) -> Self {
+        let mut flags = 0;
+        flags |= (config.rootfs_read_only != 0) as u32;
+        flags |= ((config.sandbox == SANDBOX_ENABLED) as u32) << 1;
+        flags |= ((config.network_isolated != 0) as u32) << 2;
+        flags |= ((config.publish_external != 0) as u32) << 3;
+        flags |= ((config.translation_cache_disabled != 0) as u32) << 4;
+        flags |= ((config.sandbox != 0 && config.sandbox != SANDBOX_ENABLED) as u32) << 5;
+        Self {
+            flags,
+            uid: config.uid,
+            gid: config.gid,
+            working_directory: nonempty(&config.working_directory),
+            hostname: nonempty(&config.hostname),
+            environment: nonempty(&config.environment),
+            lower_layers: nonempty_owned(lower_layers),
+            publish: config.publish.clone(),
+            volumes: nonempty(&config.volumes),
+            limits: nonempty(&config.limits),
+            network_namespace,
+            translation_cache: nonempty(&config.translation_cache),
+            network_bridge: nonempty(&config.network_bridge),
+            ip: nonempty(&config.ip),
+            filesystem_generation: nonempty(&config.filesystem_generation),
+            egress_proxy: nonempty(&config.egress_proxy),
+            file_owners: nonempty(&config.file_owners),
+            checkpoint_mode: config.checkpoint_mode,
+            checkpoint_policy: config.checkpoint_policy,
+        }
+    }
+}
+
+fn nonempty(value: &[u8]) -> Option<Vec<u8>> {
+    (!value.is_empty()).then(|| value.to_vec())
+}
+
+fn nonempty_owned(value: Vec<u8>) -> Option<Vec<u8>> {
+    (!value.is_empty()).then_some(value)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,6 +277,7 @@ impl RuntimePlan {
             }
         }
 
+        let box_policy = RuntimeBoxPolicy::project(config, lowers, options.get_bytes("HL_NETNS").map(<[u8]>::to_vec));
         Ok(Self {
             rootfs: (!config.rootfs.is_empty()).then(|| config.rootfs.clone()),
             executable_host: (!config.executable_host.is_empty()).then(|| config.executable_host.clone()),
@@ -191,6 +285,7 @@ impl RuntimePlan {
             environment: Vec::new(),
             result_path: (!config.result_path.is_empty()).then(|| config.result_path.clone()),
             options,
+            box_policy,
         })
     }
 

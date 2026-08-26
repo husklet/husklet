@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use crate::{
-    bindings::{Backend, EngineExit, MainImagePlan, SyscallDispatch},
+    bindings::{Backend, EngineBoxConfig, EngineExit, MainImagePlan, SyscallDispatch},
     dynamic_library::DynamicLibrary,
 };
 use std::{
@@ -10,7 +10,7 @@ use std::{
     sync::OnceLock,
 };
 
-const BRIDGE_ABI: u32 = 1;
+const BRIDGE_ABI: u32 = 2;
 const ENGINE_ABI: u32 = 5;
 
 pub(crate) type EngineAbi = unsafe extern "C" fn() -> c_uint;
@@ -39,6 +39,7 @@ pub(crate) type Create = unsafe extern "C" fn(
     c_uint,
     *const *const c_char,
     *const *const c_char,
+    *const EngineBoxConfig,
     *const c_int,
     c_int,
     *mut c_void,

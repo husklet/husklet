@@ -331,6 +331,7 @@ fn rootfs_plan(
         ],
         result_path: None,
         options,
+        box_policy: Default::default(),
     })
 }
 
@@ -369,6 +370,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
         environment: Vec::new(),
         result_path: None,
         options: hl_engine::options::Options::default(),
+        box_policy: Default::default(),
     };
     // This is the production selector itself.  A receipt is emitted only when
     // it constructs the backend named below for the requested guest ISA.

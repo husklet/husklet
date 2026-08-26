@@ -21,7 +21,7 @@ mod artifact;
 
 #[cfg(unix)]
 pub use checkpoint::{AuthenticatedCheckpointPeer, CheckpointBroker, CheckpointTransport};
-pub use engine::{Engine, EngineConfig, Error, Exit};
+pub use engine::{Engine, EngineBoxConfig, EngineConfig, EnginePublishRule, Error, Exit};
 pub use loader::{LoadError, LoadKind};
 #[cfg(unix)]
 pub use provider::artifact_lifecycle_smoke;

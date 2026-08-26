@@ -281,6 +281,7 @@ fn run_with_arguments(
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     };
     let streams = StandardStreams::default().with_output(captured.clone());
     let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).expect("launch");
@@ -462,7 +463,9 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     );
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
-    let native = std::process::Command::new(&executable).output().expect("native fixture");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native fixture");
     assert_eq!(native.status.code(), Some(interpreted_status));
     assert_eq!(native.stdout, interpreted);
 
@@ -471,8 +474,16 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     // oracle for this lowering.
     let (selected_stack, selected_stack_status, selected_stack_backend) =
         run_with_arguments(&executable, "1", &[b"stack"], true);
-    assert!(selected_stack_backend.rip_indirect_lowered >= 4, "{}", selected_stack_backend.line);
-    assert_eq!(selected_stack_backend.provenance_fallback, 1, "{}", selected_stack_backend.line);
+    assert!(
+        selected_stack_backend.rip_indirect_lowered >= 4,
+        "{}",
+        selected_stack_backend.line
+    );
+    assert_eq!(
+        selected_stack_backend.provenance_fallback, 1,
+        "{}",
+        selected_stack_backend.line
+    );
     let native_stack = std::process::Command::new(&executable)
         .arg("stack")
         .output()
@@ -659,6 +670,7 @@ fn a_captured_cc1_runs_from_displaced_storage() {
         environment: vec![b"LC_ALL=C".to_vec()],
         result_path: None,
         options,
+        box_policy: Default::default(),
     };
     let captured = Arc::new(CapturedOutput::default());
     let streams = StandardStreams::default().with_output(captured.clone());

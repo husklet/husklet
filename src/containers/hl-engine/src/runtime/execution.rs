@@ -7,6 +7,82 @@ use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
+struct BoxProjection {
+    raw: hl_native::EngineBoxConfig,
+    _strings: [Option<CString>; 13],
+    _publish: Vec<hl_native::EnginePublishRule>,
+}
+
+impl BoxProjection {
+    fn new(policy: &crate::launcher::plan::RuntimeBoxPolicy) -> Result<Self, EngineError> {
+        let strings: [Option<CString>; 13] = [
+            &policy.working_directory,
+            &policy.hostname,
+            &policy.environment,
+            &policy.lower_layers,
+            &policy.volumes,
+            &policy.limits,
+            &policy.network_namespace,
+            &policy.translation_cache,
+            &policy.network_bridge,
+            &policy.ip,
+            &policy.filesystem_generation,
+            &policy.egress_proxy,
+            &policy.file_owners,
+        ]
+        .map(|value| value.as_deref().map(CString::new).transpose())
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| EngineError::LaunchFailed)?
+        .try_into()
+        .map_err(|_| EngineError::LaunchFailed)?;
+        let publish = policy
+            .publish
+            .iter()
+            .map(|rule| hl_native::EnginePublishRule {
+                host_ipv4_be: rule.host_ipv4_be,
+                host_port: rule.host_port,
+                guest_port: rule.guest_port,
+            })
+            .collect::<Vec<_>>();
+        let pointer = |index: usize| strings[index].as_ref().map_or(std::ptr::null(), |value| value.as_ptr());
+        let raw = hl_native::EngineBoxConfig {
+            abi: 1,
+            size: std::mem::size_of::<hl_native::EngineBoxConfig>() as u32,
+            flags: policy.flags,
+            uid: policy.uid,
+            gid: policy.gid,
+            reserved: 0,
+            working_directory: pointer(0),
+            hostname: pointer(1),
+            environment: pointer(2),
+            lower_layers: pointer(3),
+            publish: if publish.is_empty() {
+                std::ptr::null()
+            } else {
+                publish.as_ptr()
+            },
+            publish_count: publish.len().try_into().map_err(|_| EngineError::LaunchFailed)?,
+            volumes: pointer(4),
+            limits: pointer(5),
+            network_namespace: pointer(6),
+            translation_cache: pointer(7),
+            network_bridge: pointer(8),
+            ip: pointer(9),
+            filesystem_generation: pointer(10),
+            egress_proxy: pointer(11),
+            file_owners: pointer(12),
+            checkpoint_mode: policy.checkpoint_mode,
+            checkpoint_policy: policy.checkpoint_policy,
+        };
+        Ok(Self {
+            raw,
+            _strings: strings,
+            _publish: publish,
+        })
+    }
+}
+
 #[cfg(unix)]
 #[path = "execution_checkpoint.rs"]
 mod checkpoint;
@@ -215,6 +291,7 @@ impl ProductionMachine {
             .map(CString::new)
             .transpose()
             .map_err(|_| EngineError::LaunchFailed)?;
+        let box_projection = BoxProjection::new(&self.plan.box_policy)?;
         let mut options = self
             .plan
             .options
@@ -266,6 +343,7 @@ impl ProductionMachine {
             executable_fd: -1,
             option_names: &names,
             option_values: &values,
+            box_config: Some(&box_projection.raw),
             standard_fds,
             provider_fd: -1,
         };

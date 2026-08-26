@@ -602,7 +602,8 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
                                    const hl_c_main_image_plan *image_plan, const void *interpreter_image,
                                    size_t interpreter_size, uint32_t option_count, const char *const *option_names,
-                                   const char *const *option_values, const int32_t standard_fds[3], int32_t provider_fd,
+                                   const char *const *option_values, const hl_engine_box_config *box_config,
+                                   const int32_t standard_fds[3], int32_t provider_fd,
                                    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output) {
     hl_c_backend *backend;
     hl_engine_config config;
@@ -650,6 +651,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     config.size = sizeof(config);
     config.guest_isa = isa;
     config.rootfs = rootfs;
+    config.box = box_config;
     memset(bindings, 0, sizeof(bindings));
     memset(imported, 0, sizeof(imported));
     memset(&executable, 0, sizeof(executable));

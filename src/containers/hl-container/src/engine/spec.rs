@@ -68,6 +68,7 @@ impl TryFrom<&ProcessConfig> for Spec {
                 environment,
                 result_path: None,
                 options,
+                box_policy: Default::default(),
             },
         })
     }

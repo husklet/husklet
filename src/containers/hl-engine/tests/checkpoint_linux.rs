@@ -719,6 +719,7 @@ fn timeout_plan(executable: &Path, mode: &str, ready: &Path, result: &Path, rest
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 
@@ -737,6 +738,7 @@ fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &P
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 
@@ -771,6 +773,7 @@ fn daily_dev_plan(executable: &Path, directory: &Path, restore: bool, capture: b
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 
@@ -1847,6 +1850,7 @@ fn plan(executable: &Path, release: &Path, final_release: &Path, options_to_set:
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 
@@ -1963,6 +1967,7 @@ fn connected_unix_stream_plan(
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 
@@ -1981,6 +1986,7 @@ fn socket_half_close_plan(executable: &Path, ready: &Path, mode: &str) -> Runtim
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 
@@ -5541,6 +5547,7 @@ fn member_exit_plan(executable: &Path, mode: &str, directory: &Path, restore: bo
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     }
 }
 

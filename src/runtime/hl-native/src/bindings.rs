@@ -28,6 +28,42 @@ pub struct MainImagePlan {
     pub interpreter_identity: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct EnginePublishRule {
+    pub host_ipv4_be: u32,
+    pub host_port: u16,
+    pub guest_port: u16,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct EngineBoxConfig {
+    pub abi: u32,
+    pub size: u32,
+    pub flags: u32,
+    pub uid: i32,
+    pub gid: i32,
+    pub reserved: u32,
+    pub working_directory: *const c_char,
+    pub hostname: *const c_char,
+    pub environment: *const c_char,
+    pub lower_layers: *const c_char,
+    pub publish: *const EnginePublishRule,
+    pub publish_count: u32,
+    pub volumes: *const c_char,
+    pub limits: *const c_char,
+    pub network_namespace: *const c_char,
+    pub translation_cache: *const c_char,
+    pub network_bridge: *const c_char,
+    pub ip: *const c_char,
+    pub filesystem_generation: *const c_char,
+    pub egress_proxy: *const c_char,
+    pub file_owners: *const c_char,
+    pub checkpoint_mode: u32,
+    pub checkpoint_policy: u32,
+}
+
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(super) struct EngineExit {
@@ -41,6 +77,10 @@ pub(super) struct EngineExit {
 const _: () = assert!(size_of::<MainImagePlan>() == 48);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
+const _: () = assert!(size_of::<EnginePublishRule>() == 8);
+const _: () = assert!(size_of::<EngineBoxConfig>() == 152);
+const _: () = assert!(offset_of!(EngineBoxConfig, publish_count) == 64);
+const _: () = assert!(offset_of!(EngineBoxConfig, checkpoint_mode) == 144);
 const _: () = assert!(size_of::<EngineExit>() == 24);
 const _: () = assert!(offset_of!(EngineExit, detail) == 16);
 
@@ -158,6 +198,7 @@ pub(super) unsafe fn hl_c_backend_create(
     option_count: c_uint,
     option_names: *const *const c_char,
     option_values: *const *const c_char,
+    box_config: *const EngineBoxConfig,
     standard_fds: *const c_int,
     provider_fd: c_int,
     syscall_context: *mut c_void,
@@ -200,6 +241,7 @@ pub(super) unsafe fn hl_c_backend_create(
             option_count,
             option_names,
             option_values,
+            box_config,
             standard_fds,
             provider_fd,
             syscall_context,
@@ -432,6 +474,7 @@ mod tests {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    ptr::null(),
                     -1,
                     ptr::null_mut(),
                     None,
@@ -468,6 +511,7 @@ mod tests {
                 ptr::null(),
                 0,
                 0,
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -526,6 +570,7 @@ mod tests {
                 ptr::null(),
                 0,
                 0,
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),

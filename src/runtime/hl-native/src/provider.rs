@@ -60,6 +60,7 @@ pub fn artifact_lifecycle_smoke(scratch: &std::path::Path) -> Result<(), String>
         executable_fd: -1,
         option_names: &[],
         option_values: &[],
+        box_config: None,
         standard_fds: [standard.as_raw_fd(); 3],
         provider_fd: -1,
     };

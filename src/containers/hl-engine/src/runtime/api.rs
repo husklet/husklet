@@ -137,6 +137,7 @@ impl Builder {
             environment: Vec::new(),
             result_path: None,
             options,
+            box_policy: Default::default(),
         };
         let factory = ProductionFactory;
         let services = RuntimeServices {

@@ -19,6 +19,7 @@ fn run() -> Result<i32, EngineError> {
             environment: Vec::new(),
             result_path: None,
             options: Options::default(),
+            box_policy: Default::default(),
         },
     )?;
     let runs = std::env::var("HL_C_BACKEND_SMOKE_RUNS")

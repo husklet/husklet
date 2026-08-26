@@ -11,7 +11,7 @@
 
 typedef struct hl_c_backend hl_c_backend;
 
-#define HL_C_BRIDGE_API_ABI 1u
+#define HL_C_BRIDGE_API_ABI 2u
 
 typedef struct hl_c_bridge_api {
     uint32_t abi;
@@ -32,7 +32,8 @@ typedef struct hl_c_bridge_api {
     int32_t (*create)(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
                       const hl_c_main_image_plan *image_plan, const void *interpreter_image, size_t interpreter_size,
                       uint32_t option_count, const char *const *option_names, const char *const *option_values,
-                      const int32_t standard_fds[3], int32_t provider_fd, void *syscall_context,
+                      const hl_engine_box_config *box_config, const int32_t standard_fds[3], int32_t provider_fd,
+                      void *syscall_context,
                       hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output);
     int32_t (*run)(hl_c_backend *backend, int32_t argc, const char *const *argv);
     int32_t (*request)(hl_c_backend *backend, uint32_t request, int32_t signal);
@@ -87,7 +88,8 @@ HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa);
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
                                    const hl_c_main_image_plan *image_plan, const void *interpreter_image,
                                    size_t interpreter_size, uint32_t option_count, const char *const *option_names,
-                                   const char *const *option_values, const int32_t standard_fds[3], int32_t provider_fd,
+                                   const char *const *option_values, const hl_engine_box_config *box_config,
+                                   const int32_t standard_fds[3], int32_t provider_fd,
                                    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output);
 HL_API int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char *const *argv);
 HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal);

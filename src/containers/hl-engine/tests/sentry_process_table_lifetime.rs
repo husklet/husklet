@@ -42,6 +42,7 @@ fn sandboxed(executable: &Path, arguments: &[&str]) -> i32 {
         environment: Vec::new(),
         result_path: None,
         options,
+        box_policy: Default::default(),
     };
     let engine = Engine::from_plan(GuestIsa::X86_64, plan).expect("sandboxed launch");
     engine.start().expect("guest start");
