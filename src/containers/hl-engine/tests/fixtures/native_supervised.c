@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "secure-jail")) {
         for (int fd = 3; fd < 64; ++fd)
             if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) return 70;
-        if (fcntl(500000, F_GETFD) != -1 || errno != EBADF) return 70;
+        if (fcntl(1048575, F_GETFD) != -1 || errno != EBADF) return 70;
         if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return 71;
         errno = 0;
         if (mount("none", "/tmp", "tmpfs", 0, NULL) != -1 || errno != EPERM) return 72;
@@ -144,6 +144,18 @@ int main(int argc, char **argv) {
             getrlimit(RLIMIT_CORE, &core) != 0 || core.rlim_cur != 0 || core.rlim_max != 0)
             return 95;
         fputs("identity-limits", stdout);
+    }
+    if (argc > 1 && !strcmp(argv[1], "namespaces")) {
+        const char *names[] = {"mnt", "pid", "net", "uts", "ipc"};
+        const char *keys[] = {"HOST_MNT_NS", "HOST_PID_NS", "HOST_NET_NS", "HOST_UTS_NS", "HOST_IPC_NS"};
+        for (size_t index = 0; index < 5; ++index) {
+            char path[64], value[128] = {0};
+            snprintf(path, sizeof(path), "/proc/self/ns/%s", names[index]);
+            if (readlink(path, value, sizeof(value) - 1) <= 0 || getenv(keys[index]) == NULL ||
+                strcmp(value, getenv(keys[index])) == 0)
+                return 96;
+        }
+        fputs("namespaces", stdout);
     }
     return 0;
 }

@@ -466,7 +466,11 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     char **exec_argv = calloc((size_t)argc + 1, sizeof(char *));
     if (exec_argv == NULL) return 70;
     for (uint32_t index = 0; index < argc; ++index) exec_argv[index] = argv[index];
-    if (!hl_native_supervised_policy_supported(config)) return 70;
+    if (!hl_native_supervised_policy_supported(config)) {
+        if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-supervised]\tunsupported-policy=1 host-root-required=1\n");
+        return 70;
+    }
     if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
         fprintf(stderr, "[hl-native-supervised]\tselected=1\n");
     char **environment = hl_native_supervised_environment(options);
@@ -484,6 +488,14 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         hl_host_result attached = host->posix_attachment->borrow_file_at_least(host->context, snapshot.host_handle, 64);
         if (attached.status != HL_STATUS_OK || attached.value > INT_MAX) goto attachment_failed;
         borrowed[fd] = (int)attached.value;
+    }
+    int planted_high_fd = -1;
+    const char *test_refusal = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE");
+    if (test_refusal != NULL && strcmp(test_refusal, "999:38") == 0) {
+        int source = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (source < 0 || dup2(source, 1048575) != 1048575) { if (source >= 0) close(source); goto attachment_failed; }
+        close(source);
+        planted_high_fd = 1048575;
     }
     hl_native_supervised_bootstrap *bootstrap = mmap(NULL, sizeof(*bootstrap), PROT_READ | PROT_WRITE,
                                                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -537,6 +549,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             fprintf(stderr, "[hl-native-supervised]\texecveat_errno=%d\n", errno);
         _exit(errno == ENOENT ? 127 : 126);
     }
+    if (planted_high_fd >= 0) { close(planted_high_fd); planted_high_fd = -1; }
     for (int fd = 0; fd < 3; ++fd) {
         if (borrowed[fd] >= 0) (void)host->posix_attachment->release(host->context, (uint64_t)borrowed[fd]);
         borrowed[fd] = -1;
@@ -579,6 +592,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     free(exec_argv);
     return result;
 attachment_failed:
+    if (planted_high_fd >= 0) close(planted_high_fd);
     for (int fd = 0; fd < 3; ++fd)
         if (borrowed[fd] >= 0) (void)host->posix_attachment->release(host->context, (uint64_t)borrowed[fd]);
     if (executable >= 0) (void)host->posix_attachment->release(host->context, (uint64_t)executable);
