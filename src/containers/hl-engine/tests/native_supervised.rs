@@ -6,7 +6,7 @@ use hl_engine::{
         CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams,
     },
     engine::ExitKind,
-    launcher::plan::RuntimePlan,
+    launcher::plan::{RuntimeBoxPolicy, RuntimePlan},
     options::Options,
     runtime::Engine,
 };
@@ -63,6 +63,10 @@ fn fixture(directory: &Path) -> PathBuf {
     output
 }
 
+fn isolated_policy() -> RuntimeBoxPolicy {
+    RuntimeBoxPolicy { flags: 1 << 2, ..Default::default() }
+}
+
 fn run_configured(
     executable: &Path,
     arguments: &[&str],
@@ -88,7 +92,7 @@ fn run_configured(
         environment,
         result_path: None,
         options,
-        box_policy: Default::default(),
+        box_policy: if selected { isolated_policy() } else { Default::default() },
     };
     let engine = Engine::with_streams(
         GuestIsa::X86_64,
@@ -194,7 +198,7 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
         environment: Vec::new(),
         result_path: None,
         options,
-        box_policy: Default::default(),
+        box_policy: isolated_policy(),
     };
     let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
     engine.start().unwrap();
@@ -263,7 +267,33 @@ fn selected_plan(executable: &Path) -> RuntimePlan {
         environment: Vec::new(),
         result_path: None,
         options,
-        box_policy: Default::default(),
+        box_policy: isolated_policy(),
+    }
+}
+
+#[test]
+fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let mut policies = Vec::new();
+    let mut policy = isolated_policy(); policy.flags &= !(1 << 2); policies.push(policy);
+    let mut policy = isolated_policy(); policy.uid = 1; policies.push(policy);
+    let mut policy = isolated_policy(); policy.gid = 1; policies.push(policy);
+    let mut policy = isolated_policy(); policy.limits = Some(b"nofile=32".to_vec()); policies.push(policy);
+    let mut policy = isolated_policy(); policy.volumes = Some(b"/a:/b".to_vec()); policies.push(policy);
+    let mut policy = isolated_policy(); policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
+    let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
+    let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);
+    for (index, policy) in policies.into_iter().enumerate() {
+        let mut plan = selected_plan(&executable);
+        plan.box_policy = policy;
+        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        if engine.start().is_ok() {
+            if let Ok(result) = engine.wait() {
+                assert_ne!(result.guest_status, 0, "unsupported policy {index} executed");
+            }
+        }
+        engine.destroy().unwrap();
     }
 }
 

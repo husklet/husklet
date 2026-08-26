@@ -8,8 +8,11 @@
 #include <sys/uio.h>
 #include <sys/socket.h>
 #include <sys/mount.h>
+#include <sys/ioctl.h>
 #include <sys/ptrace.h>
 #include <sys/prctl.h>
+#include <linux/capability.h>
+#include <linux/sched.h>
 #include <sched.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -70,6 +73,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "secure-jail")) {
         for (int fd = 3; fd < 64; ++fd)
             if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) return 70;
+        if (fcntl(500000, F_GETFD) != -1 || errno != EBADF) return 70;
         if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return 71;
         errno = 0;
         if (mount("none", "/tmp", "tmpfs", 0, NULL) != -1 || errno != EPERM) return 72;
@@ -79,6 +83,20 @@ int main(int argc, char **argv) {
         if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != -1 || errno != EPERM) return 74;
         errno = 0;
         if (socket(AF_INET, SOCK_STREAM, 0) != -1 || errno != EPERM) return 75;
+        struct __user_cap_header_struct cap_header = {_LINUX_CAPABILITY_VERSION_3, 0};
+        struct __user_cap_data_struct cap_data[2] = {{0}};
+        if (syscall(SYS_capget, &cap_header, cap_data) != 0 || cap_data[0].effective || cap_data[0].permitted ||
+            cap_data[0].inheritable || cap_data[1].effective || cap_data[1].permitted || cap_data[1].inheritable)
+            return 76;
+        errno = 0;
+        if (syscall(SYS_clone, CLONE_NEWNS | SIGCHLD, 0, 0, 0, 0) != -1 || errno != EPERM) return 77;
+#ifdef SYS_clone3
+        struct clone_args clone_args = {.flags = CLONE_NEWUTS, .exit_signal = SIGCHLD};
+        errno = 0;
+        if (syscall(SYS_clone3, &clone_args, sizeof(clone_args)) != -1 || errno != EPERM) return 78;
+#endif
+        errno = 0;
+        if (ioctl(1, 0xdeadbeefUL, 0) != -1 || errno != EPERM) return 79;
         fputs("secure-jail", stdout);
     }
     return 0;

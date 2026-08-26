@@ -8,15 +8,20 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <linux/capability.h>
+#include <linux/sched.h>
 #include <sched.h>
 #include <grp.h>
 #include <poll.h>
+#include <dirent.h>
+#include <limits.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <sys/uio.h>
+#include <termios.h>
 
 static int hl_native_supervised_available(void) { return 1; }
 
@@ -36,22 +41,36 @@ static int hl_native_supervised_write_text(const char *path, const char *text) {
     return result;
 }
 
-static void hl_native_supervised_close_except(int keep) {
-    struct rlimit limit;
-    rlim_t end = getrlimit(RLIMIT_NOFILE, &limit) == 0 ? limit.rlim_cur : 65536;
-    if (end == RLIM_INFINITY || end > 1048576) end = 1048576;
-    for (int fd = 3; (rlim_t)fd < end; ++fd)
-        if (fd != keep) close(fd);
+static int hl_native_supervised_close_except(int keep) {
+#ifdef SYS_close_range
+    int first = keep > 3 ? (int)syscall(SYS_close_range, 3u, (unsigned int)keep - 1u, 0) : 0;
+    int second = syscall(SYS_close_range, (unsigned int)keep + 1u, UINT_MAX, 0);
+    if (first == 0 && second == 0) return 0;
+    if (errno != ENOSYS && errno != EINVAL) return -1;
+#endif
+    DIR *directory = opendir("/proc/self/fd");
+    if (directory == NULL) return -1;
+    int scan = dirfd(directory);
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        char *end = NULL;
+        long fd = strtol(entry->d_name, &end, 10);
+        if (*entry->d_name == 0 || *end != 0 || fd < 3 || fd == keep || fd == scan) continue;
+        close((int)fd);
+    }
+    return closedir(directory);
 }
 
 static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
     if (config->rootfs == NULL || box == NULL || config->memory_limit != 0 || config->pid_limit != 0 ||
-        config->cpu_limit != 0 || box->uid > 0 || box->gid > 0 || box->lower_layers != NULL ||
+        config->cpu_limit != 0 || box->uid != -1 || box->gid != -1 || box->lower_layers != NULL ||
         box->publish_count != 0 || box->volumes != NULL || box->limits != NULL || box->network_bridge != NULL ||
-        box->ip != NULL || box->egress_proxy != NULL || box->filesystem_generation != NULL || box->file_owners != NULL ||
-        box->checkpoint_mode != 0 || (box->flags & (HL_ENGINE_BOX_SANDBOX | HL_ENGINE_BOX_PUBLISH_EXTERNAL |
-                                                   HL_ENGINE_BOX_SENTRY_ONLY)) != 0)
+        box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||
+        box->filesystem_generation != NULL || box->file_owners != NULL || box->checkpoint_mode != 0 ||
+        box->checkpoint_policy != 0 || (box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0 ||
+        (box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
+                        HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
         return 0;
     return 1;
 }
@@ -59,10 +78,15 @@ static int hl_native_supervised_policy_supported(const hl_engine_config *config)
 static int hl_native_supervised_project_container(const hl_engine_config *config,
                                                   hl_native_supervised_bootstrap *bootstrap) {
     const hl_engine_box_config *box = config->box;
-    if (setgroups(0, NULL) != 0 || unshare(CLONE_NEWUSER) != 0) return -1;
-    (void)hl_native_supervised_write_text("/proc/self/setgroups", "deny");
-    if (hl_native_supervised_write_text("/proc/self/uid_map", "0 0 1\n") != 0 ||
-        hl_native_supervised_write_text("/proc/self/gid_map", "0 0 1\n") != 0 ||
+    uid_t host_uid = geteuid();
+    gid_t host_gid = getegid();
+    if (unshare(CLONE_NEWUSER) != 0) return -1;
+    char uid_map[64], gid_map[64];
+    if (snprintf(uid_map, sizeof(uid_map), "0 %u 1\n", (unsigned)host_uid) <= 0 ||
+        snprintf(gid_map, sizeof(gid_map), "0 %u 1\n", (unsigned)host_gid) <= 0 ||
+        hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
+        hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
+        hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0 ||
         unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC) != 0)
         return -1;
     pid_t init = fork();
@@ -82,17 +106,18 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         }
         _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 70);
     }
-    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0 ||
-        mount(config->rootfs, config->rootfs, NULL, MS_BIND | MS_REC, NULL) != 0 || chroot(config->rootfs) != 0)
-        return -1;
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
+    if (strcmp(config->rootfs, "/") != 0 && mount(config->rootfs, config->rootfs, NULL, MS_BIND, NULL) != 0) return -1;
+    if (chroot(config->rootfs) != 0) return -1;
+    if (umount2("/proc", MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) return -1;
+    if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0 &&
         mount(NULL, "/", NULL, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_REC, NULL) != 0)
         return -1;
     if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
     if (box->hostname != NULL && sethostname(box->hostname, strlen(box->hostname)) != 0) return -1;
-    (void)mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
     for (int capability = 0; capability <= CAP_LAST_CAP; ++capability)
-        (void)prctl(PR_CAPBSET_DROP, capability, 0, 0, 0);
+        if (prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) != 0) return -1;
     if (setresgid(box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid) != 0 ||
         setresuid(box->uid < 0 ? 0 : box->uid, box->uid < 0 ? 0 : box->uid, box->uid < 0 ? 0 : box->uid) != 0)
         return -1;
@@ -168,6 +193,32 @@ static int hl_native_supervised_denied(int number) {
            number == SYS_umount2 || number == SYS_pivot_root || number == SYS_chroot || number == SYS_setns ||
            number == SYS_unshare || number == SYS_socket || number == SYS_socketpair || number == SYS_connect ||
            number == SYS_bind || number == SYS_listen || number == SYS_accept || number == SYS_accept4;
+}
+
+static int hl_native_supervised_clone_namespaces(uint64_t flags) {
+    const uint64_t namespaces = CLONE_NEWCGROUP | CLONE_NEWIPC | CLONE_NEWNET | CLONE_NEWNS |
+                                CLONE_NEWPID | CLONE_NEWTIME | CLONE_NEWUSER | CLONE_NEWUTS;
+    return (flags & namespaces) != 0;
+}
+
+static int hl_native_supervised_ioctl_allowed(uint64_t request) {
+    return request == TCGETS || request == TCSETS || request == TCSETSW || request == TCSETSF ||
+           request == TIOCGWINSZ || request == TIOCSWINSZ || request == TIOCGPGRP || request == TIOCSPGRP ||
+           request == FIONREAD || request == TIOCGPTN || request == TIOCSPTLCK;
+}
+
+static int hl_native_supervised_clone3_namespaces(const struct seccomp_notif *request) {
+#ifdef SYS_clone3
+    if (request->data.args[1] < sizeof(struct clone_args)) return 1;
+    struct clone_args arguments = {0};
+    struct iovec local = {&arguments, sizeof(arguments)};
+    struct iovec remote = {(void *)(uintptr_t)request->data.args[0], sizeof(arguments)};
+    if (process_vm_readv((pid_t)request->pid, &local, 1, &remote, 1, 0) != (ssize_t)sizeof(arguments)) return 1;
+    return hl_native_supervised_clone_namespaces(arguments.flags);
+#else
+    (void)request;
+    return 1;
+#endif
 }
 
 static char **hl_native_supervised_environment(const hl_options *options) {
@@ -246,9 +297,16 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
         }
         memset(response, 0, sizes.seccomp_notif_resp);
         response->id = request->id;
-        if ((int)request->data.nr == refused_number) {
+        int number = (int)request->data.nr;
+        if (number == refused_number) {
             response->error = -refused_error;
-        } else if (hl_native_supervised_denied((int)request->data.nr)) {
+        } else if (hl_native_supervised_denied(number) ||
+                   (number == SYS_ioctl && !hl_native_supervised_ioctl_allowed(request->data.args[1])) ||
+                   (number == SYS_clone && hl_native_supervised_clone_namespaces(request->data.args[0]))
+#ifdef SYS_clone3
+                   || (number == SYS_clone3 && hl_native_supervised_clone3_namespaces(request))
+#endif
+                   ) {
             response->error = -EPERM;
         } else {
             response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
@@ -307,7 +365,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             if (borrowed[fd] != fd) close(borrowed[fd]);
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
-        hl_native_supervised_close_except(executable);
+        if (hl_native_supervised_close_except(executable) != 0) _exit(70);
         if (hl_native_supervised_project_container(config, bootstrap) != 0) {
             if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
