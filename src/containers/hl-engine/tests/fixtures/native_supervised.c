@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
 #ifdef SYS_clone3
         struct clone_args clone_args = {.flags = CLONE_NEWUTS, .exit_signal = SIGCHLD};
         errno = 0;
-        if (syscall(SYS_clone3, &clone_args, sizeof(clone_args)) != -1 || errno != EPERM) return 78;
+        if (syscall(SYS_clone3, &clone_args, sizeof(clone_args)) != -1 || errno != ENOSYS) return 78;
 #endif
         errno = 0;
         if (ioctl(1, 0xdeadbeefUL, 0) != -1 || errno != EPERM) return 79;
