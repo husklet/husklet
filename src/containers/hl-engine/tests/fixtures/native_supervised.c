@@ -88,6 +88,16 @@ int main(int argc, char **argv) {
         if (syscall(SYS_capget, &cap_header, cap_data) != 0 || cap_data[0].effective || cap_data[0].permitted ||
             cap_data[0].inheritable || cap_data[1].effective || cap_data[1].permitted || cap_data[1].inheritable)
             return 76;
+        char status_text[4096] = {0};
+        int status_fd = open("/proc/self/status", O_RDONLY);
+        ssize_t status_size = status_fd < 0 ? -1 : read(status_fd, status_text, sizeof(status_text) - 1);
+        if (status_fd >= 0) close(status_fd);
+        if (status_size <= 0 || strstr(status_text, "CapInh:\t0000000000000000") == NULL ||
+            strstr(status_text, "CapPrm:\t0000000000000000") == NULL ||
+            strstr(status_text, "CapEff:\t0000000000000000") == NULL ||
+            strstr(status_text, "CapBnd:\t0000000000000000") == NULL ||
+            strstr(status_text, "CapAmb:\t0000000000000000") == NULL)
+            return 76;
         errno = 0;
         if (syscall(SYS_clone, CLONE_NEWNS | SIGCHLD, 0, 0, 0, 0) != -1 || errno != EPERM) return 77;
 #ifdef SYS_clone3

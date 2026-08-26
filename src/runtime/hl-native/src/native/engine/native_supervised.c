@@ -80,7 +80,9 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     const hl_engine_box_config *box = config->box;
     uid_t host_uid = geteuid();
     gid_t host_gid = getegid();
-    if (unshare(CLONE_NEWUSER) != 0) return -1;
+    if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
+        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0)
+        return -1;
     char uid_map[64], gid_map[64];
     if (snprintf(uid_map, sizeof(uid_map), "0 %u 1\n", (unsigned)host_uid) <= 0 ||
         snprintf(gid_map, sizeof(gid_map), "0 %u 1\n", (unsigned)host_gid) <= 0 ||
