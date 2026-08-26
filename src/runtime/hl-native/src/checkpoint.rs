@@ -204,6 +204,7 @@ mod peer_tests {
 /// Broker child and shared generation trigger installed into a native engine.
 pub struct CheckpointTransport {
     broker_child: OwnedFd,
+    trigger_waker: OwnedFd,
     trigger_descriptor: OwnedFd,
     trigger_mapping: NonNull<c_void>,
 }
@@ -354,12 +355,24 @@ impl CheckpointTransport {
             drop(unsafe { OwnedFd::from_raw_fd(child) });
             return Err(std::io::Error::other("native checkpoint trigger creation failed"));
         }
+        // The checkpoint broker socket is full duplex. Keep one duplicate of its parent end so a generation
+        // bump can wake native-supervised's blocking poll without adding a periodic timer or another ABI fd.
+        let trigger_waker = match unsafe { libc::fcntl(parent, libc::F_DUPFD_CLOEXEC, 0) } {
+            descriptor if descriptor >= 0 => unsafe { OwnedFd::from_raw_fd(descriptor) },
+            _ => {
+                unsafe { bindings::hl_c_backend_checkpoint_trigger_destroy(mapping, trigger) };
+                drop(unsafe { OwnedFd::from_raw_fd(parent) });
+                drop(unsafe { OwnedFd::from_raw_fd(child) });
+                return Err(std::io::Error::last_os_error());
+            }
+        };
         // SAFETY: all three descriptors were uniquely transferred on success.
         Ok(unsafe {
             (
                 CheckpointBroker(OwnedFd::from_raw_fd(parent)),
                 Self {
                     broker_child: OwnedFd::from_raw_fd(child),
+                    trigger_waker,
                     trigger_descriptor: OwnedFd::from_raw_fd(trigger),
                     trigger_mapping,
                 },
@@ -386,7 +399,18 @@ impl CheckpointTransport {
     #[must_use]
     pub fn bump(&self) -> u32 {
         // SAFETY: the mapping is live until this owner is dropped.
-        unsafe { bindings::hl_c_backend_checkpoint_trigger_bump(self.trigger_mapping.as_ptr()) }
+        let generation = unsafe { bindings::hl_c_backend_checkpoint_trigger_bump(self.trigger_mapping.as_ptr()) };
+        let wake = 1_u8;
+        // A generation remains authoritative even if the bounded datagram queue is already carrying a wake.
+        unsafe {
+            libc::send(
+                self.trigger_waker.as_raw_fd(),
+                (&raw const wake).cast(),
+                1,
+                libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+            );
+        }
+        generation
     }
 
     /// Native signal reserved for interrupting guest checkpoint safepoints.

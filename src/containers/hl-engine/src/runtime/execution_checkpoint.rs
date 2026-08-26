@@ -81,7 +81,9 @@ impl CheckpointControl {
         self.phases.finish(capture, "request_dispatch", dispatch);
         let completion = self.phases.begin();
         let result = await_capture_completion(&self.server, capture, deadline, || {
-            if interrupt_engine { let _ = engine.request(REQUEST_CHECKPOINT, signal); }
+            if interrupt_engine {
+                let _ = engine.request(REQUEST_CHECKPOINT, signal);
+            }
         });
         match result {
             Ok(result) => {

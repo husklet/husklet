@@ -91,6 +91,7 @@ int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void
  * exactly like the broker. */
 void hl_ckpt_trigger_publish(int descriptor);
 int hl_ckpt_trigger_descriptor(void);
+int hl_ckpt_broker_descriptor(void);
 
 /* Embedder side, called from the Rust FFI boundary. `hl_ckpt_broker_pair` creates the datagram socketpair
  * whose child end is handed to activation; `hl_ckpt_broker_accept` waits up to `timeout_ms` for one engine

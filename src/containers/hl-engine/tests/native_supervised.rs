@@ -19,10 +19,16 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 fn native_overlay_directories() -> std::collections::BTreeSet<PathBuf> {
-    std::fs::read_dir("/var/tmp").unwrap().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| {
-        path.file_name().and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("husklet-native-overlay."))
-    }).collect()
+    std::fs::read_dir("/var/tmp")
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("husklet-native-overlay."))
+        })
+        .collect()
 }
 
 struct Output {
@@ -73,7 +79,10 @@ fn fixture(directory: &Path) -> PathBuf {
 }
 
 fn isolated_policy() -> RuntimeBoxPolicy {
-    RuntimeBoxPolicy { flags: 1 << 2, ..Default::default() }
+    RuntimeBoxPolicy {
+        flags: 1 << 2,
+        ..Default::default()
+    }
 }
 
 fn run_configured(
@@ -104,7 +113,11 @@ fn run_configured(
         environment,
         result_path: None,
         options,
-        box_policy: if selected { isolated_policy() } else { Default::default() },
+        box_policy: if selected {
+            isolated_policy()
+        } else {
+            Default::default()
+        },
     };
     let engine = Engine::with_streams(
         GuestIsa::X86_64,
@@ -201,6 +214,32 @@ fn supervised_stdout_and_exit_status_keep_the_engine_contract() {
     assert_eq!(status, 23);
     assert_eq!(output, b"native-supervised");
     assert!(error.is_empty());
+}
+
+#[test]
+fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let receipt = work.path().join("idle-receipt");
+    let mut plan = selected_plan(&executable);
+    std::fs::write(&receipt, b"").unwrap();
+    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
+    plan.options
+        .set_bytes(
+            "HL_NATIVE_CKPT_TEST_IDLE_RECEIPT",
+            receipt.as_os_str().as_encoded_bytes(),
+            true,
+        )
+        .unwrap();
+    plan.arguments.push(b"checkpoint-idle".to_vec());
+    let store = Arc::new(Checkpoints);
+    let engine =
+        Engine::with_checkpoint(GuestIsa::X86_64, plan, StandardStreams::default(), store.clone(), store).unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(std::fs::read_to_string(receipt).unwrap(), "periodic_wakeups=0\n");
 }
 
 #[test]
@@ -306,7 +345,9 @@ fn supervised_overlay_owner_failure_leaves_no_projection_directory() {
     let before = native_overlay_directories();
     let mut options = Options::default();
     options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
-    options.set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true).unwrap();
+    options
+        .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
+        .unwrap();
     let plan = RuntimePlan {
         rootfs: Some(upper.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
@@ -321,7 +362,9 @@ fn supervised_overlay_owner_failure_leaves_no_projection_directory() {
         },
     };
     let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
-    if engine.start().is_ok() { assert!(engine.wait().is_err()); }
+    if engine.start().is_ok() {
+        assert!(engine.wait().is_err());
+    }
     let _ = engine.destroy();
     assert_eq!(native_overlay_directories(), before);
 }
@@ -493,11 +536,25 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     let root = work.path().join("root");
     let source = work.path().join("source");
     let output_directory = work.path().join("output");
-    for path in [root.join("bin"), root.join("proc"), root.join("src"), root.join("out"), source.clone(), source.join("nested"), output_directory.clone()] {
+    for path in [
+        root.join("bin"),
+        root.join("proc"),
+        root.join("src"),
+        root.join("out"),
+        source.clone(),
+        source.join("nested"),
+        output_directory.clone(),
+    ] {
         std::fs::create_dir_all(path).unwrap();
     }
-    assert!(std::process::Command::new("mount").args(["-t", "tmpfs", "-o", "rw,suid,dev", "tmpfs"])
-        .arg(source.join("nested")).status().unwrap().success());
+    assert!(
+        std::process::Command::new("mount")
+            .args(["-t", "tmpfs", "-o", "rw,suid,dev", "tmpfs"])
+            .arg(source.join("nested"))
+            .status()
+            .unwrap()
+            .success()
+    );
     std::fs::write(source.join("input.c"), b"source\n").unwrap();
     let executable = root.join("bin/fixture");
     std::fs::copy(built, &executable).unwrap();
@@ -505,9 +562,8 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     let mut plan = selected_plan(&executable);
     plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
     plan.arguments.push(b"volumes".to_vec());
-    plan.box_policy.volumes = Some(
-        format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes(),
-    );
+    plan.box_policy.volumes =
+        Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
     let engine = Engine::with_streams(
         GuestIsa::X86_64,
         plan,
@@ -520,7 +576,13 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     assert_eq!(*output.stdout.lock().unwrap(), b"volumes");
     assert_eq!(std::fs::read(output_directory.join("result.o")).unwrap(), b"object\n");
     assert!(!source.join("blocked").exists());
-    assert!(std::process::Command::new("umount").arg(source.join("nested")).status().unwrap().success());
+    assert!(
+        std::process::Command::new("umount")
+            .arg(source.join("nested"))
+            .status()
+            .unwrap()
+            .success()
+    );
 }
 
 #[test]
@@ -637,25 +699,47 @@ fn checkpoint_phase1(mode: &str, expected_receipt: &str) {
     plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
     std::fs::write(&receipt, b"").unwrap();
-    plan.options.set_bytes("HL_NATIVE_CKPT_TEST_RECEIPT", receipt.as_os_str().as_encoded_bytes(), true).unwrap();
+    plan.options
+        .set_bytes(
+            "HL_NATIVE_CKPT_TEST_RECEIPT",
+            receipt.as_os_str().as_encoded_bytes(),
+            true,
+        )
+        .unwrap();
     plan.arguments = [executable.as_path(), Path::new(mode), &ready, &release, &progress]
-        .into_iter().map(|value| value.as_os_str().as_encoded_bytes().to_vec()).collect();
+        .into_iter()
+        .map(|value| value.as_os_str().as_encoded_bytes().to_vec())
+        .collect();
     let output = Arc::new(Output::default());
     let store = Arc::new(Checkpoints);
     let engine = Engine::with_checkpoint(
-        GuestIsa::X86_64, plan, StandardStreams::default().with_output(output.clone()), store.clone(), store,
-    ).unwrap();
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+        store.clone(),
+        store,
+    )
+    .unwrap();
     engine.start().unwrap();
     for _ in 0..5000 {
-        if ready.exists() && progress.exists() { break; }
+        if ready.exists() && progress.exists() {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(ready.exists() && progress.exists());
     let before: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
-    assert!(engine.capture_checkpoint().is_err(), "phase 1 must refuse image capture");
+    assert!(
+        engine.capture_checkpoint().is_err(),
+        "phase 1 must refuse image capture"
+    );
     for _ in 0..5000 {
-        let after = std::fs::read_to_string(&progress).ok().and_then(|value| value.trim().parse::<u32>().ok());
-        if after.is_some_and(|value| value > before) { break; }
+        let after = std::fs::read_to_string(&progress)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok());
+        if after.is_some_and(|value| value > before) {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     let after: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
@@ -697,16 +781,36 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let executable = fixture(work.path());
     let mut policies = Vec::new();
     policies.push(RuntimeBoxPolicy::default());
-    let mut policy = RuntimeBoxPolicy { network_mode: 2, ..Default::default() };
-    policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);
-    let mut policy = isolated_policy(); policy.lower_layers = Some(b"/one\n/two".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.ip = Some(b"10.0.0.2".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.egress_proxy = Some(b"proxy".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.file_owners = Some(b"owners".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.checkpoint_policy = 1; policies.push(policy);
-    let mut policy = isolated_policy(); policy.flags |= 1 << 1; policies.push(policy);
+    let mut policy = RuntimeBoxPolicy {
+        network_mode: 2,
+        ..Default::default()
+    };
+    policy.network_namespace = Some(b"shared".to_vec());
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.network_bridge = Some(b"bridge0".to_vec());
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.flags |= 1 << 3;
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.lower_layers = Some(b"/one\n/two".to_vec());
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.ip = Some(b"10.0.0.2".to_vec());
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.egress_proxy = Some(b"proxy".to_vec());
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.file_owners = Some(b"owners".to_vec());
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.checkpoint_policy = 1;
+    policies.push(policy);
+    let mut policy = isolated_policy();
+    policy.flags |= 1 << 1;
+    policies.push(policy);
     for (index, policy) in policies.into_iter().enumerate() {
         let mut plan = selected_plan(&executable);
         plan.box_policy = policy;

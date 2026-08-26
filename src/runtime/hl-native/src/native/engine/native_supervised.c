@@ -670,22 +670,18 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
     struct seccomp_notif_resp *response = calloc(1, sizes.seccomp_notif_resp);
     if (request == NULL || response == NULL) { free(request); free(response); return 70; }
     int leader_result = 70, leader_done = 0;
+    unsigned long idle_timeouts = 0;
     int listener_active = listener;
     volatile uint32_t *trigger = NULL;
     uint32_t trigger_seen = 0;
     int trigger_descriptor = hl_ckpt_trigger_descriptor();
+    int trigger_wake = hl_ckpt_broker_descriptor();
     if (trigger_descriptor >= 0) {
         void *mapping = mmap(NULL, sizeof(uint32_t), PROT_READ | PROT_WRITE, MAP_SHARED, trigger_descriptor, 0);
         if (mapping != MAP_FAILED) { trigger = mapping; trigger_seen = *trigger; }
     }
     *guest_signal = 0;
     for (;;) {
-        if (trigger != NULL && *trigger != trigger_seen) {
-            trigger_seen = *trigger;
-            pid_t workload = -1;
-            (void)hl_native_supervised_single_child(leader, &workload);
-            (void)hl_native_supervised_checkpoint_phase1(workload, trigger_seen, options);
-        }
         int status;
         pid_t waited;
         while ((waited = waitpid(-1, &status, WNOHANG)) > 0) {
@@ -700,14 +696,32 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
             }
         }
         if (waited < 0 && errno == ECHILD && leader_done) {
+            const char *idle_receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_IDLE_RECEIPT");
+            if (idle_receipt != NULL) {
+                char line[64];
+                snprintf(line, sizeof(line), "periodic_wakeups=%lu\n", idle_timeouts);
+                (void)hl_native_supervised_write_text(idle_receipt, line);
+            }
             free(request); free(response); return leader_result;
         }
         if (waited < 0 && errno != EINTR && errno != ECHILD) { free(request); free(response); return 70; }
-        struct pollfd events[2] = {{listener_active, POLLIN, 0}, {leader_pidfd, POLLIN, 0}};
-        int polled = poll(events, leader_pidfd < 0 ? 1 : 2, 10);
+        struct pollfd events[3] = {
+            {listener_active, POLLIN, 0}, {leader_pidfd, POLLIN, 0}, {trigger_wake, POLLIN, 0}};
+        int polled = poll(events, trigger_wake < 0 ? (leader_pidfd < 0 ? 1 : 2) : 3, -1);
         if (polled < 0) { if (errno == EINTR) continue; free(request); free(response); return 70; }
+        if (polled == 0) { ++idle_timeouts; continue; }
+        if (trigger_wake >= 0 && (events[2].revents & POLLIN)) {
+            unsigned char wakes[64];
+            while (recv(trigger_wake, wakes, sizeof(wakes), MSG_DONTWAIT) > 0) {}
+            if (trigger != NULL && *trigger != trigger_seen) {
+                trigger_seen = *trigger;
+                pid_t workload = -1;
+                (void)hl_native_supervised_single_child(leader, &workload);
+                (void)hl_native_supervised_checkpoint_phase1(workload, trigger_seen, options);
+            }
+        }
         if (events[0].revents & (POLLHUP | POLLNVAL)) listener_active = -1;
-        if (polled == 0 || !(events[0].revents & POLLIN)) continue;
+        if (!(events[0].revents & POLLIN)) continue;
         memset(request, 0, sizes.seccomp_notif);
         if (ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, request) != 0) {
             if (errno == EINTR || errno == ENOENT) continue;

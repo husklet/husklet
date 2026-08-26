@@ -95,6 +95,10 @@ int hl_ckpt_trigger_descriptor(void) {
     return -1;
 }
 
+int hl_ckpt_broker_descriptor(void) {
+    return -1;
+}
+
 int hl_ckpt_broker_pair(hl_activation_descriptor *out_parent, hl_activation_descriptor *out_child) {
     if (out_parent != NULL) *out_parent = HL_ACTIVATION_DESCRIPTOR_NONE;
     if (out_child != NULL) *out_child = HL_ACTIVATION_DESCRIPTOR_NONE;
@@ -348,6 +352,10 @@ void hl_ckpt_trigger_publish(int descriptor) {
 
 int hl_ckpt_trigger_descriptor(void) {
     return checkpoint_trigger;
+}
+
+int hl_ckpt_broker_descriptor(void) {
+    return checkpoint_broker;
 }
 
 static int checkpoint_write_all(int descriptor, const void *data, size_t size) {

@@ -234,8 +234,7 @@ impl RuntimeFactory for ProductionFactory {
             .get_bytes("HL_NATIVE_SUPERVISED")
             .is_some_and(|value| !value.is_empty() && value != b"0");
         #[cfg(unix)]
-        if native_supervised && request.plan.options.get_bytes("HL_RESTORE").is_some()
-        {
+        if native_supervised && request.plan.options.get_bytes("HL_RESTORE").is_some() {
             return Err(CompositionError::RuntimeConstruction);
         }
         #[cfg(unix)]
@@ -606,7 +605,10 @@ impl GuestMachine for ProductionMachine {
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
-            let native_supervised = self.plan.options.get_bytes("HL_NATIVE_SUPERVISED")
+            let native_supervised = self
+                .plan
+                .options
+                .get_bytes("HL_NATIVE_SUPERVISED")
                 .is_some_and(|value| !value.is_empty() && value != b"0");
             return checkpoint.capture(engine.as_ref(), self.isa, deadline, !native_supervised);
         }

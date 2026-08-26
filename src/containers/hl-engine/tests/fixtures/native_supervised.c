@@ -83,6 +83,10 @@ int main(int argc, char **argv) {
         printf("host:%llu", (unsigned long long)netns.st_ino);
         return 0;
     }
+    if (argc > 1 && !strcmp(argv[1], "checkpoint-idle")) {
+        usleep(150000);
+        return 0;
+    }
     if (argc > 4 && (!strcmp(argv[1], "checkpoint-phase1") ||
                      !strcmp(argv[1], "checkpoint-descendant") ||
                      !strcmp(argv[1], "checkpoint-thread"))) {

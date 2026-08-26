@@ -216,7 +216,16 @@ const DEFINITIONS: &[Definition] = &[
         "test-only supervised syscall refusal as number:errno",
         Text
     ),
-    internal!("HL_NATIVE_CKPT_TEST_RECEIPT", "test-only native checkpoint phase receipt", Path),
+    internal!(
+        "HL_NATIVE_CKPT_TEST_RECEIPT",
+        "test-only native checkpoint phase receipt",
+        Path
+    ),
+    internal!(
+        "HL_NATIVE_CKPT_TEST_IDLE_RECEIPT",
+        "test-only native checkpoint idle-wakeup receipt",
+        Path
+    ),
     internal!(
         "HL_NATIVE_CKPT_TEST_SKIP_REGISTER",
         "test-only native checkpoint registration mutation",

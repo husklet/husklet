@@ -48,6 +48,7 @@
 #define hl_ckpt_channel_owns_descriptor HL_TARGET_LOCAL(ckpt_channel_owns_descriptor)
 #define hl_ckpt_channel_publish HL_TARGET_LOCAL(ckpt_channel_publish)
 #define hl_ckpt_trigger_descriptor HL_TARGET_LOCAL(ckpt_trigger_descriptor)
+#define hl_ckpt_broker_descriptor HL_TARGET_LOCAL(ckpt_broker_descriptor)
 #define hl_ckpt_trigger_publish HL_TARGET_LOCAL(ckpt_trigger_publish)
 #define hl_ckpt_broker_pair HL_TARGET_LOCAL(ckpt_broker_pair)
 #define hl_ckpt_broker_accept HL_TARGET_LOCAL(ckpt_broker_accept)
