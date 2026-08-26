@@ -1127,6 +1127,7 @@ static void hl_engine_create_cleanup(hl_engine *engine) {
     if (engine->box_initialized) {
         for (fd = 0; fd < engine->box.fd_capacity; ++fd) {
             hl_host_handle handle;
+            if (engine->box.fds[fd].ofd == 0 || engine->box.fds[fd].ofd == UINT32_MAX) continue;
             if (hl_linux_fd_close(&engine->box, fd, &handle) == HL_STATUS_OK && handle != HL_HOST_HANDLE_INVALID)
                 (void)engine->host.file->close(engine->host.context, handle);
         }
@@ -1505,7 +1506,8 @@ void hl_engine_destroy(hl_engine *engine) {
     }
     if (engine->box_initialized) {
         for (fd = 0; fd < engine->box.fd_capacity; ++fd)
-            (void)hl_linux_close(&engine->box, fd);
+            if (engine->box.fds[fd].ofd != 0 && engine->box.fds[fd].ofd != UINT32_MAX)
+                (void)hl_linux_close(&engine->box, fd);
         (void)hl_linux_abi_destroy(&engine->box);
     }
     free(engine->box_fds);

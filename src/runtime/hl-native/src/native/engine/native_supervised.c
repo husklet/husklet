@@ -6,6 +6,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #if defined(__linux__) && defined(__x86_64__)
 #include <linux/audit.h>
 #include <linux/filter.h>
+#include <linux/futex.h>
 #include <linux/seccomp.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
@@ -550,7 +551,11 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         int listener = hl_native_supervised_create_listener();
         if (listener < 0) _exit(70);
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
-        while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {}
+        while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {
+            if (syscall(SYS_futex, &bootstrap->acknowledged, FUTEX_WAIT, 0, NULL, NULL, 0) != 0 &&
+                errno != EAGAIN && errno != EINTR)
+                _exit(70);
+        }
         close(listener);
         pid_t workload = fork();
         if (workload < 0) _exit(70);
@@ -597,7 +602,10 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             if (poll(&death, 1, 1) != 0) break;
         }
     }
-    if (listener >= 0) atomic_store_explicit(&bootstrap->acknowledged, 1, memory_order_release);
+    if (listener >= 0) {
+        atomic_store_explicit(&bootstrap->acknowledged, 1, memory_order_release);
+        (void)syscall(SYS_futex, &bootstrap->acknowledged, FUTEX_WAKE, 1, NULL, NULL, 0);
+    }
     if (pidfd >= 0) close(pidfd);
     int leader_pidfd = listener < 0 ? -1 : (int)syscall(SYS_pidfd_open, child, 0);
     munmap(bootstrap, sizeof(*bootstrap));
