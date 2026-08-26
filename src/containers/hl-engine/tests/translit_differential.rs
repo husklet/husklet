@@ -69,6 +69,7 @@ struct Backend {
     riprel_lowered: u64,
     scratch_lowered: u64,
     lea_lowered: u64,
+    abs32_lowered: u64,
     rip_indirect_lowered: u64,
     provenance_fallback: u64,
     translations: u64,
@@ -114,6 +115,7 @@ fn backend(stderr: &[u8]) -> Backend {
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
         lea_lowered: counter("lea_lowered="),
+        abs32_lowered: counter("abs32_lowered="),
         rip_indirect_lowered: counter("rip_indirect_lowered="),
         provenance_fallback: counter("provenance_fallback="),
         translations,
@@ -536,7 +538,14 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let work = TempDir::new().unwrap();
-    for name in ["flags", "operands", "sigs", "displaced_memory", "displaced_fault"] {
+    for name in [
+        "flags",
+        "operands",
+        "sigs",
+        "displaced_memory",
+        "displaced_fault",
+        "natural_abs32_fault",
+    ] {
         let executable = displaced_fixture(work.path(), name);
         let (interpreted, interpreted_status, _) = run(&executable, "0");
         let (selected, selected_status, selected_backend) = run(&executable, "1");
@@ -551,6 +560,22 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         );
         assert!(selected_backend.blocks > 0, "{name}: no transliterated block was built");
         assert_eq!(selected_backend.declined, 0, "{name}: a link-address image was refused");
+        if name == "displaced_memory" || name == "displaced_fault" || name == "natural_abs32_fault" {
+            assert!(
+                selected_backend.riprel_lowered > 0,
+                "{name}: a natural low ET_EXEC never entered absolute RIP-relative lowering -- {}",
+                selected_backend.line
+            );
+            assert!(
+                selected_backend.abs32_lowered > 0,
+                "{name}: no abs32 load -- {}",
+                selected_backend.line
+            );
+            assert_eq!(
+                selected_backend.scratch_lowered, 0,
+                "{name}: natural load borrowed a GPR"
+            );
+        }
         assert_eq!(
             selected_status, interpreted_status,
             "{name}: selecting the transliterator changed the exit status"

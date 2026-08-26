@@ -165,6 +165,7 @@ static uint64_t translit_displaced_riprel_unreachable;
 static uint64_t translit_displaced_riprel_lowered;
 static uint64_t translit_displaced_scratch_lowered;
 static uint64_t translit_displaced_lea_lowered;
+static uint64_t translit_natural_abs32_lowered;
 static uint64_t translit_displaced_refusal_opcode[512];
 static uint64_t translit_displaced_refusal_prefix;
 static uint64_t translit_displaced_refusal_width;
@@ -384,8 +385,8 @@ static void translit_emit_exit_preset(hl_x64_asm *a, uint64_t reason) {
 // A rip-relative operand names `next_guest_rip + disp32`; after the move the same bytes name
 // `next_host_rip + disp32`. Re-aim the displacement at the guest address. The guest EA is left alone
 // otherwise -- it is an ACCESS, and accesses are not un-biased (and a biased image never reaches here).
-// Out of int32 reach ends the block; that is a real limit, not a rarity to be assumed away, because
-// nothing places the code arena near the guest image.
+// Rel32 is cheapest when it reaches.  The code arena is normally far from a low ET_EXEC, so supported
+// forms fall through to the absolute lowerer rather than treating placement as an execution-policy gate.
 static uint64_t translit_riprel_target(uint8_t op, int two, uint64_t guest_target, uint64_t nonpie_lo,
                                        uint64_t nonpie_hi, uint64_t nonpie_bias) {
     if (op == 0x8D && !two) return guest_target;
@@ -408,8 +409,8 @@ static uint32_t translit_preserve_mask(int reg) {
 // host-only arena is out of reach, x86's accumulator moffs forms provide a bounded absolute dereference
 // without borrowing a guest register, touching the stack, or adding fault-recovery state. LEA is address
 // materialisation rather than a dereference, so an immediate move preserves its low guest identity.
-static int translit_lower_displaced_riprel(hl_x64_asm *a, const struct insn *insn, uint64_t guest_target,
-                                           uint64_t storage_target, int *preserve_register) {
+static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn, uint64_t guest_target,
+                                          uint64_t storage_target, int displaced, int *preserve_register) {
     *preserve_register = -1;
     if (insn->op == 0x8D && !insn->two) {
         if (insn->lock || insn->rep || insn->repne ||
@@ -435,6 +436,22 @@ static int translit_lower_displaced_riprel(hl_x64_asm *a, const struct insn *ins
         if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_refusal_prefix, 1, __ATOMIC_RELAXED);
         return 0;
     }
+    // In 64-bit mode an address-size override plus a no-base/no-index SIB names an unsigned absolute disp32.
+    // Natural ET_EXEC storage is low, so this is shorter than movabs+load and borrows no guest GPR.
+    if (!displaced && !insn->two && insn->op == 0x8B && storage_target <= UINT32_MAX &&
+        (insn->opsize == 4 || insn->opsize == 8) && !insn->p66 && !insn->addr32) {
+        hl_x64_u8(a, 0x67);
+        uint8_t rex = (uint8_t)(0x40 | (insn->opsize == 8 ? 8 : 0) | (insn->reg >= 8 ? 4 : 0));
+        if (rex != 0x40) hl_x64_u8(a, rex);
+        hl_x64_u8(a, 0x8B);
+        hl_x64_u8(a, (uint8_t)(((insn->reg & 7) << 3) | 4));
+        hl_x64_u8(a, 0x25);
+        hl_x64_u32(a, (uint32_t)storage_target);
+        (void)__atomic_fetch_add(&translit_natural_abs32_lowered, 1, __ATOMIC_RELAXED);
+        return !a->overflow;
+    }
+    // Natural mode never falls into the displaced image's borrowed-register or moffs families.
+    if (!displaced) return 0;
     uint8_t moffs = 0;
     if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
         moffs = 0xA0;
@@ -542,14 +559,14 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 8) return translit_displaced_safe_for(&insn, TL_CALL, 1) ? 11 : 0;
     if (scenario == 9) return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 0 : 12;
-    uint8_t bytes[16] = {0};
+    uint8_t bytes[32] = {0};
     hl_x64_asm output = {bytes, bytes + sizeof(bytes), 0};
     insn.opsize = 8;
     if (scenario == 10) {
         insn.op = 0x8D;
         insn.reg = 9;
         int preserve;
-        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 13;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 13;
         const uint8_t expected[] = {0x49, 0xB9, 0x23, 0x01, 0x40, 0, 0, 0, 0, 0};
         return output.cursor - bytes == (ptrdiff_t)sizeof(expected) && memcmp(bytes, expected, sizeof(expected)) == 0
                    ? 0
@@ -559,7 +576,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 11 ? 0x8B : 0x89;
         insn.reg = 0;
         int preserve;
-        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 15;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 15;
         return output.cursor - bytes == 10 && bytes[0] == 0x48 && bytes[1] == (scenario == 11 ? 0xA1 : 0xA3) &&
                        memcmp(bytes + 2, (uint8_t[]){0x23, 0x01, 0x40, 0, 0x01, 0, 0, 0}, 8) == 0
                    ? 0
@@ -569,7 +586,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8B;
         insn.reg = 4;
         int preserve;
-        return translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve) ? 17 : 0;
+        return translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve) ? 17 : 0;
     }
     if (scenario >= 14 && scenario <= 16) {
         int preserve;
@@ -577,7 +594,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 16 ? 0xBE : 0x8B;
         insn.two = scenario == 16;
         insn.opsize = scenario == 15 ? 4 : 8;
-        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 18;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 18;
         static const uint8_t suffix[][4] = {{0x48, 0x8B, 0x09, 0}, {0x45, 0x8B, 0x6D, 0},
                                              {0x48, 0x0F, 0xBE, 0x12}};
         size_t suffix_size = scenario == 14 ? 3 : 4;
@@ -594,7 +611,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 18 ? 0xB6 : 0x63;
         insn.two = scenario == 18;
         insn.opsize = scenario == 18 ? 4 : 8;
-        if (!translit_lower_displaced_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, &preserve)) return 21;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 21;
         const uint8_t *expected = scenario == 18 ? (uint8_t[]){0x45, 0x0F, 0xB6, 0x1B}
                                                  : (uint8_t[]){0x4D, 0x63, 0x36};
         size_t expected_size = scenario == 18 ? 4 : 3;
@@ -611,6 +628,17 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int refused = translit_jcc_successor(next, next, &successor) == TL_SUCCESSOR_DECODE_REFUSED;
         translit_test_decode_refuse_pc = 0;
         return refused ? 0 : 23;
+    }
+    if (scenario == 21) {
+        int preserve;
+        insn.op = 0x8B;
+        insn.reg = 10;
+        int lowered = translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + 0x123, 0, &preserve);
+        const uint8_t expected[] = {0x67, 0x4C, 0x8B, 0x14, 0x25, 0x23, 0x01, 0x40, 0x00};
+        return lowered && preserve == -1 && output.cursor - bytes == (ptrdiff_t)sizeof(expected) &&
+                       memcmp(bytes, expected, sizeof(expected)) == 0
+                   ? 0
+                   : 24;
     }
     return 6;
 }
@@ -676,8 +704,11 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
                                                                  g_nonpie_hi, g_nonpie_bias);
-                if (!g_nonpie_lo ||
-                    !translit_lower_displaced_riprel(a, &insn, guest_target, storage_target, &preserve_register)) {
+                // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
+                // remains available to displaced images, whose complete family is covered separately.
+                if ((!g_nonpie_lo && (insn.two || insn.op != 0x8B)) ||
+                    !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
+                                                    &preserve_register)) {
                     if (g_nonpie_lo)
                         (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
                     if (g_nonpie_lo) translit_count_displaced_refusal(&insn);
@@ -935,6 +966,7 @@ static int translit_report(char *out, size_t size) {
     uint64_t displaced_scratch_lowered =
         __atomic_load_n(&translit_displaced_scratch_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_lea_lowered = __atomic_load_n(&translit_displaced_lea_lowered, __ATOMIC_RELAXED);
+    uint64_t natural_abs32_lowered = __atomic_load_n(&translit_natural_abs32_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_prefix = __atomic_load_n(&translit_displaced_refusal_prefix, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_width = __atomic_load_n(&translit_displaced_refusal_width, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_rsp = __atomic_load_n(&translit_displaced_refusal_rsp, __ATOMIC_RELAXED);
@@ -985,12 +1017,17 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
+                    " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
                     " jcc_fall_executed=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
+                    (unsigned long long)displaced_riprel_lowered,
+                    (unsigned long long)displaced_scratch_lowered,
+                    (unsigned long long)displaced_lea_lowered,
+                    (unsigned long long)natural_abs32_lowered,
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                     (unsigned long long)jcc_fall_page_refused,
                     (unsigned long long)jcc_fall_successor_page_refused,
