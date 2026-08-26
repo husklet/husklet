@@ -89,6 +89,11 @@ static int hl_native_supervised_guest_path_valid(const char *path) {
     return 1;
 }
 
+static int hl_native_supervised_path_contains(const char *parent, const char *child) {
+    size_t length = strlen(parent);
+    return strncmp(parent, child, length) == 0 && (child[length] == 0 || child[length] == '/');
+}
+
 static int hl_native_supervised_volumes_open(const char *spec, hl_native_supervised_volumes *volumes) {
     memset(volumes, 0, sizeof(*volumes));
     if (spec == NULL) return 0;
@@ -106,13 +111,18 @@ static int hl_native_supervised_volumes_open(const char *spec, hl_native_supervi
         if (!hl_native_supervised_guest_path_valid(record) || colon[0] != '/' || strchr(colon, ':') != NULL ||
             strlen(record) >= sizeof(volumes->entries[0].guest))
             goto failed;
+        if (hl_native_supervised_path_contains("/proc", record)) goto failed;
+        for (size_t index = 0; index < volumes->count; ++index)
+            if (hl_native_supervised_path_contains(volumes->entries[index].guest, record) ||
+                hl_native_supervised_path_contains(record, volumes->entries[index].guest))
+                goto failed;
         int host_root = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
         struct open_how source_how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
                                       .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
         int source = host_root < 0 ? -1 : (int)syscall(SYS_openat2, host_root, colon + 1, &source_how, sizeof(source_how));
         if (host_root >= 0) close(host_root);
         if (source < 0) goto failed;
-        int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC);
+        int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
         struct stat source_status, tree_status;
         if (tree < 0 || fstat(source, &source_status) != 0 || fstat(tree, &tree_status) != 0 ||
             source_status.st_dev != tree_status.st_dev || source_status.st_ino != tree_status.st_ino) {
@@ -146,7 +156,7 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
         int tree = volume->source;
         struct mount_attr attributes = {.attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV |
                                                      (volume->read_only ? MOUNT_ATTR_RDONLY : 0)};
-        if (tree < 0 || syscall(SYS_mount_setattr, tree, "", AT_EMPTY_PATH, &attributes, sizeof(attributes)) != 0 ||
+        if (tree < 0 || syscall(SYS_mount_setattr, tree, "", AT_EMPTY_PATH | AT_RECURSIVE, &attributes, sizeof(attributes)) != 0 ||
             syscall(SYS_move_mount, tree, "", target, "", MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH) != 0) {
             if (tree >= 0) close(tree);
             close(target); close(root); return -1;
@@ -165,7 +175,7 @@ static int hl_native_supervised_policy_supported(const hl_engine_config *config)
         box->gid < -1 || box->lower_layers != NULL || box->publish_count != 0 || box->network_bridge != NULL ||
         box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||
         box->filesystem_generation != NULL || box->file_owners != NULL || box->checkpoint_mode != 0 ||
-        box->checkpoint_policy != 0 ||
+        box->checkpoint_policy != 0 || (box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0 ||
         (box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
                         HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
         return 0;
@@ -439,12 +449,13 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
         int number = (int)request->data.nr;
         if (number == refused_number) {
             response->error = -refused_error;
+#ifdef SYS_clone3
+        } else if (number == SYS_clone3) {
+            response->error = -ENOSYS;
+#endif
         } else if (hl_native_supervised_denied(number) ||
                    (number == SYS_ioctl && !hl_native_supervised_ioctl_allowed(request->data.args[1])) ||
                    (number == SYS_clone && hl_native_supervised_clone_namespaces(request->data.args[0]))
-#ifdef SYS_clone3
-                   || number == SYS_clone3
-#endif
                    ) {
             response->error = -EPERM;
         } else {

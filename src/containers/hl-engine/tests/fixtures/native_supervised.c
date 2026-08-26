@@ -12,12 +12,16 @@
 #include <sys/ptrace.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/statvfs.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
 #include <sched.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
+#include <pthread.h>
+
+static void *thread_return(void *argument) { return argument; }
 
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "output")) {
@@ -132,6 +136,11 @@ int main(int argc, char **argv) {
         close(input);
         errno = 0;
         if (open("/src/blocked", O_WRONLY | O_CREAT, 0600) != -1 || errno != EROFS) return 92;
+        errno = 0;
+        if (open("/src/nested/blocked", O_WRONLY | O_CREAT, 0600) != -1 || errno != EROFS) return 92;
+        struct statvfs mounted;
+        if (statvfs("/src/nested", &mounted) != 0 || !(mounted.f_flag & ST_RDONLY) ||
+            !(mounted.f_flag & ST_NOSUID) || !(mounted.f_flag & ST_NODEV)) return 92;
         int output = open("/out/result.o", O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (output < 0 || write(output, "object\n", 7) != 7 || close(output) != 0) return 93;
         fputs("volumes", stdout);
@@ -156,6 +165,14 @@ int main(int argc, char **argv) {
                 return 96;
         }
         fputs("namespaces", stdout);
+    }
+    if (argc > 1 && !strcmp(argv[1], "pthread")) {
+        pthread_t thread;
+        void *result = NULL;
+        if (pthread_create(&thread, NULL, thread_return, (void *)0x1234) != 0 ||
+            pthread_join(thread, &result) != 0 || result != (void *)0x1234)
+            return 97;
+        fputs("pthread", stdout);
     }
     return 0;
 }

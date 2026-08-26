@@ -267,9 +267,11 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     let root = work.path().join("root");
     let source = work.path().join("source");
     let output_directory = work.path().join("output");
-    for path in [root.join("bin"), root.join("proc"), root.join("src"), root.join("out"), source.clone(), output_directory.clone()] {
+    for path in [root.join("bin"), root.join("proc"), root.join("src"), root.join("out"), source.clone(), source.join("nested"), output_directory.clone()] {
         std::fs::create_dir_all(path).unwrap();
     }
+    assert!(std::process::Command::new("mount").args(["-t", "tmpfs", "-o", "rw,suid,dev", "tmpfs"])
+        .arg(source.join("nested")).status().unwrap().success());
     std::fs::write(source.join("input.c"), b"source\n").unwrap();
     let executable = root.join("bin/fixture");
     std::fs::copy(built, &executable).unwrap();
@@ -292,6 +294,7 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     assert_eq!(*output.stdout.lock().unwrap(), b"volumes");
     assert_eq!(std::fs::read(output_directory.join("result.o")).unwrap(), b"object\n");
     assert!(!source.join("blocked").exists());
+    assert!(std::process::Command::new("umount").arg(source.join("nested")).status().unwrap().success());
 }
 
 #[test]
@@ -305,6 +308,9 @@ fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
     let specifications = [
         format!("rw:/tmp/../escape:{}", source.display()),
         format!("rw:/tmp:{}", symlink.display()),
+        format!("rw:/proc:{}", source.display()),
+        format!("rw:/tmp:{},ro:/tmp:{}", source.display(), source.display()),
+        format!("rw:/tmp:{},ro:/tmp/nested:{}", source.display(), source.display()),
     ];
     for specification in specifications {
         let mut plan = selected_plan(&executable);
@@ -353,6 +359,15 @@ fn supervised_projector_uses_distinct_mount_pid_net_uts_and_ipc_namespaces() {
     let (status, output, _) = run_configured(&executable, &["namespaces"], true, None, environment);
     assert_eq!(status, 0);
     assert_eq!(output, b"namespaces");
+}
+
+#[test]
+fn supervised_clone3_enosys_falls_back_for_pthread_create_and_join() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let (status, output, _) = run(&executable, &["pthread"], true);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"pthread");
 }
 
 struct Checkpoints;
@@ -404,6 +419,7 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let mut policies = Vec::new();
+    policies.push(RuntimeBoxPolicy::default());
     let mut policy = isolated_policy(); policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);
