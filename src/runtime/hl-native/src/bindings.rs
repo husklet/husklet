@@ -62,6 +62,19 @@ pub struct EngineBoxConfig {
     pub file_owners: *const c_char,
     pub checkpoint_mode: u32,
     pub checkpoint_policy: u32,
+    pub network_mode: u32,
+    pub network_interface_count: u32,
+    pub network_interfaces: *const EngineNetworkInterface,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct EngineNetworkInterface {
+    pub bridge: *const c_char,
+    pub address_ipv4_be: u32,
+    pub gateway_ipv4_be: u32,
+    pub prefix: u8,
+    pub reserved: [u8; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -78,9 +91,11 @@ const _: () = assert!(size_of::<MainImagePlan>() == 48);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
 const _: () = assert!(size_of::<EnginePublishRule>() == 8);
-const _: () = assert!(size_of::<EngineBoxConfig>() == 152);
+const _: () = assert!(size_of::<EngineBoxConfig>() == 168);
 const _: () = assert!(offset_of!(EngineBoxConfig, publish_count) == 64);
 const _: () = assert!(offset_of!(EngineBoxConfig, checkpoint_mode) == 144);
+const _: () = assert!(offset_of!(EngineBoxConfig, network_interfaces) == 160);
+const _: () = assert!(size_of::<EngineNetworkInterface>() == 24);
 const _: () = assert!(size_of::<EngineExit>() == 24);
 const _: () = assert!(offset_of!(EngineExit, detail) == 16);
 

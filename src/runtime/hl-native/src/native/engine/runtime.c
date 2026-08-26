@@ -86,6 +86,8 @@ struct hl_engine {
     char *owned_environment;
     char *owned_box_strings[11];
     hl_engine_publish_rule *owned_publish;
+    hl_engine_network_interface *owned_network_interfaces;
+    char *owned_network_bridges[8];
     hl_host_handle executable;
     hl_engine_executable executable_config;
     hl_engine_main_image_plan main_image_plan;
@@ -789,6 +791,7 @@ static int hl_engine_proxy_valid(const char *value) {
 static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_config *box) {
     char number[32];
     char publish[1024];
+    char interfaces[1024];
     uint32_t known_flags = HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_SANDBOX | HL_ENGINE_BOX_NETWORK_ISOLATED |
                            HL_ENGINE_BOX_PUBLISH_EXTERNAL | HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED |
                            HL_ENGINE_BOX_SENTRY_ONLY;
@@ -797,8 +800,20 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
     if (box->abi != HL_ENGINE_BOX_ABI || box->size < sizeof(*box)) return HL_STATUS_ABI_MISMATCH;
     if ((box->flags & ~known_flags) != 0 || box->reserved != 0 || box->uid < -1 || box->gid < -1 ||
         box->checkpoint_policy > HL_ENGINE_CHECKPOINT_REFUSE ||
-        (box->checkpoint_mode & ~(HL_ENGINE_CHECKPOINT_CAPTURE | HL_ENGINE_CHECKPOINT_RESTORE)) != 0)
+        (box->checkpoint_mode & ~(HL_ENGINE_CHECKPOINT_CAPTURE | HL_ENGINE_CHECKPOINT_RESTORE)) != 0 ||
+        (box->network_mode != 0 && box->network_mode != 2) || box->network_interface_count > 8 ||
+        ((box->network_interface_count == 0) != (box->network_interfaces == NULL)))
         return HL_STATUS_INVALID_ARGUMENT;
+    if (box->network_mode == 2 &&
+        ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 || box->network_interface_count != 0))
+        return HL_STATUS_INVALID_ARGUMENT;
+    for (uint32_t index = 0; index < box->network_interface_count; ++index) {
+        const hl_engine_network_interface *interface = &box->network_interfaces[index];
+        if (!hl_engine_identity_valid(interface->bridge, 40) || interface->address_ipv4_be == 0 ||
+            interface->gateway_ipv4_be == 0 || interface->prefix > 32 || interface->reserved[0] != 0 ||
+            interface->reserved[1] != 0 || interface->reserved[2] != 0)
+            return HL_STATUS_INVALID_ARGUMENT;
+    }
     if (box->working_directory != NULL && box->working_directory[0] != '/') return HL_STATUS_INVALID_ARGUMENT;
     if (!hl_engine_hostname_valid(box->hostname) || !hl_engine_environment_valid(box->environment))
         return HL_STATUS_INVALID_ARGUMENT;
@@ -858,6 +873,18 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
             memcpy(engine->owned_publish, box->publish, (size_t)box->publish_count * sizeof(*engine->owned_publish));
             engine->box_config.publish = engine->owned_publish;
         }
+        if (box->network_interface_count != 0) {
+            engine->owned_network_interfaces =
+                calloc(box->network_interface_count, sizeof(*engine->owned_network_interfaces));
+            if (engine->owned_network_interfaces == NULL) return HL_STATUS_OUT_OF_MEMORY;
+            for (uint32_t index = 0; index < box->network_interface_count; ++index) {
+                engine->owned_network_bridges[index] = hl_engine_copy_string(box->network_interfaces[index].bridge);
+                if (engine->owned_network_bridges[index] == NULL) return HL_STATUS_OUT_OF_MEMORY;
+                engine->owned_network_interfaces[index] = box->network_interfaces[index];
+                engine->owned_network_interfaces[index].bridge = engine->owned_network_bridges[index];
+            }
+            engine->box_config.network_interfaces = engine->owned_network_interfaces;
+        }
     }
     engine->config.box = &engine->box_config;
     if (hl_engine_set_option(&engine->options, "HL_CWD", engine->owned_working_directory) != 0 ||
@@ -906,6 +933,25 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
             if (box->publish_count != 0 && hl_engine_set_option(&engine->options, "HL_PUBLISH", publish) != 0)
                 return HL_STATUS_OUT_OF_MEMORY;
         }
+        {
+            size_t used = 0;
+            interfaces[0] = 0;
+            for (uint32_t index = 0; index < box->network_interface_count; ++index) {
+                const hl_engine_network_interface *interface = &box->network_interfaces[index];
+                const uint8_t *address = (const uint8_t *)&interface->address_ipv4_be;
+                int written = snprintf(interfaces + used, sizeof interfaces - used, "%s%s=%u.%u.%u.%u/%u",
+                                       index ? "\n" : "", interface->bridge, (unsigned)address[0],
+                                       (unsigned)address[1], (unsigned)address[2], (unsigned)address[3],
+                                       (unsigned)interface->prefix);
+                if (written < 0 || (size_t)written >= sizeof interfaces - used) return HL_STATUS_INVALID_ARGUMENT;
+                used += (size_t)written;
+            }
+            if (box->network_interface_count != 0 &&
+                hl_engine_set_option(&engine->options, "HL_NETIFS", interfaces) != 0)
+                return HL_STATUS_OUT_OF_MEMORY;
+        }
+        if (box->network_mode == 2 && hl_options_set(&engine->options, "HL_NET_HOST", "1", 1) != 0)
+            return HL_STATUS_OUT_OF_MEMORY;
         if (box->translation_cache != NULL && hl_options_set(&engine->options, "HL_PCACHE", "1", 1) != 0)
             return HL_STATUS_OUT_OF_MEMORY;
         if ((box->flags & HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED) != 0 &&
@@ -1197,6 +1243,9 @@ static void hl_engine_create_cleanup(hl_engine *engine) {
     for (index = 0; index < sizeof(engine->owned_box_strings) / sizeof(engine->owned_box_strings[0]); ++index)
         free(engine->owned_box_strings[index]);
     free(engine->owned_publish);
+    for (index = 0; index < sizeof(engine->owned_network_bridges) / sizeof(engine->owned_network_bridges[0]); ++index)
+        free(engine->owned_network_bridges[index]);
+    free(engine->owned_network_interfaces);
     free(engine);
 }
 
@@ -1584,6 +1633,9 @@ void hl_engine_destroy(hl_engine *engine) {
         for (index = 0; index < sizeof(engine->owned_box_strings) / sizeof(engine->owned_box_strings[0]); ++index)
             free(engine->owned_box_strings[index]);
         free(engine->owned_publish);
+        for (index = 0; index < sizeof(engine->owned_network_bridges) / sizeof(engine->owned_network_bridges[0]); ++index)
+            free(engine->owned_network_bridges[index]);
+        free(engine->owned_network_interfaces);
     }
     free(engine);
 }

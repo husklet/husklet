@@ -299,7 +299,8 @@ static const char *hl_native_supervised_policy_rejection(const hl_engine_config 
     if (box->uid < -1 || box->gid < -1) return "identity";
     if (box->lower_layers != NULL && strchr(box->lower_layers, '\n') != NULL) return "multiple-lower-layers";
     if (box->publish_count != 0) return "published-network";
-    if (box->network_bridge != NULL || box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL)
+    if (box->network_mode == 2 || box->network_interface_count != 0 || box->network_bridge != NULL ||
+        box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL)
         return "host-or-shared-network";
     /* The generation file invalidates the translated backend's user-space pathname caches after a
      * daemon-side write.  Native-supervised has no such cache: every lookup goes through the kernel

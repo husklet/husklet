@@ -10,7 +10,7 @@ HL_EXTERN_C_BEGIN
 #define HL_ENGINE_ABI 5u
 /* The one accepted box generation. A box declaring anything else, or smaller than the struct below, is
  * rejected outright -- there is no per-generation field-presence gating to read past. */
-#define HL_ENGINE_BOX_ABI 1u
+#define HL_ENGINE_BOX_ABI 2u
 
 /* checkpoint_mode: which directions of the store channel this engine uses. Zero disables checkpointing. */
 #define HL_ENGINE_CHECKPOINT_CAPTURE 1u
@@ -127,7 +127,19 @@ typedef struct hl_engine_box_config {
     uint32_t checkpoint_mode;
     /* HL_ENGINE_CHECKPOINT_*; zero asks for no policy (permissive restore). */
     uint32_t checkpoint_policy;
+    /* Zero is automatic (possibly isolated by flags); two is the host network stack. */
+    uint32_t network_mode;
+    uint32_t network_interface_count;
+    const struct hl_engine_network_interface *network_interfaces;
 } hl_engine_box_config;
+
+typedef struct hl_engine_network_interface {
+    const char *bridge;
+    uint32_t address_ipv4_be;
+    uint32_t gateway_ipv4_be;
+    uint8_t prefix;
+    uint8_t reserved[3];
+} hl_engine_network_interface;
 
 typedef struct hl_engine_config {
     HL_ABI_HEADER;
@@ -165,9 +177,11 @@ HL_STATIC_ASSERT(sizeof(hl_engine_fd_binding) == 32, "engine descriptor binding 
 HL_STATIC_ASSERT(offsetof(hl_engine_fd_binding, host_handle) == 24, "engine descriptor handle ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_executable) == 40, "engine executable ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_main_image_plan) == 48, "engine main-image plan ABI drifted");
-HL_STATIC_ASSERT(sizeof(hl_engine_box_config) == 152, "engine box configuration ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_engine_box_config) == 168, "engine box configuration ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_box_config, publish_count) == 64, "engine box publish count ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_box_config, checkpoint_mode) == 144, "engine box checkpoint mode ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_engine_box_config, network_interfaces) == 160, "engine box network interfaces drifted");
+HL_STATIC_ASSERT(sizeof(hl_engine_network_interface) == 24, "engine network interface ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_config) == 96, "engine configuration ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_config, payload) == 32, "engine payload ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_config, main_image_plan) == 88, "engine plan pointer ABI drifted");

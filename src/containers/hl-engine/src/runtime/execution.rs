@@ -11,6 +11,8 @@ struct BoxProjection {
     raw: hl_native::EngineBoxConfig,
     _strings: [Option<CString>; 13],
     _publish: Vec<hl_native::EnginePublishRule>,
+    _network_names: Vec<CString>,
+    _network_interfaces: Vec<hl_native::EngineNetworkInterface>,
 }
 
 impl BoxProjection {
@@ -45,9 +47,26 @@ impl BoxProjection {
                 guest_port: rule.guest_port,
             })
             .collect::<Vec<_>>();
+        let network_names = policy
+            .network_interfaces
+            .iter()
+            .map(|interface| CString::new(interface.bridge.clone()).map_err(|_| EngineError::LaunchFailed))
+            .collect::<Result<Vec<_>, _>>()?;
+        let network_interfaces = policy
+            .network_interfaces
+            .iter()
+            .zip(&network_names)
+            .map(|(interface, bridge)| hl_native::EngineNetworkInterface {
+                bridge: bridge.as_ptr(),
+                address_ipv4_be: interface.address_ipv4_be,
+                gateway_ipv4_be: interface.gateway_ipv4_be,
+                prefix: interface.prefix,
+                reserved: [0; 3],
+            })
+            .collect::<Vec<_>>();
         let pointer = |index: usize| strings[index].as_ref().map_or(std::ptr::null(), |value| value.as_ptr());
         let raw = hl_native::EngineBoxConfig {
-            abi: 1,
+            abi: 2,
             size: std::mem::size_of::<hl_native::EngineBoxConfig>() as u32,
             flags: policy.flags,
             uid: policy.uid,
@@ -74,11 +93,23 @@ impl BoxProjection {
             file_owners: pointer(12),
             checkpoint_mode: policy.checkpoint_mode,
             checkpoint_policy: policy.checkpoint_policy,
+            network_mode: policy.network_mode,
+            network_interface_count: network_interfaces
+                .len()
+                .try_into()
+                .map_err(|_| EngineError::LaunchFailed)?,
+            network_interfaces: if network_interfaces.is_empty() {
+                std::ptr::null()
+            } else {
+                network_interfaces.as_ptr()
+            },
         };
         Ok(Self {
             raw,
             _strings: strings,
             _publish: publish,
+            _network_names: network_names,
+            _network_interfaces: network_interfaces,
         })
     }
 }
@@ -645,6 +676,45 @@ mod tests {
     #[test]
     fn native_run_status_survives_the_engine_boundary() {
         assert_eq!(native_run_failure(13), EngineError::NativeRunFailed(13));
+    }
+
+    #[test]
+    fn typed_network_projection_preserves_order_gateway_and_publications() {
+        let policy = crate::launcher::plan::RuntimeBoxPolicy {
+            network_mode: 0,
+            network_namespace: Some(b"container-key".to_vec()),
+            network_interfaces: vec![
+                crate::launcher::plan::NetworkInterface {
+                    bridge: b"front".to_vec(),
+                    address_ipv4_be: u32::from_le_bytes([172, 29, 0, 2]),
+                    gateway_ipv4_be: u32::from_le_bytes([172, 29, 0, 1]),
+                    prefix: 24,
+                },
+                crate::launcher::plan::NetworkInterface {
+                    bridge: b"back".to_vec(),
+                    address_ipv4_be: u32::from_le_bytes([10, 7, 0, 9]),
+                    gateway_ipv4_be: u32::from_le_bytes([10, 7, 0, 1]),
+                    prefix: 19,
+                },
+            ],
+            publish: vec![crate::config::PortPublication {
+                host_ipv4_be: u32::from_le_bytes([127, 0, 0, 1]),
+                host_port: 18080,
+                guest_port: 8080,
+            }],
+            ..Default::default()
+        };
+        let projection = BoxProjection::new(&policy).unwrap();
+        assert_eq!(projection.raw.abi, 2);
+        assert_eq!(projection.raw.network_interface_count, 2);
+        assert_eq!(projection.raw.publish_count, 1);
+        assert_eq!(projection._network_interfaces[0].prefix, 24);
+        assert_eq!(
+            projection._network_interfaces[1].gateway_ipv4_be,
+            u32::from_le_bytes([10, 7, 0, 1])
+        );
+        assert_eq!(projection._network_names[0].to_bytes(), b"front");
+        assert_eq!(projection._publish[0].guest_port, 8080);
     }
 
     #[cfg(unix)]

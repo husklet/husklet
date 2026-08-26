@@ -71,6 +71,32 @@ impl TryFrom<&ProcessConfig> for Spec {
                 let owners = Self::owner_records(launch);
                 (!owners.is_empty()).then(|| owners.into_bytes())
             },
+            network_mode: match launch.network_mode {
+                crate::NetworkMode::Automatic => 0,
+                crate::NetworkMode::Host => 2,
+            },
+            network_namespace: (launch.network_mode == crate::NetworkMode::Automatic)
+                .then(|| launch.network_namespace.as_bytes().to_vec()),
+            network_interfaces: launch
+                .networks
+                .iter()
+                .filter(|network| network.bridge.is_some())
+                .map(|network| hl_engine::launcher::plan::NetworkInterface {
+                    bridge: network.bridge.as_ref().expect("validated bridge").as_bytes().to_vec(),
+                    address_ipv4_be: u32::from(network.address.expect("validated address")).to_be(),
+                    gateway_ipv4_be: u32::from(network.gateway.expect("validated gateway")).to_be(),
+                    prefix: network.prefix.expect("validated prefix"),
+                })
+                .collect(),
+            publish: launch
+                .publish
+                .iter()
+                .map(|rule| hl_engine::config::PortPublication {
+                    host_ipv4_be: u32::from(rule.host_ip).to_be(),
+                    host_port: rule.host,
+                    guest_port: rule.port.guest,
+                })
+                .collect(),
             ..Default::default()
         };
         Ok(Self {
@@ -328,6 +354,14 @@ impl Spec {
             if prefix > 32 {
                 return Err(Error::InvalidSpec(format!(
                     "virtual network bridge {bridge:?} has IPv4 prefix {prefix} greater than 32"
+                )));
+            }
+            let gateway = interface
+                .gateway
+                .ok_or_else(|| Error::InvalidSpec(format!("virtual network bridge {bridge:?} has no IPv4 gateway")))?;
+            if gateway.is_unspecified() {
+                return Err(Error::InvalidSpec(format!(
+                    "virtual network bridge {bridge:?} has an unspecified IPv4 gateway"
                 )));
             }
             records.push(format!("{bridge}={address}/{prefix}"));

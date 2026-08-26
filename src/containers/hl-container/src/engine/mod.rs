@@ -322,6 +322,7 @@ mod tests {
             bridge: Some(name.to_owned()),
             address: Some(address.parse().unwrap()),
             prefix: Some(prefix),
+            gateway: Some("172.28.0.1".parse().unwrap()),
             name: name.to_owned(),
             driver: crate::NetworkDriver::Bridge,
             endpoints: Vec::new(),
@@ -451,6 +452,22 @@ mod tests {
         );
         assert_eq!(spec.plan.options.get("HL_NETBR"), None);
         assert_eq!(spec.plan.options.get("HL_IP"), None);
+        assert_eq!(spec.plan.box_policy.network_mode, 0);
+        assert_eq!(
+            spec.plan.box_policy.network_namespace.as_deref(),
+            Some(b"container-test".as_slice())
+        );
+        assert_eq!(spec.plan.box_policy.network_interfaces.len(), 2);
+        assert_eq!(spec.plan.box_policy.network_interfaces[0].bridge, b"front");
+        assert_eq!(
+            spec.plan.box_policy.network_interfaces[0].address_ipv4_be,
+            u32::from_le_bytes([172, 29, 0, 2])
+        );
+        assert_eq!(
+            spec.plan.box_policy.network_interfaces[0].gateway_ipv4_be,
+            u32::from_le_bytes([172, 28, 0, 1])
+        );
+        assert_eq!(spec.plan.box_policy.network_interfaces[1].bridge, b"back");
     }
 
     #[test]
@@ -483,5 +500,31 @@ mod tests {
         incomplete.prefix = None;
         launch.networks = vec![incomplete];
         assert!(Spec::try_from(&launch).is_err());
+        let mut missing_gateway = bridge("valid", "10.0.0.2", 24);
+        missing_gateway.gateway = None;
+        launch.networks = vec![missing_gateway];
+        assert!(Spec::try_from(&launch).is_err());
+    }
+
+    #[test]
+    fn host_network_and_publications_reach_the_typed_policy_without_legacy_parsing() {
+        let mut launch = launch();
+        launch.network_mode = crate::NetworkMode::Host;
+        launch.publish = vec![crate::Publication::tcp("127.0.0.1".parse().unwrap(), 18080, 8080).unwrap()];
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.box_policy.network_mode, 2);
+        assert_eq!(spec.plan.box_policy.network_namespace, None);
+        assert_eq!(spec.plan.box_policy.publish.len(), 1);
+        assert_eq!(
+            spec.plan.box_policy.publish[0].host_ipv4_be,
+            u32::from_le_bytes([127, 0, 0, 1])
+        );
+        assert_eq!(
+            (
+                spec.plan.box_policy.publish[0].host_port,
+                spec.plan.box_policy.publish[0].guest_port
+            ),
+            (18080, 8080)
+        );
     }
 }

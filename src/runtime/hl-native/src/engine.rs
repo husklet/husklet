@@ -18,7 +18,7 @@ use image::{resolve_layered_guest, resolve_through_merged_directory_symlink};
 mod layout;
 use layout::validate_elf_image;
 
-pub use crate::bindings::{EngineBoxConfig, EnginePublishRule};
+pub use crate::bindings::{EngineBoxConfig, EngineNetworkInterface, EnginePublishRule};
 
 pub const STATUS_OK: i32 = 0;
 

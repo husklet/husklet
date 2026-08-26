@@ -51,6 +51,16 @@ pub struct RuntimeBoxPolicy {
     pub file_owners: Option<Vec<u8>>,
     pub checkpoint_mode: u32,
     pub checkpoint_policy: u32,
+    pub network_mode: u32,
+    pub network_interfaces: Vec<NetworkInterface>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkInterface {
+    pub bridge: Vec<u8>,
+    pub address_ipv4_be: u32,
+    pub gateway_ipv4_be: u32,
+    pub prefix: u8,
 }
 
 impl Default for RuntimeBoxPolicy {
@@ -75,6 +85,8 @@ impl Default for RuntimeBoxPolicy {
             file_owners: None,
             checkpoint_mode: 0,
             checkpoint_policy: 0,
+            network_mode: 0,
+            network_interfaces: Vec::new(),
         }
     }
 }
@@ -108,6 +120,8 @@ impl RuntimeBoxPolicy {
             file_owners: nonempty(&config.file_owners),
             checkpoint_mode: config.checkpoint_mode,
             checkpoint_policy: config.checkpoint_policy,
+            network_mode: u32::from(config.network_transport == NETWORK_HOST) * NETWORK_HOST,
+            network_interfaces: Vec::new(),
         }
     }
 }
