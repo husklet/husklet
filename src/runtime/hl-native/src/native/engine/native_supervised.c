@@ -443,7 +443,7 @@ projection_failed: {
     }
 }
 
-static int hl_native_supervised_create_listener(void) {
+static int hl_native_supervised_create_listener(const hl_options *options) {
 #define HL_NATIVE_NOTIFY(number) \
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (number), 0, 1), \
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF)
@@ -481,8 +481,25 @@ static int hl_native_supervised_create_listener(void) {
         HL_NATIVE_NOTIFY(SYS_getpid),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
     };
+    struct sock_filter selective[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        HL_NATIVE_NOTIFY(SYS_clone),
+#ifdef SYS_clone3
+        HL_NATIVE_NOTIFY(SYS_clone3),
+#endif
+        HL_NATIVE_NOTIFY(SYS_ioctl), HL_NATIVE_NOTIFY(SYS_ptrace), HL_NATIVE_NOTIFY(SYS_seccomp),
+        HL_NATIVE_NOTIFY(SYS_mount), HL_NATIVE_NOTIFY(SYS_umount2), HL_NATIVE_NOTIFY(SYS_pivot_root),
+        HL_NATIVE_NOTIFY(SYS_chroot), HL_NATIVE_NOTIFY(SYS_setns), HL_NATIVE_NOTIFY(SYS_unshare),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
 #undef HL_NATIVE_NOTIFY
-    struct sock_fprog program = {(unsigned short)(sizeof(instructions) / sizeof(instructions[0])), instructions};
+    int refusal = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE") != NULL;
+    struct sock_fprog program = refusal
+        ? (struct sock_fprog){(unsigned short)(sizeof(instructions) / sizeof(instructions[0])), instructions}
+        : (struct sock_fprog){(unsigned short)(sizeof(selective) / sizeof(selective[0])), selective};
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
     return (int)syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &program);
 }
@@ -873,7 +890,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         }
         int listener = stage_fail != NULL && strcmp(stage_fail, "listener") == 0
                            ? (errno = EIO, -1)
-                           : hl_native_supervised_create_listener();
+                           : hl_native_supervised_create_listener(options);
         if (listener < 0) _exit(70);
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
         while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {
