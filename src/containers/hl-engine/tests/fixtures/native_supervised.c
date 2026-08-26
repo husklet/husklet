@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
@@ -67,6 +68,8 @@ int main(int argc, char **argv) {
         fputs("sendmsg-denied", stdout);
     }
     if (argc > 1 && !strcmp(argv[1], "secure-jail")) {
+        for (int fd = 3; fd < 64; ++fd)
+            if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) return 70;
         if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return 71;
         errno = 0;
         if (mount("none", "/tmp", "tmpfs", 0, NULL) != -1 || errno != EPERM) return 72;

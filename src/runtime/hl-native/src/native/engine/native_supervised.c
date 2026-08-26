@@ -36,6 +36,14 @@ static int hl_native_supervised_write_text(const char *path, const char *text) {
     return result;
 }
 
+static void hl_native_supervised_close_except(int keep) {
+    struct rlimit limit;
+    rlim_t end = getrlimit(RLIMIT_NOFILE, &limit) == 0 ? limit.rlim_cur : 65536;
+    if (end == RLIM_INFINITY || end > 1048576) end = 1048576;
+    for (int fd = 3; (rlim_t)fd < end; ++fd)
+        if (fd != keep) close(fd);
+}
+
 static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
     if (config->rootfs == NULL || box == NULL || config->memory_limit != 0 || config->pid_limit != 0 ||
@@ -299,6 +307,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             if (borrowed[fd] != fd) close(borrowed[fd]);
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
+        hl_native_supervised_close_except(executable);
         if (hl_native_supervised_project_container(config, bootstrap) != 0) {
             if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
@@ -323,6 +332,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             }
             _exit(WIFEXITED(leader_status) ? WEXITSTATUS(leader_status) : 70);
         }
+        if (fcntl(executable, F_SETFD, FD_CLOEXEC) != 0) _exit(70);
         execveat(executable, "", exec_argv, environment, AT_EMPTY_PATH);
         if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
             fprintf(stderr, "[hl-native-supervised]\texecveat_errno=%d\n", errno);
