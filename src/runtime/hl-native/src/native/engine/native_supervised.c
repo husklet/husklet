@@ -68,7 +68,7 @@ static int hl_native_supervised_policy_supported(const hl_engine_config *config)
         box->publish_count != 0 || box->volumes != NULL || box->limits != NULL || box->network_bridge != NULL ||
         box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||
         box->filesystem_generation != NULL || box->file_owners != NULL || box->checkpoint_mode != 0 ||
-        box->checkpoint_policy != 0 || (box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0 ||
+        box->checkpoint_policy != 0 ||
         (box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
                         HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
         return 0;

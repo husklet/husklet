@@ -304,7 +304,6 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let mut policies = Vec::new();
-    let mut policy = isolated_policy(); policy.flags &= !(1 << 2); policies.push(policy);
     let mut policy = isolated_policy(); policy.uid = 1; policies.push(policy);
     let mut policy = isolated_policy(); policy.gid = 1; policies.push(policy);
     let mut policy = isolated_policy(); policy.limits = Some(b"nofile=32".to_vec()); policies.push(policy);
