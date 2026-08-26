@@ -1413,23 +1413,39 @@ typedef struct {
     uint8_t *rw;
     ptrdiff_t rw2rx;
     _Atomic uint32_t count;
-    jit_body_owner_entry *entry;
+    _Atomic(jit_body_owner_entry *) entry;
 } jit_body_owner_set;
+_Static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "signal recovery requires lock-free atomic pointers");
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2 && sizeof(uint32_t) == sizeof(unsigned int),
+               "signal recovery requires a lock-free 32-bit owner count");
 static jit_body_owner_set g_body_owners[STW_RETIRED_MAX + 1];
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic int g_body_owner_publish_pause;
+static _Atomic int g_body_owner_publish_slot;
+#endif
 
 static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
     jit_body_owner_set *empty = NULL;
     for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
-        if (g_body_owners[i].entry != NULL && g_body_owners[i].generation == generation) return &g_body_owners[i];
-        if (empty == NULL && g_body_owners[i].entry == NULL) empty = &g_body_owners[i];
+        jit_body_owner_entry *entries = atomic_load_explicit(&g_body_owners[i].entry, memory_order_acquire);
+        if (entries != NULL && g_body_owners[i].generation == generation) return &g_body_owners[i];
+        if (empty == NULL && entries == NULL) empty = &g_body_owners[i];
     }
     if (!create || empty == NULL) return NULL;
-    empty->entry = calloc(JIT_BODY_OWNER_N, sizeof(*empty->entry));
-    if (empty->entry == NULL) return NULL;
+    jit_body_owner_entry *entries = calloc(JIT_BODY_OWNER_N, sizeof(*entries));
+    if (entries == NULL) return NULL;
     empty->generation = generation;
     empty->rw = g_cache;
     empty->rw2rx = g_rw2rx;
     atomic_store_explicit(&empty->count, 0, memory_order_relaxed);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_load_explicit(&g_body_owner_publish_pause, memory_order_acquire) == 1) {
+        atomic_store_explicit(&g_body_owner_publish_slot, (int)(empty - g_body_owners), memory_order_release);
+        atomic_store_explicit(&g_body_owner_publish_pause, 2, memory_order_release);
+        while (atomic_load_explicit(&g_body_owner_publish_pause, memory_order_acquire) == 2) sched_yield();
+    }
+#endif
+    atomic_store_explicit(&empty->entry, entries, memory_order_release);
     return empty;
 }
 
@@ -1444,16 +1460,17 @@ static int jit_body_owner_reserve(uint64_t generation, uint32_t *token) {
 
 static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t lo, uint64_t hi, uint64_t guest) {
     jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
+    jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
     uintptr_t base = (uintptr_t)(set == NULL ? NULL : set->rw);
     if (set == NULL || hi <= lo || lo < base || hi > base + CACHE_SZ ||
         token != atomic_load_explicit(&set->count, memory_order_relaxed))
         return 0;
     uint32_t start = (uint32_t)(lo - base), end = (uint32_t)(hi - base);
     if (token != 0) {
-        jit_body_owner_entry *previous = &set->entry[token - 1];
+        jit_body_owner_entry *previous = &entries[token - 1];
         if (previous->rw_end <= previous->rw_start || previous->rw_end > start) return 0;
     }
-    set->entry[token] = (jit_body_owner_entry){start, end, guest};
+    entries[token] = (jit_body_owner_entry){start, end, guest};
     atomic_store_explicit(&set->count, token + 1, memory_order_release);
     return 1;
 }
@@ -1461,7 +1478,8 @@ static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t 
 static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
     for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
         jit_body_owner_set *set = &g_body_owners[i];
-        if (set->entry == NULL) continue;
+        jit_body_owner_entry *entries = atomic_load_explicit(&set->entry, memory_order_acquire);
+        if (entries == NULL) continue;
         uintptr_t rw = (uintptr_t)set->rw;
         uintptr_t rx = (uintptr_t)((intptr_t)set->rw + set->rw2rx);
         uint64_t rwpc;
@@ -1476,7 +1494,7 @@ static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
         uint32_t lo = 0, hi = count;
         while (lo < hi) {
             uint32_t mid = lo + (hi - lo) / 2;
-            jit_body_owner_entry *entry = &set->entry[mid];
+            jit_body_owner_entry *entry = &entries[mid];
             if (rwpc < entry->rw_start)
                 hi = mid;
             else if (rwpc >= entry->rw_end)
@@ -1492,17 +1510,33 @@ static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
 
 static void jit_body_owner_drop_generation(uint64_t generation) {
     for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
-        if (g_body_owners[i].entry == NULL || g_body_owners[i].generation != generation) continue;
-        free(g_body_owners[i].entry);
-        g_body_owners[i] = (jit_body_owner_set){0};
+        jit_body_owner_entry *entries = atomic_load_explicit(&g_body_owners[i].entry, memory_order_acquire);
+        if (entries == NULL || g_body_owners[i].generation != generation) continue;
+        /* The dispatcher is the sole registry writer.  Production callers reach
+           here only after STW has quiesced signal lookup and exec_gen proves no
+           generated frame pins this generation.  Detach first so a later lookup
+           cannot acquire the allocation; only that quiescent writer may free it. */
+        entries = atomic_exchange_explicit(&g_body_owners[i].entry, NULL, memory_order_acq_rel);
+        free(entries);
+        g_body_owners[i].generation = 0;
+        g_body_owners[i].rw = NULL;
+        g_body_owners[i].rw2rx = 0;
+        atomic_store_explicit(&g_body_owners[i].count, 0, memory_order_relaxed);
         return;
     }
 }
 
 static void jit_body_owner_clear(void) {
     for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
-        free(g_body_owners[i].entry);
-        g_body_owners[i] = (jit_body_owner_set){0};
+        /* Called only in the single surviving fork child or under dispatcher
+           teardown/STW, when no signal lookup can still hold this pointer. */
+        jit_body_owner_entry *entries =
+            atomic_exchange_explicit(&g_body_owners[i].entry, NULL, memory_order_acq_rel);
+        free(entries);
+        g_body_owners[i].generation = 0;
+        g_body_owners[i].rw = NULL;
+        g_body_owners[i].rw2rx = 0;
+        atomic_store_explicit(&g_body_owners[i].count, 0, memory_order_relaxed);
     }
 }
 

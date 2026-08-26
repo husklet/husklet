@@ -537,6 +537,11 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
 enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED };
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_test_decode_refuse_pc;
+
+static void *translit_body_owner_publish_worker(void *opaque) {
+    uint64_t generation = *(uint64_t *)opaque;
+    return jit_body_owner_set_for(generation, 1);
+}
 #endif
 static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next, struct insn *successor);
 
@@ -800,6 +805,36 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             return 45;
         if (!jit_body_owner_reclaim_if_unused(generation, 0, 0)) return 46;
         return !jit_body_owner_lookup(rw + 1, &owner) ? 0 : 47;
+    }
+    if (scenario == 34) {
+        uint64_t generation = UINT64_MAX - 34;
+        pthread_t thread;
+        jit_body_owner_drop_generation(generation);
+        atomic_store_explicit(&g_body_owner_publish_slot, -1, memory_order_relaxed);
+        atomic_store_explicit(&g_body_owner_publish_pause, 1, memory_order_release);
+        if (pthread_create(&thread, NULL, translit_body_owner_publish_worker, &generation) != 0) {
+            atomic_store_explicit(&g_body_owner_publish_pause, 0, memory_order_release);
+            return 48;
+        }
+        unsigned spins = 0;
+        while (atomic_load_explicit(&g_body_owner_publish_pause, memory_order_acquire) != 2 &&
+               ++spins != 10000000u)
+            sched_yield();
+        int slot = atomic_load_explicit(&g_body_owner_publish_slot, memory_order_acquire);
+        int hidden = spins != 10000000u && slot >= 0 && slot < STW_RETIRED_MAX + 1 &&
+                     atomic_load_explicit(&g_body_owners[slot].entry, memory_order_acquire) == NULL;
+        atomic_store_explicit(&g_body_owner_publish_pause, 0, memory_order_release);
+        void *published = NULL;
+        if (pthread_join(thread, &published) != 0) return 48;
+        jit_body_owner_set *set = slot < 0 ? NULL : &g_body_owners[slot];
+        int visible = published != NULL && set == published && set->generation == generation &&
+                      set->rw == g_cache && set->rw2rx == g_rw2rx &&
+                      atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
+                      atomic_load_explicit(&set->entry, memory_order_acquire) != NULL;
+        jit_body_owner_drop_generation(generation);
+        int detached = set != NULL && atomic_load_explicit(&set->entry, memory_order_acquire) == NULL &&
+                       set->generation == 0 && set->rw == NULL && set->rw2rx == 0;
+        return hidden && visible && detached ? 0 : 48;
     }
     return 6;
 }
