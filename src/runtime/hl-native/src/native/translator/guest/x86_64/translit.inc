@@ -927,6 +927,20 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         jit_body_owner_drop_generation(generation);
         return hidden && visible ? 0 : 51;
     }
+    if (scenario == 38) {
+        const uint64_t generation = UINT64_MAX - 38, rw = UINT64_C(0x630000000);
+        uint32_t token = JIT_BODY_OWNER_N - 1;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 52;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        atomic_store_explicit(&set->count, token, memory_order_relaxed);
+        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2}};
+        int rejected = !jit_body_owner_publish_n(generation, token, range, 2);
+        int unchanged = atomic_load_explicit(&set->count, memory_order_acquire) == token;
+        jit_body_owner_drop_generation(generation);
+        return rejected && unchanged ? 0 : 52;
+    }
     return 6;
 }
 #endif
