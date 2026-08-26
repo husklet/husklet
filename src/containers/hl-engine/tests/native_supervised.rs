@@ -920,6 +920,22 @@ fn supervised_clone_mapping_and_listener_fail_before_readiness() {
 }
 
 #[test]
+fn supervised_listener_handoff_survives_lost_wake_and_interruption() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    for refusal in ["994:38", "995:38"] {
+        assert_eq!(run_with_refusal(&executable, &[], true, Some(refusal)).0, 0);
+    }
+}
+
+#[test]
+fn supervised_listener_handoff_wakes_a_waiting_parent() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    assert_eq!(run_with_refusal(&executable, &[], true, Some("993:38")).0, 0);
+}
+
+#[test]
 fn supervised_mode_accepts_phase1_checkpoint_roles_but_refuses_restore() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

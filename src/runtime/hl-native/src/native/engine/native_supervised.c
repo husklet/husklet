@@ -41,8 +41,50 @@ typedef struct {
     _Atomic int result_signal;
     _Atomic int projected_overlay;
     _Atomic int clone_stages;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    _Atomic int listener_wakes;
+#endif
     char projected_root[PATH_MAX];
 } hl_native_supervised_bootstrap;
+
+static int hl_native_supervised_listener_wait(hl_native_supervised_bootstrap *bootstrap, int leader_pidfd,
+                                              const hl_options *options) {
+    struct pollfd death = {leader_pidfd, POLLIN, 0};
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *test = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE");
+    if (test != NULL && strcmp(test, "994:38") == 0) usleep(10000);
+#endif
+    for (int attempt = 0; attempt < 5000; ++attempt) {
+        int remote = atomic_load_explicit(&bootstrap->listener, memory_order_acquire);
+        if (remote >= 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (test != NULL && (strcmp(test, "993:38") == 0 || strcmp(test, "994:38") == 0)) {
+                int wake_receipt;
+                for (int attempt = 0; attempt < 1000; ++attempt) {
+                    wake_receipt = atomic_load_explicit(&bootstrap->listener_wakes, memory_order_acquire);
+                    if (wake_receipt != 0) break;
+                    sched_yield();
+                }
+                int expected = strcmp(test, "993:38") == 0 ? 2 : 1;
+                if (wake_receipt != expected) return -1;
+            }
+#endif
+            return (int)syscall(SYS_pidfd_getfd, leader_pidfd, remote, 0);
+        }
+        if (poll(&death, 1, 0) != 0) break;
+        struct timespec timeout = {.tv_sec = 0, .tv_nsec = 1000000};
+        int waited;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (test != NULL && strcmp(test, "995:38") == 0 && attempt == 0) {
+            errno = EINTR;
+            waited = -1;
+        } else
+#endif
+            waited = (int)syscall(SYS_futex, &bootstrap->listener, FUTEX_WAIT, -1, &timeout, NULL, 0);
+        if (waited != 0 && errno != EAGAIN && errno != EINTR && errno != ETIMEDOUT) break;
+    }
+    return -1;
+}
 
 static void hl_native_supervised_projection_cleanup(hl_native_supervised_bootstrap *bootstrap) {
     if (bootstrap != NULL && atomic_load_explicit(&bootstrap->projected_overlay, memory_order_acquire))
@@ -850,6 +892,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     atomic_init(&bootstrap->result_signal, 0);
     atomic_init(&bootstrap->projected_overlay, 0);
     atomic_init(&bootstrap->clone_stages, 0);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    atomic_init(&bootstrap->listener_wakes, 0);
+#endif
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
         munmap(bootstrap, sizeof(*bootstrap)); goto attachment_failed;
     }
@@ -907,7 +952,17 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
                            ? (errno = EIO, -1)
                            : hl_native_supervised_create_listener(options);
         if (listener < 0) _exit(70);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (test_refusal != NULL && (strcmp(test_refusal, "993:38") == 0 || strcmp(test_refusal, "995:38") == 0))
+            usleep(10000);
+#endif
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
+        int listeners_woken = (int)syscall(SYS_futex, &bootstrap->listener, FUTEX_WAKE, 1, NULL, NULL, 0);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        atomic_store_explicit(&bootstrap->listener_wakes, listeners_woken + 1, memory_order_release);
+#else
+        (void)listeners_woken;
+#endif
         while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {
             if (syscall(SYS_futex, &bootstrap->acknowledged, FUTEX_WAIT, 0, NULL, NULL, 0) != 0 &&
                 errno != EAGAIN && errno != EINTR)
@@ -963,18 +1018,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     }
     (void)host->posix_attachment->release(host->context, (uint64_t)executable);
     executable = -1;
-    int listener = -1;
-    if (leader_pidfd >= 0) {
-        struct pollfd death = {leader_pidfd, POLLIN, 0};
-        for (int attempt = 0; attempt < 5000; ++attempt) {
-            int remote = atomic_load_explicit(&bootstrap->listener, memory_order_acquire);
-            if (remote >= 0) {
-                listener = (int)syscall(SYS_pidfd_getfd, leader_pidfd, remote, 0);
-                break;
-            }
-            if (poll(&death, 1, 1) != 0) break;
-        }
-    }
+    int listener = leader_pidfd < 0 ? -1 : hl_native_supervised_listener_wait(bootstrap, leader_pidfd, options);
     if (listener >= 0) {
         atomic_store_explicit(&bootstrap->acknowledged, 1, memory_order_release);
         (void)syscall(SYS_futex, &bootstrap->acknowledged, FUTEX_WAKE, 1, NULL, NULL, 0);
