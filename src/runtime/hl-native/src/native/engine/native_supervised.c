@@ -9,40 +9,16 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <linux/seccomp.h>
 #include <poll.h>
 #include <sys/prctl.h>
-#include <sys/socket.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 
 static int hl_native_supervised_available(void) { return 1; }
 
-static int hl_native_supervised_send_listener(int socket, int listener) {
-    char byte = 1;
-    struct iovec vector = {&byte, sizeof(byte)};
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
-    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1,
-                             .msg_control = control.bytes, .msg_controllen = sizeof(control.bytes)};
-    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
-    header->cmsg_level = SOL_SOCKET;
-    header->cmsg_type = SCM_RIGHTS;
-    header->cmsg_len = CMSG_LEN(sizeof(int));
-    memcpy(CMSG_DATA(header), &listener, sizeof(listener));
-    return sendmsg(socket, &message, 0) == (ssize_t)sizeof(byte) ? 0 : -1;
-}
-
-static int hl_native_supervised_receive_listener(int socket) {
-    char byte;
-    struct iovec vector = {&byte, sizeof(byte)};
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
-    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1,
-                             .msg_control = control.bytes, .msg_controllen = sizeof(control.bytes)};
-    if (recvmsg(socket, &message, 0) != (ssize_t)sizeof(byte)) return -1;
-    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
-    if (header == NULL || header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
-        header->cmsg_len != CMSG_LEN(sizeof(int))) return -1;
-    int listener;
-    memcpy(&listener, CMSG_DATA(header), sizeof(listener));
-    return listener;
-}
+typedef struct {
+    _Atomic int listener;
+    _Atomic int acknowledged;
+} hl_native_supervised_bootstrap;
 
 static int hl_native_supervised_create_listener(void) {
 #define HL_NATIVE_NOTIFY(number) \
@@ -54,7 +30,16 @@ static int hl_native_supervised_create_listener(void) {
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
         HL_NATIVE_NOTIFY(SYS_open), HL_NATIVE_NOTIFY(SYS_openat), HL_NATIVE_NOTIFY(SYS_creat),
+#ifdef SYS_openat2
+        HL_NATIVE_NOTIFY(SYS_openat2),
+#endif
         HL_NATIVE_NOTIFY(SYS_execve), HL_NATIVE_NOTIFY(SYS_clone), HL_NATIVE_NOTIFY(SYS_fork),
+#ifdef SYS_execveat
+        HL_NATIVE_NOTIFY(SYS_execveat),
+#endif
+#ifdef SYS_clone3
+        HL_NATIVE_NOTIFY(SYS_clone3),
+#endif
         HL_NATIVE_NOTIFY(SYS_vfork), HL_NATIVE_NOTIFY(SYS_unlink), HL_NATIVE_NOTIFY(SYS_unlinkat),
         HL_NATIVE_NOTIFY(SYS_rename), HL_NATIVE_NOTIFY(SYS_renameat), HL_NATIVE_NOTIFY(SYS_renameat2),
         HL_NATIVE_NOTIFY(SYS_mkdir), HL_NATIVE_NOTIFY(SYS_mkdirat), HL_NATIVE_NOTIFY(SYS_rmdir),
@@ -68,7 +53,7 @@ static int hl_native_supervised_create_listener(void) {
         HL_NATIVE_NOTIFY(SYS_socket), HL_NATIVE_NOTIFY(SYS_socketpair), HL_NATIVE_NOTIFY(SYS_connect),
         HL_NATIVE_NOTIFY(SYS_bind), HL_NATIVE_NOTIFY(SYS_listen), HL_NATIVE_NOTIFY(SYS_accept),
         HL_NATIVE_NOTIFY(SYS_accept4), HL_NATIVE_NOTIFY(SYS_ioctl), HL_NATIVE_NOTIFY(SYS_ptrace),
-        HL_NATIVE_NOTIFY(SYS_seccomp),
+        HL_NATIVE_NOTIFY(SYS_seccomp), HL_NATIVE_NOTIFY(SYS_sendmsg),
         /* Internal refusal-test probe. Production policy otherwise lets identity reads stay native. */
         HL_NATIVE_NOTIFY(SYS_getpid),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
@@ -205,15 +190,17 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         if (attached.status != HL_STATUS_OK || attached.value > INT_MAX) goto attachment_failed;
         borrowed[fd] = (int)attached.value;
     }
-    int channel[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, channel) != 0) goto attachment_failed;
+    hl_native_supervised_bootstrap *bootstrap = mmap(NULL, sizeof(*bootstrap), PROT_READ | PROT_WRITE,
+                                                     MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (bootstrap == MAP_FAILED) goto attachment_failed;
+    atomic_init(&bootstrap->listener, -1);
+    atomic_init(&bootstrap->acknowledged, 0);
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
-        close(channel[0]); close(channel[1]); goto attachment_failed;
+        munmap(bootstrap, sizeof(*bootstrap)); goto attachment_failed;
     }
     pid_t child = fork();
-    if (child < 0) { close(channel[0]); close(channel[1]); goto attachment_failed; }
+    if (child < 0) { munmap(bootstrap, sizeof(*bootstrap)); goto attachment_failed; }
     if (child == 0) {
-        close(channel[0]);
         for (int fd = 0; fd < 3; ++fd) {
             if (borrowed[fd] < 0) continue;
             if (dup2(borrowed[fd], fd) < 0) _exit(70);
@@ -221,9 +208,10 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
         int listener = hl_native_supervised_create_listener();
-        if (listener < 0 || hl_native_supervised_send_listener(channel[1], listener) != 0) _exit(70);
+        if (listener < 0) _exit(70);
+        atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
+        while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {}
         close(listener);
-        close(channel[1]);
         if (chroot(rootfs) != 0 || chdir("/") != 0) _exit(70);
         execveat(executable, "", argv, environment, AT_EMPTY_PATH);
         _exit(errno == ENOENT ? 127 : 126);
@@ -234,9 +222,22 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     }
     (void)host->posix_attachment->release(host->context, (uint64_t)executable);
     executable = -1;
-    close(channel[1]);
-    int listener = hl_native_supervised_receive_listener(channel[0]);
-    close(channel[0]);
+    int pidfd = (int)syscall(SYS_pidfd_open, child, 0);
+    int listener = -1;
+    if (pidfd >= 0) {
+        struct pollfd death = {pidfd, POLLIN, 0};
+        for (int attempt = 0; attempt < 5000; ++attempt) {
+            int remote = atomic_load_explicit(&bootstrap->listener, memory_order_acquire);
+            if (remote >= 0) {
+                listener = (int)syscall(SYS_pidfd_getfd, pidfd, remote, 0);
+                break;
+            }
+            if (poll(&death, 1, 1) != 0) break;
+        }
+    }
+    if (listener >= 0) atomic_store_explicit(&bootstrap->acknowledged, 1, memory_order_release);
+    if (pidfd >= 0) close(pidfd);
+    munmap(bootstrap, sizeof(*bootstrap));
     if (listener < 0) {
         (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
         hl_native_supervised_environment_free(environment); return 70;
