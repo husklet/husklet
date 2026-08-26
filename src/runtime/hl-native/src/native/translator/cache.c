@@ -1422,6 +1422,7 @@ static jit_body_owner_set g_body_owners[STW_RETIRED_MAX + 1];
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic int g_body_owner_publish_pause;
 static _Atomic int g_body_owner_publish_slot;
+static _Atomic int g_body_owner_batch_pause;
 #endif
 
 static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
@@ -1458,6 +1459,15 @@ static int jit_body_owner_reserve(uint64_t generation, uint32_t *token) {
     return 1;
 }
 
+static int jit_body_owner_reserve_n(uint64_t generation, uint32_t wanted, uint32_t *token) {
+    jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+    if (set == NULL || wanted == 0) return 0;
+    uint32_t count = atomic_load_explicit(&set->count, memory_order_relaxed);
+    if (wanted > JIT_BODY_OWNER_N - count) return 0;
+    *token = count;
+    return 1;
+}
+
 static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t lo, uint64_t hi, uint64_t guest) {
     jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
     jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
@@ -1472,6 +1482,36 @@ static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t 
     }
     entries[token] = (jit_body_owner_entry){start, end, guest};
     atomic_store_explicit(&set->count, token + 1, memory_order_release);
+    return 1;
+}
+
+typedef struct { uint64_t lo, hi, guest; } jit_body_owner_range;
+
+static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
+                                    const jit_body_owner_range *range, uint32_t wanted) {
+    jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
+    jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
+    uintptr_t base = (uintptr_t)(set == NULL ? NULL : set->rw);
+    uint32_t count = set == NULL ? 0 : atomic_load_explicit(&set->count, memory_order_relaxed);
+    if (entries == NULL || range == NULL || wanted == 0 || token != count || wanted > JIT_BODY_OWNER_N - token)
+        return 0;
+    uint32_t previous_end = token == 0 ? 0 : entries[token - 1].rw_end;
+    for (uint32_t i = 0; i < wanted; i++) {
+        if (range[i].hi <= range[i].lo || range[i].lo < base || range[i].hi > base + CACHE_SZ) return 0;
+        uint32_t start = (uint32_t)(range[i].lo - base), end = (uint32_t)(range[i].hi - base);
+        if ((token != 0 || i != 0) && previous_end > start) return 0;
+        previous_end = end;
+    }
+    for (uint32_t i = 0; i < wanted; i++)
+        entries[token + i] = (jit_body_owner_entry){(uint32_t)(range[i].lo - base),
+                                                    (uint32_t)(range[i].hi - base), range[i].guest};
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_load_explicit(&g_body_owner_batch_pause, memory_order_acquire) == 1) {
+        atomic_store_explicit(&g_body_owner_batch_pause, 2, memory_order_release);
+        while (atomic_load_explicit(&g_body_owner_batch_pause, memory_order_acquire) == 2) sched_yield();
+    }
+#endif
+    atomic_store_explicit(&set->count, token + wanted, memory_order_release);
     return 1;
 }
 

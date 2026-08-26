@@ -542,6 +542,17 @@ static void *translit_body_owner_publish_worker(void *opaque) {
     uint64_t generation = *(uint64_t *)opaque;
     return jit_body_owner_set_for(generation, 1);
 }
+
+typedef struct {
+    uint64_t generation;
+    uint32_t token;
+    jit_body_owner_range range[3];
+} translit_body_owner_batch;
+
+static void *translit_body_owner_batch_worker(void *opaque) {
+    translit_body_owner_batch *batch = opaque;
+    return (void *)(uintptr_t)jit_body_owner_publish_n(batch->generation, batch->token, batch->range, 3);
+}
 #endif
 static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next, struct insn *successor);
 
@@ -835,6 +846,86 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int detached = set != NULL && atomic_load_explicit(&set->entry, memory_order_acquire) == NULL &&
                        set->generation == 0 && set->rw == NULL && set->rw2rx == 0;
         return hidden && visible && detached ? 0 : 48;
+    }
+    if (scenario == 35) {
+        const uint64_t generation = UINT64_MAX - 35, rw = UINT64_C(0x600000000);
+        uint32_t token;
+        uint64_t owner = 0;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 49;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = CACHE_SZ * 2u;
+        if (!jit_body_owner_reserve(generation, &token) ||
+            !jit_body_owner_publish(generation, token, rw, rw + 8, 0))
+            return 49;
+        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2},
+                                        {rw + 0x20, rw + 0x28, 3}};
+        int ok = jit_body_owner_reserve_n(generation, 3, &token) && token == 1 &&
+                 jit_body_owner_publish_n(generation, token, range, 3) &&
+                 jit_body_owner_lookup(rw + 0x17, &owner) && owner == 1 &&
+                 jit_body_owner_lookup(rw + CACHE_SZ * 2u + 0x18, &owner) && owner == 2 &&
+                 jit_body_owner_lookup(rw + 0x27, &owner) && owner == 3 &&
+                 !jit_body_owner_lookup(rw + 8, &owner) && !jit_body_owner_lookup(rw + 0x28, &owner);
+        jit_body_owner_drop_generation(generation);
+        return ok ? 0 : 49;
+    }
+    if (scenario == 36) {
+        const uint64_t generation = UINT64_MAX - 36, rw = UINT64_C(0x610000000);
+        uint32_t token;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 50;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        jit_body_owner_range unsorted[] = {{rw + 0x20, rw + 0x28, 1}, {rw + 0x10, rw + 0x18, 2}};
+        jit_body_owner_range overlap[] = {{rw + 0x10, rw + 0x20, 1}, {rw + 0x18, rw + 0x28, 2}};
+        int ok = jit_body_owner_reserve_n(generation, 2, &token) &&
+                 !jit_body_owner_publish_n(generation, token, unsorted, 2) &&
+                 atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
+                 !jit_body_owner_publish_n(generation, token, overlap, 2) &&
+                 atomic_load_explicit(&set->count, memory_order_acquire) == 0;
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - 1, memory_order_relaxed);
+        ok = ok && !jit_body_owner_reserve_n(generation, 2, &token) &&
+             jit_body_owner_reserve_n(generation, 1, &token) && token == JIT_BODY_OWNER_N - 1;
+        jit_body_owner_drop_generation(generation);
+        return ok ? 0 : 50;
+    }
+    if (scenario == 37) {
+        const uint64_t generation = UINT64_MAX - 37, rw = UINT64_C(0x620000000);
+        pthread_t thread;
+        uint64_t owner = 0;
+        uint32_t token;
+        jit_body_owner_drop_generation(generation);
+        jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+        if (set == NULL) return 51;
+        set->rw = (uint8_t *)(uintptr_t)rw;
+        set->rw2rx = 0;
+        if (!jit_body_owner_reserve_n(generation, 3, &token)) return 51;
+        translit_body_owner_batch batch = {
+            generation, token, {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2},
+                                {rw + 0x20, rw + 0x28, 3}}};
+        atomic_store_explicit(&g_body_owner_batch_pause, 1, memory_order_release);
+        if (pthread_create(&thread, NULL, translit_body_owner_batch_worker, &batch) != 0) {
+            atomic_store_explicit(&g_body_owner_batch_pause, 0, memory_order_release);
+            return 51;
+        }
+        unsigned spins = 0;
+        while (atomic_load_explicit(&g_body_owner_batch_pause, memory_order_acquire) != 2 &&
+               ++spins != 10000000u)
+            sched_yield();
+        int hidden = spins != 10000000u &&
+                     atomic_load_explicit(&set->count, memory_order_acquire) == token &&
+                     !jit_body_owner_lookup(rw + 0x10, &owner) &&
+                     !jit_body_owner_lookup(rw + 0x27, &owner);
+        atomic_store_explicit(&g_body_owner_batch_pause, 0, memory_order_release);
+        void *published = NULL;
+        if (pthread_join(thread, &published) != 0) return 51;
+        int visible = published != NULL &&
+                      atomic_load_explicit(&set->count, memory_order_acquire) == token + 3 &&
+                      jit_body_owner_lookup(rw + 0x10, &owner) && owner == 1 &&
+                      jit_body_owner_lookup(rw + 0x27, &owner) && owner == 3;
+        jit_body_owner_drop_generation(generation);
+        return hidden && visible ? 0 : 51;
     }
     return 6;
 }
