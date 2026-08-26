@@ -217,6 +217,11 @@ const DEFINITIONS: &[Definition] = &[
         Text
     ),
     internal!(
+        "HL_NATIVE_NOTIFY_TEST_RECEIPT",
+        "test-only supervised notification census receipt",
+        Path
+    ),
+    internal!(
         "HL_NATIVE_CKPT_TEST_RECEIPT",
         "test-only native checkpoint phase receipt",
         Path

@@ -151,6 +151,17 @@ int main(int argc, char **argv) {
         fputs("native-supervised", stdout);
         return 23;
     }
+    if (argc > 1 && !strcmp(argv[1], "open-policy")) {
+        errno = 0;
+        int fd = (int)syscall(SYS_open, "/dev/null", O_RDONLY, 0);
+        if (argc > 2 && !strcmp(argv[2], "refused")) {
+            if (fd >= 0) close(fd);
+            return fd == -1 && errno == ENOSYS ? 0 : 98;
+        }
+        if (fd < 0) return 99;
+        close(fd);
+        fputs("open-native", stdout);
+    }
     if (argc > 1 && !strcmp(argv[1], "descendant")) {
         pid_t child = fork();
         if (child < 0) return 31;

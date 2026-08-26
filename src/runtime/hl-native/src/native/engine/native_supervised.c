@@ -687,7 +687,10 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
     struct seccomp_notif_resp *response = calloc(1, sizes.seccomp_notif_resp);
     if (request == NULL || response == NULL) { free(request); free(response); return 70; }
     int leader_result = 70, leader_done = 0;
-    unsigned long idle_timeouts = 0;
+    int diagnostics = hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL;
+    const char *notification_receipt = hl_options_get(options, "HL_NATIVE_NOTIFY_TEST_RECEIPT");
+    int count_notifications = diagnostics || notification_receipt != NULL;
+    unsigned long idle_timeouts = 0, notifications = 0, open_notifications = 0;
     int listener_active = listener;
     volatile uint32_t *trigger = NULL;
     uint32_t trigger_seen = 0;
@@ -719,6 +722,14 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
                 snprintf(line, sizeof(line), "periodic_wakeups=%lu\n", idle_timeouts);
                 (void)hl_native_supervised_write_text(idle_receipt, line);
             }
+            if (diagnostics)
+                fprintf(stderr, "[hl-native-supervised]\tnotifications=%lu open=%lu\n", notifications,
+                        open_notifications);
+            if (notification_receipt != NULL) {
+                char line[64];
+                snprintf(line, sizeof(line), "notifications=%lu open=%lu\n", notifications, open_notifications);
+                (void)hl_native_supervised_write_text(notification_receipt, line);
+            }
             free(request); free(response); return leader_result;
         }
         if (waited < 0 && errno != EINTR && errno != ECHILD) { free(request); free(response); return 70; }
@@ -747,6 +758,10 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         memset(response, 0, sizes.seccomp_notif_resp);
         response->id = request->id;
         int number = (int)request->data.nr;
+        if (count_notifications) {
+            ++notifications;
+            if (number == SYS_open) ++open_notifications;
+        }
         if (number == refused_number) {
             response->error = -refused_error;
 #ifdef SYS_clone3

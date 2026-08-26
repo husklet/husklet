@@ -385,6 +385,39 @@ fn refusal_reaches_a_fork_descendant_without_fallback() {
 }
 
 #[test]
+fn selective_filter_skips_continued_open_but_refusal_still_traps_it() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    for (refusal, expected_open, argument) in [(None, "open=0", None), (Some("2:38"), "open=1", Some("refused"))] {
+        let output = Arc::new(Output::default());
+        let receipt = work.path().join(expected_open);
+        std::fs::write(&receipt, b"").unwrap();
+        let mut plan = selected_plan(&executable);
+        plan.options
+            .set("HL_NATIVE_NOTIFY_TEST_RECEIPT", receipt.to_str().unwrap(), true)
+            .unwrap();
+        plan.arguments.push(b"open-policy".to_vec());
+        if let Some(argument) = argument {
+            plan.arguments.push(argument.as_bytes().to_vec());
+        }
+        if let Some(refusal) = refusal {
+            plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
+        }
+        let engine = Engine::with_streams(
+            GuestIsa::X86_64,
+            plan,
+            StandardStreams::default().with_output(output.clone()),
+        )
+        .unwrap();
+        engine.start().unwrap();
+        assert_eq!(engine.wait().unwrap().guest_status, 0);
+        engine.destroy().unwrap();
+        let census = std::fs::read_to_string(receipt).unwrap();
+        assert!(census.contains(expected_open), "census={census}",);
+    }
+}
+
+#[test]
 fn supervisor_drains_an_orphaned_descendant() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

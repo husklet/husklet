@@ -134,6 +134,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_GUEST_ENV_EXACT", "guest exec environment suppresses engine defaults", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_NATIVE_SUPERVISED_REFUSE", "test-only supervised syscall refusal as number:errno",
                        HL_OPTION_TEXT),
+    HL_INTERNAL_OPTION("HL_NATIVE_NOTIFY_TEST_RECEIPT", "test-only supervised notification census receipt",
+                       HL_OPTION_PATH),
     HL_INTERNAL_OPTION("HL_NATIVE_CKPT_TEST_RECEIPT", "test-only native checkpoint phase receipt", HL_OPTION_PATH),
     HL_INTERNAL_OPTION("HL_NATIVE_CKPT_TEST_IDLE_RECEIPT", "test-only native checkpoint idle-wakeup receipt",
                        HL_OPTION_PATH),
