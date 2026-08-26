@@ -29,6 +29,9 @@ static int hl_native_supervised_selected(const hl_options *options) {
 
 static int hl_native_supervised_available(void) { return 1; }
 
+uint64_t hl_linux_abi_constructed(void);
+uint64_t hl_linux_abi_destroyed(void);
+
 typedef struct {
     _Atomic int listener;
     _Atomic int target_pid;
@@ -483,6 +486,11 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
                                         const hl_engine_config *config,
                                         hl_host_handle executable_handle, uint32_t argc, char *const argv[],
                                         const hl_options *options, int activation_ready, int *guest_signal) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    /* Every selected integration scenario is also a structural gate: rebuilding the translated ABI makes
+     * the native-only suite fail instead of silently preserving behavior through the old heavyweight seam. */
+    if (box != NULL) return 70;
+#endif
     if (argv == NULL || argv[0] == NULL) return 70;
     if (host == NULL || host->posix_attachment == NULL || host->posix_attachment->borrow_file_at_least == NULL ||
         host->posix_attachment->release == NULL) return 70;
@@ -496,7 +504,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         return 70;
     }
     if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
-        fprintf(stderr, "[hl-native-supervised]\tselected=1\n");
+        fprintf(stderr, "[hl-native-supervised]\tselected=1 translated_abi=%d constructed=%llu destroyed=%llu\n",
+                box != NULL, (unsigned long long)hl_linux_abi_constructed(),
+                (unsigned long long)hl_linux_abi_destroyed());
     char **environment = hl_native_supervised_environment(options);
     if (environment == NULL) { free(exec_argv); return 70; }
     hl_host_result executable_attachment =
@@ -508,7 +518,17 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     int borrowed[3] = {-1, -1, -1};
     for (hl_linux_fd fd = 0; fd < 3; ++fd) {
         hl_linux_fd_snapshot snapshot = {0};
-        if (hl_linux_fd_snapshot_get(box, fd, &snapshot) != HL_STATUS_OK) goto attachment_failed;
+        if (box != NULL) {
+            if (hl_linux_fd_snapshot_get(box, fd, &snapshot) != HL_STATUS_OK) goto attachment_failed;
+        } else {
+            snapshot.host_handle = HL_HOST_HANDLE_INVALID;
+            for (uint32_t index = 0; index < config->fd_binding_count; ++index)
+                if (config->fd_bindings[index].guest_fd == fd) {
+                    snapshot.host_handle = config->fd_bindings[index].host_handle;
+                    break;
+                }
+            if (snapshot.host_handle == HL_HOST_HANDLE_INVALID) goto attachment_failed;
+        }
         hl_host_result attached = host->posix_attachment->borrow_file_at_least(host->context, snapshot.host_handle, 64);
         if (attached.status != HL_STATUS_OK || attached.value > INT_MAX) goto attachment_failed;
         borrowed[fd] = (int)attached.value;

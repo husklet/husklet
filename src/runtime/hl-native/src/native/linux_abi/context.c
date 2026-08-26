@@ -9,6 +9,17 @@
 #include <string.h>
 #include <unistd.h>
 
+static _Atomic uint64_t hl_linux_abi_constructed_count;
+static _Atomic uint64_t hl_linux_abi_destroyed_count;
+
+uint64_t hl_linux_abi_constructed(void) {
+    return atomic_load_explicit(&hl_linux_abi_constructed_count, memory_order_relaxed);
+}
+
+uint64_t hl_linux_abi_destroyed(void) {
+    return atomic_load_explicit(&hl_linux_abi_destroyed_count, memory_order_relaxed);
+}
+
 #define HL_LINUX_FD_RESERVED UINT32_MAX
 
 static _Atomic uint32_t g_linux_ofd_token_counter;
@@ -301,6 +312,7 @@ hl_status hl_linux_abi_init(hl_linux_abi *linux_abi, const hl_host_services *hos
         return HL_STATUS_NOT_SUPPORTED;
     }
     atomic_flag_clear(&linux_abi->table_lock);
+    atomic_fetch_add_explicit(&hl_linux_abi_constructed_count, 1, memory_order_relaxed);
     return HL_STATUS_OK;
 }
 
@@ -324,6 +336,7 @@ hl_status hl_linux_abi_destroy(hl_linux_abi *linux_abi) {
     }
     hl_linux_unlock(linux_abi);
     linux_abi->abi = 0;
+    atomic_fetch_add_explicit(&hl_linux_abi_destroyed_count, 1, memory_order_relaxed);
     return HL_STATUS_OK;
 }
 

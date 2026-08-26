@@ -72,6 +72,8 @@ struct hl_engine {
     hl_linux_fd_entry *box_fds;
     hl_linux_ofd_entry *box_ofds;
     uint32_t box_initialized;
+    hl_engine_fd_binding *native_fd_bindings;
+    uint32_t native_fd_binding_count;
     hl_options options;
     uint32_t options_initialized;
     uint32_t options_owned;
@@ -1120,6 +1122,41 @@ cleanup:
     return status;
 }
 
+static hl_status hl_engine_install_native_fd_bindings(hl_engine *engine, const hl_engine_config *config,
+                                                      const hl_host_services *host) {
+    hl_status status = hl_engine_validate_fd_bindings(config);
+    if (status != HL_STATUS_OK || config->fd_binding_count == 0) return status;
+    status = hl_host_services_validate(host, HL_HOST_CAP_FILE);
+    if (status != HL_STATUS_OK) return status;
+    engine->native_fd_bindings = calloc(config->fd_binding_count, sizeof(*engine->native_fd_bindings));
+    if (engine->native_fd_bindings == NULL) return HL_STATUS_OUT_OF_MEMORY;
+    for (uint32_t index = 0; index < config->fd_binding_count; ++index) {
+        hl_host_result cloned = host->file->clone_for_fork(host->context, config->fd_bindings[index].host_handle);
+        if (cloned.status != HL_STATUS_OK || cloned.value == HL_HOST_HANDLE_INVALID)
+            return cloned.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : (hl_status)cloned.status;
+        engine->native_fd_bindings[index] = config->fd_bindings[index];
+        engine->native_fd_bindings[index].ownership = HL_ENGINE_FD_BORROW;
+        engine->native_fd_bindings[index].host_handle = cloned.value;
+        engine->native_fd_binding_count++;
+    }
+    for (uint32_t index = 0; index < config->fd_binding_count; ++index)
+        if (config->fd_bindings[index].ownership == HL_ENGINE_FD_TRANSFER)
+            (void)host->file->close(host->context, config->fd_bindings[index].host_handle);
+    engine->config.fd_bindings = engine->native_fd_bindings;
+    engine->config.fd_binding_count = engine->native_fd_binding_count;
+    return HL_STATUS_OK;
+}
+
+static int hl_engine_native_supervised_selected(const hl_options *options) {
+#if defined(__linux__) && defined(__x86_64__)
+    const char *value = hl_options_get(options, "HL_NATIVE_SUPERVISED");
+    return value != NULL && value[0] != 0 && value[0] != '0';
+#else
+    (void)options;
+    return 0;
+#endif
+}
+
 static void hl_engine_create_cleanup(hl_engine *engine) {
     uint32_t fd;
     size_t index;
@@ -1135,6 +1172,9 @@ static void hl_engine_create_cleanup(hl_engine *engine) {
     }
     free(engine->box_fds);
     free(engine->box_ofds);
+    for (uint32_t binding = 0; binding < engine->native_fd_binding_count; ++binding)
+        (void)engine->host.file->close(engine->host.context, engine->native_fd_bindings[binding].host_handle);
+    free(engine->native_fd_bindings);
     if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
     free(engine->owned_rootfs);
     if (engine->owned_executable_image != NULL) {
@@ -1172,15 +1212,20 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     if (status != HL_STATUS_OK) return status;
     engine = hl_engine_allocate(config, host);
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
-    status = hl_engine_copy_image_plan(engine, config, interpreter_image, interpreter_size);
-    if (status != HL_STATUS_OK) goto fail;
     status = hl_engine_pin_executable(engine, config, host);
     if (status != HL_STATUS_OK) goto fail;
     status = hl_engine_initialize_options(engine, config, source_options, borrow_options);
     if (status != HL_STATUS_OK) goto fail;
-    status = hl_engine_initialize_linux_abi(engine);
+    int native_supervised = hl_engine_native_supervised_selected(&engine->options);
+    status = hl_engine_copy_image_plan(engine, config, native_supervised ? NULL : interpreter_image,
+                                       native_supervised ? 0 : interpreter_size);
     if (status != HL_STATUS_OK) goto fail;
-    status = hl_engine_install_fd_bindings(engine, config, host);
+    if (native_supervised) {
+        status = hl_engine_install_native_fd_bindings(engine, config, host);
+    } else {
+        status = hl_engine_initialize_linux_abi(engine);
+        if (status == HL_STATUS_OK) status = hl_engine_install_fd_bindings(engine, config, host);
+    }
     if (status != HL_STATUS_OK) goto fail;
     atomic_flag_clear(&engine->lock);
     atomic_init(&engine->checkpoint_control_lock, false);
@@ -1512,6 +1557,9 @@ void hl_engine_destroy(hl_engine *engine) {
     }
     free(engine->box_fds);
     free(engine->box_ofds);
+    for (uint32_t binding = 0; binding < engine->native_fd_binding_count; ++binding)
+        (void)engine->host.file->close(engine->host.context, engine->native_fd_bindings[binding].host_handle);
+    free(engine->native_fd_bindings);
     if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
     free(engine->owned_rootfs);
     if (engine->owned_executable_image != NULL) {

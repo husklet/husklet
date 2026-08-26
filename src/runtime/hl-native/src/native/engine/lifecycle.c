@@ -542,9 +542,17 @@ static hl_status hl_production_terminal_state(const hl_production_entry_context 
     int descriptor;
     int saved_errno;
     if (owned != NULL) *owned = 0;
-    if (context->box == NULL || hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
-        input.host_handle == HL_HOST_HANDLE_INVALID)
-        return HL_STATUS_OK;
+    if (context->box != NULL) {
+        if (hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK) return HL_STATUS_OK;
+    } else {
+        input.host_handle = HL_HOST_HANDLE_INVALID;
+        for (uint32_t index = 0; index < context->config->fd_binding_count; ++index)
+            if (context->config->fd_bindings[index].guest_fd == 0) {
+                input.host_handle = context->config->fd_bindings[index].host_handle;
+                break;
+            }
+    }
+    if (input.host_handle == HL_HOST_HANDLE_INVALID) return HL_STATUS_OK;
     attachments = context->host->posix_attachment;
     if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL) return HL_STATUS_OK;
     borrowed = attachments->borrow_file(context->host->context, input.host_handle);
@@ -834,6 +842,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
 #else
     int activation_ready[2] = {-1, -1};
     int diagnostic_port = hl_production_diagnostic_port(options);
+    int native_supervised = hl_native_supervised_selected(options);
     hl_host_process_fd_private_plan *child_descriptor_plan = NULL;
     if (diagnostic_port == -2) {
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
@@ -860,7 +869,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.interpreter_size = interpreter_size;
     entry.activation_ready_read = activation_ready[0];
     entry.activation_ready_write = activation_ready[1];
-    if (box != NULL) {
+    if (box != NULL || native_supervised) {
         const int retained_descriptors[] = {activation_ready[1], checkpoint_broker, checkpoint_trigger,
                                             checkpoint_control, diagnostic_port};
         if (hl_host_process_fd_private_plan_prepare(STDERR_FILENO + 1, retained_descriptors,
@@ -872,7 +881,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
             return HL_STATUS_PLATFORM_FAILURE;
         }
     }
-    if (box != NULL) {
+    if (box != NULL || native_supervised) {
         entry.checkpoint_broker = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_broker);
         entry.checkpoint_trigger =
             hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_trigger);
