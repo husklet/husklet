@@ -152,6 +152,8 @@ typedef struct hl_production_entry_context {
     const hl_host_process_fd_private_plan *child_descriptor_plan;
 } hl_production_entry_context;
 
+#include "native_supervised.c"
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 void hl_host_activation_ready_test_wait(void);
 #endif
@@ -713,15 +715,21 @@ static int32_t hl_production_entry(void *opaque) {
             if (pthread_detach(control) != 0) return HL_STATUS_PLATFORM_FAILURE;
         }
     }
-    if (write(activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
-        return HL_STATUS_PLATFORM_FAILURE;
     /* The readiness byte is the parent's success boundary. Retain this registered engine-private writer
      * until process exit instead of making success depend on close(2)'s ambiguous EINTR state. It is above
      * the guest interval, excluded from checkpoint descriptor capture, and has one explicit lifetime owner. */
-    int32_t result = hl_run_linux_guest(
-        context->host, context->box, context->config->rootfs, executable, spec == NULL ? NULL : spec->image,
-        spec == NULL ? 0 : spec->image_size, NULL, context->config->main_image_plan, context->interpreter_image,
-        context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
+    int32_t result;
+    if (hl_native_supervised_selected(context->options)) {
+        result = hl_native_supervised_run(context->config->rootfs,
+                                          (char *const *)(uintptr_t)context->argv, activation_ready_write);
+    } else {
+        if (write(activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
+            return HL_STATUS_PLATFORM_FAILURE;
+        result = hl_run_linux_guest(
+            context->host, context->box, context->config->rootfs, executable, spec == NULL ? NULL : spec->image,
+            spec == NULL ? 0 : spec->image_size, NULL, context->config->main_image_plan, context->interpreter_image,
+            context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
+    }
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -758,6 +766,10 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
                                              int checkpoint_broker, int checkpoint_trigger, int checkpoint_control,
                                              const void *interpreter_image, size_t interpreter_size,
                                              hl_host_handle *process, hl_host_handle *result_token) {
+    if (hl_native_supervised_selected(options) &&
+        (checkpoint_broker >= 0 || checkpoint_control >= 0 || hl_options_get(options, "HL_CHECKPOINT") != NULL ||
+         hl_options_get(options, "HL_RESTORE") != NULL))
+        return HL_STATUS_NOT_SUPPORTED;
 #if !defined(_WIN32)
     hl_production_entry_context entry = {0};
 #endif

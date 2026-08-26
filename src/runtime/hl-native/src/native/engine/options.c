@@ -111,6 +111,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_NETNS", "guest network and IPC namespace identity", HL_OPTION_TEXT),
     HL_LAUNCH_OPTION("HL_NET_ISOLATE", "disable guest external networking", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_NET_HOST", "use the host network stack directly", HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_NATIVE_SUPERVISED", "run a Linux x86-64 guest natively under syscall supervision",
+                     HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_PCACHE", "enable persistent translated-code caching", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_PCACHE_DIR", "persistent translated-code cache storage", HL_OPTION_PATH),
     HL_LAUNCH_OPTION("HL_PIDS_MAX", "guest process limit", HL_OPTION_INTEGER),

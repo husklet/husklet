@@ -188,6 +188,11 @@ const DEFINITIONS: &[Definition] = &[
     launch!("HL_ROOTFS_RO", "mount the guest root filesystem read-only", Flag),
     launch!("HL_SANDBOX", "apply host confinement to the untrusted worker", Flag),
     launch!("HL_SECCOMP_BASELINE", "guest-visible launch seccomp baseline", Text),
+    launch!(
+        "HL_NATIVE_SUPERVISED",
+        "run a Linux x86-64 guest natively under syscall supervision",
+        Flag
+    ),
     launch!("HL_UID", "initial guest user identity", Integer),
     launch!("HL_ULIMITS", "serialized Linux resource limits", Records),
     launch!(
