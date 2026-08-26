@@ -360,27 +360,28 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
     char projected_root[PATH_MAX];
     if (hl_native_supervised_overlay_mount(config, options, projected_root) != 0) return -1;
-    if (hl_native_supervised_owners_apply(projected_root, box->file_owners) != 0) return -1;
+    int projected_overlay = box->lower_layers != NULL;
+    if (hl_native_supervised_owners_apply(projected_root, box->file_owners) != 0) goto projection_failed;
     unsigned guest_uid = (unsigned)(box->uid < 0 ? 0 : box->uid);
     unsigned guest_gid = (unsigned)(box->gid < 0 ? 0 : box->gid);
     char uid_map[16384], gid_map[16384];
     if (box->file_owners == NULL) {
         if (snprintf(uid_map, sizeof(uid_map), "%u %u 1\n", guest_uid, (unsigned)geteuid()) <= 0 ||
             snprintf(gid_map, sizeof(gid_map), "%u %u 1\n", guest_gid, (unsigned)getegid()) <= 0)
-            return -1;
+            goto projection_failed;
     } else if (hl_native_supervised_id_map(uid_map, sizeof(uid_map), guest_uid, box->file_owners, 0) != 0 ||
                hl_native_supervised_id_map(gid_map, sizeof(gid_map), guest_gid, box->file_owners, 1) != 0) {
-        return -1;
+        goto projection_failed;
     }
     int mapping[2] = {-1, -1};
-    if (box->file_owners != NULL && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, mapping) != 0) return -1;
+    if (box->file_owners != NULL && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, mapping) != 0)
+        goto projection_failed;
     char byte;
     pid_t init = fork();
     if (init < 0) {
         close(mapping[0]);
         close(mapping[1]);
-        if (box->lower_layers != NULL) { umount2(projected_root, MNT_DETACH); rmdir(projected_root); }
-        return -1;
+        goto projection_failed;
     }
     if (init > 0) {
         if (mapping[1] >= 0) close(mapping[1]);
@@ -445,6 +446,15 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     struct __user_cap_data_struct data[2] = {{0}};
     if (syscall(SYS_capset, &header, data) != 0 || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
     return 0;
+projection_failed: {
+        int failure = errno;
+        if (projected_overlay) {
+            (void)umount2(projected_root, MNT_DETACH);
+            (void)rmdir(projected_root);
+        }
+        errno = failure;
+        return -1;
+    }
 }
 
 static int hl_native_supervised_create_listener(void) {

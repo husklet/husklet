@@ -16,6 +16,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
+fn native_overlay_directories() -> std::collections::BTreeSet<PathBuf> {
+    std::fs::read_dir("/var/tmp").unwrap().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| {
+        path.file_name().and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("husklet-native-overlay."))
+    }).collect()
+}
+
 struct Output {
     stdout: Mutex<Vec<u8>>,
     stderr: Mutex<Vec<u8>>,
@@ -228,6 +235,41 @@ fn supervised_overlay_preserves_lower_upper_and_declared_ownership() {
     assert_eq!(*output.stdout.lock().unwrap(), b"overlay-owned");
     assert_eq!(std::fs::read(upper.join("upper.txt")).unwrap(), b"upper\n");
     assert_eq!(std::fs::metadata(&lower.join("owned")).unwrap().uid(), 0);
+}
+
+#[test]
+fn supervised_overlay_owner_failure_leaves_no_projection_directory() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let lower = work.path().join("lower");
+    let upper = work.path().join("upper");
+    let overlay_work = work.path().join("work");
+    for directory in [&lower, &upper, &overlay_work, &lower.join("bin"), &lower.join("proc")] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let executable = lower.join("bin/fixture");
+    std::fs::copy(&built, &executable).unwrap();
+    let before = native_overlay_directories();
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    options.set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true).unwrap();
+    let plan = RuntimePlan {
+        rootfs: Some(upper.as_os_str().as_encoded_bytes().to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: RuntimeBoxPolicy {
+            lower_layers: Some(lower.as_os_str().as_encoded_bytes().to_vec()),
+            file_owners: Some(b"missing-owner\t123\t456".to_vec()),
+            ..isolated_policy()
+        },
+    };
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    if engine.start().is_ok() { assert!(engine.wait().is_err()); }
+    let _ = engine.destroy();
+    assert_eq!(native_overlay_directories(), before);
 }
 
 #[test]
