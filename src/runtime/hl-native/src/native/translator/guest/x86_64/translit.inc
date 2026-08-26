@@ -166,6 +166,7 @@ static uint64_t translit_displaced_riprel_lowered;
 static uint64_t translit_displaced_scratch_lowered;
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
+static uint64_t translit_natural_lea_lowered;
 static uint64_t translit_displaced_refusal_opcode[512];
 static uint64_t translit_displaced_refusal_prefix;
 static uint64_t translit_displaced_refusal_width;
@@ -416,9 +417,16 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         if (insn->lock || insn->rep || insn->repne ||
             (insn->opsize != 2 && insn->opsize != 4 && insn->opsize != 8))
             return 0;
+        if (!displaced && (insn->opsize != 8 || insn->addr32)) return 0;
         int reg = insn->reg;
         if (insn->opsize == 8) {
-            hl_x64_mov_imm64(a, reg, guest_target);
+            if (!displaced && guest_target <= UINT32_MAX) {
+                if (reg >= 8) hl_x64_u8(a, 0x41);
+                hl_x64_u8(a, (uint8_t)(0xB8 + (reg & 7)));
+                hl_x64_u32(a, (uint32_t)guest_target);
+            } else {
+                hl_x64_mov_imm64(a, reg, guest_target);
+            }
         } else {
             if (insn->opsize == 2) hl_x64_u8(a, 0x66);
             if (reg >= 8) hl_x64_u8(a, 0x41);
@@ -640,6 +648,21 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 24;
     }
+    if (scenario == 22 || scenario == 23) {
+        int preserve;
+        insn.op = 0x8D;
+        insn.reg = scenario == 22 ? 10 : 9;
+        uint64_t target = scenario == 22 ? lo + 0x123 : UINT64_C(0x7f0012345678);
+        int lowered = translit_lower_absolute_riprel(&output, &insn, target, target, 0, &preserve);
+        const uint8_t *expected = scenario == 22 ? (uint8_t[]){0x41, 0xBA, 0x23, 0x01, 0x40, 0x00}
+                                                 : (uint8_t[]){0x49, 0xB9, 0x78, 0x56, 0x34, 0x12,
+                                                               0x00, 0x7F, 0x00, 0x00};
+        size_t expected_size = scenario == 22 ? 6 : 10;
+        return lowered && preserve == -1 && output.cursor - bytes == (ptrdiff_t)expected_size &&
+                       memcmp(bytes, expected, expected_size) == 0
+                   ? 0
+                   : 25;
+    }
     return 6;
 }
 #endif
@@ -706,7 +729,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
                                                                  g_nonpie_hi, g_nonpie_bias);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
-                if ((!g_nonpie_lo && (insn.two || insn.op != 0x8B)) ||
+                if ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
                                                     &preserve_register)) {
                     if (g_nonpie_lo)
@@ -715,8 +738,10 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
                     a->cursor = instruction_start; // un-emit: the block ends before this instruction
                     break;
                 }
-                uint64_t *counter = insn.op == 0x8D && !insn.two ? &translit_displaced_lea_lowered
-                                                                 : &translit_displaced_riprel_lowered;
+                uint64_t *counter = insn.op == 0x8D && !insn.two
+                                        ? (g_nonpie_lo ? &translit_displaced_lea_lowered
+                                                       : &translit_natural_lea_lowered)
+                                        : &translit_displaced_riprel_lowered;
                 (void)__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
                 if (preserve_register >= 0)
                     (void)__atomic_fetch_add(&translit_displaced_scratch_lowered, 1, __ATOMIC_RELAXED);
@@ -967,6 +992,7 @@ static int translit_report(char *out, size_t size) {
         __atomic_load_n(&translit_displaced_scratch_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_lea_lowered = __atomic_load_n(&translit_displaced_lea_lowered, __ATOMIC_RELAXED);
     uint64_t natural_abs32_lowered = __atomic_load_n(&translit_natural_abs32_lowered, __ATOMIC_RELAXED);
+    uint64_t natural_lea_lowered = __atomic_load_n(&translit_natural_lea_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_prefix = __atomic_load_n(&translit_displaced_refusal_prefix, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_width = __atomic_load_n(&translit_displaced_refusal_width, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_rsp = __atomic_load_n(&translit_displaced_refusal_rsp, __ATOMIC_RELAXED);
@@ -1018,6 +1044,7 @@ static int translit_report(char *out, size_t size) {
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
+                    " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
                     " jcc_fall_executed=%llu\n",
@@ -1028,6 +1055,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
                     (unsigned long long)natural_abs32_lowered,
+                    (unsigned long long)natural_lea_lowered,
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                     (unsigned long long)jcc_fall_page_refused,
                     (unsigned long long)jcc_fall_successor_page_refused,

@@ -70,6 +70,7 @@ struct Backend {
     scratch_lowered: u64,
     lea_lowered: u64,
     abs32_lowered: u64,
+    natural_lea_lowered: u64,
     rip_indirect_lowered: u64,
     provenance_fallback: u64,
     translations: u64,
@@ -116,6 +117,7 @@ fn backend(stderr: &[u8]) -> Backend {
         scratch_lowered: counter("scratch_lowered="),
         lea_lowered: counter("lea_lowered="),
         abs32_lowered: counter("abs32_lowered="),
+        natural_lea_lowered: counter("natural_lea_lowered="),
         rip_indirect_lowered: counter("rip_indirect_lowered="),
         provenance_fallback: counter("provenance_fallback="),
         translations,
@@ -545,6 +547,7 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         "displaced_memory",
         "displaced_fault",
         "natural_abs32_fault",
+        "natural_lea",
     ] {
         let executable = displaced_fixture(work.path(), name);
         let (interpreted, interpreted_status, _) = run(&executable, "0");
@@ -575,6 +578,14 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
                 selected_backend.scratch_lowered, 0,
                 "{name}: natural load borrowed a GPR"
             );
+        }
+        if name == "natural_lea" {
+            assert!(
+                selected_backend.natural_lea_lowered > 0,
+                "natural LEA never entered immediate lowering -- {}",
+                selected_backend.line
+            );
+            assert_eq!(selected_backend.scratch_lowered, 0, "natural LEA borrowed a GPR");
         }
         assert_eq!(
             selected_status, interpreted_status,
