@@ -720,7 +720,7 @@ static int32_t hl_production_entry(void *opaque) {
      * the guest interval, excluded from checkpoint descriptor capture, and has one explicit lifetime owner. */
     int32_t result;
     if (hl_native_supervised_selected(context->options)) {
-        result = hl_native_supervised_run(context->config->rootfs,
+        result = hl_native_supervised_run(context->box, context->config->rootfs,
                                           (char *const *)(uintptr_t)context->argv, activation_ready_write);
     } else {
         if (write(activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))

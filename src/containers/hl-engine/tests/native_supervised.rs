@@ -71,3 +71,12 @@ fn option_is_default_off_and_true_exits_identically() {
     assert_eq!(run(&executable, &[], false), (0, Vec::new()));
     assert_eq!(run(&executable, &[], true), (0, Vec::new()));
 }
+
+#[test]
+fn supervised_stdout_and_exit_status_keep_the_engine_contract() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let (status, output) = run(&executable, &["output"], true);
+    assert_eq!(status, 23);
+    assert_eq!(output, b"native-supervised");
+}

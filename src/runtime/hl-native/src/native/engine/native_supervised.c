@@ -6,6 +6,7 @@
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 
 extern char **environ;
@@ -59,7 +60,51 @@ static int hl_native_supervised_create_listener(void) {
     return (int)syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &program);
 }
 
-static int hl_native_supervised_wait(int listener, pid_t leader) {
+#define HL_NATIVE_SUPERVISED_COPY_CHUNK (64u * 1024u)
+
+static int64_t hl_native_supervised_stream(hl_linux_abi *box, const struct seccomp_notif *request) {
+    int write_call = request->data.nr == SYS_write;
+    hl_linux_fd fd = (hl_linux_fd)request->data.args[0];
+    uint64_t address = request->data.args[1];
+    uint64_t remaining = request->data.args[2];
+    unsigned char *buffer = malloc(remaining < HL_NATIVE_SUPERVISED_COPY_CHUNK
+                                       ? (size_t)remaining
+                                       : HL_NATIVE_SUPERVISED_COPY_CHUNK);
+    if (buffer == NULL && remaining != 0) return -ENOMEM;
+    uint64_t completed = 0;
+    do {
+        size_t chunk = remaining < HL_NATIVE_SUPERVISED_COPY_CHUNK ? (size_t)remaining
+                                                                   : HL_NATIVE_SUPERVISED_COPY_CHUNK;
+        int64_t result;
+        if (write_call) {
+            if (chunk != 0) {
+                struct iovec local = {buffer, chunk};
+                struct iovec remote = {(void *)(uintptr_t)(address + completed), chunk};
+                if (process_vm_readv((pid_t)request->pid, &local, 1, &remote, 1, 0) != (ssize_t)chunk) {
+                    result = -EFAULT;
+                    goto finished;
+                }
+            }
+            result = hl_linux_write(box, fd, buffer, chunk);
+        } else {
+            result = hl_linux_read(box, fd, buffer, chunk);
+            if (result > 0) {
+                struct iovec local = {buffer, (size_t)result};
+                struct iovec remote = {(void *)(uintptr_t)(address + completed), (size_t)result};
+                if (process_vm_writev((pid_t)request->pid, &local, 1, &remote, 1, 0) != result) result = -EFAULT;
+            }
+        }
+finished:
+        if (result < 0) { free(buffer); return completed != 0 ? (int64_t)completed : result; }
+        completed += (uint64_t)result;
+        remaining -= (uint64_t)result;
+        if ((size_t)result != chunk || chunk == 0) break;
+    } while (remaining != 0);
+    free(buffer);
+    return (int64_t)completed;
+}
+
+static int hl_native_supervised_wait(hl_linux_abi *box, int listener, pid_t leader) {
     int status;
     for (;;) {
         pid_t waited = waitpid(leader, &status, WNOHANG);
@@ -75,12 +120,21 @@ static int hl_native_supervised_wait(int listener, pid_t leader) {
             if (errno == EINTR || errno == ENOENT) continue;
             return 70;
         }
-        struct seccomp_notif_resp response = {.id = request.id, .flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE};
+        struct seccomp_notif_resp response = {.id = request.id};
+        if ((request.data.nr == SYS_read || request.data.nr == SYS_write) && request.data.args[0] <= STDERR_FILENO) {
+            int64_t result = hl_native_supervised_stream(box, &request);
+            if (result < 0)
+                response.error = (int32_t)result;
+            else
+                response.val = result;
+        } else {
+            response.flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+        }
         if (ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, &response) != 0 && errno != ENOENT) return 70;
     }
 }
 
-static int32_t hl_native_supervised_run(const char *rootfs, char *const argv[], int activation_ready) {
+static int32_t hl_native_supervised_run(hl_linux_abi *box, const char *rootfs, char *const argv[], int activation_ready) {
     if (argv == NULL || argv[0] == NULL) return 70;
     if (rootfs == NULL) rootfs = "/";
     int channel[2];
@@ -105,13 +159,13 @@ static int32_t hl_native_supervised_run(const char *rootfs, char *const argv[], 
     if (write(activation_ready, &ready, sizeof(ready)) != (ssize_t)sizeof(ready)) {
         close(listener); (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0); return 70;
     }
-    int result = hl_native_supervised_wait(listener, child);
+    int result = hl_native_supervised_wait(box, listener, child);
     close(listener);
     return result;
 }
 #else
 static int hl_native_supervised_selected(const hl_options *options) { (void)options; return 0; }
-static int32_t hl_native_supervised_run(const char *rootfs, char *const argv[], int activation_ready) {
-    (void)rootfs; (void)argv; (void)activation_ready; return 70;
+static int32_t hl_native_supervised_run(hl_linux_abi *box, const char *rootfs, char *const argv[], int activation_ready) {
+    (void)box; (void)rootfs; (void)argv; (void)activation_ready; return 70;
 }
 #endif
