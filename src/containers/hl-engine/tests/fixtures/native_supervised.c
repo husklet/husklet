@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
@@ -52,5 +53,15 @@ int main(int argc, char **argv) {
         if (dup2(1, 7) != 7 || write(7, "-dup", 4) != 4) return 54;
     }
     if (argc > 1 && !strcmp(argv[1], "signal")) raise(SIGTERM);
+    if (argc > 1 && !strcmp(argv[1], "sendmsg-denied")) {
+        int pair[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return 61;
+        char byte = 1;
+        struct iovec vector = {&byte, 1};
+        struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1};
+        errno = 0;
+        if (sendmsg(pair[0], &message, 0) != -1 || errno != EPERM) return 62;
+        fputs("sendmsg-denied", stdout);
+    }
     return 0;
 }

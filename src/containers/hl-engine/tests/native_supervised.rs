@@ -189,6 +189,16 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
     engine.destroy().unwrap();
 }
 
+#[test]
+fn supervised_filter_denies_sendmsg_after_listener_bootstrap() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let (status, output, error) = run(&executable, &["sendmsg-denied"], true);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"sendmsg-denied");
+    assert!(error.is_empty());
+}
+
 struct Checkpoints;
 impl CheckpointSink for Checkpoints {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> { Ok(()) }

@@ -81,6 +81,12 @@ static int hl_native_supervised_refusal(const hl_options *options, int *number, 
     return 0;
 }
 
+static int hl_native_supervised_denied(int number) {
+    return number == SYS_sendmsg || number == SYS_ptrace || number == SYS_seccomp || number == SYS_mount ||
+           number == SYS_umount2 || number == SYS_pivot_root || number == SYS_chroot || number == SYS_setns ||
+           number == SYS_unshare;
+}
+
 static char **hl_native_supervised_environment(const hl_options *options) {
     const char *encoded = hl_options_get(options, "HL_GUEST_ENV");
     int escaped = hl_options_get(options, "HL_GUEST_ENV_ESC") != NULL;
@@ -159,6 +165,8 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
         response->id = request->id;
         if ((int)request->data.nr == refused_number) {
             response->error = -refused_error;
+        } else if (hl_native_supervised_denied((int)request->data.nr)) {
+            response->error = -EPERM;
         } else {
             response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
         }
@@ -207,12 +215,12 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             if (borrowed[fd] != fd) close(borrowed[fd]);
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
+        if (chroot(rootfs) != 0 || chdir("/") != 0) _exit(70);
         int listener = hl_native_supervised_create_listener();
         if (listener < 0) _exit(70);
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
         while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {}
         close(listener);
-        if (chroot(rootfs) != 0 || chdir("/") != 0) _exit(70);
         execveat(executable, "", argv, environment, AT_EMPTY_PATH);
         _exit(errno == ENOENT ? 127 : 126);
     }
