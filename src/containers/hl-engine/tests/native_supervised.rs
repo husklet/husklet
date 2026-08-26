@@ -573,6 +573,24 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
 }
 
 #[test]
+fn supervised_clone_mapping_and_listener_fail_before_readiness() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    for (stage, refusal) in [("clone", "998:38"), ("mapping", "997:38"), ("listener", "996:38")] {
+        let mut plan = selected_plan(&executable);
+        plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
+        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        if engine.start().is_ok() {
+            match engine.wait() {
+                Ok(exit) => assert_ne!(exit.guest_status, 0, "{stage} fault executed the guest"),
+                Err(_) => {}
+            }
+        }
+        engine.destroy().unwrap();
+    }
+}
+
+#[test]
 fn supervised_mode_refuses_checkpoint_capture_restore_and_join_at_construction() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

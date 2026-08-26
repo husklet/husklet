@@ -38,7 +38,15 @@ typedef struct {
     _Atomic int target_pid;
     _Atomic int acknowledged;
     _Atomic int result_signal;
+    _Atomic int projected_overlay;
+    _Atomic int clone_stages;
+    char projected_root[PATH_MAX];
 } hl_native_supervised_bootstrap;
+
+static void hl_native_supervised_projection_cleanup(hl_native_supervised_bootstrap *bootstrap) {
+    if (bootstrap != NULL && atomic_load_explicit(&bootstrap->projected_overlay, memory_order_acquire))
+        (void)rmdir(bootstrap->projected_root);
+}
 
 typedef struct {
     int source;
@@ -353,67 +361,19 @@ static int hl_native_supervised_limits_apply(const char *spec) {
 
 static int hl_native_supervised_project_container(const hl_engine_config *config, const hl_options *options,
                                                   hl_native_supervised_bootstrap *bootstrap,
-                                                  const hl_native_supervised_volumes *volumes) {
+                                                  const hl_native_supervised_volumes *volumes, int mapping_fd,
+                                                  const char *uid_map, const char *gid_map) {
     const hl_engine_box_config *box = config->box;
-    if (unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC) != 0)
-        return -1;
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
     char projected_root[PATH_MAX];
     if (hl_native_supervised_overlay_mount(config, options, projected_root) != 0) return -1;
     int projected_overlay = box->lower_layers != NULL;
+    if (projected_overlay) {
+        memcpy(bootstrap->projected_root, projected_root, strlen(projected_root) + 1);
+        atomic_store_explicit(&bootstrap->projected_overlay, 1, memory_order_release);
+    }
     if (hl_native_supervised_owners_apply(projected_root, box->file_owners) != 0) goto projection_failed;
-    unsigned guest_uid = (unsigned)(box->uid < 0 ? 0 : box->uid);
-    unsigned guest_gid = (unsigned)(box->gid < 0 ? 0 : box->gid);
-    char uid_map[16384], gid_map[16384];
-    if (box->file_owners == NULL) {
-        if (snprintf(uid_map, sizeof(uid_map), "%u %u 1\n", guest_uid, (unsigned)geteuid()) <= 0 ||
-            snprintf(gid_map, sizeof(gid_map), "%u %u 1\n", guest_gid, (unsigned)getegid()) <= 0)
-            goto projection_failed;
-    } else if (hl_native_supervised_id_map(uid_map, sizeof(uid_map), guest_uid, box->file_owners, 0) != 0 ||
-               hl_native_supervised_id_map(gid_map, sizeof(gid_map), guest_gid, box->file_owners, 1) != 0) {
-        goto projection_failed;
-    }
-    int mapping[2] = {-1, -1};
-    if (box->file_owners != NULL && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, mapping) != 0)
-        goto projection_failed;
     char byte;
-    pid_t init = fork();
-    if (init < 0) {
-        close(mapping[0]);
-        close(mapping[1]);
-        goto projection_failed;
-    }
-    if (init > 0) {
-        if (mapping[1] >= 0) close(mapping[1]);
-        atomic_store_explicit(&bootstrap->target_pid, init, memory_order_release);
-        struct pollfd ready = {.fd = mapping[0], .events = POLLIN};
-        if (mapping[0] >= 0 &&
-            (poll(&ready, 1, 10000) != 1 || read(mapping[0], &byte, 1) != 1 ||
-             hl_native_supervised_write_process_text(init, "setgroups", "deny") != 0 ||
-             hl_native_supervised_write_process_text(init, "uid_map", uid_map) != 0 ||
-             hl_native_supervised_write_process_text(init, "gid_map", gid_map) != 0 || write(mapping[0], "1", 1) != 1)) {
-            kill(init, SIGKILL);
-            waitpid(init, NULL, 0);
-            close(mapping[0]);
-            if (box->lower_layers != NULL) { umount2(projected_root, MNT_DETACH); rmdir(projected_root); }
-            _exit(70);
-        }
-        if (mapping[0] >= 0) close(mapping[0]);
-        int status;
-        if (waitpid(init, &status, 0) != init) _exit(70);
-        if (box->lower_layers != NULL) { umount2(projected_root, MNT_DETACH); rmdir(projected_root); }
-        int result_signal = atomic_load_explicit(&bootstrap->result_signal, memory_order_acquire);
-        if (result_signal != 0) {
-            sigset_t signals;
-            sigemptyset(&signals);
-            sigaddset(&signals, result_signal);
-            sigprocmask(SIG_UNBLOCK, &signals, NULL);
-            signal(result_signal, SIG_DFL);
-            raise(result_signal);
-        }
-        _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 70);
-    }
-    if (mapping[0] >= 0) close(mapping[0]);
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
     if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
@@ -426,14 +386,14 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         return -1;
     if (box->hostname != NULL && sethostname(box->hostname, strlen(box->hostname)) != 0) return -1;
     if (setgroups(0, NULL) != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
-        (mapping[1] >= 0
-             ? (write(mapping[1], "1", 1) != 1 || read(mapping[1], &byte, 1) != 1)
+        (mapping_fd >= 0
+             ? (write(mapping_fd, "1", 1) != 1 || read(mapping_fd, &byte, 1) != 1)
              : (hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
                 hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
                 hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0)) ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0)
         return -1;
-    if (mapping[1] >= 0) close(mapping[1]);
+    if (mapping_fd >= 0) close(mapping_fd);
     if (chroot(projected_root) != 0) return -1;
     if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
     if (hl_native_supervised_limits_apply(box->limits) != 0) return -1;
@@ -703,27 +663,63 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     atomic_init(&bootstrap->target_pid, -1);
     atomic_init(&bootstrap->acknowledged, 0);
     atomic_init(&bootstrap->result_signal, 0);
+    atomic_init(&bootstrap->projected_overlay, 0);
+    atomic_init(&bootstrap->clone_stages, 0);
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
         munmap(bootstrap, sizeof(*bootstrap)); goto attachment_failed;
     }
-    pid_t child = fork();
-    if (child < 0) { munmap(bootstrap, sizeof(*bootstrap)); goto attachment_failed; }
+    unsigned guest_uid = (unsigned)(config->box->uid < 0 ? 0 : config->box->uid);
+    unsigned guest_gid = (unsigned)(config->box->gid < 0 ? 0 : config->box->gid);
+    char uid_map[16384], gid_map[16384];
+    int mapping[2] = {-1, -1};
+    int leader_pidfd = -1;
+    if (config->box->file_owners == NULL) {
+        if (snprintf(uid_map, sizeof(uid_map), "%u %u 1\n", guest_uid, (unsigned)geteuid()) <= 0 ||
+            snprintf(gid_map, sizeof(gid_map), "%u %u 1\n", guest_gid, (unsigned)getegid()) <= 0)
+            goto clone_failed;
+    } else if (hl_native_supervised_id_map(uid_map, sizeof(uid_map), guest_uid, config->box->file_owners, 0) != 0 ||
+               hl_native_supervised_id_map(gid_map, sizeof(gid_map), guest_gid, config->box->file_owners, 1) != 0) {
+        goto clone_failed;
+    }
+    if (config->box->file_owners != NULL && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, mapping) != 0)
+        goto clone_failed;
+    struct clone_args clone = {
+        .flags = CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_PIDFD,
+        .pidfd = (uint64_t)(uintptr_t)&leader_pidfd,
+        .exit_signal = SIGCHLD,
+    };
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *stage_fail = test_refusal != NULL && strcmp(test_refusal, "998:38") == 0 ? "clone" :
+                             test_refusal != NULL && strcmp(test_refusal, "997:38") == 0 ? "mapping" :
+                             test_refusal != NULL && strcmp(test_refusal, "996:38") == 0 ? "listener" : NULL;
+#else
+    const char *stage_fail = NULL;
+#endif
+    pid_t child = stage_fail != NULL && strcmp(stage_fail, "clone") == 0
+                      ? (errno = ENOSYS, (pid_t)-1)
+                      : (pid_t)syscall(SYS_clone3, &clone, sizeof(clone));
+    if (child < 0) goto clone_failed;
     if (child == 0) {
+        atomic_fetch_add_explicit(&bootstrap->clone_stages, 1, memory_order_relaxed);
+        if (mapping[0] >= 0) close(mapping[0]);
         for (int fd = 0; fd < 3; ++fd) {
             if (borrowed[fd] < 0) continue;
             if (dup2(borrowed[fd], fd) < 0) _exit(70);
             if (borrowed[fd] != fd) close(borrowed[fd]);
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
-        if (hl_native_supervised_close_except(executable) != 0) _exit(70);
         hl_native_supervised_volumes volumes;
         if (hl_native_supervised_volumes_open(config->box->volumes, &volumes) != 0 ||
-            hl_native_supervised_project_container(config, options, bootstrap, &volumes) != 0) {
+            hl_native_supervised_project_container(config, options, bootstrap, &volumes, mapping[1], uid_map,
+                                                    gid_map) != 0 ||
+            hl_native_supervised_close_except(executable) != 0) {
             if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
             _exit(70);
         }
-        int listener = hl_native_supervised_create_listener();
+        int listener = stage_fail != NULL && strcmp(stage_fail, "listener") == 0
+                           ? (errno = EIO, -1)
+                           : hl_native_supervised_create_listener();
         if (listener < 0) _exit(70);
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
         while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {
@@ -735,6 +731,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         pid_t workload = fork();
         if (workload < 0) _exit(70);
         if (workload > 0) {
+            atomic_fetch_add_explicit(&bootstrap->clone_stages, 1, memory_order_relaxed);
             int leader_status = 0;
             int status;
             pid_t waited;
@@ -752,6 +749,27 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             fprintf(stderr, "[hl-native-supervised]\texecveat_errno=%d\n", errno);
         _exit(errno == ENOENT ? 127 : 126);
     }
+    if (mapping[1] >= 0) close(mapping[1]);
+    if (mapping[0] < 0 && stage_fail != NULL && strcmp(stage_fail, "mapping") == 0) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+        goto clone_failed;
+    }
+    if (mapping[0] >= 0) {
+        char byte;
+        struct pollfd ready = {.fd = mapping[0], .events = POLLIN};
+        if (poll(&ready, 1, 10000) != 1 || read(mapping[0], &byte, 1) != 1 ||
+            (stage_fail != NULL && strcmp(stage_fail, "mapping") == 0) ||
+            hl_native_supervised_write_process_text(child, "setgroups", "deny") != 0 ||
+            hl_native_supervised_write_process_text(child, "uid_map", uid_map) != 0 ||
+            hl_native_supervised_write_process_text(child, "gid_map", gid_map) != 0 || write(mapping[0], "1", 1) != 1) {
+            close(mapping[0]);
+            kill(child, SIGKILL);
+            waitpid(child, NULL, 0);
+            goto clone_failed;
+        }
+        close(mapping[0]);
+    }
     if (planted_high_fd >= 0) { close(planted_high_fd); planted_high_fd = -1; }
     for (int fd = 0; fd < 3; ++fd) {
         if (borrowed[fd] >= 0) (void)host->posix_attachment->release(host->context, (uint64_t)borrowed[fd]);
@@ -759,19 +777,13 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     }
     (void)host->posix_attachment->release(host->context, (uint64_t)executable);
     executable = -1;
-    int target_pid = -1;
-    for (int attempt = 0; attempt < 5000 && target_pid < 0; ++attempt) {
-        target_pid = atomic_load_explicit(&bootstrap->target_pid, memory_order_acquire);
-        if (target_pid < 0) usleep(1000);
-    }
-    int pidfd = target_pid < 0 ? -1 : (int)syscall(SYS_pidfd_open, target_pid, 0);
     int listener = -1;
-    if (pidfd >= 0) {
-        struct pollfd death = {pidfd, POLLIN, 0};
+    if (leader_pidfd >= 0) {
+        struct pollfd death = {leader_pidfd, POLLIN, 0};
         for (int attempt = 0; attempt < 5000; ++attempt) {
             int remote = atomic_load_explicit(&bootstrap->listener, memory_order_acquire);
             if (remote >= 0) {
-                listener = (int)syscall(SYS_pidfd_getfd, pidfd, remote, 0);
+                listener = (int)syscall(SYS_pidfd_getfd, leader_pidfd, remote, 0);
                 break;
             }
             if (poll(&death, 1, 1) != 0) break;
@@ -781,24 +793,41 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         atomic_store_explicit(&bootstrap->acknowledged, 1, memory_order_release);
         (void)syscall(SYS_futex, &bootstrap->acknowledged, FUTEX_WAKE, 1, NULL, NULL, 0);
     }
-    if (pidfd >= 0) close(pidfd);
-    int leader_pidfd = listener < 0 ? -1 : (int)syscall(SYS_pidfd_open, child, 0);
-    munmap(bootstrap, sizeof(*bootstrap));
     if (listener < 0) {
         (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
+        hl_native_supervised_projection_cleanup(bootstrap);
+        if (leader_pidfd >= 0) close(leader_pidfd);
+        munmap(bootstrap, sizeof(*bootstrap));
         hl_native_supervised_environment_free(environment); free(exec_argv); return 70;
     }
     unsigned char ready = 1;
     if (write(activation_ready, &ready, sizeof(ready)) != (ssize_t)sizeof(ready)) {
         close(listener); (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
+        hl_native_supervised_projection_cleanup(bootstrap);
+        if (leader_pidfd >= 0) close(leader_pidfd);
+        munmap(bootstrap, sizeof(*bootstrap));
         hl_native_supervised_environment_free(environment); free(exec_argv); return 70;
     }
     int result = hl_native_supervised_wait(listener, leader_pidfd, child, options, guest_signal);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_load_explicit(&bootstrap->clone_stages, memory_order_relaxed) != 2) result = 70;
+#endif
+    int result_signal = atomic_load_explicit(&bootstrap->result_signal, memory_order_acquire);
+    if (result_signal != 0) *guest_signal = result_signal;
+    hl_native_supervised_projection_cleanup(bootstrap);
+    munmap(bootstrap, sizeof(*bootstrap));
     if (leader_pidfd >= 0) close(leader_pidfd);
     close(listener);
     hl_native_supervised_environment_free(environment);
     free(exec_argv);
     return result;
+clone_failed:
+    if (mapping[0] >= 0) close(mapping[0]);
+    if (mapping[1] >= 0) close(mapping[1]);
+    if (leader_pidfd >= 0) close(leader_pidfd);
+    hl_native_supervised_projection_cleanup(bootstrap);
+    munmap(bootstrap, sizeof(*bootstrap));
+    goto attachment_failed;
 attachment_failed:
     if (planted_high_fd >= 0) close(planted_high_fd);
     for (int fd = 0; fd < 3; ++fd)
