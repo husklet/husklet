@@ -1396,6 +1396,124 @@ static int jit_host_to_rwpc(uint64_t host_pc, uint64_t *rwpc) {
     return 0;
 }
 
+// Non-wrapping body ownership for recovery from a wrapped instruction-provenance ring.  Each arena
+// generation gets an immutable append-only range vector; it is freed only when that generation's mapping
+// is no longer pinned or reachable.  Exhaustion declines the optional emitted body rather than overwriting
+// a live owner.
+#define JIT_BODY_OWNER_N 1398101u
+typedef struct {
+    uint32_t rw_start, rw_end;
+    uint64_t guest;
+} jit_body_owner_entry;
+_Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
+typedef struct {
+    uint64_t generation;
+    uint8_t *rw;
+    ptrdiff_t rw2rx;
+    _Atomic uint32_t count;
+    jit_body_owner_entry *entry;
+} jit_body_owner_set;
+static jit_body_owner_set g_body_owners[STW_RETIRED_MAX + 1];
+
+static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
+    jit_body_owner_set *empty = NULL;
+    for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
+        if (g_body_owners[i].entry != NULL && g_body_owners[i].generation == generation) return &g_body_owners[i];
+        if (empty == NULL && g_body_owners[i].entry == NULL) empty = &g_body_owners[i];
+    }
+    if (!create || empty == NULL) return NULL;
+    empty->entry = calloc(JIT_BODY_OWNER_N, sizeof(*empty->entry));
+    if (empty->entry == NULL) return NULL;
+    empty->generation = generation;
+    empty->rw = g_cache;
+    empty->rw2rx = g_rw2rx;
+    atomic_store_explicit(&empty->count, 0, memory_order_relaxed);
+    return empty;
+}
+
+static int jit_body_owner_reserve(uint64_t generation, uint32_t *token) {
+    jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
+    if (set == NULL) return 0;
+    uint32_t count = atomic_load_explicit(&set->count, memory_order_relaxed);
+    if (count >= JIT_BODY_OWNER_N) return 0;
+    *token = count;
+    return 1;
+}
+
+static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t lo, uint64_t hi, uint64_t guest) {
+    jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
+    uintptr_t base = (uintptr_t)(set == NULL ? NULL : set->rw);
+    if (set == NULL || hi <= lo || lo < base || hi > base + CACHE_SZ ||
+        token != atomic_load_explicit(&set->count, memory_order_relaxed))
+        return 0;
+    uint32_t start = (uint32_t)(lo - base), end = (uint32_t)(hi - base);
+    if (token != 0) {
+        jit_body_owner_entry *previous = &set->entry[token - 1];
+        if (previous->rw_end <= previous->rw_start || previous->rw_end > start) return 0;
+    }
+    set->entry[token] = (jit_body_owner_entry){start, end, guest};
+    atomic_store_explicit(&set->count, token + 1, memory_order_release);
+    return 1;
+}
+
+static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
+    for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
+        jit_body_owner_set *set = &g_body_owners[i];
+        if (set->entry == NULL) continue;
+        uintptr_t rw = (uintptr_t)set->rw;
+        uintptr_t rx = (uintptr_t)((intptr_t)set->rw + set->rw2rx);
+        uint64_t rwpc;
+        if (host_pc >= rw && host_pc < rw + CACHE_SZ)
+            rwpc = host_pc - rw;
+        else if (host_pc >= rx && host_pc < rx + CACHE_SZ)
+            rwpc = host_pc - rx;
+        else
+            continue;
+        uint32_t count = atomic_load_explicit(&set->count, memory_order_acquire);
+        // Emission is monotonic inside an arena, so binary search is signal-safe and bounded.
+        uint32_t lo = 0, hi = count;
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo) / 2;
+            jit_body_owner_entry *entry = &set->entry[mid];
+            if (rwpc < entry->rw_start)
+                hi = mid;
+            else if (rwpc >= entry->rw_end)
+                lo = mid + 1;
+            else {
+                *guest = entry->guest;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void jit_body_owner_drop_generation(uint64_t generation) {
+    for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
+        if (g_body_owners[i].entry == NULL || g_body_owners[i].generation != generation) continue;
+        free(g_body_owners[i].entry);
+        g_body_owners[i] = (jit_body_owner_set){0};
+        return;
+    }
+}
+
+static void jit_body_owner_clear(void) {
+    for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
+        free(g_body_owners[i].entry);
+        g_body_owners[i] = (jit_body_owner_set){0};
+    }
+}
+
+static void jit_body_owner_after_fork(int preserve) {
+    if (!preserve) jit_body_owner_clear();
+}
+
+static int jit_body_owner_reclaim_if_unused(uint64_t generation, int pinned, int mapped) {
+    if (pinned || mapped) return 0;
+    jit_body_owner_drop_generation(generation);
+    return 1;
+}
+
 /*
  * Resolve a translation-map value (always an RW-alias address) through the
  * arena which actually owns it.  Retained generations can have a different
@@ -1893,8 +2011,11 @@ static int gen_in_use(uint64_t gen) {
 static void reclaim_retired(void) {
     if (g_no_stw_reclaim) return;
     for (int i = 0; i < g_nretired;) {
-        if (!gen_in_use(g_retired[i].gen) && !map_has_cache_generation(g_retired[i].gen)) {
+        int pinned = gen_in_use(g_retired[i].gen);
+        int mapped = map_has_cache_generation(g_retired[i].gen);
+        if (!pinned && !mapped) {
             uint64_t gen = g_retired[i].gen;
+            (void)jit_body_owner_reclaim_if_unused(gen, pinned, mapped);
             cache_unmap(g_retired[i].handle, g_retired[i].rw, g_retired[i].rw2rx);
             if (g_nfreed_total) g_freed[(g_nfreed_total - 1) % STW_FREED_MAX].gen = gen;
             g_retired[i] = g_retired[--g_nretired]; // swap-remove
@@ -2190,8 +2311,10 @@ static int jit_after_fork(void) {
        cache through a stale executable address.  The preserving path remaps at
        its fixed current RX address and can retain the former ordering. */
     if (!preserve) {
-        for (int i = 0; i < g_nretired; i++)
+        for (int i = 0; i < g_nretired; i++) {
+            jit_body_owner_drop_generation(g_retired[i].gen);
             cache_unmap(g_retired[i].handle, g_retired[i].rw, g_retired[i].rw2rx);
+        }
         g_nretired = 0;
     }
     if (hl_arena_repair(&g_jit_services, &g_emit, preserve) != 0) {
@@ -2200,12 +2323,15 @@ static int jit_after_fork(void) {
         return 0;
     }
     if (preserve) {
-        for (int i = 0; i < g_nretired; i++)
+        for (int i = 0; i < g_nretired; i++) {
+            jit_body_owner_drop_generation(g_retired[i].gen);
             cache_unmap(g_retired[i].handle, g_retired[i].rw, g_retired[i].rw2rx);
+        }
         g_nretired = 0;
     }
     g_fork_preserved = preserve;
     if (!preserve) {
+        jit_body_owner_after_fork(0);
         map_clear();
         /* The child COW-inherited the parent's fully-populated 1 MiB g_ibtc.  A
            memset zeroes it correctly but first faults every COW page in (~190us

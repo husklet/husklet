@@ -90,6 +90,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INJECTION_OPTION("HL_TRANSLIT_PROVENANCE_FALLBACK",
                         "test-only same-ISA fault recovery without exact instruction provenance",
                         HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_BODY_OWNER_EXHAUST",
+                        "test-only exhaust immutable same-ISA body-owner capacity", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",
