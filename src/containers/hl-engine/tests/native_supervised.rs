@@ -133,6 +133,29 @@ fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>, 
     run_with_refusal(executable, arguments, selected, None)
 }
 
+#[test]
+fn retained_native_session_restarts_only_after_complete_wait() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.arguments.push(b"output".to_vec());
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+
+    engine.start().unwrap();
+    assert!(engine.start().is_err(), "a running retained session accepted a concurrent launch");
+    assert_eq!(engine.wait().unwrap().guest_status, 23);
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 23);
+    engine.destroy().unwrap();
+    assert_eq!(output.stdout.lock().unwrap().as_slice(), b"native-supervisednative-supervised");
+}
+
 fn run_policy(executable: &Path, arguments: &[&str], policy: RuntimeBoxPolicy) -> (i32, Vec<u8>, Vec<u8>) {
     let mut options = Options::default();
     options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();

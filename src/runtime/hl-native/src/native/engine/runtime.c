@@ -1426,7 +1426,13 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     if (process_result != HL_HOST_HANDLE_INVALID && engine->backend->release_process_result != NULL)
         engine->backend->release_process_result(&engine->host, process_result);
     hl_engine_lock(engine);
-    engine->state = HL_ENGINE_FINISHED;
+    {
+        const char *native = hl_options_get(&engine->options, "HL_NATIVE_SUPERVISED");
+        /* A native run is synchronous through result publication and complete PID1 descendant drain.
+           Only then may the immutable engine authority serve another fresh namespace launch. */
+        engine->state = native != NULL && native[0] != '\0' && strcmp(native, "0") != 0 ? HL_ENGINE_CREATED
+                                                                                         : HL_ENGINE_FINISHED;
+    }
     hl_engine_unlock(engine);
 #if defined(HL_NATIVE_TEST_HOOKS)
     {

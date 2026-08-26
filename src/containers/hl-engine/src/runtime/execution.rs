@@ -193,6 +193,16 @@ impl<T> StartupState<T> {
         };
         Some(Arc::clone(engine))
     }
+
+    fn retained(&self) -> Option<Arc<T>> {
+        self.engine.as_ref().map(Arc::clone)
+    }
+
+    fn discard_if(&mut self, engine: &Arc<T>) {
+        if self.engine.as_ref().is_some_and(|current| Arc::ptr_eq(current, engine)) {
+            self.engine = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -399,6 +409,13 @@ impl ProductionMachine {
         Ok(engine)
     }
 
+    fn native_supervised(&self) -> bool {
+        self.plan
+            .options
+            .get_bytes("HL_NATIVE_SUPERVISED")
+            .is_some_and(|value| !value.is_empty() && value != b"0")
+    }
+
     fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
         self.state
             .lock()
@@ -449,7 +466,20 @@ impl GuestMachine for ProductionMachine {
         } else {
             None
         };
-        let engine = Arc::new(self.create()?);
+        // A supervised run returns only after namespace PID1 has reaped every descendant and the
+        // result has been published. At that boundary the immutable machine still owns exactly the
+        // same root, executable and typed box policy, so retaining its pinned native authority is
+        // safe. A different RuntimePlan constructs a different ProductionMachine and cannot enter
+        // this cache.
+        let engine = if self.native_supervised() {
+            self.state
+                .lock()
+                .map_err(|_| EngineError::Synchronization)?
+                .retained()
+                .map_or_else(|| self.create().map(Arc::new), Ok)?
+        } else {
+            Arc::new(self.create()?)
+        };
         let pending_stop = self
             .state
             .lock()
@@ -483,7 +513,13 @@ impl GuestMachine for ProductionMachine {
         };
         #[cfg(not(unix))]
         let run = engine.run(&pointers).map_err(native_run_failure);
-        run?;
+        if let Err(error) = run {
+            self.state
+                .lock()
+                .map_err(|_| EngineError::Synchronization)?
+                .discard_if(&engine);
+            return Err(error);
+        }
         #[cfg(unix)]
         if let Some(terminal) = &self.terminal {
             terminal.flush();
