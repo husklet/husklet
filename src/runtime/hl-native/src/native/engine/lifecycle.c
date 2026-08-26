@@ -721,7 +721,7 @@ static int32_t hl_production_entry(void *opaque) {
     int32_t result;
     int native_supervised_signal = 0;
     if (hl_native_supervised_selected(context->options)) {
-        result = hl_native_supervised_run(context->host, context->box, context->config->rootfs, executable,
+        result = hl_native_supervised_run(context->host, context->box, context->config, executable,
                                           context->argc,
                                           (char *const *)(uintptr_t)context->argv, context->options,
                                           activation_ready_write, &native_supervised_signal);

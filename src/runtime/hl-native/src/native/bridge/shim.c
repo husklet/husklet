@@ -719,6 +719,9 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     status = hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
         &config, &backend->services, &backend->options, syscall_context, syscall_dispatch, interpreter_image,
         interpreter_size, &backend->engine);
+    if (hl_options_get(&backend->options, "HL_C_DIAGNOSTICS") != NULL && status != HL_STATUS_OK)
+        fprintf(stderr, "[hl-native-supervised]\tcreate_status=%d box=%p rootfs=%s\n", status, (void *)box_config,
+                rootfs == NULL ? "(null)" : rootfs);
     if (status != HL_STATUS_OK) {
         hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)

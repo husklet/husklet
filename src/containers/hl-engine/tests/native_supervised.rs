@@ -80,7 +80,7 @@ fn run_configured(
     let output = Arc::new(Output::default());
     output.input.lock().unwrap().extend_from_slice(b"pipe");
     let plan = RuntimePlan {
-        rootfs: None,
+        rootfs: selected.then(|| b"/".to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: std::iter::once(executable.as_os_str().as_encoded_bytes().to_vec())
             .chain(arguments.iter().map(|value| value.as_bytes().to_vec()))
@@ -188,7 +188,7 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
     let mut options = Options::default();
     options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
     let plan = RuntimePlan {
-        rootfs: None,
+        rootfs: Some(b"/".to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"signal".to_vec()],
         environment: Vec::new(),
@@ -212,6 +212,15 @@ fn supervised_filter_denies_sendmsg_after_listener_bootstrap() {
     assert_eq!(status, 0);
     assert_eq!(output, b"sendmsg-denied");
     assert!(error.is_empty());
+}
+
+#[test]
+fn supervised_projector_applies_nnp_and_denies_escape_syscalls() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let (status, output, _) = run(&executable, &["secure-jail"], true);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"secure-jail");
 }
 
 struct Checkpoints;
@@ -248,7 +257,7 @@ fn selected_plan(executable: &Path) -> RuntimePlan {
     let mut options = Options::default();
     options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
     RuntimePlan {
-        rootfs: None,
+        rootfs: Some(b"/".to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
         environment: Vec::new(),

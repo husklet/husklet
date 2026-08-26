@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,10 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
+#include <sys/mount.h>
+#include <sys/ptrace.h>
+#include <sys/prctl.h>
+#include <sched.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
@@ -54,14 +59,24 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && !strcmp(argv[1], "signal")) raise(SIGTERM);
     if (argc > 1 && !strcmp(argv[1], "sendmsg-denied")) {
-        int pair[2];
-        if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return 61;
         char byte = 1;
         struct iovec vector = {&byte, 1};
         struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1};
         errno = 0;
-        if (sendmsg(pair[0], &message, 0) != -1 || errno != EPERM) return 62;
+        if (sendmsg(1, &message, 0) != -1 || errno != EPERM) return 62;
         fputs("sendmsg-denied", stdout);
+    }
+    if (argc > 1 && !strcmp(argv[1], "secure-jail")) {
+        if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return 71;
+        errno = 0;
+        if (mount("none", "/tmp", "tmpfs", 0, NULL) != -1 || errno != EPERM) return 72;
+        errno = 0;
+        if (unshare(CLONE_NEWNS) != -1 || errno != EPERM) return 73;
+        errno = 0;
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != -1 || errno != EPERM) return 74;
+        errno = 0;
+        if (socket(AF_INET, SOCK_STREAM, 0) != -1 || errno != EPERM) return 75;
+        fputs("secure-jail", stdout);
     }
     return 0;
 }

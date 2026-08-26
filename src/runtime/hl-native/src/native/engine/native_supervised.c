@@ -7,8 +7,13 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <linux/capability.h>
+#include <sched.h>
+#include <grp.h>
 #include <poll.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -17,8 +22,77 @@ static int hl_native_supervised_available(void) { return 1; }
 
 typedef struct {
     _Atomic int listener;
+    _Atomic int target_pid;
     _Atomic int acknowledged;
+    _Atomic int result_signal;
 } hl_native_supervised_bootstrap;
+
+static int hl_native_supervised_write_text(const char *path, const char *text) {
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    size_t length = strlen(text);
+    int result = write(fd, text, length) == (ssize_t)length ? 0 : -1;
+    close(fd);
+    return result;
+}
+
+static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
+    const hl_engine_box_config *box = config->box;
+    if (config->rootfs == NULL || box == NULL || config->memory_limit != 0 || config->pid_limit != 0 ||
+        config->cpu_limit != 0 || box->uid > 0 || box->gid > 0 || box->lower_layers != NULL ||
+        box->publish_count != 0 || box->volumes != NULL || box->limits != NULL || box->network_bridge != NULL ||
+        box->ip != NULL || box->egress_proxy != NULL || box->filesystem_generation != NULL || box->file_owners != NULL ||
+        box->checkpoint_mode != 0 || (box->flags & (HL_ENGINE_BOX_SANDBOX | HL_ENGINE_BOX_PUBLISH_EXTERNAL |
+                                                   HL_ENGINE_BOX_SENTRY_ONLY)) != 0)
+        return 0;
+    return 1;
+}
+
+static int hl_native_supervised_project_container(const hl_engine_config *config,
+                                                  hl_native_supervised_bootstrap *bootstrap) {
+    const hl_engine_box_config *box = config->box;
+    if (setgroups(0, NULL) != 0 || unshare(CLONE_NEWUSER) != 0) return -1;
+    (void)hl_native_supervised_write_text("/proc/self/setgroups", "deny");
+    if (hl_native_supervised_write_text("/proc/self/uid_map", "0 0 1\n") != 0 ||
+        hl_native_supervised_write_text("/proc/self/gid_map", "0 0 1\n") != 0 ||
+        unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC) != 0)
+        return -1;
+    pid_t init = fork();
+    if (init < 0) return -1;
+    if (init > 0) {
+        atomic_store_explicit(&bootstrap->target_pid, init, memory_order_release);
+        int status;
+        if (waitpid(init, &status, 0) != init) _exit(70);
+        int result_signal = atomic_load_explicit(&bootstrap->result_signal, memory_order_acquire);
+        if (result_signal != 0) {
+            sigset_t signals;
+            sigemptyset(&signals);
+            sigaddset(&signals, result_signal);
+            sigprocmask(SIG_UNBLOCK, &signals, NULL);
+            signal(result_signal, SIG_DFL);
+            raise(result_signal);
+        }
+        _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 70);
+    }
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0 ||
+        mount(config->rootfs, config->rootfs, NULL, MS_BIND | MS_REC, NULL) != 0 || chroot(config->rootfs) != 0)
+        return -1;
+    if ((box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0 &&
+        mount(NULL, "/", NULL, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_REC, NULL) != 0)
+        return -1;
+    if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
+    if (box->hostname != NULL && sethostname(box->hostname, strlen(box->hostname)) != 0) return -1;
+    (void)mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
+    for (int capability = 0; capability <= CAP_LAST_CAP; ++capability)
+        (void)prctl(PR_CAPBSET_DROP, capability, 0, 0, 0);
+    if (setresgid(box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid) != 0 ||
+        setresuid(box->uid < 0 ? 0 : box->uid, box->uid < 0 ? 0 : box->uid, box->uid < 0 ? 0 : box->uid) != 0)
+        return -1;
+    struct __user_cap_header_struct header = {_LINUX_CAPABILITY_VERSION_3, 0};
+    struct __user_cap_data_struct data[2] = {{0}};
+    if (syscall(SYS_capset, &header, data) != 0 || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
+    return 0;
+}
 
 static int hl_native_supervised_create_listener(void) {
 #define HL_NATIVE_NOTIFY(number) \
@@ -84,7 +158,8 @@ static int hl_native_supervised_refusal(const hl_options *options, int *number, 
 static int hl_native_supervised_denied(int number) {
     return number == SYS_sendmsg || number == SYS_ptrace || number == SYS_seccomp || number == SYS_mount ||
            number == SYS_umount2 || number == SYS_pivot_root || number == SYS_chroot || number == SYS_setns ||
-           number == SYS_unshare;
+           number == SYS_unshare || number == SYS_socket || number == SYS_socketpair || number == SYS_connect ||
+           number == SYS_bind || number == SYS_listen || number == SYS_accept || number == SYS_accept4;
 }
 
 static char **hl_native_supervised_environment(const hl_options *options) {
@@ -176,7 +251,8 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
     }
 }
 
-static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box, const char *rootfs,
+static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box,
+                                        const hl_engine_config *config,
                                         hl_host_handle executable_handle, uint32_t argc, char *const argv[],
                                         const hl_options *options, int activation_ready, int *guest_signal) {
     if (argv == NULL || argv[0] == NULL) return 70;
@@ -185,7 +261,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     char **exec_argv = calloc((size_t)argc + 1, sizeof(char *));
     if (exec_argv == NULL) return 70;
     for (uint32_t index = 0; index < argc; ++index) exec_argv[index] = argv[index];
-    if (rootfs == NULL) rootfs = "/";
+    if (!hl_native_supervised_policy_supported(config)) return 70;
     if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
         fprintf(stderr, "[hl-native-supervised]\tselected=1\n");
     char **environment = hl_native_supervised_environment(options);
@@ -208,7 +284,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
                                                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (bootstrap == MAP_FAILED) goto attachment_failed;
     atomic_init(&bootstrap->listener, -1);
+    atomic_init(&bootstrap->target_pid, -1);
     atomic_init(&bootstrap->acknowledged, 0);
+    atomic_init(&bootstrap->result_signal, 0);
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
         munmap(bootstrap, sizeof(*bootstrap)); goto attachment_failed;
     }
@@ -221,12 +299,30 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             if (borrowed[fd] != fd) close(borrowed[fd]);
         }
         if (fcntl(executable, F_SETFD, 0) != 0) _exit(70);
-        if (chroot(rootfs) != 0 || chdir("/") != 0) _exit(70);
+        if (hl_native_supervised_project_container(config, bootstrap) != 0) {
+            if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+                fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
+            _exit(70);
+        }
         int listener = hl_native_supervised_create_listener();
         if (listener < 0) _exit(70);
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
         while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {}
         close(listener);
+        pid_t workload = fork();
+        if (workload < 0) _exit(70);
+        if (workload > 0) {
+            int leader_status = 0;
+            int status;
+            pid_t waited;
+            while ((waited = waitpid(-1, &status, 0)) > 0)
+                if (waited == workload) leader_status = status;
+            if (WIFSIGNALED(leader_status)) {
+                atomic_store_explicit(&bootstrap->result_signal, WTERMSIG(leader_status), memory_order_release);
+                _exit(128 + WTERMSIG(leader_status));
+            }
+            _exit(WIFEXITED(leader_status) ? WEXITSTATUS(leader_status) : 70);
+        }
         execveat(executable, "", exec_argv, environment, AT_EMPTY_PATH);
         if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
             fprintf(stderr, "[hl-native-supervised]\texecveat_errno=%d\n", errno);
@@ -238,7 +334,12 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     }
     (void)host->posix_attachment->release(host->context, (uint64_t)executable);
     executable = -1;
-    int pidfd = (int)syscall(SYS_pidfd_open, child, 0);
+    int target_pid = -1;
+    for (int attempt = 0; attempt < 5000 && target_pid < 0; ++attempt) {
+        target_pid = atomic_load_explicit(&bootstrap->target_pid, memory_order_acquire);
+        if (target_pid < 0) usleep(1000);
+    }
+    int pidfd = target_pid < 0 ? -1 : (int)syscall(SYS_pidfd_open, target_pid, 0);
     int listener = -1;
     if (pidfd >= 0) {
         struct pollfd death = {pidfd, POLLIN, 0};
@@ -278,10 +379,11 @@ attachment_failed:
 }
 #else
 static int hl_native_supervised_available(void) { return 0; }
-static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box, const char *rootfs,
+static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box,
+                                        const hl_engine_config *config,
                                         hl_host_handle executable_handle, uint32_t argc, char *const argv[],
                                         const hl_options *options, int activation_ready, int *guest_signal) {
-    (void)host; (void)box; (void)rootfs; (void)executable_handle; (void)argc; (void)argv; (void)options;
+    (void)host; (void)box; (void)config; (void)executable_handle; (void)argc; (void)argv; (void)options;
     (void)activation_ready;
     *guest_signal = 0; return 70;
 }

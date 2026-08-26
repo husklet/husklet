@@ -933,7 +933,7 @@ static hl_status hl_engine_create_validate(const hl_engine_config *config, const
     if (config->payload_size != 0 && config->payload == NULL) return HL_STATUS_INVALID_ARGUMENT;
     if (config->payload_size != 0) return HL_STATUS_NOT_SUPPORTED;
     if (borrow_options && (source_options == NULL || config->memory_limit != 0 || config->pid_limit != 0 ||
-                           config->cpu_limit != 0 || config->box != NULL || hl_options_validate(source_options) != 0))
+                           config->cpu_limit != 0 || hl_options_validate(source_options) != 0))
         return HL_STATUS_INVALID_ARGUMENT;
     if (config->executable != NULL &&
         (config->executable->abi != HL_ENGINE_ABI || config->executable->size < sizeof(*config->executable)))
