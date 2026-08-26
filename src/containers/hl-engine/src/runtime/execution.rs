@@ -111,6 +111,21 @@ impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
+        let native_supervised = request
+            .plan
+            .options
+            .get_bytes("HL_NATIVE_SUPERVISED")
+            .is_some_and(|value| !value.is_empty() && value != b"0");
+        #[cfg(unix)]
+        if native_supervised
+            && (request.services.checkpoint_sink.is_some()
+                || request.services.checkpoint_source.is_some()
+                || request.services.checkpoint_channel.is_some()
+                || request.plan.options.get_bytes("HL_CHECKPOINT").is_some()
+                || request.plan.options.get_bytes("HL_RESTORE").is_some())
+        {
+            return Err(CompositionError::RuntimeConstruction);
+        }
         #[cfg(unix)]
         let terminal = request
             .services

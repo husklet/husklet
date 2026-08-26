@@ -2,7 +2,7 @@
 
 use hl_engine::{
     activation::GuestIsa,
-    composition::{StandardStream, StandardStreamPort, StandardStreams},
+    composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams},
     launcher::plan::RuntimePlan,
     engine::ExitKind,
     options::Options,
@@ -10,6 +10,7 @@ use hl_engine::{
 };
 use std::path::{Path, PathBuf};
 use std::os::unix::fs::PermissionsExt;
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -186,4 +187,54 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
     assert_eq!(exit.kind, ExitKind::Signal);
     assert_eq!(exit.guest_status, libc::SIGTERM);
     engine.destroy().unwrap();
+}
+
+struct Checkpoints;
+impl CheckpointSink for Checkpoints {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> { Ok(()) }
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> { Ok(NonZeroU64::MIN) }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> { Ok(()) }
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> { Ok(()) }
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> { Ok(()) }
+}
+impl CheckpointSource for Checkpoints {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> { Ok(Vec::new()) }
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> { Ok(Vec::new()) }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> { Ok(Vec::new()) }
+}
+
+fn selected_plan(executable: &Path) -> RuntimePlan {
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(), result_path: None, options,
+    }
+}
+
+#[test]
+fn supervised_mode_refuses_checkpoint_capture_restore_and_join_at_construction() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let store = Arc::new(Checkpoints);
+    assert!(Engine::with_checkpoint(
+        GuestIsa::X86_64, selected_plan(&executable), StandardStreams::default(), store.clone(), store.clone(),
+    ).is_err());
+
+    let mut restore = selected_plan(&executable);
+    restore.options.set("HL_RESTORE", "1", true).unwrap();
+    assert!(Engine::with_streams(GuestIsa::X86_64, restore, StandardStreams::default()).is_err());
+
+    let coordinator = Engine::with_checkpoint(
+        GuestIsa::X86_64,
+        RuntimePlan { options: Options::default(), ..selected_plan(&executable) },
+        StandardStreams::default(), store.clone(), store,
+    ).unwrap();
+    let channel = coordinator.checkpoint_channel().unwrap();
+    assert!(Engine::with_checkpoint_channel(
+        GuestIsa::X86_64, selected_plan(&executable), StandardStreams::default(), channel,
+    ).is_err());
+    coordinator.destroy().unwrap();
 }
