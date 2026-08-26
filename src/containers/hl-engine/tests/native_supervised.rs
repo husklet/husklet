@@ -227,6 +227,34 @@ fn supervised_projector_applies_nnp_and_denies_escape_syscalls() {
     assert_eq!(output, b"secure-jail");
 }
 
+#[test]
+fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("tmp")).unwrap();
+    std::fs::create_dir_all(root.join("proc")).unwrap();
+    std::fs::write(root.join("proc/hostile"), b"host").unwrap();
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"root-contract".to_vec());
+    plan.box_policy.working_directory = Some(b"/tmp".to_vec());
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"root-contract");
+}
+
 struct Checkpoints;
 impl CheckpointSink for Checkpoints {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {

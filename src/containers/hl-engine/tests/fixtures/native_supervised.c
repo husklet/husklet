@@ -99,5 +99,16 @@ int main(int argc, char **argv) {
         if (ioctl(1, 0xdeadbeefUL, 0) != -1 || errno != EPERM) return 79;
         fputs("secure-jail", stdout);
     }
+    if (argc > 1 && !strcmp(argv[1], "root-contract")) {
+        char cwd[64];
+        if (getcwd(cwd, sizeof(cwd)) == NULL || strcmp(cwd, "/tmp")) return 81;
+        errno = 0;
+        if (open("/etc/hostname", O_RDONLY) != -1 || errno != ENOENT) return 82;
+        errno = 0;
+        if (open("/proc/hostile", O_RDONLY) != -1 || errno != ENOENT) return 83;
+        char namespace[128];
+        if (readlink("/proc/self/ns/mnt", namespace, sizeof(namespace)) <= 0) return 84;
+        fputs("root-contract", stdout);
+    }
     return 0;
 }
