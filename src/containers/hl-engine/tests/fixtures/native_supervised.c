@@ -24,6 +24,22 @@
 static void *thread_return(void *argument) { return argument; }
 
 int main(int argc, char **argv) {
+    if (argc > 2 && !strcmp(argv[1], "filesystem-generation")) {
+        char value[16] = {0};
+        for (int attempt = 0; attempt < 400; ++attempt) {
+            int fd = open(argv[2], O_RDONLY);
+            if (fd >= 0) {
+                ssize_t length = read(fd, value, sizeof(value));
+                close(fd);
+                if (length == 7 && !memcmp(value, "updated", 7)) {
+                    fputs("filesystem-coherent", stdout);
+                    return 0;
+                }
+            }
+            usleep(5000);
+        }
+        return 89;
+    }
     if (argc > 1 && !strcmp(argv[1], "output")) {
         fputs("native-supervised", stdout);
         return 23;

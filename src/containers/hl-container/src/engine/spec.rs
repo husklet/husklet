@@ -58,6 +58,13 @@ impl TryFrom<&ProcessConfig> for Spec {
             })
             .collect();
 
+        let box_policy = hl_engine::launcher::plan::RuntimeBoxPolicy {
+            // Retain the daemon-owned coherence epoch in the typed policy as well as the legacy
+            // option. Native execution relies on kernel VFS coherence; translated execution maps
+            // this file to invalidate its user-space caches.
+            filesystem_generation: Some(launch.filesystem_generation.as_os_str().as_encoded_bytes().to_vec()),
+            ..Default::default()
+        };
         Ok(Self {
             isa,
             domain,
@@ -68,7 +75,7 @@ impl TryFrom<&ProcessConfig> for Spec {
                 environment,
                 result_path: None,
                 options,
-                box_policy: Default::default(),
+                box_policy,
             },
         })
     }

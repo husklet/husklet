@@ -143,6 +143,46 @@ fn supervised_stdout_and_exit_status_keep_the_engine_contract() {
 }
 
 #[test]
+fn supervised_generation_policy_keeps_daemon_writes_kernel_coherent() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let generation = work.path().join("fsgen");
+    std::fs::write(&generation, 1_u32.to_ne_bytes()).unwrap();
+    let visible = work.path().join("daemon-write");
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    let output = Arc::new(Output::default());
+    let plan = RuntimePlan {
+        rootfs: Some(b"/".to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            b"filesystem-generation".to_vec(),
+            visible.as_os_str().as_encoded_bytes().to_vec(),
+        ],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: RuntimeBoxPolicy {
+            filesystem_generation: Some(generation.as_os_str().as_encoded_bytes().to_vec()),
+            ..isolated_policy()
+        },
+    };
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    std::fs::write(&visible, b"updated").unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    assert_eq!(exit.guest_status, 0);
+    assert_eq!(*output.stdout.lock().unwrap(), b"filesystem-coherent");
+}
+
+#[test]
 fn refusal_reaches_a_fork_descendant_without_fallback() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
@@ -427,7 +467,6 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let mut policy = isolated_policy(); policy.ip = Some(b"10.0.0.2".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.egress_proxy = Some(b"proxy".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.file_owners = Some(b"owners".to_vec()); policies.push(policy);
-    let mut policy = isolated_policy(); policy.filesystem_generation = Some(b"generation".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.checkpoint_policy = 1; policies.push(policy);
     let mut policy = isolated_policy(); policy.flags |= 1 << 1; policies.push(policy);
     for (index, policy) in policies.into_iter().enumerate() {

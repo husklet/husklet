@@ -178,7 +178,10 @@ static const char *hl_native_supervised_policy_rejection(const hl_engine_config 
     if (box->publish_count != 0) return "published-network";
     if (box->network_bridge != NULL || box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL)
         return "host-or-shared-network";
-    if (box->filesystem_generation != NULL || box->file_owners != NULL) return "live-filesystem-overlay";
+    /* The generation file invalidates the translated backend's user-space pathname caches after a
+     * daemon-side write.  Native-supervised has no such cache: every lookup goes through the kernel
+     * VFS, so retaining the typed field is semantics-preserving and requires no poll or mapping. */
+    if (box->file_owners != NULL) return "live-filesystem-overlay-ownership";
     if (box->checkpoint_mode != 0 || box->checkpoint_policy != 0) return "checkpoint";
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0) return "network-isolated-required";
     if ((box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |

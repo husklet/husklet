@@ -409,6 +409,19 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_generation_reaches_the_typed_engine_policy() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let launch = launch();
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(
+            spec.plan.box_policy.filesystem_generation.as_deref(),
+            Some(launch.filesystem_generation.as_os_str().as_bytes())
+        );
+        assert_eq!(spec.plan.options.get("HL_FSGEN_FILE"), Some("/generation"));
+    }
+
+    #[test]
     fn network_interfaces_preserve_attachment_order_and_prefixes() {
         let mut launch = launch();
         launch.networks = vec![bridge("front", "172.29.0.2", 24), bridge("back", "10.7.0.9", 19)];
