@@ -11,6 +11,7 @@
 #include <sys/ioctl.h>
 #include <sys/ptrace.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
 #include <sched.h>
@@ -134,6 +135,15 @@ int main(int argc, char **argv) {
         int output = open("/out/result.o", O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (output < 0 || write(output, "object\n", 7) != 7 || close(output) != 0) return 93;
         fputs("volumes", stdout);
+    }
+    if (argc > 1 && !strcmp(argv[1], "identity-limits")) {
+        if (getuid() != 1234 || geteuid() != 1234 || getgid() != 2345 || getegid() != 2345 || getgroups(0, NULL) != 0)
+            return 94;
+        struct rlimit nofile, core;
+        if (getrlimit(RLIMIT_NOFILE, &nofile) != 0 || nofile.rlim_cur != 32 || nofile.rlim_max != 32 ||
+            getrlimit(RLIMIT_CORE, &core) != 0 || core.rlim_cur != 0 || core.rlim_max != 0)
+            return 95;
+        fputs("identity-limits", stdout);
     }
     return 0;
 }

@@ -314,6 +314,28 @@ fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
     }
 }
 
+#[test]
+fn supervised_projector_applies_identity_empty_groups_and_typed_limits() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.arguments.push(b"identity-limits".to_vec());
+    plan.box_policy.uid = 1234;
+    plan.box_policy.gid = 2345;
+    plan.box_policy.limits = Some(b"nofile=32:32,core=0:0".to_vec());
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"identity-limits");
+}
+
 struct Checkpoints;
 impl CheckpointSink for Checkpoints {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
@@ -363,9 +385,6 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let mut policies = Vec::new();
-    let mut policy = isolated_policy(); policy.uid = 1; policies.push(policy);
-    let mut policy = isolated_policy(); policy.gid = 1; policies.push(policy);
-    let mut policy = isolated_policy(); policy.limits = Some(b"nofile=32".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);

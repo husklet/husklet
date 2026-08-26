@@ -161,9 +161,8 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
 static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
     if (geteuid() != 0 || getegid() != 0 || config->rootfs == NULL || box == NULL ||
-        config->memory_limit != 0 || config->pid_limit != 0 ||
-        config->cpu_limit != 0 || box->uid != -1 || box->gid != -1 || box->lower_layers != NULL ||
-        box->publish_count != 0 || box->limits != NULL || box->network_bridge != NULL ||
+        config->memory_limit != 0 || config->pid_limit != 0 || config->cpu_limit != 0 || box->uid < -1 ||
+        box->gid < -1 || box->lower_layers != NULL || box->publish_count != 0 || box->network_bridge != NULL ||
         box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||
         box->filesystem_generation != NULL || box->file_owners != NULL || box->checkpoint_mode != 0 ||
         box->checkpoint_policy != 0 ||
@@ -171,6 +170,52 @@ static int hl_native_supervised_policy_supported(const hl_engine_config *config)
                         HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
         return 0;
     return 1;
+}
+
+static int hl_native_supervised_limit_resource(const char *name) {
+    static const struct { const char *name; int resource; } resources[] = {
+        {"cpu", RLIMIT_CPU}, {"fsize", RLIMIT_FSIZE}, {"data", RLIMIT_DATA}, {"stack", RLIMIT_STACK},
+        {"core", RLIMIT_CORE}, {"rss", RLIMIT_RSS}, {"nproc", RLIMIT_NPROC}, {"nofile", RLIMIT_NOFILE},
+        {"memlock", RLIMIT_MEMLOCK}, {"as", RLIMIT_AS}, {"locks", RLIMIT_LOCKS},
+        {"sigpending", RLIMIT_SIGPENDING}, {"msgqueue", RLIMIT_MSGQUEUE}, {"nice", RLIMIT_NICE},
+        {"rtprio", RLIMIT_RTPRIO}, {"rttime", RLIMIT_RTTIME}, {NULL, -1}};
+    for (size_t index = 0; resources[index].name != NULL; ++index)
+        if (strcmp(name, resources[index].name) == 0) return resources[index].resource;
+    return -1;
+}
+
+static int hl_native_supervised_limit_value(const char *text, rlim_t *value) {
+    if (strcmp(text, "unlimited") == 0 || strcmp(text, "-1") == 0) { *value = RLIM_INFINITY; return 0; }
+    errno = 0;
+    char *end = NULL;
+    unsigned long long parsed = strtoull(text, &end, 10);
+    if (errno != 0 || end == text || *end != 0 || (rlim_t)parsed != parsed) return -1;
+    *value = (rlim_t)parsed;
+    return 0;
+}
+
+static int hl_native_supervised_limits_apply(const char *spec) {
+    if (spec == NULL) return 0;
+    char *copy = strdup(spec);
+    if (copy == NULL) return -1;
+    char *save = NULL;
+    for (char *record = strtok_r(copy, ",", &save); record != NULL; record = strtok_r(NULL, ",", &save)) {
+        char *equals = strchr(record, '=');
+        if (equals == NULL) { free(copy); return -1; }
+        *equals++ = 0;
+        int resource = hl_native_supervised_limit_resource(record);
+        char *colon = strchr(equals, ':');
+        if (colon != NULL) *colon++ = 0;
+        struct rlimit limit;
+        if (resource < 0 || hl_native_supervised_limit_value(equals, &limit.rlim_cur) != 0 ||
+            (colon != NULL ? hl_native_supervised_limit_value(colon, &limit.rlim_max) :
+                             (limit.rlim_max = limit.rlim_cur, 0)) != 0 ||
+            limit.rlim_cur > limit.rlim_max || setrlimit(resource, &limit) != 0) {
+            free(copy); return -1;
+        }
+    }
+    free(copy);
+    return 0;
 }
 
 static int hl_native_supervised_project_container(const hl_engine_config *config,
@@ -209,18 +254,21 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         mount(NULL, config->rootfs, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0)
         return -1;
     if (box->hostname != NULL && sethostname(box->hostname, strlen(box->hostname)) != 0) return -1;
-    if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
+    if (setgroups(0, NULL) != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0)
         return -1;
+    unsigned guest_uid = (unsigned)(box->uid < 0 ? 0 : box->uid);
+    unsigned guest_gid = (unsigned)(box->gid < 0 ? 0 : box->gid);
     char uid_map[64], gid_map[64];
-    if (snprintf(uid_map, sizeof(uid_map), "0 %u 1\n", (unsigned)host_uid) <= 0 ||
-        snprintf(gid_map, sizeof(gid_map), "0 %u 1\n", (unsigned)host_gid) <= 0 ||
+    if (snprintf(uid_map, sizeof(uid_map), "%u %u 1\n", guest_uid, (unsigned)host_uid) <= 0 ||
+        snprintf(gid_map, sizeof(gid_map), "%u %u 1\n", guest_gid, (unsigned)host_gid) <= 0 ||
         hl_native_supervised_write_text("/proc/self/setgroups", "deny") != 0 ||
         hl_native_supervised_write_text("/proc/self/uid_map", uid_map) != 0 ||
         hl_native_supervised_write_text("/proc/self/gid_map", gid_map) != 0)
         return -1;
     if (chroot(config->rootfs) != 0) return -1;
     if (chdir(box->working_directory == NULL ? "/" : box->working_directory) != 0) return -1;
+    if (hl_native_supervised_limits_apply(box->limits) != 0) return -1;
     for (int capability = 0; capability <= CAP_LAST_CAP; ++capability)
         if (prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) != 0) return -1;
     if (setresgid(box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid, box->gid < 0 ? 0 : box->gid) != 0 ||
