@@ -9,6 +9,7 @@ use std::{
 };
 
 const SCHEMA: &str = "husklet-benchmark-v1";
+pub(super) const EVIDENCE_POLICY: &str = "production-timing-plus-post-campaign-telemetry-v1";
 // A smoke executes the campaign's actual factor-bound command. Large calibrated factors can take
 // longer than the former ten-second startup allowance on a DBT arm, even though they remain well
 // inside the workload timeout declared by the campaign.
@@ -276,7 +277,8 @@ impl Campaign {
 
     pub fn identity(&self) -> Result<String, Error> {
         let bytes = serde_json::to_vec(self)?;
-        let mut framed = FramedIdentity::new(b"husklet-benchmark-campaign-v1")?;
+        let mut framed = FramedIdentity::new(b"husklet-benchmark-campaign-v2")?;
+        framed.field(EVIDENCE_POLICY.as_bytes())?;
         framed.field(&bytes)?;
         Ok(framed.finish())
     }

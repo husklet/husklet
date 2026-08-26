@@ -1,5 +1,5 @@
 use super::{
-    definition::Campaign,
+    definition::{Campaign, EVIDENCE_POLICY},
     evidence::Row,
     schedule::{self, Step},
     verdict::Report,
@@ -51,16 +51,10 @@ impl Ledger {
         admit_destination(directory, resume)?;
         let manifest = directory.join("manifest.json");
         let raw = directory.join("raw.jsonl");
-        let identity = if mode == "acceptance" {
-            campaign.identity()?
-        } else {
-            format!("{}:{mode}", campaign.identity()?)
-        };
+        let identity = format!("{}:{mode}:{EVIDENCE_POLICY}", campaign.identity()?);
         if resume {
             let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&manifest)?)?;
-            if recorded["identity"] != identity {
-                return Err("resume campaign identity differs".into());
-            }
+            require_identity(&recorded, &identity)?;
         } else {
             fs::create_dir(directory).map_err(|error| format!("result directory must be new: {error}"))?;
             fs::write(
@@ -116,6 +110,44 @@ impl Ledger {
         Ok(self.rows.values().cloned().collect())
     }
 
+    pub fn attach_telemetry(&mut self, diagnostics: BTreeMap<String, String>) -> Result<(), Error> {
+        let expected = self
+            .planned
+            .iter()
+            .filter(|(_, step)| matches!(step.arm.as_str(), "I" | "R"))
+            .map(|(key, _)| key.clone())
+            .collect::<BTreeSet<_>>();
+        if diagnostics.keys().cloned().collect::<BTreeSet<_>>() != expected {
+            return Err("benchmark telemetry coverage differs from the planned product arms".into());
+        }
+        if !self.needs_telemetry()? {
+            return Err("benchmark telemetry receipts are already complete".into());
+        }
+        for (key, diagnostic) in diagnostics {
+            self.rows.get_mut(&key).expect("telemetry key was validated").diagnostic = Some(diagnostic);
+        }
+        self.writer.flush()?;
+        rewrite(&self.directory.join("raw.jsonl"), &self.rows)?;
+        Ok(())
+    }
+
+    pub fn needs_telemetry(&self) -> Result<bool, Error> {
+        if self.rows.keys().collect::<BTreeSet<_>>() != self.planned.keys().collect() {
+            return Err("benchmark telemetry state requires a complete timing ledger".into());
+        }
+        let states = self
+            .planned
+            .iter()
+            .filter(|(_, step)| matches!(step.arm.as_str(), "I" | "R"))
+            .map(|(key, _)| self.rows[key].diagnostic.is_some())
+            .collect::<BTreeSet<_>>();
+        if states.len() > 1 {
+            Err("benchmark ledger mixes missing and present telemetry receipts".into())
+        } else {
+            Ok(states.first().is_some_and(|present| !present))
+        }
+    }
+
     pub fn require_space(&self, gib: f64) -> Result<(), Error> {
         let free = fs2::available_space(&self.directory)? as f64 / 1024_f64.powi(3);
         if free < gib {
@@ -128,6 +160,14 @@ impl Ledger {
         fs::write(self.directory.join("report.tsv"), &report.text)?;
         fs::write(self.directory.join("verdict.txt"), format!("{}\n", report.verdict))?;
         Ok(())
+    }
+}
+
+fn require_identity(recorded: &serde_json::Value, identity: &str) -> Result<(), Error> {
+    if recorded["identity"] == identity {
+        Ok(())
+    } else {
+        Err("resume campaign identity or evidence policy differs".into())
     }
 }
 
@@ -237,6 +277,13 @@ mod tests {
         }
     }
 
+    fn product_step(position: usize, arm: &str) -> Step {
+        let mut value = step(position);
+        value.arm = arm.into();
+        value.cell = "IR".into();
+        value
+    }
+
     fn ledger(steps: &[Step]) -> (tempfile::TempDir, Ledger) {
         let directory = tempfile::tempdir().unwrap();
         let raw = directory.path().join("raw.jsonl");
@@ -319,5 +366,45 @@ mod tests {
                 .contains("already published")
         );
         admit_destination(directory.path(), false).unwrap();
+    }
+
+    #[test]
+    fn old_evidence_policy_manifest_is_rejected_on_resume() {
+        let recorded = serde_json::json!({"identity": "campaign:acceptance"});
+        let current = format!("campaign:acceptance:{EVIDENCE_POLICY}");
+        let error = require_identity(&recorded, &current).unwrap_err();
+        assert!(error.to_string().contains("evidence policy"));
+    }
+
+    #[test]
+    fn telemetry_attaches_only_after_a_complete_receipt_free_ledger() {
+        let steps = [product_step(0, "I"), product_step(1, "R")];
+        let (directory, mut ledger) = ledger(&steps);
+        ledger.append(&row(&steps[0])).unwrap();
+        let diagnostics = steps
+            .iter()
+            .map(|step| (step.key(), "[prof] dispatcher crossings=1 translations=1".into()))
+            .collect();
+        assert!(
+            ledger
+                .attach_telemetry(diagnostics)
+                .unwrap_err()
+                .to_string()
+                .contains("complete")
+        );
+        ledger.append(&row(&steps[1])).unwrap();
+        let diagnostics = steps
+            .iter()
+            .map(|step| (step.key(), "[prof] dispatcher crossings=1 translations=1".into()))
+            .collect();
+        ledger.attach_telemetry(diagnostics).unwrap();
+        assert!(
+            !ledger.needs_telemetry().unwrap(),
+            "complete receipts were not resumable"
+        );
+        let rows = read_rows(&directory.path().join("raw.jsonl"), &ledger.planned).unwrap();
+        assert!(rows.values().all(|row| row.diagnostic.is_some()));
+        ledger.rows.get_mut(&steps[0].key()).unwrap().diagnostic = None;
+        assert!(ledger.needs_telemetry().unwrap_err().to_string().contains("mixes"));
     }
 }

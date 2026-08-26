@@ -19,6 +19,15 @@ pub(super) fn sample(
     sample_kind(campaign, step, SampleKind::Timed)
 }
 
+pub(super) fn telemetry(campaign: &Campaign, step: &Step) -> Result<(String, String, String), Error> {
+    let (_, identity, frame, receipt) = sample_kind(campaign, step, SampleKind::Telemetry)?;
+    Ok((
+        identity,
+        frame,
+        receipt.expect("telemetry samples always carry a receipt"),
+    ))
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum SampleKind {
     Timed,
@@ -114,21 +123,34 @@ fn sample_argv(
 
 fn telemetry_receipt(stderr: &[u8]) -> Result<String, Error> {
     let text = std::str::from_utf8(stderr).map_err(|_| "benchmark telemetry is not UTF-8")?;
-    let line = text
-        .lines()
-        .find(|line| {
-            line.strip_prefix("hl-native: ")
-                .or_else(|| line.strip_prefix("[prof] "))
-                .is_some_and(|fields| {
-                    fields.split_ascii_whitespace().any(|field| {
-                        field
-                            .split_once('=')
-                            .is_some_and(|(_, value)| value.parse::<u64>().is_ok())
-                    })
-                })
-        })
-        .ok_or("benchmark telemetry arm emitted no native counter record")?;
-    Ok(line.to_owned())
+    let mut receipt = None;
+    for line in text.lines() {
+        if !line.starts_with("[prof] ") {
+            return Err(format!("benchmark telemetry contains an unrecognized record {line:?}").into());
+        }
+        let Some(fields) = line.strip_prefix("[prof] dispatcher crossings=") else {
+            if line.starts_with("[prof] dispatcher round-trips=")
+                || line.starts_with("[prof] translit: ")
+                || line.starts_with("[prof] crossings=")
+            {
+                continue;
+            }
+            return Err(format!("benchmark telemetry contains an unrecognized product profile schema {line:?}").into());
+        };
+        let Some((crossings, translations)) = fields.split_once(" translations=") else {
+            return Err("benchmark telemetry counter record has a noncanonical schema".into());
+        };
+        if crossings.parse::<u64>().is_err()
+            || translations.parse::<u64>().is_err()
+            || translations.bytes().any(|byte| byte.is_ascii_whitespace())
+        {
+            return Err("benchmark telemetry counter record has a noncanonical schema".into());
+        }
+        if receipt.replace(line.to_owned()).is_some() {
+            return Err("benchmark telemetry emitted duplicate canonical counter records".into());
+        }
+    }
+    receipt.ok_or_else(|| "benchmark telemetry arm emitted no canonical product counter record".into())
 }
 
 const FAILURE_EXCERPT: usize = 4096;
@@ -270,21 +292,12 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
     }
     let output = readings[0].1.clone();
     let output_frame = readings[0].2.clone();
-    let telemetry = matches!(step.arm.as_str(), "I" | "R")
-        .then(|| sample_kind(campaign, step, SampleKind::Telemetry))
-        .transpose()?;
-    let diagnostic = telemetry.as_ref().and_then(|reading| reading.3.clone());
+    let diagnostic = readings[0].3.clone();
     if readings
         .iter()
         .any(|(_, identity, frame, observed)| *identity != output || *frame != output_frame || observed.is_some())
     {
         return Err("repeated sample exact-output mismatch".into());
-    }
-    if telemetry
-        .as_ref()
-        .is_some_and(|(_, identity, frame, _)| *identity != output || *frame != output_frame)
-    {
-        return Err("untimed telemetry exact-output mismatch".into());
     }
     let mut phases = BTreeMap::new();
     for name in readings[0].0.keys() {
@@ -542,7 +555,7 @@ mod tests {
 
     #[test]
     fn untimed_telemetry_argv_produces_a_counter_receipt() {
-        let script = "test \"$1\" = --diagnostics && printf 'hl-native: crossings=7 translations=3\\n' >&2";
+        let script = "test \"$1\" = --diagnostics && printf '[prof] dispatcher crossings=7 translations=3\\n' >&2";
         let command = vec![
             "sh".to_owned(),
             "-c".to_owned(),
@@ -554,7 +567,39 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(
             telemetry_receipt(&output.stderr).unwrap(),
-            "hl-native: crossings=7 translations=3"
+            "[prof] dispatcher crossings=7 translations=3"
+        );
+    }
+
+    #[test]
+    fn telemetry_rejects_forged_first_lines_and_duplicate_receipts() {
+        let forged = b"hl-native: crossings=999 translations=999\n[prof] dispatcher crossings=7 translations=3\n";
+        assert!(
+            telemetry_receipt(forged)
+                .unwrap_err()
+                .to_string()
+                .contains("unrecognized")
+        );
+        let duplicate = b"[prof] dispatcher crossings=7 translations=3\n[prof] dispatcher crossings=8 translations=4\n";
+        assert!(
+            telemetry_receipt(duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate")
+        );
+        let lookalike = b"[prof] dispatcher crossings=7 translations=3 extra=1\n";
+        assert!(
+            telemetry_receipt(lookalike)
+                .unwrap_err()
+                .to_string()
+                .contains("noncanonical")
+        );
+        let unknown = b"[prof] wrapper crossings=7 translations=3\n[prof] dispatcher crossings=7 translations=3\n";
+        assert!(
+            telemetry_receipt(unknown)
+                .unwrap_err()
+                .to_string()
+                .contains("unrecognized")
         );
     }
     use crate::benchmark::schedule::Step;

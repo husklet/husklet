@@ -16,7 +16,10 @@ use clap::Args;
 use definition::Campaign;
 use evidence::Measurement;
 use ledger::Ledger;
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -92,6 +95,13 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     // A writable guest or replaced binary invalidates the whole campaign, even if its output
     // happened to remain stable. Re-hash after the last sample as well as before the first.
     campaign.verify_artifacts()?;
+    let timed_rows = ledger.complete()?;
+    if ledger.needs_telemetry()? {
+        let diagnostics =
+            post_campaign_telemetry(&measurements, &timed_rows, |step| evidence::telemetry(&campaign, step))?;
+        ledger.attach_telemetry(diagnostics)?;
+        campaign.verify_artifacts()?;
+    }
     let rows = ledger.complete()?;
     let report = verdict::Report::evaluate(&campaign, &rows, options.limit)?;
     ledger.publish(&report)?;
@@ -106,5 +116,98 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         Ok(())
     } else {
         Err("benchmark acceptance limit exceeded".into())
+    }
+}
+
+fn post_campaign_telemetry(
+    steps: &[schedule::Step],
+    timed_rows: &[evidence::Row],
+    mut run: impl FnMut(&schedule::Step) -> Result<(String, String, String), Error>,
+) -> Result<BTreeMap<String, String>, Error> {
+    let by_key = timed_rows
+        .iter()
+        .map(|row| (row.key.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    if steps.iter().any(|step| !by_key.contains_key(step.key().as_str())) {
+        return Err("post-campaign telemetry cannot start before every timed row is complete".into());
+    }
+    let mut diagnostics = BTreeMap::new();
+    for step in steps.iter().filter(|step| matches!(step.arm.as_str(), "I" | "R")) {
+        let timed = by_key[step.key().as_str()];
+        let (identity, frame, receipt) = run(step)?;
+        if identity != timed.output || frame != timed.output_frame {
+            return Err("untimed telemetry exact-output mismatch".into());
+        }
+        diagnostics.insert(step.key(), receipt);
+    }
+    Ok(diagnostics)
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    use crate::benchmark::{
+        definition::ProfileKind,
+        evidence::{HostLoad, Phase},
+    };
+    use std::cell::Cell;
+
+    fn step(position: usize, arm: &str) -> schedule::Step {
+        schedule::Step {
+            workload: "malloc".into(),
+            layout: "plain".into(),
+            cell: "EI".into(),
+            round: 0,
+            position,
+            arm: arm.into(),
+            profile: ProfileKind::Primary,
+            paired_profile: ProfileKind::Primary,
+        }
+    }
+
+    fn row(step: &schedule::Step) -> evidence::Row {
+        evidence::Row {
+            key: step.key(),
+            workload: step.workload.clone(),
+            layout: step.layout.clone(),
+            cell: step.cell.clone(),
+            round: step.round,
+            position: step.position,
+            arm: step.arm.clone(),
+            profile: step.profile,
+            output: "identity".into(),
+            output_frame: "frame".into(),
+            diagnostic: None,
+            phases: BTreeMap::from([("malloc".into(), Phase { us: 1, ok: "ok".into() })]),
+            host_load: vec![HostLoad {
+                before: 0.1,
+                after: 0.2,
+            }],
+        }
+    }
+
+    #[test]
+    fn telemetry_cannot_mutate_state_until_every_timed_row_exists() {
+        let steps = [step(0, "E"), step(1, "I")];
+        let cache_epoch = Cell::new(0);
+        let incomplete = [row(&steps[1])];
+        assert!(
+            post_campaign_telemetry(&steps, &incomplete, |_| {
+                cache_epoch.set(cache_epoch.get() + 1);
+                Ok(("identity".into(), "frame".into(), "receipt".into()))
+            })
+            .is_err()
+        );
+        assert_eq!(cache_epoch.get(), 0, "telemetry ran between timed rows");
+
+        let complete = [row(&steps[0]), row(&steps[1])];
+        let diagnostics = post_campaign_telemetry(&steps, &complete, |_| {
+            assert_eq!(complete.len(), 2);
+            cache_epoch.set(cache_epoch.get() + 1);
+            Ok(("identity".into(), "frame".into(), "receipt".into()))
+        })
+        .unwrap();
+        assert_eq!(cache_epoch.get(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 }
