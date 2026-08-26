@@ -792,6 +792,8 @@ static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uin
     int wide = mmx ? 8 : 16;
     uint8_t d[16], s[16];
     if (op == 0xDB || op == 0xDF || op == 0xEB || op == 0xEF) {
+        if (interp_sse_prefix(insn) == SSE_F2 || interp_sse_prefix(insn) == SSE_F3)
+            return interp_guest_trap(cpu, cpu->rip, 4, 2);
         if (!mmx && interp_sse_prefix(insn) == SSE_66 && interp_sse_unaligned(cpu, insn, next))
             return interp_guest_trap(cpu, cpu->rip, 11, 128);
         interp_simd_get(cpu, mmx, insn->reg, d);
@@ -906,7 +908,7 @@ static int interp_sse_integer_shift(struct cpu *cpu, struct insn *insn, uint64_t
     uint8_t value[16];
     if (immediate) {
         // 0F 71/72/73 are register-only groups: ModRM.mod != 3 is reserved.
-        if (insn->is_mem) return interp_undefined(cpu, insn, pc, "memory SSE immediate shift");
+        if (insn->is_mem) return interp_guest_trap(cpu, pc, 4, 2);
         int sub = insn->reg & 7;
         unsigned count = (unsigned)(insn->imm & 0xff);
         int lane = op == 0x71 ? 2 : op == 0x72 ? 4 : 8;
@@ -1080,7 +1082,7 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
 
     // LOCK is never valid on an SSE instruction. Ignoring it executes a different
     // instruction instead of delivering the architectural #UD.
-    if (insn->lock) return interp_undefined(cpu, insn, pc, "LOCK on SSE instruction");
+    if (insn->lock) return interp_guest_trap(cpu, pc, 4, 2);
 
     // Native host FP under the guest's MXCSR.
     if (interp_sse_is_float_arithmetic(op)) return interp_step_sse_fp(cpu, insn, pc, next);
