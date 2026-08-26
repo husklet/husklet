@@ -3,6 +3,7 @@
 #include "result.h"
 #include "options.h"
 #include "executable_authority.h"
+#include "checkpoint_channel.h"
 #include "hl/syscall_trap.h"
 #include "../host/system.h"
 #if defined(__APPLE__)
@@ -779,9 +780,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
                                              const void *interpreter_image, size_t interpreter_size,
                                              hl_host_handle *process, hl_host_handle *result_token) {
     if (hl_native_supervised_selected(options) && !hl_native_supervised_available()) return HL_STATUS_NOT_SUPPORTED;
-    if (hl_native_supervised_selected(options) &&
-        (checkpoint_broker >= 0 || checkpoint_control >= 0 || hl_options_get(options, "HL_CHECKPOINT") != NULL ||
-         hl_options_get(options, "HL_RESTORE") != NULL))
+    if (hl_native_supervised_selected(options) && hl_options_get(options, "HL_RESTORE") != NULL)
         return HL_STATUS_NOT_SUPPORTED;
 #if !defined(_WIN32)
     hl_production_entry_context entry = {0};

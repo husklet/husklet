@@ -522,6 +522,107 @@ static int hl_native_supervised_ioctl_allowed(uint64_t request) {
            request == FIONREAD || request == TIOCGPTN || request == TIOCSPTLCK;
 }
 
+static int hl_native_supervised_single_child(pid_t parent, pid_t *child) {
+    char path[64], bytes[128];
+    if (snprintf(path, sizeof(path), "/proc/%d/task/%d/children", parent, parent) >= (int)sizeof(path)) return -1;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    ssize_t count = read(fd, bytes, sizeof(bytes) - 1);
+    close(fd);
+    if (count <= 0) return -1;
+    bytes[count] = 0;
+    char *end = NULL;
+    long value = strtol(bytes, &end, 10);
+    while (end != NULL && *end == ' ') ++end;
+    if (value <= 0 || value > INT_MAX || end == NULL || *end != 0) return -1;
+    *child = (pid_t)value;
+    return 0;
+}
+
+static int hl_native_supervised_single_thread_no_children(pid_t process) {
+    char path[64];
+    if (snprintf(path, sizeof(path), "/proc/%d/task", process) >= (int)sizeof(path)) return -1;
+    DIR *tasks = opendir(path);
+    if (tasks == NULL) return -1;
+    size_t count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(tasks)) != NULL)
+        if (entry->d_name[0] != '.' && ++count > 1) break;
+    closedir(tasks);
+    pid_t child;
+    return count == 1 && hl_native_supervised_single_child(process, &child) != 0 ? 0 : -1;
+}
+
+static int hl_native_supervised_stopped(pid_t process) {
+    char path[64], bytes[256];
+    if (snprintf(path, sizeof(path), "/proc/%d/status", process) >= (int)sizeof(path)) return 0;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    ssize_t count = read(fd, bytes, sizeof(bytes) - 1);
+    close(fd);
+    if (count <= 0) return 0;
+    bytes[count] = 0;
+    char *state = strstr(bytes, "\nState:\t");
+    return state != NULL && (state[8] == 'T' || state[8] == 't');
+}
+
+static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t generation, const hl_options *options) {
+    if (workload <= 0 || hl_native_supervised_single_thread_no_children(workload) != 0) {
+        hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
+        (void)hl_ckpt_channel_acquire();
+        (void)hl_ckpt_channel_notify(&refusal, "native phase-1 refuses descendants or multiple threads");
+        const char *receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_RECEIPT");
+        if (receipt != NULL)
+            (void)hl_native_supervised_write_text(receipt,
+                                                  "registered=0 frozen=0 thawed=0 refusal=unsupported-state\n");
+        return -1;
+    }
+    if (kill(workload, SIGSTOP) != 0) return -1;
+    int frozen = 0;
+    for (int attempt = 0; attempt < 1000 && !frozen; ++attempt) {
+        frozen = hl_native_supervised_stopped(workload);
+        if (!frozen) usleep(1000);
+    }
+    int registered = 0;
+    if (frozen && hl_options_get(options, "HL_NATIVE_CKPT_TEST_SKIP_REGISTER") == NULL) {
+        /* The trigger is bumped while the host still owns the capture-state lock; wait until the
+         * matching membership ledger is visible before announcing this stopped participant. */
+        usleep(10000);
+        unsigned char payload[12] = {0};
+        uint32_t one = 1, executor = (uint32_t)workload;
+        memcpy(payload, &one, 4);
+        memcpy(payload + 8, &executor, 4);
+        hl_ckpt_reply reply = {0};
+        int called = -1;
+        for (int attempt = 0; attempt < 1000 && !registered; ++attempt) {
+            hl_ckpt_request request = {
+                .op = HL_CKPT_OP_REGISTER_READY, .length = sizeof(payload), .generation = generation};
+            called = hl_ckpt_channel_call(&request, NULL, payload, &reply, NULL, 0);
+            registered = called == 0 && reply.status == HL_CKPT_STATUS_OK && reply.value != 0;
+            if (!registered) usleep(1000);
+        }
+        if (!registered && hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-checkpoint]\tregister_call=%d status=%d member=%llu failure=%s\n",
+                    called, reply.status, (unsigned long long)reply.value,
+                    hl_ckpt_channel_failure() == NULL ? "none" : hl_ckpt_channel_failure());
+    }
+    hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
+    (void)hl_ckpt_channel_notify(&refusal, registered ? "native phase-1 supports freeze only, not image capture"
+                                                       : "native phase-1 participant registration failed");
+    int thawed = kill(workload, SIGCONT) == 0;
+    if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+        fprintf(stderr, "[hl-native-checkpoint]\tgeneration=%u registered=%d frozen=%d thawed=%d\n",
+                generation, registered, frozen, thawed);
+    const char *receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_RECEIPT");
+    if (receipt != NULL) {
+        char line[128];
+        snprintf(line, sizeof(line), "generation=%u registered=%d frozen=%d thawed=%d\n",
+                 generation, registered, frozen, thawed);
+        (void)hl_native_supervised_write_text(receipt, line);
+    }
+    return registered && frozen && thawed ? 0 : -1;
+}
+
 static char **hl_native_supervised_environment(const hl_options *options) {
     const char *encoded = hl_options_get(options, "HL_GUEST_ENV");
     int escaped = hl_options_get(options, "HL_GUEST_ENV_ESC") != NULL;
@@ -570,8 +671,21 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
     if (request == NULL || response == NULL) { free(request); free(response); return 70; }
     int leader_result = 70, leader_done = 0;
     int listener_active = listener;
+    volatile uint32_t *trigger = NULL;
+    uint32_t trigger_seen = 0;
+    int trigger_descriptor = hl_ckpt_trigger_descriptor();
+    if (trigger_descriptor >= 0) {
+        void *mapping = mmap(NULL, sizeof(uint32_t), PROT_READ | PROT_WRITE, MAP_SHARED, trigger_descriptor, 0);
+        if (mapping != MAP_FAILED) { trigger = mapping; trigger_seen = *trigger; }
+    }
     *guest_signal = 0;
     for (;;) {
+        if (trigger != NULL && *trigger != trigger_seen) {
+            trigger_seen = *trigger;
+            pid_t workload = -1;
+            (void)hl_native_supervised_single_child(leader, &workload);
+            (void)hl_native_supervised_checkpoint_phase1(workload, trigger_seen, options);
+        }
         int status;
         pid_t waited;
         while ((waited = waitpid(-1, &status, WNOHANG)) > 0) {
@@ -590,7 +704,7 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         }
         if (waited < 0 && errno != EINTR && errno != ECHILD) { free(request); free(response); return 70; }
         struct pollfd events[2] = {{listener_active, POLLIN, 0}, {leader_pidfd, POLLIN, 0}};
-        int polled = poll(events, leader_pidfd < 0 ? 1 : 2, leader_pidfd < 0 ? 10 : -1);
+        int polled = poll(events, leader_pidfd < 0 ? 1 : 2, 10);
         if (polled < 0) { if (errno == EINTR) continue; free(request); free(response); return 70; }
         if (events[0].revents & (POLLHUP | POLLNVAL)) listener_active = -1;
         if (polled == 0 || !(events[0].revents & POLLIN)) continue;

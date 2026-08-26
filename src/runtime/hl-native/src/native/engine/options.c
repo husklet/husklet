@@ -134,6 +134,9 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_GUEST_ENV_EXACT", "guest exec environment suppresses engine defaults", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_NATIVE_SUPERVISED_REFUSE", "test-only supervised syscall refusal as number:errno",
                        HL_OPTION_TEXT),
+    HL_INTERNAL_OPTION("HL_NATIVE_CKPT_TEST_RECEIPT", "test-only native checkpoint phase receipt", HL_OPTION_PATH),
+    HL_INTERNAL_OPTION("HL_NATIVE_CKPT_TEST_SKIP_REGISTER", "test-only native checkpoint registration mutation",
+                       HL_OPTION_FLAG),
     HL_DEBUG_OPTION("HL_LOG", "debug-build logging tag selector", HL_OPTION_TEXT),
     HL_DEBUG_OPTION("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", HL_OPTION_FLAG),
 };

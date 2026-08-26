@@ -27,6 +27,11 @@
 #include <netinet/in.h>
 
 static void *thread_return(void *argument) { return argument; }
+static void *checkpoint_thread(void *argument) {
+    const char *release = argument;
+    while (access(release, F_OK) != 0) usleep(1000);
+    return NULL;
+}
 
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "network-none")) {
@@ -76,6 +81,37 @@ int main(int argc, char **argv) {
             write(fd, "host", 4) != 4) return 78;
         close(fd);
         printf("host:%llu", (unsigned long long)netns.st_ino);
+        return 0;
+    }
+    if (argc > 4 && (!strcmp(argv[1], "checkpoint-phase1") ||
+                     !strcmp(argv[1], "checkpoint-descendant") ||
+                     !strcmp(argv[1], "checkpoint-thread"))) {
+        pid_t child = -1;
+        pthread_t thread;
+        int threaded = !strcmp(argv[1], "checkpoint-thread");
+        if (!strcmp(argv[1], "checkpoint-descendant")) {
+            child = fork();
+            if (child < 0) return 79;
+            if (child == 0) {
+                while (access(argv[3], F_OK) != 0) usleep(1000);
+                _exit(0);
+            }
+        } else if (threaded &&
+                   pthread_create(&thread, NULL, checkpoint_thread, argv[3]) != 0) {
+            return 79;
+        }
+        int ready = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (ready < 0 || write(ready, "ready", 5) != 5) return 80;
+        close(ready);
+        unsigned counter = 0;
+        while (access(argv[3], F_OK) != 0) {
+            int result = open(argv[4], O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (result < 0 || dprintf(result, "%u\n", ++counter) <= 0) return 81;
+            close(result);
+            usleep(1000);
+        }
+        if (child > 0 && waitpid(child, NULL, 0) != child) return 82;
+        if (threaded && pthread_join(thread, NULL) != 0) return 82;
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "overlay")) {

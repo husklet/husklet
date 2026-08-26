@@ -39,6 +39,7 @@ impl CheckpointControl {
         engine: &hl_native::Engine,
         isa: crate::activation::GuestIsa,
         deadline: std::time::Instant,
+        interrupt_engine: bool,
     ) -> Result<(), EngineError> {
         use std::time::Instant;
 
@@ -69,7 +70,7 @@ impl CheckpointControl {
             crate::activation::GuestIsa::X86_64 => 2,
         });
         let dispatch = self.phases.begin();
-        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, signal).is_err() {
+        if signal <= 0 || (interrupt_engine && engine.request(REQUEST_CHECKPOINT, signal).is_err()) {
             if self.server.abort_capture(capture).is_err() {
                 self.phases.terminal(capture, 1);
                 return Err(EngineError::LaunchFailed);
@@ -80,7 +81,7 @@ impl CheckpointControl {
         self.phases.finish(capture, "request_dispatch", dispatch);
         let completion = self.phases.begin();
         let result = await_capture_completion(&self.server, capture, deadline, || {
-            let _ = engine.request(REQUEST_CHECKPOINT, signal);
+            if interrupt_engine { let _ = engine.request(REQUEST_CHECKPOINT, signal); }
         });
         match result {
             Ok(result) => {

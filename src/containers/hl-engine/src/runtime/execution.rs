@@ -234,12 +234,7 @@ impl RuntimeFactory for ProductionFactory {
             .get_bytes("HL_NATIVE_SUPERVISED")
             .is_some_and(|value| !value.is_empty() && value != b"0");
         #[cfg(unix)]
-        if native_supervised
-            && (request.services.checkpoint_sink.is_some()
-                || request.services.checkpoint_source.is_some()
-                || request.services.checkpoint_channel.is_some()
-                || request.plan.options.get_bytes("HL_CHECKPOINT").is_some()
-                || request.plan.options.get_bytes("HL_RESTORE").is_some())
+        if native_supervised && request.plan.options.get_bytes("HL_RESTORE").is_some()
         {
             return Err(CompositionError::RuntimeConstruction);
         }
@@ -611,7 +606,9 @@ impl GuestMachine for ProductionMachine {
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
-            return checkpoint.capture(engine.as_ref(), self.isa, deadline);
+            let native_supervised = self.plan.options.get_bytes("HL_NATIVE_SUPERVISED")
+                .is_some_and(|value| !value.is_empty() && value != b"0");
+            return checkpoint.capture(engine.as_ref(), self.isa, deadline, !native_supervised);
         }
         Err(EngineError::Unsupported)
     }

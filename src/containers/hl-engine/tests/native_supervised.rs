@@ -626,6 +626,57 @@ impl CheckpointSource for Checkpoints {
     }
 }
 
+fn checkpoint_phase1(mode: &str, expected_receipt: &str) {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let ready = work.path().join("ready");
+    let release = work.path().join("release");
+    let progress = work.path().join("progress");
+    let receipt = work.path().join("receipt");
+    let mut plan = selected_plan(&executable);
+    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
+    std::fs::write(&receipt, b"").unwrap();
+    plan.options.set_bytes("HL_NATIVE_CKPT_TEST_RECEIPT", receipt.as_os_str().as_encoded_bytes(), true).unwrap();
+    plan.arguments = [executable.as_path(), Path::new(mode), &ready, &release, &progress]
+        .into_iter().map(|value| value.as_os_str().as_encoded_bytes().to_vec()).collect();
+    let output = Arc::new(Output::default());
+    let store = Arc::new(Checkpoints);
+    let engine = Engine::with_checkpoint(
+        GuestIsa::X86_64, plan, StandardStreams::default().with_output(output.clone()), store.clone(), store,
+    ).unwrap();
+    engine.start().unwrap();
+    for _ in 0..5000 {
+        if ready.exists() && progress.exists() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(ready.exists() && progress.exists());
+    let before: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
+    assert!(engine.capture_checkpoint().is_err(), "phase 1 must refuse image capture");
+    for _ in 0..5000 {
+        let after = std::fs::read_to_string(&progress).ok().and_then(|value| value.trim().parse::<u32>().ok());
+        if after.is_some_and(|value| value > before) { break; }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let after: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
+    assert!(after > before, "workload did not continue after bounded thaw");
+    std::fs::write(&release, b"release").unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert!(std::fs::read_to_string(receipt).unwrap().contains(expected_receipt));
+}
+
+#[test]
+fn supervised_checkpoint_phase1_registers_freezes_and_resumes_one_workload() {
+    checkpoint_phase1("checkpoint-phase1", "registered=1 frozen=1 thawed=1");
+}
+
+#[test]
+fn supervised_checkpoint_phase1_refuses_descendants_and_multiple_threads() {
+    checkpoint_phase1("checkpoint-descendant", "refusal=unsupported-state");
+    checkpoint_phase1("checkpoint-thread", "refusal=unsupported-state");
+}
+
 fn selected_plan(executable: &Path) -> RuntimePlan {
     let mut options = Options::default();
     options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
@@ -688,21 +739,10 @@ fn supervised_clone_mapping_and_listener_fail_before_readiness() {
 }
 
 #[test]
-fn supervised_mode_refuses_checkpoint_capture_restore_and_join_at_construction() {
+fn supervised_mode_accepts_phase1_checkpoint_roles_but_refuses_restore() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let store = Arc::new(Checkpoints);
-    assert!(
-        Engine::with_checkpoint(
-            GuestIsa::X86_64,
-            selected_plan(&executable),
-            StandardStreams::default(),
-            store.clone(),
-            store.clone(),
-        )
-        .is_err()
-    );
-
     let mut restore = selected_plan(&executable);
     restore.options.set("HL_RESTORE", "1", true).unwrap();
     assert!(Engine::with_streams(GuestIsa::X86_64, restore, StandardStreams::default()).is_err());
@@ -726,7 +766,7 @@ fn supervised_mode_refuses_checkpoint_capture_restore_and_join_at_construction()
             StandardStreams::default(),
             channel,
         )
-        .is_err()
+        .is_ok()
     );
     coordinator.destroy().unwrap();
 }
