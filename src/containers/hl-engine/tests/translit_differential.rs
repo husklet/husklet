@@ -405,6 +405,13 @@ fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
     agrees("operands");
 }
 
+/// Exact legacy SSE2 encodings, including high registers, mandatory-prefix
+/// rejection, alignment faults and the register-only PSRLDQ group.
+#[test]
+fn exact_sse2_integer_forms_match_the_native_host() {
+    agrees("sse2_exact");
+}
+
 /// A direct forward edge stays in one emitted descriptor. The corrupt bytes in the skipped gap make
 /// target calculation observable, while the counters make a zero stitch budget observably red.
 #[test]
