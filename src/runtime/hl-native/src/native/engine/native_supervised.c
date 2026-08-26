@@ -63,7 +63,8 @@ static int hl_native_supervised_close_except(int keep) {
 
 static int hl_native_supervised_policy_supported(const hl_engine_config *config) {
     const hl_engine_box_config *box = config->box;
-    if (config->rootfs == NULL || box == NULL || config->memory_limit != 0 || config->pid_limit != 0 ||
+    if (geteuid() != 0 || getegid() != 0 || config->rootfs == NULL || box == NULL ||
+        config->memory_limit != 0 || config->pid_limit != 0 ||
         config->cpu_limit != 0 || box->uid != -1 || box->gid != -1 || box->lower_layers != NULL ||
         box->publish_count != 0 || box->volumes != NULL || box->limits != NULL || box->network_bridge != NULL ||
         box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL ||

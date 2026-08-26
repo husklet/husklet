@@ -243,6 +243,8 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
     plan.arguments.push(b"root-contract".to_vec());
     plan.box_policy.working_directory = Some(b"/tmp".to_vec());
+    plan.box_policy.hostname = Some(b"husklet-native".to_vec());
+    plan.box_policy.flags |= 1;
     let engine = Engine::with_streams(
         GuestIsa::X86_64,
         plan,

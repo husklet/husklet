@@ -112,12 +112,16 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "root-contract")) {
         char cwd[64];
         if (getcwd(cwd, sizeof(cwd)) == NULL || strcmp(cwd, "/tmp")) return 81;
+        char hostname[64];
+        if (gethostname(hostname, sizeof(hostname)) != 0 || strcmp(hostname, "husklet-native")) return 81;
         errno = 0;
         if (open("/etc/hostname", O_RDONLY) != -1 || errno != ENOENT) return 82;
         errno = 0;
         if (open("/proc/hostile", O_RDONLY) != -1 || errno != ENOENT) return 83;
         char namespace[128];
         if (readlink("/proc/self/ns/mnt", namespace, sizeof(namespace)) <= 0) return 84;
+        errno = 0;
+        if (open("/blocked", O_WRONLY | O_CREAT, 0600) != -1 || errno != EROFS) return 85;
         fputs("root-contract", stdout);
     }
     return 0;
