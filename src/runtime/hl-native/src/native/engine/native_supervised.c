@@ -27,6 +27,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/wait.h>
 #include <sys/uio.h>
 #include <termios.h>
+#include <net/if.h>
 
 static int hl_native_supervised_available(void) { return 1; }
 
@@ -299,19 +300,42 @@ static const char *hl_native_supervised_policy_rejection(const hl_engine_config 
     if (box->uid < -1 || box->gid < -1) return "identity";
     if (box->lower_layers != NULL && strchr(box->lower_layers, '\n') != NULL) return "multiple-lower-layers";
     if (box->publish_count != 0) return "published-network";
-    if (box->network_mode == 2 || box->network_interface_count != 0 || box->network_bridge != NULL ||
-        box->network_namespace != NULL || box->ip != NULL || box->egress_proxy != NULL)
-        return "host-or-shared-network";
+    if (box->network_interface_count != 0 || box->network_bridge != NULL || box->ip != NULL ||
+        box->egress_proxy != NULL)
+        return "bridged-network";
     /* The generation file invalidates the translated backend's user-space pathname caches after a
      * daemon-side write.  Native-supervised has no such cache: every lookup goes through the kernel
      * VFS, so retaining the typed field is semantics-preserving and requires no poll or mapping. */
     if (box->file_owners != NULL && box->lower_layers == NULL) return "ownership-without-overlay";
     if (box->checkpoint_mode != 0 || box->checkpoint_policy != 0) return "checkpoint";
-    if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) == 0) return "network-isolated-required";
+    int isolated = (box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0;
+    if (box->network_mode == 2) {
+        if (isolated || box->network_namespace != NULL) return "host-network-policy";
+    } else if (box->network_mode == 0) {
+        if (!isolated) return "bridged-network";
+    } else {
+        return "network-mode";
+    }
     if ((box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
                         HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
         return "box-flags";
     return NULL;
+}
+
+static int hl_native_supervised_loopback_up(void) {
+    int socket_fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (socket_fd < 0) return -1;
+    struct ifreq request = {0};
+    memcpy(request.ifr_name, "lo", 3);
+    int result = ioctl(socket_fd, SIOCGIFFLAGS, &request);
+    if (result == 0) {
+        request.ifr_flags |= IFF_UP | IFF_RUNNING;
+        result = ioctl(socket_fd, SIOCSIFFLAGS, &request);
+    }
+    int failure = errno;
+    close(socket_fd);
+    errno = failure;
+    return result;
 }
 
 static int hl_native_supervised_limit_resource(const char *name) {
@@ -365,6 +389,7 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
                                                   const hl_native_supervised_volumes *volumes, int mapping_fd,
                                                   const char *uid_map, const char *gid_map) {
     const hl_engine_box_config *box = config->box;
+    if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 && hl_native_supervised_loopback_up() != 0) return -1;
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
     char projected_root[PATH_MAX];
     if (hl_native_supervised_overlay_mount(config, options, projected_root) != 0) return -1;
@@ -480,10 +505,9 @@ static int hl_native_supervised_refusal(const hl_options *options, int *number, 
 }
 
 static int hl_native_supervised_denied(int number) {
-    return number == SYS_sendmsg || number == SYS_ptrace || number == SYS_seccomp || number == SYS_mount ||
+    return number == SYS_ptrace || number == SYS_seccomp || number == SYS_mount ||
            number == SYS_umount2 || number == SYS_pivot_root || number == SYS_chroot || number == SYS_setns ||
-           number == SYS_unshare || number == SYS_socket || number == SYS_socketpair || number == SYS_connect ||
-           number == SYS_bind || number == SYS_listen || number == SYS_accept || number == SYS_accept4;
+           number == SYS_unshare;
 }
 
 static int hl_native_supervised_clone_namespaces(uint64_t flags) {
@@ -684,8 +708,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     }
     if (config->box->file_owners != NULL && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, mapping) != 0)
         goto clone_failed;
+    uint64_t network_namespace = (config->box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 ? CLONE_NEWNET : 0;
     struct clone_args clone = {
-        .flags = CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_PIDFD,
+        .flags = CLONE_NEWNS | CLONE_NEWPID | network_namespace | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_PIDFD,
         .pidfd = (uint64_t)(uintptr_t)&leader_pidfd,
         .exit_signal = SIGCHLD,
     };

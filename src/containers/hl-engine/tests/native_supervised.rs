@@ -12,6 +12,8 @@ use hl_engine::{
 };
 use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
+use std::io::Read as _;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -129,6 +131,35 @@ fn run_with_refusal(
 
 fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>, Vec<u8>) {
     run_with_refusal(executable, arguments, selected, None)
+}
+
+fn run_policy(executable: &Path, arguments: &[&str], policy: RuntimeBoxPolicy) -> (i32, Vec<u8>, Vec<u8>) {
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    let output = Arc::new(Output::default());
+    let plan = RuntimePlan {
+        rootfs: Some(b"/".to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: std::iter::once(executable.as_os_str().as_encoded_bytes().to_vec())
+            .chain(arguments.iter().map(|value| value.as_bytes().to_vec()))
+            .collect(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: policy,
+    };
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    let status = engine.wait().unwrap().guest_status;
+    engine.destroy().unwrap();
+    let stdout = output.stdout.lock().unwrap().clone();
+    let stderr = output.stderr.lock().unwrap().clone();
+    (status, stdout, stderr)
 }
 
 #[test]
@@ -342,13 +373,55 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
 }
 
 #[test]
-fn supervised_filter_denies_sendmsg_after_listener_bootstrap() {
+fn supervised_filter_allows_guest_network_messages_after_listener_bootstrap() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    let (status, output, error) = run(&executable, &["sendmsg-denied"], true);
+    let (status, output, error) = run(&executable, &["sendmsg-filter"], true);
     assert_eq!(status, 0);
-    assert_eq!(output, b"sendmsg-denied");
+    assert_eq!(output, b"sendmsg-filter");
     assert!(error.is_empty());
+}
+
+#[test]
+fn supervised_none_network_has_private_netns_live_loopback_and_no_external_route() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let host_inode = std::fs::metadata("/proc/self/ns/net").unwrap().ino();
+    let mut policy = isolated_policy();
+    policy.network_namespace = Some(b"stable-none-identity".to_vec());
+    let (status, output, error) = run_policy(&executable, &["network-none"], policy);
+    assert_eq!(status, 0, "{}", String::from_utf8_lossy(&error));
+    let inode = std::str::from_utf8(&output).unwrap().strip_prefix("none:").unwrap().parse::<u64>().unwrap();
+    assert_ne!(inode, host_inode);
+}
+
+#[test]
+fn supervised_host_network_reuses_host_netns_and_reaches_host_loopback() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    let output = Arc::new(Output::default());
+    let plan = RuntimePlan {
+        rootfs: Some(b"/".to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"network-host".to_vec(), port.into_bytes()],
+        environment: Vec::new(), result_path: None, options,
+        box_policy: RuntimeBoxPolicy { network_mode: 2, ..Default::default() },
+    };
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default().with_output(output.clone())).unwrap();
+    engine.start().unwrap();
+    let (mut connection, _) = listener.accept().unwrap();
+    let mut payload = [0; 4];
+    connection.read_exact(&mut payload).unwrap();
+    assert_eq!(&payload, b"host");
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    let stdout = output.stdout.lock().unwrap().clone();
+    let inode = std::str::from_utf8(&stdout).unwrap().strip_prefix("host:").unwrap().parse::<u64>().unwrap();
+    assert_eq!(inode, std::fs::metadata("/proc/self/ns/net").unwrap().ino());
 }
 
 #[test]
@@ -550,7 +623,8 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     let executable = fixture(work.path());
     let mut policies = Vec::new();
     policies.push(RuntimeBoxPolicy::default());
-    let mut policy = isolated_policy(); policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
+    let mut policy = RuntimeBoxPolicy { network_mode: 2, ..Default::default() };
+    policy.network_namespace = Some(b"shared".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.network_bridge = Some(b"bridge0".to_vec()); policies.push(policy);
     let mut policy = isolated_policy(); policy.flags |= 1 << 3; policies.push(policy);
     let mut policy = isolated_policy(); policy.lower_layers = Some(b"/one\n/two".to_vec()); policies.push(policy);

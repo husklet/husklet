@@ -21,10 +21,63 @@
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
+#include <poll.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <netinet/in.h>
 
 static void *thread_return(void *argument) { return argument; }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "network-none")) {
+        struct stat netns;
+        if (stat("/proc/self/ns/net", &netns) != 0) return 72;
+        int listener = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        struct sockaddr_in loopback = {.sin_family = AF_INET, .sin_port = 0};
+        loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        socklen_t loopback_length = sizeof(loopback);
+        if (listener < 0 || bind(listener, (struct sockaddr *)&loopback, sizeof(loopback)) != 0 ||
+            listen(listener, 1) != 0 || getsockname(listener, (struct sockaddr *)&loopback, &loopback_length) != 0)
+            return 73;
+        pid_t peer = fork();
+        if (peer < 0) return 73;
+        if (peer == 0) {
+            int client = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            _exit(client >= 0 && connect(client, (struct sockaddr *)&loopback, sizeof(loopback)) == 0 ? 0 : 73);
+        }
+        struct pollfd ready = {listener, POLLIN, 0};
+        int accepted = poll(&ready, 1, 1000) == 1 ? accept4(listener, NULL, NULL, SOCK_CLOEXEC) : -1;
+        int peer_status = 0;
+        if (accepted < 0 || waitpid(peer, &peer_status, 0) != peer || !WIFEXITED(peer_status) ||
+            WEXITSTATUS(peer_status) != 0) return 73;
+        close(accepted);
+        close(listener);
+        int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+        struct sockaddr_in outside = {.sin_family = AF_INET, .sin_port = htons(9)};
+        if (inet_pton(AF_INET, "192.0.2.1", &outside.sin_addr) != 1) return 74;
+        errno = 0;
+        int connected = connect(fd, (struct sockaddr *)&outside, sizeof(outside));
+        int failure = errno;
+        close(fd);
+        if (connected == 0 || (failure != ENETUNREACH && failure != EHOSTUNREACH && failure != EACCES)) return 75;
+        printf("none:%llu", (unsigned long long)netns.st_ino);
+        return 0;
+    }
+    if (argc > 2 && !strcmp(argv[1], "network-host")) {
+        struct stat netns;
+        if (stat("/proc/self/ns/net", &netns) != 0) return 76;
+        char *end = NULL;
+        long port = strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end || port <= 0 || port > 65535) return 77;
+        int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        struct sockaddr_in loopback = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+        loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (fd < 0 || connect(fd, (struct sockaddr *)&loopback, sizeof(loopback)) != 0 ||
+            write(fd, "host", 4) != 4) return 78;
+        close(fd);
+        printf("host:%llu", (unsigned long long)netns.st_ino);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "overlay")) {
         char value[16] = {0};
         int fd = open("/lower.txt", O_RDONLY);
@@ -97,13 +150,13 @@ int main(int argc, char **argv) {
         if (dup2(1, 7) != 7 || write(7, "-dup", 4) != 4) return 54;
     }
     if (argc > 1 && !strcmp(argv[1], "signal")) raise(SIGTERM);
-    if (argc > 1 && !strcmp(argv[1], "sendmsg-denied")) {
+    if (argc > 1 && !strcmp(argv[1], "sendmsg-filter")) {
         char byte = 1;
         struct iovec vector = {&byte, 1};
         struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1};
         errno = 0;
-        if (sendmsg(1, &message, 0) != -1 || errno != EPERM) return 62;
-        fputs("sendmsg-denied", stdout);
+        if (sendmsg(1, &message, 0) != -1 || errno != ENOTSOCK) return 62;
+        fputs("sendmsg-filter", stdout);
     }
     if (argc > 1 && !strcmp(argv[1], "secure-jail")) {
         for (int fd = 3; fd < 64; ++fd)
@@ -116,8 +169,9 @@ int main(int argc, char **argv) {
         if (unshare(CLONE_NEWNS) != -1 || errno != EPERM) return 73;
         errno = 0;
         if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != -1 || errno != EPERM) return 74;
-        errno = 0;
-        if (socket(AF_INET, SOCK_STREAM, 0) != -1 || errno != EPERM) return 75;
+        int network_socket = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (network_socket < 0) return 75;
+        close(network_socket);
         struct __user_cap_header_struct cap_header = {_LINUX_CAPABILITY_VERSION_3, 0};
         struct __user_cap_data_struct cap_data[2] = {{0}};
         if (syscall(SYS_capget, &cap_header, cap_data) != 0 || cap_data[0].effective || cap_data[0].permitted ||
