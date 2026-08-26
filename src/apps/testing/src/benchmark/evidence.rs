@@ -16,22 +16,33 @@ pub(super) fn sample(
     campaign: &Campaign,
     step: &Step,
 ) -> Result<(BTreeMap<String, Phase>, String, String, Option<String>), Error> {
+    sample_kind(campaign, step, SampleKind::Timed)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SampleKind {
+    Timed,
+    Telemetry,
+}
+
+fn sample_kind(
+    campaign: &Campaign,
+    step: &Step,
+    kind: SampleKind,
+) -> Result<(BTreeMap<String, Phase>, String, String, Option<String>), Error> {
     let arm = campaign.arms[&step.arm]
         .profile(step.profile)
         .ok_or_else(|| format!("benchmark arm {} has no {} profile", step.arm, step.profile.as_str()))?;
     let workload = &campaign.workloads[&step.workload];
     let guest = &workload.commands[&step.layout];
     let executable = campaign.guest(&step.arm, step.profile, Path::new(&guest[0]))?;
-    let mut command = HostProcess::standard(&arm.command[0]);
-    command
-        .args(&arm.command[1..])
-        .arg(executable)
-        .args(&guest[1..])
-        .stdin(Stdio::null());
+    let argv = sample_argv(&arm.command, &executable, &guest[1..], kind)?;
+    let mut command = HostProcess::standard(&argv[0]);
+    command.args(&argv[1..]).stdin(Stdio::null());
     let started = Instant::now();
     let output = bounded_output(&mut command, Duration::from_secs(workload.timeout_seconds))?;
     let wall_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX).max(1);
-    if !output.status.success() || !output.stderr.is_empty() {
+    if !output.status.success() || (kind == SampleKind::Timed && !output.stderr.is_empty()) {
         return Err(format!(
             "benchmark {}/{}/{} failed: status={} stderr={}",
             step.workload,
@@ -72,9 +83,52 @@ pub(super) fn sample(
         }
         let frame = canonical.join("\n");
         let identity = FramedIdentity::of(frame.as_bytes());
-        Ok((phases, identity, frame, None))
+        let diagnostic = match kind {
+            SampleKind::Timed => None,
+            SampleKind::Telemetry => Some(telemetry_receipt(&output.stderr)?),
+        };
+        Ok((phases, identity, frame, diagnostic))
     })();
     parsed.map_err(|error| parse_failure(step, output.status.to_string(), &output.stdout, &output.stderr, error))
+}
+
+fn sample_argv(
+    command: &[String],
+    executable: &Path,
+    guest_arguments: &[String],
+    kind: SampleKind,
+) -> Result<Vec<String>, Error> {
+    if command.iter().any(|argument| argument == "--diagnostics") {
+        return Err(
+            "benchmark profile command must not embed --diagnostics; telemetry is a separate untimed arm".into(),
+        );
+    }
+    let mut argv = command.to_vec();
+    if kind == SampleKind::Telemetry {
+        argv.push("--diagnostics".into());
+    }
+    argv.push(executable.display().to_string());
+    argv.extend(guest_arguments.iter().cloned());
+    Ok(argv)
+}
+
+fn telemetry_receipt(stderr: &[u8]) -> Result<String, Error> {
+    let text = std::str::from_utf8(stderr).map_err(|_| "benchmark telemetry is not UTF-8")?;
+    let line = text
+        .lines()
+        .find(|line| {
+            line.strip_prefix("hl-native: ")
+                .or_else(|| line.strip_prefix("[prof] "))
+                .is_some_and(|fields| {
+                    fields.split_ascii_whitespace().any(|field| {
+                        field
+                            .split_once('=')
+                            .is_some_and(|(_, value)| value.parse::<u64>().is_ok())
+                    })
+                })
+        })
+        .ok_or("benchmark telemetry arm emitted no native counter record")?;
+    Ok(line.to_owned())
 }
 
 const FAILURE_EXCERPT: usize = 4096;
@@ -216,12 +270,21 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
     }
     let output = readings[0].1.clone();
     let output_frame = readings[0].2.clone();
-    let diagnostic = readings[0].3.clone();
+    let telemetry = matches!(step.arm.as_str(), "I" | "R")
+        .then(|| sample_kind(campaign, step, SampleKind::Telemetry))
+        .transpose()?;
+    let diagnostic = telemetry.as_ref().and_then(|reading| reading.3.clone());
     if readings
         .iter()
-        .any(|(_, identity, frame, observed)| *identity != output || *frame != output_frame || *observed != diagnostic)
+        .any(|(_, identity, frame, observed)| *identity != output || *frame != output_frame || observed.is_some())
     {
         return Err("repeated sample exact-output mismatch".into());
+    }
+    if telemetry
+        .as_ref()
+        .is_some_and(|(_, identity, frame, _)| *identity != output || *frame != output_frame)
+    {
+        return Err("untimed telemetry exact-output mismatch".into());
     }
     let mut phases = BTreeMap::new();
     for name in readings[0].0.keys() {
@@ -459,9 +522,41 @@ fn process_name_prefix_count(prefix: &str) -> Result<u64, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Measurement, counter_metadata, metadata_line, parse_failure, phase_fields, require_line_framing,
-        require_metadata,
+        Measurement, SampleKind, counter_metadata, metadata_line, parse_failure, phase_fields, require_line_framing,
+        require_metadata, sample_argv, telemetry_receipt,
     };
+
+    #[test]
+    fn timed_argv_cannot_enable_diagnostics() {
+        let command = vec!["engine".to_owned(), "--rootfs".to_owned(), "/root".to_owned()];
+        let timed = sample_argv(&command, std::path::Path::new("/guest"), &[], SampleKind::Timed).unwrap();
+        assert!(!timed.iter().any(|argument| argument == "--diagnostics"));
+        let contaminated = vec!["engine".to_owned(), "--diagnostics".to_owned()];
+        assert!(
+            sample_argv(&contaminated, std::path::Path::new("/guest"), &[], SampleKind::Timed)
+                .unwrap_err()
+                .to_string()
+                .contains("must not embed")
+        );
+    }
+
+    #[test]
+    fn untimed_telemetry_argv_produces_a_counter_receipt() {
+        let script = "test \"$1\" = --diagnostics && printf 'hl-native: crossings=7 translations=3\\n' >&2";
+        let command = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            script.to_owned(),
+            "telemetry-probe".to_owned(),
+        ];
+        let argv = sample_argv(&command, std::path::Path::new("/guest"), &[], SampleKind::Telemetry).unwrap();
+        let output = std::process::Command::new(&argv[0]).args(&argv[1..]).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            telemetry_receipt(&output.stderr).unwrap(),
+            "hl-native: crossings=7 translations=3"
+        );
+    }
     use crate::benchmark::schedule::Step;
     use std::{
         cell::Cell,

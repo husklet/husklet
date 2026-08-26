@@ -386,6 +386,12 @@ fn sha256(value: &str) -> bool {
 }
 
 fn validate_profile(arm: &str, kind: &str, profile: &Profile) -> Result<(), Error> {
+    if profile.command.iter().any(|argument| argument == "--diagnostics") {
+        return Err(format!(
+            "benchmark arm {arm} {kind} command enables --diagnostics inside timed measurements; telemetry is collected separately"
+        )
+        .into());
+    }
     if profile.command.is_empty()
         || profile.artifacts.is_empty()
         || profile.smoke.is_empty()
@@ -552,6 +558,17 @@ mod tests {
             guest_path: GuestPath::RootfsAbsolute,
             guest_map: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn measured_profiles_reject_the_diagnostics_observer() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = directory.path().join("engine");
+        fs::write(&engine, b"engine").unwrap();
+        let mut profile = output_profile(&engine);
+        profile.command.push("--diagnostics".into());
+        let error = super::validate_profile("I", "primary", &profile).unwrap_err();
+        assert!(error.to_string().contains("inside timed measurements"), "{error}");
     }
 
     #[cfg(unix)]
