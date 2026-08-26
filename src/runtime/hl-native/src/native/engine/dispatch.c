@@ -221,10 +221,15 @@ static void block_return(void) {
 #define G_TRANSLATE_BLOCK(context, pc) translate_block(pc)
 #define G_RUN_BLOCK(context, cpu, code) run_block(cpu, code)
 #endif
+#ifndef G_MAP_HOST_CACHE
+#define G_MAP_HOST_CACHE NULL
+#define G_MAP_HOST(cache, pc) ((void)(cache), map_host(pc))
+#endif
 
 // ---------------- dispatcher ----------------
 static void run_guest(struct cpu *c) {
     G_HOT_CONTEXT_TYPE *hot_context = G_HOT_CONTEXT_CREATE();
+    hl_map_host_cache_entry *map_cache = G_MAP_HOST_CACHE;
     if (hot_context == NULL) {
         c->exit_code = 70;
         c->exited = 1;
@@ -314,7 +319,7 @@ static void run_guest(struct cpu *c) {
             profile_map_start = now;
         }
         if (g_threaded) jit_dispatch_lock();
-        void *code = map_host(G_PC(c));
+        void *code = G_MAP_HOST(map_cache, G_PC(c));
         hl_dispatch_profile_map(&g_dispatch_profile, code != NULL);
         if (!code) {
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;

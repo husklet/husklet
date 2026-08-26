@@ -41,6 +41,8 @@ static inline int smc_seen(void) {
 #define G_HOT_CONTEXT_TYPE hl_x86_hot_context
 #define G_HOT_CONTEXT_CREATE() hl_x86_hot_context_create(x86_guest_fetch_exec_context, NULL)
 #define G_HOT_CONTEXT_DESTROY(context) hl_x86_hot_context_destroy(context)
+#define G_MAP_HOST_CACHE map_host_cache_current()
+#define G_MAP_HOST(cache, gpc) map_host_cached((cache), (gpc))
 #define G_TRANSLATE_BLOCK(context, pc) translate_block(context, pc)
 #define G_RUN_BLOCK(context, cpu, code) run_block(context, cpu, code)
 

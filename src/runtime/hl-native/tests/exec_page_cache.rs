@@ -76,6 +76,14 @@ fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn x86_hoisted_map_cache_pointer_survives_thread_generation_and_fork_boundaries() {
+    assert!(exec_page_cache_test(2, 16).is_ok());
+    assert!(exec_page_cache_test(2, 17).is_ok());
+    assert!(exec_page_cache_test(2, 25).is_ok());
+}
+
 #[test]
 fn jit_rollover_falls_back_to_an_executable_single_mapping() {
     for isa in [1, 2] {
