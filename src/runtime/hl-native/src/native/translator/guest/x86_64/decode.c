@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+#include <pthread.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -19,6 +20,8 @@ static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Thread_local uint64_t g_decode_memo_decodes;
 static _Thread_local uint64_t g_decode_memo_hits;
+static _Atomic int g_hot_context_test_fail_allocation;
+static _Atomic int g_hot_context_test_live;
 #endif
 
 void hl_x86_decode_set_instruction_fetch(hl_x86_instruction_fetch_fn fetch) {
@@ -373,15 +376,27 @@ int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
 }
 
 hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_exchange_explicit(&g_hot_context_test_fail_allocation, 0, memory_order_relaxed)) return NULL;
+#endif
     hl_x86_hot_context *context = calloc(1, sizeof *context);
     if (context != NULL) {
         context->fetch_fn = fetch;
         context->fetch_opaque = opaque != NULL ? opaque : &context->fetch;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        atomic_fetch_add_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
+#endif
     }
     return context;
 }
 
-void hl_x86_hot_context_destroy(hl_x86_hot_context *context) { free(context); }
+void hl_x86_hot_context_destroy(hl_x86_hot_context *context) {
+    if (context == NULL) return;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    atomic_fetch_sub_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
+#endif
+    free(context);
+}
 
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I) {
     return decode_with(pc, I, context->memo, context->fetch_fn, context->fetch_opaque);
@@ -451,6 +466,47 @@ int hl_x86_hot_context_test(void) {
     hl_x86_hot_context_destroy(first);
     hl_x86_hot_context_destroy(second);
     return result;
+}
+
+#if !defined(_WIN32)
+typedef struct { uint8_t opcode; int result; } hot_context_thread_fixture;
+static void *hot_context_thread_worker(void *opaque) {
+    hot_context_thread_fixture *thread = opaque;
+    decode_memo_fixture fixture = {.pc = UINT64_C(0x50000100), .bytes = {thread->opcode},
+                                   .first_page_executable = 1, .second_page_executable = 1};
+    hl_x86_hot_context *context = hl_x86_hot_context_create(decode_context_fixture_fetch, &fixture);
+    hl_x86_insn instruction;
+    thread->result = context != NULL && hl_x86_decode_context(context, fixture.pc, &instruction) == 1 &&
+                             instruction.op == thread->opcode
+                         ? 0 : -1;
+    hl_x86_hot_context_destroy(context);
+    return NULL;
+}
+
+int hl_x86_hot_context_thread_test(void) {
+    hot_context_thread_fixture first = {.opcode = 0x90}, second = {.opcode = 0xc3};
+    pthread_t a, b;
+    if (pthread_create(&a, NULL, hot_context_thread_worker, &first) != 0) return -50;
+    if (pthread_create(&b, NULL, hot_context_thread_worker, &second) != 0) {
+        pthread_join(a, NULL);
+        return -51;
+    }
+    if (pthread_join(a, NULL) != 0 || pthread_join(b, NULL) != 0) return -52;
+    return first.result == 0 && second.result == 0 && atomic_load(&g_hot_context_test_live) == 0 ? 0 : -53;
+}
+#else
+int hl_x86_hot_context_thread_test(void) { return 0; }
+#endif
+
+int hl_x86_hot_context_allocation_test(void) {
+    int before = atomic_load_explicit(&g_hot_context_test_live, memory_order_relaxed);
+    atomic_store_explicit(&g_hot_context_test_fail_allocation, 1, memory_order_relaxed);
+    if (hl_x86_hot_context_create(NULL, NULL) != NULL) return -60;
+    if (atomic_load_explicit(&g_hot_context_test_live, memory_order_relaxed) != before) return -61;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(NULL, NULL);
+    if (context == NULL) return -62;
+    hl_x86_hot_context_destroy(context);
+    return atomic_load_explicit(&g_hot_context_test_live, memory_order_relaxed) == before ? 0 : -63;
 }
 
 /* Invoked through the existing target-local scenario/count hook. */

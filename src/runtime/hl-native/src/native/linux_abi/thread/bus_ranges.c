@@ -910,6 +910,8 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     }
 #if defined(HL_X86_DECODE_MEMO_TEST)
     case 21: result = hl_x86_hot_context_test(); break;
+    case 22: result = hl_x86_hot_context_thread_test(); break;
+    case 23: result = hl_x86_hot_context_allocation_test(); break;
 #endif
     default: result = -10;
     }

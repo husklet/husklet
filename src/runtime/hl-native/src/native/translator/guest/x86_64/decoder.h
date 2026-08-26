@@ -58,6 +58,8 @@ void hl_x86_decode_set_instruction_fetch(hl_x86_instruction_fetch_fn);
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_x86_decode_memo_test(uint32_t scenario, uint64_t *decodes);
 int hl_x86_hot_context_test(void);
+int hl_x86_hot_context_thread_test(void);
+int hl_x86_hot_context_allocation_test(void);
 #endif
 
 #endif

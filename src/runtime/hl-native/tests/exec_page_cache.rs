@@ -56,6 +56,17 @@ fn x86_explicit_hot_contexts_isolate_and_revalidate_across_fork() {
     assert!(exec_page_cache_test(2, 21).is_ok());
 }
 
+#[cfg(unix)]
+#[test]
+fn x86_explicit_hot_contexts_are_isolated_between_pthreads() {
+    assert!(exec_page_cache_test(2, 22).is_ok());
+}
+
+#[test]
+fn x86_hot_context_allocation_failure_leaks_nothing_and_does_not_latch() {
+    assert!(exec_page_cache_test(2, 23).is_ok());
+}
+
 #[test]
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
