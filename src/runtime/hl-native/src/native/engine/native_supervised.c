@@ -177,24 +177,30 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
 }
 
 static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box, const char *rootfs,
-                                        hl_host_handle executable_handle, char *const argv[],
+                                        hl_host_handle executable_handle, uint32_t argc, char *const argv[],
                                         const hl_options *options, int activation_ready, int *guest_signal) {
     if (argv == NULL || argv[0] == NULL) return 70;
-    if (rootfs == NULL) rootfs = "/";
-    if (host == NULL || host->posix_attachment == NULL || host->posix_attachment->borrow_file == NULL ||
+    if (host == NULL || host->posix_attachment == NULL || host->posix_attachment->borrow_file_at_least == NULL ||
         host->posix_attachment->release == NULL) return 70;
+    char **exec_argv = calloc((size_t)argc + 1, sizeof(char *));
+    if (exec_argv == NULL) return 70;
+    for (uint32_t index = 0; index < argc; ++index) exec_argv[index] = argv[index];
+    if (rootfs == NULL) rootfs = "/";
+    if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+        fprintf(stderr, "[hl-native-supervised]\tselected=1\n");
     char **environment = hl_native_supervised_environment(options);
-    if (environment == NULL) return 70;
-    hl_host_result executable_attachment = host->posix_attachment->borrow_file(host->context, executable_handle);
+    if (environment == NULL) { free(exec_argv); return 70; }
+    hl_host_result executable_attachment =
+        host->posix_attachment->borrow_file_at_least(host->context, executable_handle, 64);
     if (executable_attachment.status != HL_STATUS_OK || executable_attachment.value > INT_MAX) {
-        hl_native_supervised_environment_free(environment); return 70;
+        hl_native_supervised_environment_free(environment); free(exec_argv); return 70;
     }
     int executable = (int)executable_attachment.value;
     int borrowed[3] = {-1, -1, -1};
     for (hl_linux_fd fd = 0; fd < 3; ++fd) {
         hl_linux_fd_snapshot snapshot = {0};
         if (hl_linux_fd_snapshot_get(box, fd, &snapshot) != HL_STATUS_OK) goto attachment_failed;
-        hl_host_result attached = host->posix_attachment->borrow_file(host->context, snapshot.host_handle);
+        hl_host_result attached = host->posix_attachment->borrow_file_at_least(host->context, snapshot.host_handle, 64);
         if (attached.status != HL_STATUS_OK || attached.value > INT_MAX) goto attachment_failed;
         borrowed[fd] = (int)attached.value;
     }
@@ -221,7 +227,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         atomic_store_explicit(&bootstrap->listener, listener, memory_order_release);
         while (!atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire)) {}
         close(listener);
-        execveat(executable, "", argv, environment, AT_EMPTY_PATH);
+        execveat(executable, "", exec_argv, environment, AT_EMPTY_PATH);
+        if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-supervised]\texecveat_errno=%d\n", errno);
         _exit(errno == ENOENT ? 127 : 126);
     }
     for (int fd = 0; fd < 3; ++fd) {
@@ -248,30 +256,33 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     munmap(bootstrap, sizeof(*bootstrap));
     if (listener < 0) {
         (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
-        hl_native_supervised_environment_free(environment); return 70;
+        hl_native_supervised_environment_free(environment); free(exec_argv); return 70;
     }
     unsigned char ready = 1;
     if (write(activation_ready, &ready, sizeof(ready)) != (ssize_t)sizeof(ready)) {
         close(listener); (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
-        hl_native_supervised_environment_free(environment); return 70;
+        hl_native_supervised_environment_free(environment); free(exec_argv); return 70;
     }
     int result = hl_native_supervised_wait(listener, child, options, guest_signal);
     close(listener);
     hl_native_supervised_environment_free(environment);
+    free(exec_argv);
     return result;
 attachment_failed:
     for (int fd = 0; fd < 3; ++fd)
         if (borrowed[fd] >= 0) (void)host->posix_attachment->release(host->context, (uint64_t)borrowed[fd]);
     if (executable >= 0) (void)host->posix_attachment->release(host->context, (uint64_t)executable);
     hl_native_supervised_environment_free(environment);
+    free(exec_argv);
     return 70;
 }
 #else
 static int hl_native_supervised_available(void) { return 0; }
 static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_abi *box, const char *rootfs,
-                                        hl_host_handle executable_handle, char *const argv[],
+                                        hl_host_handle executable_handle, uint32_t argc, char *const argv[],
                                         const hl_options *options, int activation_ready, int *guest_signal) {
-    (void)host; (void)box; (void)rootfs; (void)executable_handle; (void)argv; (void)options; (void)activation_ready;
+    (void)host; (void)box; (void)rootfs; (void)executable_handle; (void)argc; (void)argv; (void)options;
+    (void)activation_ready;
     *guest_signal = 0; return 70;
 }
 #endif
