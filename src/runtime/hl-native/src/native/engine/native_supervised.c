@@ -415,7 +415,8 @@ static void hl_native_supervised_environment_free(char **environment) {
     free(environment);
 }
 
-static int hl_native_supervised_wait(int listener, pid_t leader, const hl_options *options, int *guest_signal) {
+static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leader,
+                                     const hl_options *options, int *guest_signal) {
     int refused_number, refused_error;
     if (hl_native_supervised_refusal(options, &refused_number, &refused_error) != 0) return 70;
     struct seccomp_notif_sizes sizes = {0};
@@ -424,6 +425,7 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
     struct seccomp_notif_resp *response = calloc(1, sizes.seccomp_notif_resp);
     if (request == NULL || response == NULL) { free(request); free(response); return 70; }
     int leader_result = 70, leader_done = 0;
+    int listener_active = listener;
     *guest_signal = 0;
     for (;;) {
         int status;
@@ -443,10 +445,11 @@ static int hl_native_supervised_wait(int listener, pid_t leader, const hl_option
             free(request); free(response); return leader_result;
         }
         if (waited < 0 && errno != EINTR && errno != ECHILD) { free(request); free(response); return 70; }
-        struct pollfd event = {listener, POLLIN, 0};
-        int polled = poll(&event, 1, 10);
+        struct pollfd events[2] = {{listener_active, POLLIN, 0}, {leader_pidfd, POLLIN, 0}};
+        int polled = poll(events, leader_pidfd < 0 ? 1 : 2, leader_pidfd < 0 ? 10 : -1);
         if (polled < 0) { if (errno == EINTR) continue; free(request); free(response); return 70; }
-        if (polled == 0 || !(event.revents & POLLIN)) continue;
+        if (events[0].revents & (POLLHUP | POLLNVAL)) listener_active = -1;
+        if (polled == 0 || !(events[0].revents & POLLIN)) continue;
         memset(request, 0, sizes.seccomp_notif);
         if (ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, request) != 0) {
             if (errno == EINTR || errno == ENOENT) continue;
@@ -596,6 +599,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     }
     if (listener >= 0) atomic_store_explicit(&bootstrap->acknowledged, 1, memory_order_release);
     if (pidfd >= 0) close(pidfd);
+    int leader_pidfd = listener < 0 ? -1 : (int)syscall(SYS_pidfd_open, child, 0);
     munmap(bootstrap, sizeof(*bootstrap));
     if (listener < 0) {
         (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
@@ -606,7 +610,8 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         close(listener); (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
         hl_native_supervised_environment_free(environment); free(exec_argv); return 70;
     }
-    int result = hl_native_supervised_wait(listener, child, options, guest_signal);
+    int result = hl_native_supervised_wait(listener, leader_pidfd, child, options, guest_signal);
+    if (leader_pidfd >= 0) close(leader_pidfd);
     close(listener);
     hl_native_supervised_environment_free(environment);
     free(exec_argv);
