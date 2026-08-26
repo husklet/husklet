@@ -35,10 +35,19 @@ fn fixture(directory: &Path) -> PathBuf {
     output
 }
 
-fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>) {
+fn run_configured(
+    executable: &Path,
+    arguments: &[&str],
+    selected: bool,
+    refusal: Option<&str>,
+    environment: Vec<Vec<u8>>,
+) -> (i32, Vec<u8>) {
     let mut options = Options::default();
     if selected {
         options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    }
+    if let Some(refusal) = refusal {
+        options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
     }
     let output = Arc::new(Output::default());
     let plan = RuntimePlan {
@@ -47,7 +56,7 @@ fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>) 
         arguments: std::iter::once(executable.as_os_str().as_encoded_bytes().to_vec())
             .chain(arguments.iter().map(|value| value.as_bytes().to_vec()))
             .collect(),
-        environment: Vec::new(),
+        environment,
         result_path: None,
         options,
     };
@@ -62,6 +71,14 @@ fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>) 
     engine.destroy().unwrap();
     let bytes = output.0.lock().unwrap().clone();
     (status, bytes)
+}
+
+fn run_with_refusal(executable: &Path, arguments: &[&str], selected: bool, refusal: Option<&str>) -> (i32, Vec<u8>) {
+    run_configured(executable, arguments, selected, refusal, Vec::new())
+}
+
+fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>) {
+    run_with_refusal(executable, arguments, selected, None)
 }
 
 #[test]
@@ -79,4 +96,32 @@ fn supervised_stdout_and_exit_status_keep_the_engine_contract() {
     let (status, output) = run(&executable, &["output"], true);
     assert_eq!(status, 23);
     assert_eq!(output, b"native-supervised");
+}
+
+#[test]
+fn refusal_reaches_a_fork_descendant_without_fallback() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let (status, output) = run_with_refusal(&executable, &["descendant"], true, Some("39:38"));
+    assert_eq!(status, 0);
+    assert_eq!(output, b"descendant-supervised");
+}
+
+#[test]
+fn supervisor_drains_an_orphaned_descendant() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let (status, output) = run_with_refusal(&executable, &["orphan"], true, Some("39:38"));
+    assert_eq!(status, 0);
+    assert_eq!(output, b"orphan-supervised");
+}
+
+#[test]
+fn supervised_exec_uses_only_the_exact_guest_environment() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let environment = vec![b"NATIVE_SUPERVISED_ENV=line1\nline2\\tail".to_vec()];
+    let (status, output) = run_configured(&executable, &["environment"], true, None, environment);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"environment-exact");
 }

@@ -211,6 +211,11 @@ const DEFINITIONS: &[Definition] = &[
         "guest exec environment suppresses engine defaults",
         Flag
     ),
+    internal!(
+        "HL_NATIVE_SUPERVISED_REFUSE",
+        "test-only supervised syscall refusal as number:errno",
+        Text
+    ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
     debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
 ];

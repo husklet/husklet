@@ -132,6 +132,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_NAME_BINDS", "live guest basename projection rules", HL_OPTION_RECORDS),
     HL_INTERNAL_OPTION("HL_GUEST_ENV_ESC", "guest environment uses escaped record encoding", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_GUEST_ENV_EXACT", "guest exec environment suppresses engine defaults", HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_NATIVE_SUPERVISED_REFUSE", "test-only supervised syscall refusal as number:errno",
+                       HL_OPTION_TEXT),
     HL_DEBUG_OPTION("HL_LOG", "debug-build logging tag selector", HL_OPTION_TEXT),
     HL_DEBUG_OPTION("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", HL_OPTION_FLAG),
 };
