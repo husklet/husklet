@@ -164,6 +164,11 @@ static uint64_t translit_sse2_runs_admitted;
 static uint64_t translit_sse2_instructions_admitted;
 static uint64_t translit_sse2_target_runs;
 static uint64_t translit_sse2_next_family_runs;
+static uint64_t translit_sse2_store_instructions;
+static uint64_t translit_sse2_store_movups;
+static uint64_t translit_sse2_store_movaps;
+static uint64_t translit_sse2_store_movdqu;
+static uint64_t translit_sse2_store_family_runs;
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -253,10 +258,12 @@ static int translit_classify_two(const struct insn *insn) {
     if (op >= 0x80 && op <= 0x8F) return TL_JCC;
     if (!insn->p66 && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg && !insn->vex &&
         !insn->evex && !insn->map3 && insn->has_modrm) {
-        // MOVDQU uses mandatory F3; MOVUPS/MOVAPS use no mandatory prefix.  These are loads only:
-        // their store partners have guest-memory retirement, SMC and shared-observer requirements.
-        if (insn->rep && op == 0x6F) return TL_SSE2;
-        if (!insn->rep && (op == 0x10 || op == 0x28)) return TL_SSE2;
+        // MOVDQU uses mandatory F3; MOVUPS/MOVAPS use no mandatory prefix. Stores remain eligible only
+        // while translit_image_ok() proves no executable/shared alias observation is active.
+        if (insn->rep && (op == 0x6F || (op == 0x7F && insn->is_mem))) return TL_SSE2;
+        if (!insn->rep &&
+            (op == 0x10 || op == 0x28 || ((op == 0x11 || op == 0x29) && insn->is_mem)))
+            return TL_SSE2;
     }
     if (insn->p66 && !insn->rep && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg &&
         !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm) {
@@ -990,7 +997,10 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                                {0x66, 0x0F, 0x6F, 0x00}, {0xF3, 0x0F, 0x6F, 0x01},
                                                {0x0F, 0x10, 0xC1}, {0x0F, 0x28, 0x01},
                                                {0x66, 0x0F, 0x73, 0xDA, 0}, {0x66, 0x0F, 0xEB, 0xC1},
-                                               {0x66, 0x0F, 0x7E, 0xC0}};
+                                               {0x66, 0x0F, 0x7E, 0xC0}, {0xF3, 0x0F, 0x7F, 0x00},
+                                               {0x0F, 0x11, 0x00}, {0x0F, 0x29, 0x00},
+                                               {0x44, 0x0F, 0x11, 0x4F, 1}, {0x44, 0x0F, 0x29, 0x0C, 0x24},
+                                               {0xF3, 0x44, 0x0F, 0x7F, 0x4F, 0x13}};
         static const uint8_t refused[][6] = {{0xF0, 0x66, 0x0F, 0xDB, 0xC1}, // LOCK
                                               {0xF2, 0x0F, 0xDB, 0xC1},       // wrong mandatory prefix
                                               {0xF2, 0x0F, 0x6F, 0xC1},
@@ -999,9 +1009,9 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                               {0x66, 0x0F, 0xDB, 0x00},       // aligned-memory contract deferred
                                               {0x66, 0x0F, 0x7E, 0x00},       // memory store deferred
                                               {0x66, 0x0F, 0xDF, 0x00},       // PANDN memory source deferred
-                                              {0xF3, 0x0F, 0x7F, 0x00},       // MOVDQU store deferred
-                                              {0x0F, 0x11, 0x00},             // MOVUPS store deferred
-                                              {0x0F, 0x29, 0x00}};            // MOVAPS store deferred
+                                              {0xF3, 0x0F, 0x7F, 0xC0},       // MOVDQU store requires memory
+                                              {0x0F, 0x11, 0xC0},             // MOVUPS store requires memory
+                                              {0x0F, 0x29, 0xC0}};            // MOVAPS store requires memory
         struct insn decoded;
         for (size_t i = 0; i < sizeof admitted / sizeof admitted[0]; i++)
             if (hl_x86_decode((uint64_t)(uintptr_t)admitted[i], &decoded) <= 0 ||
@@ -1024,6 +1034,22 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             memcmp(emitted, load, sizeof load) != 0)
             return 54;
         return 0;
+    }
+    if (scenario == 41) {
+#if defined(HL_HOST_CPU_X86_64)
+        int saved_option = translit_selected;
+        int saved_shared = filemap_emulated_shared_active();
+        translit_selected = 1;
+        filemap_test_set_emulated_shared(0);
+        int admitted_without_observer = translit_image_ok();
+        filemap_test_set_emulated_shared(1);
+        int refused_with_observer = !translit_image_ok();
+        filemap_test_set_emulated_shared(saved_shared);
+        translit_selected = saved_option;
+        return admitted_without_observer && refused_with_observer ? 0 : 55;
+#else
+        return 0;
+#endif
     }
     return 6;
 }
@@ -1077,6 +1103,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int count = 0, terminated = 0, stitched = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t sse2_signature = 0;
+    uint64_t sse2_store_count = 0;
+    uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
+    int sse2_next_family_seen = 0;
+    int sse2_store_family_seen = 0;
 #endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
     uint32_t sse2_owner_count = 0;
@@ -1140,8 +1170,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
 
         if (kind == TL_SSE2) {
+            int sse2_store = insn.is_mem &&
+                             (insn.op == 0x11 || insn.op == 0x29 || (insn.rep && insn.op == 0x7F));
             int destination = insn.op == 0x73 ? insn.rm_reg : insn.reg;
-            if (insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB) {
+            if (sse2_store) {
+                translit_xmm_cpu(a, insn.reg, 1);
+            } else if (insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB) {
                 translit_xmm_cpu(a, insn.reg, 1);
                 if (!insn.is_mem && insn.rm_reg != insn.reg) translit_xmm_cpu(a, insn.rm_reg, 1);
             } else if (insn.op == 0x6F || insn.op == 0x10 || insn.op == 0x28) {
@@ -1158,7 +1192,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 a->cursor = instruction_start;
                 break;
             }
-            if (insn.op != 0x7E) translit_xmm_cpu(a, destination, 0);
+            if (!sse2_store && insn.op != 0x7E) translit_xmm_cpu(a, destination, 0);
             if (a->overflow) {
                 a->cursor = instruction_start;
                 break;
@@ -1172,6 +1206,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             count++;
 #if defined(HL_NATIVE_TEST_HOOKS)
             sse2_signature = (sse2_signature << 8) | insn.op;
+            sse2_store_count += (uint64_t)sse2_store;
+            sse2_store_movups += (uint64_t)(sse2_store && insn.op == 0x11);
+            sse2_store_movaps += (uint64_t)(sse2_store && insn.op == 0x29);
+            sse2_store_movdqu += (uint64_t)(sse2_store && insn.op == 0x7F);
+            if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
+                sse2_next_family_seen = 1;
+            if ((sse2_signature & UINT64_C(0xFFFFFFFF)) == UINT64_C(0x6F11297F))
+                sse2_store_family_seen = 1;
 #endif
             continue;
         }
@@ -1366,12 +1408,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     if (sse2_run) {
         (void)__atomic_fetch_add(&translit_sse2_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_instructions_admitted, (uint64_t)count, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_store_instructions, sse2_store_count, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_store_movups, sse2_store_movups, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_store_movaps, sse2_store_movaps, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_store_movdqu, sse2_store_movdqu, __ATOMIC_RELAXED);
         if (count == 6 && sse2_signature == UINT64_C(0x6FDB6F73EB7E))
             (void)__atomic_fetch_add(&translit_sse2_target_runs, 1, __ATOMIC_RELAXED);
-        // A compiler may extend the descriptor after this family; the low opcode suffix still proves
-        // these three literal instructions were contiguous in one published body.
-        if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
+        if (sse2_next_family_seen)
             (void)__atomic_fetch_add(&translit_sse2_next_family_runs, 1, __ATOMIC_RELAXED);
+        if (sse2_store_family_seen)
+            (void)__atomic_fetch_add(&translit_sse2_store_family_runs, 1, __ATOMIC_RELAXED);
     }
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
@@ -1432,10 +1478,17 @@ static int translit_report(char *out, size_t size) {
         __atomic_load_n(&translit_sse2_instructions_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_target_runs = __atomic_load_n(&translit_sse2_target_runs, __ATOMIC_RELAXED);
     uint64_t sse2_next_family_runs = __atomic_load_n(&translit_sse2_next_family_runs, __ATOMIC_RELAXED);
+    uint64_t sse2_store_instructions = __atomic_load_n(&translit_sse2_store_instructions, __ATOMIC_RELAXED);
+    uint64_t sse2_store_movups = __atomic_load_n(&translit_sse2_store_movups, __ATOMIC_RELAXED);
+    uint64_t sse2_store_movaps = __atomic_load_n(&translit_sse2_store_movaps, __ATOMIC_RELAXED);
+    uint64_t sse2_store_movdqu = __atomic_load_n(&translit_sse2_store_movdqu, __ATOMIC_RELAXED);
+    uint64_t sse2_store_family_runs = __atomic_load_n(&translit_sse2_store_family_runs, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
-             sse2_next_family_runs = 0;
+             sse2_next_family_runs = 0, sse2_store_instructions = 0;
+    uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
+    uint64_t sse2_store_family_runs = 0;
 #endif
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
@@ -1509,6 +1562,9 @@ static int translit_report(char *out, size_t size) {
                     " body_owner_recovered=%llu body_owner_published=%llu"
                     " sse2_runs_admitted=%llu sse2_instructions_admitted=%llu sse2_target_runs=%llu"
                     " sse2_next_family_runs=%llu"
+                    " sse2_store_instructions=%llu"
+                    " sse2_store_movups=%llu sse2_store_movaps=%llu sse2_store_movdqu=%llu"
+                    " sse2_store_family_runs=%llu"
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -1520,6 +1576,10 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)body_owner_recovered, (unsigned long long)body_owner_published,
                     (unsigned long long)sse2_runs_admitted, (unsigned long long)sse2_instructions_admitted,
                     (unsigned long long)sse2_target_runs, (unsigned long long)sse2_next_family_runs,
+                    (unsigned long long)sse2_store_instructions,
+                    (unsigned long long)sse2_store_movups, (unsigned long long)sse2_store_movaps,
+                    (unsigned long long)sse2_store_movdqu,
+                    (unsigned long long)sse2_store_family_runs,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,

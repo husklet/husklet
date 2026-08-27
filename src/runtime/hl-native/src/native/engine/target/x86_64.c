@@ -189,6 +189,10 @@ static const hl_host_services *effective_host_services(void) {
 
 static void jit86_store_alias_changed(uint64_t guest, size_t size);
 static int jit86_store_alias_observation_active(void);
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int filemap_emulated_shared_active(void);
+static void filemap_test_set_emulated_shared(int active);
+#endif
 static void gbus_mapping_transition_lock(void);
 static void gbus_mapping_transition_unlock(void);
 static size_t x86_store_writable_prefix(uintptr_t address, size_t length);
