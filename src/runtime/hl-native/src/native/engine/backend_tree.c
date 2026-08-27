@@ -150,6 +150,9 @@ struct hl_backend_tree_shared {
     _Atomic uint64_t stop_form_total;
     _Atomic uint64_t stop_form_unique;
     _Atomic uint64_t stop_form_overflow;
+    /* One shared dynamic count: every admitted link has the same proven JCC disposition. Keeping it in
+       the fork-shared record makes emitted increments independent of per-process slot reassignment. */
+    _Atomic uint64_t jcc_links;
     struct hl_backend_tree_slot slots[HL_BACKEND_TREE_SLOTS];
 };
 
@@ -425,22 +428,12 @@ static inline void hl_backend_tree_direct_edge(unsigned family, int same_page) {
                                   memory_order_relaxed);
 }
 
-// Same-ISA x86 records immutable, already-published same-page JCC links in batches when the eventual
-// dispatcher return closes the run. Each link was resolved under the map lock at source publication, so
-// all disposition columns are facts rather than a later lookup's inference.
-static inline void hl_backend_tree_jcc_links(uint64_t count) {
-    struct hl_backend_tree_slot *slot = g_backend_tree_self;
-    if (slot == NULL || count == 0) return;
-    unsigned family = HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
-    atomic_fetch_add_explicit(&slot->direct_edge[family], count, memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->direct_edge_chained[family], count, memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->direct_edge_resolution[family][HL_BACKEND_SHAPE_EDGE_MAPPED], count,
-                              memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->jcc_taken_same_page, count, memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->jcc_taken_target_translated, count, memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->jcc_taken_generation_current, count, memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->jcc_taken_rel32, count, memory_order_relaxed);
-    atomic_fetch_add_explicit(&slot->jcc_taken_eligible, count, memory_order_relaxed);
+// Addresses baked by hook-only same-ISA x86 link stubs. Each target was resolved under the map lock at
+// source publication, so these disposition columns are facts rather than a later lookup's inference.
+// The address belongs to the fork-shared record rather than a lifecycle slot, so it remains authoritative
+// even on the narrow fixed-pcache fork path that preserves an arena.
+static inline uintptr_t hl_backend_tree_jcc_link_counter_address(void) {
+    return g_backend_tree == NULL ? 0 : (uintptr_t)&g_backend_tree->jcc_links;
 }
 
 static inline void hl_backend_tree_direct_edge_resolution(unsigned family, unsigned resolution,
@@ -652,6 +645,16 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
         summary->jcc_taken_eligible += atomic_load_explicit(&slot->jcc_taken_eligible, memory_order_relaxed);
         summary->jcc_taken_ineligible += atomic_load_explicit(&slot->jcc_taken_ineligible, memory_order_relaxed);
     }
+    uint64_t jcc_links = atomic_load_explicit(&shared->jcc_links, memory_order_relaxed);
+    unsigned jcc_family = HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
+    summary->direct_edge[jcc_family] += jcc_links;
+    summary->direct_edge_chained[jcc_family] += jcc_links;
+    summary->direct_edge_resolution[jcc_family][HL_BACKEND_SHAPE_EDGE_MAPPED] += jcc_links;
+    summary->jcc_taken_same_page += jcc_links;
+    summary->jcc_taken_target_translated += jcc_links;
+    summary->jcc_taken_generation_current += jcc_links;
+    summary->jcc_taken_rel32 += jcc_links;
+    summary->jcc_taken_eligible += jcc_links;
     summary->claimed += missing_claims;
     summary->missing = summary->claimed - summary->completed - summary->abnormal;
     summary->crossings = summary->translated_entries + summary->interpreted_entries;

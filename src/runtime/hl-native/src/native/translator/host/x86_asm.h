@@ -87,22 +87,22 @@ static inline void hl_x64_cmp_gs_imm8(hl_x64_asm *a, int32_t disp, uint8_t value
     hl_x64_u8(a, value);
 }
 
-// incq %gs:disp32. Hook-only dynamic counters use per-CPU storage so emitted code bakes no process-global
-// address and remains position independent.
-static inline void hl_x64_inc_gs(hl_x64_asm *a, int32_t disp) {
-    hl_x64_u8(a, 0x65);
-    hl_x64_u8(a, 0x48);
-    hl_x64_u8(a, 0xFF);
-    hl_x64_u8(a, 0x04); // mod=00 /0 rm=100 (SIB)
-    hl_x64_u8(a, 0x25); // no base/index, disp32
-    hl_x64_u32(a, (uint32_t)disp);
-}
-
 // movabs $imm64, %reg
 static inline void hl_x64_mov_imm64(hl_x64_asm *a, int reg, uint64_t value) {
     hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 1 : 0)));
     hl_x64_u8(a, (uint8_t)(0xB8 + (reg & 7)));
     hl_x64_u64(a, value);
+}
+
+// lock incq *(uint64_t *)address. Diagnostic-only linked-edge counters emit this after a full spill, when
+// RAX and flags are canonical in the CPU image. The same-ISA backend has no persistent code cache, and its
+// fork hook discards inherited code, so the process-local absolute address never crosses an image epoch.
+static inline void hl_x64_atomic_inc_abs(hl_x64_asm *a, uintptr_t address) {
+    hl_x64_mov_imm64(a, HL_X64_RAX, (uint64_t)address);
+    hl_x64_u8(a, 0xF0);
+    hl_x64_u8(a, 0x48);
+    hl_x64_u8(a, 0xFF);
+    hl_x64_u8(a, 0x00);
 }
 
 // mov (%base), %reg  (64-bit)

@@ -155,10 +155,10 @@ static uint64_t translit_jcc_fall_successor_page_refused;
 static uint64_t translit_jcc_fall_decode_refused;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_jcc_fall_executed;
-static uint64_t translit_jcc_link_admitted;
-static uint64_t translit_jcc_link_taken;
-static uint64_t translit_jcc_link_irq_fallback;
-static uint64_t translit_jcc_link_dispatcher;
+static _Atomic uint64_t translit_jcc_link_admitted;
+static _Atomic uint64_t translit_jcc_link_taken;
+static _Atomic uint64_t translit_jcc_link_irq_fallback;
+static _Atomic uint64_t translit_jcc_link_dispatcher;
 #endif
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
@@ -764,17 +764,15 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(a, 5); // JNE: dispatcher fallback
 #if defined(HL_NATIVE_TEST_HOOKS)
-    hl_x64_inc_gs(a, OFF_TRANSLIT_JCC_LINK_TAKEN);
-    hl_x64_mov_imm64(a, HL_X64_RAX, target_block->gpc);
-    hl_x64_store_gs(a, HL_X64_RAX, OFF_BACKEND_SHAPE_GPC);
-    hl_x64_mov_imm64(a, HL_X64_RAX, (uint64_t)(uintptr_t)target_block);
-    hl_x64_store_gs(a, HL_X64_RAX, OFF_BACKEND_SHAPE_BLOCK);
+    hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_taken);
+    uintptr_t shape_counter = hl_backend_tree_jcc_link_counter_address();
+    if (shape_counter != 0) hl_x64_atomic_inc_abs(a, shape_counter);
 #endif
     translit_emit_reload(a);
     hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
     hl_x64_patch_rel32(a, irq, a->cursor);
 #if defined(HL_NATIVE_TEST_HOOKS)
-    hl_x64_inc_gs(a, OFF_TRANSLIT_JCC_LINK_IRQ_FALLBACK);
+    hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_irq_fallback);
 #endif
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
@@ -784,7 +782,7 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
 static void translit_emit_jcc_dispatcher(hl_x64_asm *a, uint64_t target) {
     translit_emit_spill(a);
 #if defined(HL_NATIVE_TEST_HOOKS)
-    hl_x64_inc_gs(a, OFF_TRANSLIT_JCC_LINK_DISPATCHER);
+    hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_dispatcher);
 #endif
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
@@ -2328,23 +2326,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 static void translit_run(struct cpu *cpu, struct interp_block *block) {
     (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
     if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_entries, 1, __ATOMIC_RELAXED);
-#if defined(HL_NATIVE_TEST_HOOKS)
-    cpu->backend_shape_gpc = block->gpc;
-    cpu->backend_shape_block = (uint64_t)(uintptr_t)block;
-    cpu->translit_jcc_link_taken = 0;
-    cpu->translit_jcc_link_irq_fallback = 0;
-    cpu->translit_jcc_link_dispatcher = 0;
-#endif
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);
 #if defined(HL_NATIVE_TEST_HOOKS)
-    (void)__atomic_fetch_add(&translit_jcc_link_taken, cpu->translit_jcc_link_taken, __ATOMIC_RELAXED);
-    (void)__atomic_fetch_add(&translit_jcc_link_irq_fallback, cpu->translit_jcc_link_irq_fallback,
-                             __ATOMIC_RELAXED);
-    (void)__atomic_fetch_add(&translit_jcc_link_dispatcher, cpu->translit_jcc_link_dispatcher,
-                             __ATOMIC_RELAXED);
-    hl_backend_tree_jcc_links(cpu->translit_jcc_link_taken);
     if (block->profile_jcc_fall_stitches != 0)
         (void)__atomic_fetch_add(&translit_jcc_fall_executed, block->profile_jcc_fall_stitches, __ATOMIC_RELAXED);
 #endif
