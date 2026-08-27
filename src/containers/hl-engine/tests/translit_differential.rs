@@ -85,8 +85,8 @@ struct Backend {
     sse2_store_movaps: u64,
     sse2_store_movdqu: u64,
     sse2_store_family_runs: u64,
-    sse2_pxor_instructions: u64,
-    sse2_pxor_runs: u64,
+    sse2_pxor_admitted: u64,
+    sse2_pxor_runs_admitted: u64,
     translations: u64,
 }
 
@@ -146,8 +146,8 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_store_movaps: counter("sse2_store_movaps="),
         sse2_store_movdqu: counter("sse2_store_movdqu="),
         sse2_store_family_runs: counter("sse2_store_family_runs="),
-        sse2_pxor_instructions: counter("sse2_pxor_instructions="),
-        sse2_pxor_runs: counter("sse2_pxor_runs="),
+        sse2_pxor_admitted: counter("sse2_pxor_admitted="),
+        sse2_pxor_runs_admitted: counter("sse2_pxor_runs_admitted="),
         translations,
         line,
     }
@@ -190,14 +190,14 @@ fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
     assert_eq!(native.stdout, selected);
     assert_eq!(
         selected,
-        b"pxor=1010101010101010 high=1010101010101010 zero=0000000000000000 flags=0\n"
+        b"distinct=1010101010101010:1010101010101010 high=ffffffffffffffff:ffffffffffffffff zero=0000000000000000:0000000000000000 flags=0c95:0c95:0000\n"
     );
+    assert!(selected_backend.sse2_pxor_admitted >= 3, "{}", selected_backend.line);
     assert!(
-        selected_backend.sse2_pxor_instructions >= 3,
+        selected_backend.sse2_pxor_runs_admitted > 0,
         "{}",
         selected_backend.line
     );
-    assert!(selected_backend.sse2_pxor_runs > 0, "{}", selected_backend.line);
     let image = std::fs::read(executable).unwrap();
     assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0xef, 0xc1]));
     assert!(image.windows(5).any(|bytes| bytes == [0x66, 0x45, 0x0f, 0xef, 0xc1]));

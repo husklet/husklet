@@ -169,8 +169,8 @@ static uint64_t translit_sse2_store_movups;
 static uint64_t translit_sse2_store_movaps;
 static uint64_t translit_sse2_store_movdqu;
 static uint64_t translit_sse2_store_family_runs;
-static uint64_t translit_sse2_pxor_instructions;
-static uint64_t translit_sse2_pxor_runs;
+static uint64_t translit_sse2_pxor_admitted;
+static uint64_t translit_sse2_pxor_runs_admitted;
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -1428,8 +1428,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             (void)__atomic_fetch_add(&translit_sse2_next_family_runs, 1, __ATOMIC_RELAXED);
         if (sse2_store_family_seen)
             (void)__atomic_fetch_add(&translit_sse2_store_family_runs, 1, __ATOMIC_RELAXED);
-        (void)__atomic_fetch_add(&translit_sse2_pxor_instructions, sse2_pxor_count, __ATOMIC_RELAXED);
-        if (sse2_pxor_seen) (void)__atomic_fetch_add(&translit_sse2_pxor_runs, 1, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_pxor_admitted, sse2_pxor_count, __ATOMIC_RELAXED);
+        if (sse2_pxor_seen) (void)__atomic_fetch_add(&translit_sse2_pxor_runs_admitted, 1, __ATOMIC_RELAXED);
     }
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
@@ -1495,15 +1495,15 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_store_movaps = __atomic_load_n(&translit_sse2_store_movaps, __ATOMIC_RELAXED);
     uint64_t sse2_store_movdqu = __atomic_load_n(&translit_sse2_store_movdqu, __ATOMIC_RELAXED);
     uint64_t sse2_store_family_runs = __atomic_load_n(&translit_sse2_store_family_runs, __ATOMIC_RELAXED);
-    uint64_t sse2_pxor_instructions = __atomic_load_n(&translit_sse2_pxor_instructions, __ATOMIC_RELAXED);
-    uint64_t sse2_pxor_runs = __atomic_load_n(&translit_sse2_pxor_runs, __ATOMIC_RELAXED);
+    uint64_t sse2_pxor_admitted = __atomic_load_n(&translit_sse2_pxor_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_pxor_runs_admitted = __atomic_load_n(&translit_sse2_pxor_runs_admitted, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
              sse2_next_family_runs = 0, sse2_store_instructions = 0;
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
     uint64_t sse2_store_family_runs = 0;
-    uint64_t sse2_pxor_instructions = 0, sse2_pxor_runs = 0;
+    uint64_t sse2_pxor_admitted = 0, sse2_pxor_runs_admitted = 0;
 #endif
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
@@ -1580,7 +1580,7 @@ static int translit_report(char *out, size_t size) {
                     " sse2_store_instructions=%llu"
                     " sse2_store_movups=%llu sse2_store_movaps=%llu sse2_store_movdqu=%llu"
                     " sse2_store_family_runs=%llu"
-                    " sse2_pxor_instructions=%llu sse2_pxor_runs=%llu"
+                    " sse2_pxor_admitted=%llu sse2_pxor_runs_admitted=%llu"
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -1596,7 +1596,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)sse2_store_movups, (unsigned long long)sse2_store_movaps,
                     (unsigned long long)sse2_store_movdqu,
                     (unsigned long long)sse2_store_family_runs,
-                    (unsigned long long)sse2_pxor_instructions, (unsigned long long)sse2_pxor_runs,
+                    (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
