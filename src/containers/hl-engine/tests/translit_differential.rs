@@ -465,6 +465,25 @@ fn exact_sse2_integer_forms_match_the_native_host() {
     agrees("sse2_exact");
 }
 
+#[test]
+fn next_sse_family_matches_native_for_unaligned_high_rip_alias_flags_and_prefixes() {
+    agrees("sse_next_family");
+}
+
+#[test]
+fn next_sse_family_fixture_contains_the_exact_dynamic_chain_and_extended_forms() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_next_family");
+    let image = std::fs::read(executable).unwrap();
+    let contains = |bytes: &[u8]| image.windows(bytes.len()).any(|window| window == bytes);
+    assert!(contains(&[0xf3, 0x0f, 0x6f, 0x47, 0x01]));
+    assert!(contains(&[0xf3, 0x0f, 0x6f, 0x4f, 0x11]));
+    assert!(contains(&[0x66, 0x0f, 0xdf, 0xc1]));
+    assert!(contains(&[0xf3, 0x45, 0x0f, 0x6f, 0x40, 0x03]));
+    assert!(contains(&[0xf3, 0x44, 0x0f, 0x6f, 0x0d]));
+    assert!(contains(&[0x66, 0x45, 0x0f, 0xdf, 0xc1]));
+}
+
 /// A direct forward edge stays in one emitted descriptor. The corrupt bytes in the skipped gap make
 /// target calculation observable, while the counters make a zero stitch budget observably red.
 #[test]
