@@ -10,6 +10,9 @@ autobins = false
 [lints]
 workspace = true
 
+[features]
+native-test-hooks = ["hl-native/native-test-hooks"]
+
 [dependencies]
 # `string` lets the usage, version and suggestion lines carry the worker name the caller actually
 # typed, which is resolved from argument zero and so cannot be a `&'static str`.

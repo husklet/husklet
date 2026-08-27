@@ -82,6 +82,10 @@ struct LaunchArguments {
     /// Execute a same-ISA Linux x86-64 guest under the experimental native syscall supervisor.
     #[arg(long)]
     native_supervised: bool,
+    /// Set one launch-scoped native test injection in a hooks-enabled worker.
+    #[cfg(feature = "native-test-hooks")]
+    #[arg(long, value_name = "KEY=VALUE", hide = true, value_parser = parse_native_test_option)]
+    native_test_option: Vec<NativeTestOption>,
     /// Existing container root used to resolve the guest entry and `PT_INTERP`.
     #[arg(long)]
     rootfs: Option<PathBuf>,
@@ -90,6 +94,25 @@ struct LaunchArguments {
     /// Arguments handed to the guest unchanged.
     #[arg(allow_hyphen_values = true)]
     arguments: Vec<String>,
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeTestOption {
+    name: &'static str,
+    value: &'static str,
+}
+
+#[cfg(feature = "native-test-hooks")]
+fn parse_native_test_option(value: &str) -> Result<NativeTestOption, String> {
+    match value {
+        "HL_TRANSLIT_FS_AUTHORITY_TEST=1" => Ok(NativeTestOption {
+            name: "HL_TRANSLIT_FS_AUTHORITY_TEST",
+            value: "1",
+        }),
+        _ if !value.contains('=') => Err("native test options use KEY=VALUE syntax".to_owned()),
+        _ => Err("unsupported native test option; expected HL_TRANSLIT_FS_AUTHORITY_TEST=1".to_owned()),
+    }
 }
 
 /// Why a worker could not run the guest.
@@ -244,6 +267,12 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
                 .to_owned(),
         ));
     }
+    #[cfg(feature = "native-test-hooks")]
+    if launch.rootfs.is_none() && !launch.native_test_option.is_empty() {
+        return Err(Failure::Request(
+            "--native-test-option requires --rootfs; raw host-path launches do not carry launch options".to_owned(),
+        ));
+    }
     let engine = if let Some(rootfs) = &launch.rootfs {
         let plan = rootfs_plan(rootfs, launch)?;
         hl_engine::runtime::Engine::from_plan(guest.isa(), plan)?
@@ -310,6 +339,18 @@ fn rootfs_plan(
                 .map_err(|error| Failure::Request(format!("cannot set the engine launch option {name}: {error:?}")))?;
         }
     }
+    #[cfg(feature = "native-test-hooks")]
+    for injected in &launch.native_test_option {
+        if options.get(injected.name).is_some() {
+            return Err(Failure::Request(format!(
+                "native test option {} may be specified only once",
+                injected.name
+            )));
+        }
+        options
+            .set(injected.name, injected.value, false)
+            .map_err(|error| Failure::Request(format!("cannot set native test option {}: {error:?}", injected.name)))?;
+    }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(host.as_os_str().as_encoded_bytes().to_vec()),
@@ -375,7 +416,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
         environment: Vec::new(),
         result_path: None,
         options: hl_engine::options::Options::default(),
-        box_policy: Default::default(),
+        box_policy: hl_engine::launcher::plan::RuntimeBoxPolicy::default(),
     };
     // This is the production selector itself.  A receipt is emitted only when
     // it constructs the backend named below for the requested guest ISA.
@@ -491,6 +532,67 @@ mod tests {
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
     }
 
+    #[cfg(not(feature = "native-test-hooks"))]
+    #[test]
+    fn production_parser_rejects_native_test_options() {
+        let parsed = LaunchArguments::try_parse_from([
+            "hl-x86_64",
+            "--native-test-option",
+            "HL_TRANSLIT_FS_AUTHORITY_TEST=1",
+            "program",
+        ]);
+        assert_eq!(parsed.unwrap_err().kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn hooks_parser_accepts_only_the_typed_fs_authority_injection() {
+        let selected = launch(&[
+            "--native-test-option",
+            "HL_TRANSLIT_FS_AUTHORITY_TEST=1",
+            "--rootfs",
+            "/image",
+            "bin/program",
+        ]);
+        assert_eq!(
+            selected.native_test_option,
+            [super::NativeTestOption {
+                name: "HL_TRANSLIT_FS_AUTHORITY_TEST",
+                value: "1"
+            }]
+        );
+
+        for invalid in [
+            "HL_TRANSLIT_FS_AUTHORITY_TEST",
+            "HL_TRANSLIT_FS_AUTHORITY_TEST=0",
+            "HL_C_DIAGNOSTICS=1",
+        ] {
+            assert!(
+                LaunchArguments::try_parse_from([
+                    "hl-x86_64",
+                    "--native-test-option",
+                    invalid,
+                    "--rootfs",
+                    "/image",
+                    "bin/program",
+                ])
+                .is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn native_test_options_require_a_rootfs_instead_of_being_ignored() {
+        let failure = execute(
+            Guest::X86_64,
+            &launch(&["--native-test-option", "HL_TRANSLIT_FS_AUTHORITY_TEST=1", "/bin/true"]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("--native-test-option requires --rootfs"));
+    }
+
     #[test]
     fn launch_options_are_rejected_for_a_host_path_instead_of_ignored() {
         for option in ["--diagnostics", "--translit", "--native-supervised"] {
@@ -536,6 +638,50 @@ mod tests {
         assert_eq!(selected.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
         assert_eq!(selected.box_policy.flags & (1 << 2), 1 << 2);
         assert_eq!(defaults.box_policy.flags & (1 << 2), 0);
+    }
+
+    #[cfg(all(unix, feature = "native-test-hooks"))]
+    #[test]
+    fn rootfs_plan_binds_one_native_test_option_and_rejects_a_duplicate() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("bin/program");
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let root = root.path().to_str().unwrap();
+
+        let plan = rootfs_plan(
+            std::path::Path::new(root),
+            &launch(&[
+                "--native-test-option",
+                "HL_TRANSLIT_FS_AUTHORITY_TEST=1",
+                "--rootfs",
+                root,
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(plan.options.get("HL_TRANSLIT_FS_AUTHORITY_TEST"), Some("1"));
+
+        let duplicate = rootfs_plan(
+            std::path::Path::new(root),
+            &launch(&[
+                "--native-test-option",
+                "HL_TRANSLIT_FS_AUTHORITY_TEST=1",
+                "--native-test-option",
+                "HL_TRANSLIT_FS_AUTHORITY_TEST=1",
+                "--rootfs",
+                root,
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            reason(&duplicate),
+            "native test option HL_TRANSLIT_FS_AUTHORITY_TEST may be specified only once"
+        );
     }
 
     /// A stock image ships `/bin/sh` as an **absolute** symbolic link, and the host path the plan
