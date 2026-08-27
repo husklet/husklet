@@ -87,6 +87,8 @@ struct Backend {
     sse2_store_family_runs: u64,
     sse2_pxor_admitted: u64,
     sse2_pxor_runs_admitted: u64,
+    sse2_punpcklqdq_admitted: u64,
+    sse2_punpcklqdq_runs_admitted: u64,
     translations: u64,
     unsupported_total: u64,
     unsupported_keyed: u64,
@@ -165,6 +167,8 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_store_family_runs: counter("sse2_store_family_runs="),
         sse2_pxor_admitted: counter("sse2_pxor_admitted="),
         sse2_pxor_runs_admitted: counter("sse2_pxor_runs_admitted="),
+        sse2_punpcklqdq_admitted: counter("sse2_punpcklqdq_admitted="),
+        sse2_punpcklqdq_runs_admitted: counter("sse2_punpcklqdq_runs_admitted="),
         translations,
         unsupported_total: unsupported_counter("total="),
         unsupported_keyed: unsupported_counter("keyed="),
@@ -246,6 +250,37 @@ fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
     let image = std::fs::read(executable).unwrap();
     assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0xef, 0xc1]));
     assert!(image.windows(5).any(|bytes| bytes == [0x66, 0x45, 0x0f, 0xef, 0xc1]));
+}
+
+#[test]
+fn register_punpcklqdq_matches_native_for_distinct_high_alias_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_punpcklqdq");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native PUNPCKLQDQ fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"distinct=8877665544332211:0123456789abcdef high=0706050403020100:f8f9fafbfcfdfeff alias=8877665544332211:8877665544332211 flags=0c95:0c95:0000\n"
+    );
+    assert!(
+        selected_backend.sse2_punpcklqdq_admitted >= 3,
+        "{}",
+        selected_backend.line
+    );
+    assert!(
+        selected_backend.sse2_punpcklqdq_runs_admitted > 0,
+        "{}",
+        selected_backend.line
+    );
+    let image = std::fs::read(executable).unwrap();
+    assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0x6c, 0xc1]));
+    assert!(image.windows(5).any(|bytes| bytes == [0x66, 0x45, 0x0f, 0x6c, 0xc1]));
 }
 
 #[test]
@@ -450,6 +485,57 @@ fn run_with_arguments(
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     run_with_arguments(executable, translit, &[], false, false)
+}
+
+fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).unwrap();
+    options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    options.set("HL_TRANSLIT_PROFILE_WIDE_TEST", "1", true).unwrap();
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), termination.to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    let stderr = captured.err.lock().unwrap().clone();
+    (exit.guest_status, stderr)
+}
+
+#[test]
+fn full_width_translit_profile_is_complete_for_exit_and_exit_group() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "profile_termination");
+    for termination in [b"exit".as_slice(), b"group".as_slice()] {
+        let (status, stderr) = wide_profile(&executable, termination);
+        assert_eq!(status, 0);
+        assert_eq!(stderr.last(), Some(&b'\n'), "{}", String::from_utf8_lossy(&stderr));
+        let text = String::from_utf8(stderr).unwrap();
+        let lines: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("[prof] translit:"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{text}");
+        let line = lines[0];
+        assert!(line.contains("natural_lea_lowered=18446744073709551615"), "{line}");
+        assert!(line.contains("jcc_fall_executed=18446744073709551615"), "{line}");
+        assert!(!line.contains("[diag]"), "{line}");
+        if termination == b"group" {
+            assert!(
+                text.lines().any(|record| record.starts_with("[diag] boundary ")),
+                "{text}"
+            );
+        }
+    }
 }
 
 /// The whole contract: the backend selection must not be observable in the guest's output.

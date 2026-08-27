@@ -1669,17 +1669,9 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
                                     (unsigned long long)g_ibtc_fill, ibtc_mode);
-        // The same-ISA backend, and -- when it produced nothing -- which of its two silent refusals
-        // fired. Both are permanent for the process, so without this line an operator can only tell
-        // "transliterated" from "refused" by timing the run.
-        if (profile_size > 0 && (size_t)profile_size < sizeof profile) {
-            int translit_size = translit_report(profile + profile_size, sizeof profile - (size_t)profile_size);
-            if (translit_size > 0) profile_size += translit_size;
-        }
-        if (profile_size > 0) {
-            size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
-            (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
-        }
+        if (profile_size > 0 && (size_t)profile_size < sizeof profile)
+            (void)profile_record_write(profile, (size_t)profile_size);
+        (void)translit_profile_write();
 #if defined(HL_NATIVE_TEST_HOOKS)
         char unsupported[1024];
         int unsupported_size = translit_unsupported_report(unsupported, sizeof unsupported);
