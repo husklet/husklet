@@ -180,6 +180,8 @@ static uint64_t translit_sse2_punpcklqdq_runs_admitted;
 
 #define TL_UNSUPPORTED_FORM_N 4096u
 #define TL_UNSUPPORTED_SITE_N 8192u
+// Process-local diagnostic state. fork() inherits a snapshot and each exiting process reports only its
+// own subsequent execution; consumers must not sum parent/child lines as though this were shared aggregation.
 typedef struct {
     _Atomic uint32_t state;
     uint64_t key;
@@ -198,6 +200,7 @@ static _Atomic uint64_t translit_unsupported_form_overflow;
 static _Atomic uint64_t translit_unsupported_site_unique;
 static _Atomic uint64_t translit_unsupported_site_repeats, translit_unsupported_site_collisions;
 static _Atomic uint64_t translit_unsupported_site_overflow;
+static _Atomic uint64_t translit_unsupported_deferred_excluded;
 #else
 #define TRANSLIT_PUNPCKLQDQ_PROFILE ""
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS
@@ -370,10 +373,6 @@ static int translit_classify(const struct insn *insn) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-static unsigned translit_unsupported_prefix(const struct insn *insn) {
-    return insn->rep ? 1u : insn->repne ? 2u : insn->p66 ? 3u : 0u;
-}
-
 static unsigned translit_unsupported_width(const struct insn *insn) {
     return insn->opsize == 1 ? 0u : insn->opsize == 2 ? 1u : insn->opsize == 4 ? 2u : insn->opsize == 8 ? 3u : 4u;
 }
@@ -381,15 +380,19 @@ static unsigned translit_unsupported_width(const struct insn *insn) {
 static uint64_t translit_unsupported_key(const struct insn *insn) {
     unsigned map = insn->evex ? 4u : insn->vex ? 3u : insn->map3 ? 2u : insn->two ? 1u : 0u;
     unsigned immediate = insn->imm_bytes == 0 ? 0u : insn->imm_bytes == 1 ? 1u : insn->imm_bytes <= 4 ? 2u : 3u;
-    return (uint64_t)insn->op | (uint64_t)map << 8 | (uint64_t)translit_unsupported_prefix(insn) << 11 |
-           (uint64_t)(insn->has_modrm != 0) << 13 | (uint64_t)(insn->mod & 3) << 14 |
-           (uint64_t)(insn->reg & 7) << 16 | (uint64_t)(insn->rm & 7) << 19 |
-           (uint64_t)(insn->is_mem != 0) << 22 | (uint64_t)(insn->rexW != 0) << 23 |
-           (uint64_t)(insn->rexR != 0) << 24 | (uint64_t)(insn->rexB != 0) << 25 |
-           (uint64_t)(insn->seg & 3) << 26 | (uint64_t)(insn->addr32 != 0) << 28 |
-           (uint64_t)(insn->lock != 0) << 29 | (uint64_t)immediate << 30 |
-           (uint64_t)translit_unsupported_width(insn) << 32 | (uint64_t)(insn->vex_map & 7) << 35 |
-           (uint64_t)(insn->rexX != 0) << 38;
+    return (uint64_t)insn->op | (uint64_t)map << 8 | (uint64_t)(insn->p66 != 0) << 11 |
+           (uint64_t)(insn->rep != 0) << 12 | (uint64_t)(insn->repne != 0) << 13 |
+           (uint64_t)(insn->lock != 0) << 14 | (uint64_t)(insn->addr32 != 0) << 15 |
+           (uint64_t)(insn->seg & 7) << 16 | (uint64_t)(insn->has_rex != 0) << 19 |
+           (uint64_t)(insn->rexW != 0) << 20 | (uint64_t)(insn->rexR != 0) << 21 |
+           (uint64_t)(insn->rexX != 0) << 22 | (uint64_t)(insn->rexB != 0) << 23 |
+           (uint64_t)(insn->has_modrm != 0) << 24 | (uint64_t)insn->modrm << 25 |
+           (uint64_t)(insn->is_mem != 0) << 33 | (uint64_t)(insn->rip_rel != 0) << 34 |
+           (uint64_t)translit_unsupported_width(insn) << 35 | (uint64_t)immediate << 38 |
+           (uint64_t)(insn->vex_map & 7) << 40 | (uint64_t)(insn->vex_pp & 3) << 43 |
+           (uint64_t)(insn->vex_l & 3) << 45 | (uint64_t)(insn->vex_w != 0) << 47 |
+           (uint64_t)(insn->vvvv & 31) << 48 | (uint64_t)(insn->evex_mask & 7) << 53 |
+           (uint64_t)(insn->evex_z != 0) << 56 | (uint64_t)(insn->evex_b != 0) << 57;
 }
 
 static uint64_t translit_unsupported_mix(uint64_t value) {
@@ -400,13 +403,19 @@ static uint64_t translit_unsupported_mix(uint64_t value) {
     return value ^ (value >> 33);
 }
 
+static uint32_t translit_unsupported_published(const _Atomic uint32_t *state) {
+    uint32_t value = atomic_load_explicit(state, memory_order_acquire);
+    while (value == 1) value = atomic_load_explicit(state, memory_order_acquire);
+    return value;
+}
+
 static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
     uint64_t key = translit_unsupported_key(insn);
     unsigned start = (unsigned)translit_unsupported_mix(key) & (TL_UNSUPPORTED_FORM_N - 1u);
     int keyed = 0;
     for (unsigned probe = 0; probe < TL_UNSUPPORTED_FORM_N; probe++) {
         translit_unsupported_form *slot = &translit_unsupported_forms[(start + probe) & (TL_UNSUPPORTED_FORM_N - 1u)];
-        uint32_t state = atomic_load_explicit(&slot->state, memory_order_acquire);
+        uint32_t state = translit_unsupported_published(&slot->state);
         if (state == 0) {
             uint32_t empty = 0;
             if (atomic_compare_exchange_strong_explicit(&slot->state, &empty, 1, memory_order_acquire,
@@ -434,7 +443,7 @@ static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
     start = (unsigned)mixed & (TL_UNSUPPORTED_SITE_N - 1u);
     for (unsigned probe = 0; probe < TL_UNSUPPORTED_SITE_N; probe++) {
         translit_unsupported_site *slot = &translit_unsupported_sites[(start + probe) & (TL_UNSUPPORTED_SITE_N - 1u)];
-        uint32_t state = atomic_load_explicit(&slot->state, memory_order_acquire);
+        uint32_t state = translit_unsupported_published(&slot->state);
         if (state == 0) {
             uint32_t empty = 0;
             if (atomic_compare_exchange_strong_explicit(&slot->state, &empty, 1, memory_order_acquire,
@@ -456,6 +465,14 @@ static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
         atomic_fetch_add_explicit(&translit_unsupported_site_collisions, 1, memory_order_relaxed);
     }
     atomic_fetch_add_explicit(&translit_unsupported_site_overflow, 1, memory_order_relaxed);
+}
+
+static void translit_unsupported_record_completed(const struct insn *insn, uint64_t pc, int completed) {
+    if (translit_classify(insn) != TL_NO) return;
+    if (completed)
+        translit_unsupported_record(insn, pc);
+    else
+        atomic_fetch_add_explicit(&translit_unsupported_deferred_excluded, 1, memory_order_relaxed);
 }
 
 static void translit_unsupported_top(const translit_unsupported_form *forms, unsigned form_count,
@@ -734,6 +751,19 @@ static void *translit_body_owner_batch_worker(void *opaque) {
 static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next, struct insn *successor);
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+typedef struct {
+    _Atomic uint32_t state, started, done, observed;
+} translit_unsupported_wait_test;
+
+static void *translit_unsupported_wait_thread(void *opaque) {
+    translit_unsupported_wait_test *test = opaque;
+    atomic_store_explicit(&test->started, 1, memory_order_release);
+    uint32_t observed = translit_unsupported_published(&test->state);
+    atomic_store_explicit(&test->observed, observed, memory_order_relaxed);
+    atomic_store_explicit(&test->done, 1, memory_order_release);
+    return NULL;
+}
+
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
@@ -1202,6 +1232,90 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 56;
     }
+    if (scenario == 43) {
+        struct insn forms[19] = {0};
+        for (unsigned i = 0; i < 19; i++) forms[i].op = 0x12;
+        forms[1].p66 = 1;
+        forms[2].rep = 1;
+        forms[3].repne = 1;
+        forms[4].lock = 1;
+        forms[5].addr32 = 1;
+        forms[6].seg = 2;
+        forms[7].has_rex = forms[7].rexW = 1;
+        forms[8].has_rex = forms[8].rexR = 1;
+        forms[9].has_rex = forms[9].rexX = 1;
+        forms[10].has_rex = forms[10].rexB = 1;
+        forms[11].has_modrm = 1;
+        forms[11].modrm = 0xc1;
+        forms[12].opsize = 8;
+        forms[13].vex = 1;
+        forms[13].vex_map = 2;
+        forms[13].vex_pp = 3;
+        forms[14].vex = 1;
+        forms[14].vex_l = 2;
+        forms[14].vex_w = 1;
+        forms[15].vex = 1;
+        forms[15].vvvv = 17;
+        forms[16].vex = forms[16].evex = 1;
+        forms[16].evex_mask = 5;
+        forms[17].vex = forms[17].evex = 1;
+        forms[17].evex_z = 1;
+        forms[18].vex = forms[18].evex = 1;
+        forms[18].evex_b = 1;
+        uint64_t keys[19];
+        for (unsigned i = 0; i < 19; i++) keys[i] = translit_unsupported_key(&forms[i]);
+        for (unsigned i = 0; i < 19; i++)
+            for (unsigned j = i + 1; j < 19; j++)
+                if (keys[i] == keys[j]) return 57;
+        return 0;
+    }
+    if (scenario == 44) {
+        struct insn insn = {.op = 0x12, .two = 1, .has_modrm = 1, .modrm = 0xc1, .mod = 3};
+        uint64_t key = translit_unsupported_key(&insn);
+        for (unsigned i = 0; i < TL_UNSUPPORTED_FORM_N; i++) {
+            translit_unsupported_forms[i].key = key ^ 1;
+            atomic_store_explicit(&translit_unsupported_forms[i].state, 2, memory_order_release);
+        }
+        for (unsigned i = 0; i < TL_UNSUPPORTED_SITE_N; i++) {
+            translit_unsupported_sites[i].pc = i;
+            translit_unsupported_sites[i].key = key ^ 1;
+            atomic_store_explicit(&translit_unsupported_sites[i].state, 2, memory_order_release);
+        }
+        uint64_t form_overflow = atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed);
+        uint64_t site_overflow = atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed);
+        translit_unsupported_record(&insn, UINT64_MAX);
+        return atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed) == form_overflow + 1 &&
+                       atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed) == site_overflow + 1
+                   ? 0
+                   : 58;
+    }
+    if (scenario == 45) {
+        for (unsigned table = 0; table < 2; table++) {
+            translit_unsupported_wait_test test = {.state = 1};
+            pthread_t thread;
+            if (pthread_create(&thread, NULL, translit_unsupported_wait_thread, &test) != 0) return 59;
+            while (!atomic_load_explicit(&test.started, memory_order_acquire)) sched_yield();
+            for (unsigned spin = 0; spin < 1000; spin++) sched_yield();
+            if (atomic_load_explicit(&test.done, memory_order_acquire)) return 59;
+            atomic_store_explicit(&test.state, 2, memory_order_release);
+            if (pthread_join(thread, NULL) != 0 || !atomic_load_explicit(&test.done, memory_order_acquire) ||
+                atomic_load_explicit(&test.observed, memory_order_relaxed) != 2)
+                return 59;
+        }
+        return 0;
+    }
+    if (scenario == 46) {
+        struct insn insn = {.op = 0x12, .two = 1, .has_modrm = 1, .modrm = 0xc1, .mod = 3};
+        uint64_t keyed = atomic_load_explicit(&translit_unsupported_keyed, memory_order_relaxed);
+        uint64_t overflow = atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed);
+        uint64_t deferred = atomic_load_explicit(&translit_unsupported_deferred_excluded, memory_order_relaxed);
+        translit_unsupported_record_completed(&insn, 0x1234, 0);
+        return atomic_load_explicit(&translit_unsupported_keyed, memory_order_relaxed) == keyed &&
+                       atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed) == overflow &&
+                       atomic_load_explicit(&translit_unsupported_deferred_excluded, memory_order_relaxed) == deferred + 1
+                   ? 0
+                   : 60;
+    }
     return 6;
 }
 #endif
@@ -1636,7 +1750,17 @@ static void translit_unsupported_top(const translit_unsupported_form *forms, uns
 
 static int translit_unsupported_report(char *out, size_t size) {
     uint64_t top_key[8] = {0}, top_count[8] = {0};
+    uint64_t site_top_pc = 0, site_top_key = 0, site_top_count = 0;
     translit_unsupported_top(translit_unsupported_forms, TL_UNSUPPORTED_FORM_N, top_key, top_count);
+    for (unsigned slot = 0; slot < TL_UNSUPPORTED_SITE_N; slot++) {
+        if (atomic_load_explicit(&translit_unsupported_sites[slot].state, memory_order_acquire) != 2) continue;
+        uint64_t count = atomic_load_explicit(&translit_unsupported_sites[slot].count, memory_order_relaxed);
+        if (count > site_top_count) {
+            site_top_pc = translit_unsupported_sites[slot].pc;
+            site_top_key = translit_unsupported_sites[slot].key;
+            site_top_count = count;
+        }
+    }
     uint64_t keyed = atomic_load_explicit(&translit_unsupported_keyed, memory_order_relaxed);
     uint64_t overflow = atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed);
     uint64_t site_unique = atomic_load_explicit(&translit_unsupported_site_unique, memory_order_relaxed);
@@ -1644,7 +1768,8 @@ static int translit_unsupported_report(char *out, size_t size) {
     uint64_t site_overflow = atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed);
     int used = snprintf(out, size,
                         "[diag] unsupported total=%llu keyed=%llu overflow=%llu forms=%llu collisions=%llu"
-                        " site_events=%llu sites=%llu repeats=%llu site_overflow=%llu site_collisions=%llu top=",
+                        " site_events=%llu sites=%llu repeats=%llu site_overflow=%llu site_collisions=%llu"
+                        " deferred_excluded=%llu top=",
                         (unsigned long long)(keyed + overflow), (unsigned long long)keyed,
                         (unsigned long long)overflow,
                         (unsigned long long)atomic_load_explicit(&translit_unsupported_form_unique,
@@ -1655,6 +1780,8 @@ static int translit_unsupported_report(char *out, size_t size) {
                         (unsigned long long)site_unique, (unsigned long long)site_repeats,
                         (unsigned long long)site_overflow,
                         (unsigned long long)atomic_load_explicit(&translit_unsupported_site_collisions,
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&translit_unsupported_deferred_excluded,
                                                                 memory_order_relaxed));
     if (used < 0 || (size_t)used >= size) return -1;
     for (unsigned rank = 0; rank < 8 && top_count[rank] != 0; rank++) {
@@ -1663,6 +1790,11 @@ static int translit_unsupported_report(char *out, size_t size) {
         if (added < 0 || (size_t)added >= size - (size_t)used) return -1;
         used += added;
     }
+    int site_added = snprintf(out + used, size - (size_t)used, " site_top=%llx:%llx:%llu",
+                              (unsigned long long)site_top_pc, (unsigned long long)site_top_key,
+                              (unsigned long long)site_top_count);
+    if (site_added < 0 || (size_t)site_added >= size - (size_t)used) return -1;
+    used += site_added;
     if ((size_t)used + 1u >= size) return -1;
     out[used++] = '\n';
     out[used] = '\0';

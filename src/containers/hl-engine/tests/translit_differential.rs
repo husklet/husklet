@@ -96,6 +96,7 @@ struct Backend {
     unsupported_sites: u64,
     unsupported_repeats: u64,
     unsupported_site_overflow: u64,
+    unsupported_line: String,
 }
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
@@ -176,6 +177,7 @@ fn backend(stderr: &[u8]) -> Backend {
         unsupported_sites: unsupported_counter("sites="),
         unsupported_repeats: unsupported_counter("repeats="),
         unsupported_site_overflow: unsupported_counter("site_overflow="),
+        unsupported_line: unsupported.to_owned(),
         line,
     }
 }
@@ -199,6 +201,11 @@ fn unsupported_census_records_successful_interpreter_steps() {
     assert_eq!(
         report.unsupported_total,
         report.unsupported_sites + report.unsupported_repeats + report.unsupported_site_overflow
+    );
+    assert!(
+        report.unsupported_line.contains("198718096e:128"),
+        "{}",
+        report.unsupported_line
     );
 }
 

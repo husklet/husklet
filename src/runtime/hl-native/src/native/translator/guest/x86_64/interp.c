@@ -429,9 +429,9 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         }
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
 #if defined(HL_NATIVE_TEST_HOOKS)
-        if (g_prof && !(step == STEP_END && (cpu->reason == R_TRAP || cpu->reason == R_BUS)) &&
-            translit_classify(&insn) == TL_NO)
-            translit_unsupported_record(&insn, pc);
+        // This is an execution census, not an admission/attempt census. STEP_END hands deferred work to
+        // a service which may still fail or trap, so only the in-interpreter committed path is counted.
+        if (g_prof) translit_unsupported_record_completed(&insn, pc, step != STEP_END);
 #endif
         if (step == STEP_END) return;
     }
