@@ -64,7 +64,23 @@ pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
     if crossings.is_none() || translations.is_none() {
         return Err("retained C profile omitted the crossings/translations summary".into());
     }
-    let _ = backend_tree(stderr)?;
+    Ok(())
+}
+
+pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), Error> {
+    let records = stderr
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.starts_with(BACKEND_TREE_PREFIX.as_bytes()))
+        .count();
+    let expected = usize::from(enabled);
+    if records != expected {
+        return Err(format!("backend-tree diagnostic appeared {records} times, expected {expected}").into());
+    }
+    if !enabled {
+        return Ok(());
+    }
+    let text = std::str::from_utf8(stderr).map_err(|_| "backend-tree diagnostic stderr is not UTF-8")?;
+    let _ = backend_tree(text)?;
     Ok(())
 }
 
@@ -230,13 +246,14 @@ mod tests {
     #[test]
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
         validate_profile("[prof] dispatcher crossings=41 translations=7\n").unwrap();
+        validate_backend_tree(b"ordinary guest stderr\n", false).unwrap();
     }
 
     const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
 
     #[test]
     fn backend_tree_record_is_exact_and_reconciled() {
-        validate_profile(&format!("[prof] crossings=1 translations=1\n{TREE}")).unwrap();
+        validate_backend_tree(TREE.as_bytes(), true).unwrap();
         let digest = backend_tree_digest(TREE.as_bytes());
         assert!(digest.contains("claimed=3 completed=1"), "{digest}");
         assert!(
@@ -248,43 +265,58 @@ mod tests {
     #[test]
     fn backend_tree_rejects_missing_duplicate_unknown_and_unreconciled_fields() {
         let profile = |tree: &str| format!("[prof] crossings=1 translations=1\n{tree}");
+        assert!(
+            validate_backend_tree(b"[prof] crossings=1 translations=1\n", true)
+                .unwrap_err()
+                .to_string()
+                .contains("appeared 0 times")
+        );
+        assert!(
+            validate_backend_tree(TREE.as_bytes(), false)
+                .unwrap_err()
+                .to_string()
+                .contains("expected 0")
+        );
         let missing = TREE.replace(" map_hits=3", "");
         assert!(
-            validate_profile(&profile(&missing))
+            validate_backend_tree(profile(&missing).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("omitted field")
         );
         let duplicate = TREE.replace(" map_hits=3", " map_hits=3 map_hits=3");
         assert!(
-            validate_profile(&profile(&duplicate))
+            validate_backend_tree(profile(&duplicate).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("duplicates field")
         );
         assert!(
-            validate_profile(&format!("[prof] crossings=1 translations=1\n{TREE}{TREE}"))
-                .unwrap_err()
-                .to_string()
-                .contains("appeared 2 times")
+            validate_backend_tree(
+                format!("[prof] crossings=1 translations=1\n{TREE}{TREE}").as_bytes(),
+                true
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("appeared 2 times")
         );
         let unknown = TREE.replace(" map_hits=3", " map_hits=3 mystery=9");
         assert!(
-            validate_profile(&profile(&unknown))
+            validate_backend_tree(profile(&unknown).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("unknown field")
         );
         let entries = TREE.replace(" translated_entries=2", " translated_entries=1");
         assert!(
-            validate_profile(&profile(&entries))
+            validate_backend_tree(profile(&entries).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("entry totals")
         );
         let reasons = TREE.replace(" reason_other=1", " reason_other=0");
         assert!(
-            validate_profile(&profile(&reasons))
+            validate_backend_tree(profile(&reasons).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("reason totals")

@@ -5,6 +5,41 @@ use std::sync::Mutex;
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn fatal_signal_census_tail_is_atomic_only() {
+    let source = include_str!("../src/native/linux_abi/signal.c");
+    let body = source
+        .split_once("static _Noreturn void guest_group_fatal")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n// SA_SIGINFO"))
+        .map(|(body, _)| body)
+        .expect("guest_group_fatal body");
+    let tail = body
+        .split_once("ckpt_restored_member_exit_signal(sig);")
+        .map(|(_, tail)| tail)
+        .expect("existing restored-member signal publication");
+    assert!(tail.contains("hl_backend_tree_finalize(1)"), "{tail}");
+    assert!(tail.contains("_exit(128 + sig)"), "{tail}");
+    for forbidden in [
+        "launch_reg_terminate_peers",
+        "hl_backend_tree_report",
+        "waitpid",
+        "kill(",
+        "poll(",
+        "snprintf",
+        "opendir",
+        "readdir",
+        "open(",
+        "read(",
+        "unlink",
+    ] {
+        assert!(!tail.contains(forbidden), "fatal census tail calls {forbidden}: {tail}");
+    }
+    assert!(
+        tail.find("hl_backend_tree_finalize(1)") < tail.find("_exit(128 + sig)"),
+        "{tail}"
+    );
+}
+
+#[test]
 fn ordinary_and_nested_processes_share_execution_counters() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

@@ -24,6 +24,9 @@ typedef struct hl_engine_backend {
 void hl_engine_backend_register(const hl_engine_backend *backend);
 void hl_target_register_backend(void);
 void hl_target_runtime_init(void);
+size_t hl_target_backend_tree_shared_size(int enabled);
+void hl_target_backend_tree_child_begin(void *shared, size_t shared_size);
+void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_linux_abi *box);
 /* Internal launch path: atomically imports an already validated, instance-owned option snapshot. */
 hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl_host_services *host,
                                         const hl_options *options, hl_engine **out_engine);

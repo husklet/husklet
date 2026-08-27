@@ -851,9 +851,9 @@ static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
        exited 0 produced identical records. Sent before _exit for the same reason the status is published
        above -- after it there is no process left to send anything. */
     ckpt_restored_member_exit_signal(sig);
-    if (hl_backend_tree_is_root()) launch_reg_terminate_peers();
+    /* The census contribution is a single lock-free atomic transition. The lifecycle parent owns every
+       blocking teardown, reap and report operation after this signal context reaches _exit. */
     (void)hl_backend_tree_finalize(1);
-    hl_backend_tree_report();
     _exit(128 + sig);
 }
 

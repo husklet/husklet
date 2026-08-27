@@ -17,6 +17,13 @@
 #define HL_BACKEND_TREE_SLOTS 4096u
 #define HL_BACKEND_TREE_REASON_COUNT 16u
 
+#if ATOMIC_INT_LOCK_FREE != 2
+#error "backend-tree signal finalization requires lock-free 32-bit atomics"
+#endif
+#if (defined(_WIN32) && ATOMIC_LLONG_LOCK_FREE != 2) || (!defined(_WIN32) && ATOMIC_LONG_LOCK_FREE != 2)
+#error "backend-tree signal finalization requires lock-free 64-bit atomics"
+#endif
+
 enum hl_backend_tree_lifecycle {
     HL_BACKEND_TREE_CLAIMED = 1,
     HL_BACKEND_TREE_COMPLETED = 2,
@@ -24,7 +31,8 @@ enum hl_backend_tree_lifecycle {
 };
 
 struct hl_backend_tree_slot {
-    _Atomic int pid; /* 0 free, -1 being filled, positive published last */
+    _Atomic int pid;           /* 0 free, -1 being filled, positive published last */
+    _Atomic uint64_t birth_ns; /* published before pid; prevents authority crossing PID reuse */
     _Atomic uint32_t lifecycle;
     _Atomic uint64_t translated_entries;
     _Atomic uint64_t interpreted_entries;
@@ -68,6 +76,7 @@ struct hl_backend_tree_summary {
 
 static struct hl_backend_tree_shared *g_backend_tree;
 static struct hl_backend_tree_slot *g_backend_tree_self;
+static int g_backend_tree_lifecycle_owned;
 
 static struct hl_backend_tree_slot *hl_backend_tree_reserve(void) {
     if (g_backend_tree == NULL) return NULL;
@@ -84,7 +93,10 @@ static struct hl_backend_tree_slot *hl_backend_tree_reserve(void) {
 }
 
 static void hl_backend_tree_publish(struct hl_backend_tree_slot *slot, int pid) {
-    if (slot != NULL && pid > 0) atomic_store_explicit(&slot->pid, pid, memory_order_release);
+    uint64_t birth_ns = 0;
+    if (slot == NULL || pid <= 0 || !hl_host_process_start_time_ns(pid, &birth_ns)) return;
+    atomic_store_explicit(&slot->birth_ns, birth_ns, memory_order_relaxed);
+    atomic_store_explicit(&slot->pid, pid, memory_order_release);
 }
 
 static struct hl_backend_tree_slot *hl_backend_tree_claim_pid(int pid) {
@@ -97,7 +109,27 @@ static struct hl_backend_tree_slot *hl_backend_tree_claim_pid(int pid) {
     return slot;
 }
 
+size_t hl_target_backend_tree_shared_size(int enabled) {
+#if defined(_WIN32)
+    (void)enabled;
+    return 0;
+#else
+    return enabled ? sizeof(struct hl_backend_tree_shared) : 0;
+#endif
+}
+
+void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
+    g_backend_tree_lifecycle_owned = 1;
+    g_backend_tree = shared_size == sizeof(struct hl_backend_tree_shared) ? shared : NULL;
+    g_backend_tree_self = NULL;
+    if (g_backend_tree == NULL) return;
+    int self = (int)getpid();
+    atomic_store_explicit(&g_backend_tree->root_pid, self, memory_order_release);
+    g_backend_tree_self = hl_backend_tree_claim_pid(self);
+}
+
 static void hl_backend_tree_begin(int enabled, const hl_host_services *host) {
+    if (g_backend_tree_lifecycle_owned) return;
     g_backend_tree = NULL;
     g_backend_tree_self = NULL;
     if (!enabled) return;
@@ -112,10 +144,10 @@ static void hl_backend_tree_begin(int enabled, const hl_host_services *host) {
 #endif
     }
     if (mapping == NULL) return;
-    g_backend_tree = (struct hl_backend_tree_shared *)mapping;
-    int self = (int)getpid();
-    atomic_store_explicit(&g_backend_tree->root_pid, self, memory_order_release);
-    g_backend_tree_self = hl_backend_tree_claim_pid(self);
+    hl_target_backend_tree_child_begin(mapping, sizeof(struct hl_backend_tree_shared));
+    /* The exported hook owns this fallback mapping itself and starts a fresh scenario on its next call.
+       Production enters with lifecycle_owned already set and returns before allocating here. */
+    g_backend_tree_lifecycle_owned = 0;
 }
 
 /* Reserve the birth before fork. The parent can then publish the returned pid even when the child is killed
@@ -134,7 +166,6 @@ static void hl_backend_tree_after_fork(pid_t result, struct hl_backend_tree_slot
         }
         return;
     }
-    int pid = result == 0 ? (int)getpid() : (int)result;
     if (birth == NULL) {
         /* Only the parent records exhaustion: both fork return arms share the mapping, so counting in the child
            too would turn one untracked process into two missing lifecycle rows. */
@@ -142,8 +173,11 @@ static void hl_backend_tree_after_fork(pid_t result, struct hl_backend_tree_slot
         if (result == 0) g_backend_tree_self = NULL;
         return;
     }
-    hl_backend_tree_publish(birth, pid);
-    if (result == 0) g_backend_tree_self = birth;
+    if (result == 0) {
+        g_backend_tree_self = birth;
+        hl_backend_tree_publish(birth, (int)getpid());
+    } else
+        hl_backend_tree_publish(birth, (int)result);
 }
 
 static inline void hl_backend_tree_run_begin(int translated, uint64_t steps) {
@@ -190,15 +224,20 @@ static inline void hl_backend_tree_irq_pending(void) {
         atomic_fetch_add_explicit(&g_backend_tree_self->irq_pending, 1, memory_order_relaxed);
 }
 
-static int hl_backend_tree_finalize_slot(struct hl_backend_tree_slot *slot, int abnormal) {
+static int hl_backend_tree_finalize_slot_in(struct hl_backend_tree_shared *shared, struct hl_backend_tree_slot *slot,
+                                            int abnormal) {
     if (slot == NULL) return 0;
     uint32_t expected = HL_BACKEND_TREE_CLAIMED;
     uint32_t completed = abnormal ? HL_BACKEND_TREE_ABNORMAL : HL_BACKEND_TREE_COMPLETED;
     if (atomic_compare_exchange_strong_explicit(&slot->lifecycle, &expected, completed, memory_order_acq_rel,
                                                 memory_order_acquire))
         return 1;
-    if (g_backend_tree != NULL) atomic_fetch_add_explicit(&g_backend_tree->duplicate_finalize, 1, memory_order_relaxed);
+    if (shared != NULL) atomic_fetch_add_explicit(&shared->duplicate_finalize, 1, memory_order_relaxed);
     return 0;
+}
+
+static int hl_backend_tree_finalize_slot(struct hl_backend_tree_slot *slot, int abnormal) {
+    return hl_backend_tree_finalize_slot_in(g_backend_tree, slot, abnormal);
 }
 
 static int hl_backend_tree_finalize(int abnormal) {
@@ -218,37 +257,40 @@ static void hl_backend_tree_reaped(int pid) {
     }
 }
 
-static int hl_backend_tree_is_root(void) {
-    return g_backend_tree != NULL &&
-           atomic_load_explicit(&g_backend_tree->root_pid, memory_order_acquire) == (int)getpid();
-}
-
 static int hl_backend_tree_is_finalized(void) {
     return g_backend_tree_self != NULL &&
            atomic_load_explicit(&g_backend_tree_self->lifecycle, memory_order_acquire) != HL_BACKEND_TREE_CLAIMED;
 }
 
 #if !defined(_WIN32)
-/* Root-side process barrier. Normal children have already finalized before becoming reapable. A child killed
-   before its finalizer is reaped here when it is ours, or observed gone when it is a deeper descendant; only
-   then is its claimed slot closed as abnormal. A bounded failure withholds the record rather than emitting a
-   summary while a descendant can still mutate it. */
-static int hl_backend_tree_reap_barrier(void) {
-    if (!hl_backend_tree_is_root()) return 0;
-    int self = (int)getpid();
+/* The lifecycle parent calls this only after it has reaped the initial guest. Match every remaining pid with
+   its immutable birth token before signalling it, then wait until that incarnation is gone or a zombie. A
+   zombie cannot execute or mutate the mapping; treating it as settled also avoids depending on an unrelated
+   host init's reap cadence for a deeper descendant. */
+static int hl_backend_tree_process_can_mutate(const struct hl_backend_tree_slot *slot, int pid) {
+    hl_host_process_info process;
+    uint64_t expected = atomic_load_explicit(&slot->birth_ns, memory_order_acquire);
+    return expected != 0 && hl_host_process_read(pid, &process) && process.start_time_ns == expected &&
+           process.state != 'Z' && process.state != 'X';
+}
+
+static int hl_backend_tree_parent_barrier(struct hl_backend_tree_shared *shared, int root_pid) {
     for (unsigned round = 0; round < 2000; ++round) {
         unsigned live = 0;
         for (uint32_t index = 0; index < HL_BACKEND_TREE_SLOTS; ++index) {
-            struct hl_backend_tree_slot *slot = &g_backend_tree->slots[index];
+            struct hl_backend_tree_slot *slot = &shared->slots[index];
             int pid = atomic_load_explicit(&slot->pid, memory_order_acquire);
-            if (pid <= 0 || pid == self) continue;
-            int status = 0;
-            pid_t reaped = waitpid((pid_t)pid, &status, WNOHANG);
-            if (reaped == (pid_t)pid || (reaped < 0 && errno == ECHILD && kill((pid_t)pid, 0) < 0 && errno == ESRCH)) {
-                if (atomic_load_explicit(&slot->lifecycle, memory_order_acquire) == HL_BACKEND_TREE_CLAIMED)
-                    (void)hl_backend_tree_finalize_slot(slot, 1);
+            if (pid == -1) {
+                ++live;
                 continue;
             }
+            if (pid <= 0) continue;
+            if (pid == root_pid || !hl_backend_tree_process_can_mutate(slot, pid)) {
+                if (atomic_load_explicit(&slot->lifecycle, memory_order_acquire) == HL_BACKEND_TREE_CLAIMED)
+                    (void)hl_backend_tree_finalize_slot_in(shared, slot, 1);
+                continue;
+            }
+            (void)kill((pid_t)pid, SIGKILL);
             ++live;
         }
         if (live == 0) return 1;
@@ -257,17 +299,17 @@ static int hl_backend_tree_reap_barrier(void) {
     return 0;
 }
 #else
-#define hl_backend_tree_reap_barrier() 1
+#define hl_backend_tree_parent_barrier(shared, root_pid) 0
 #endif
 
-static void hl_backend_tree_summary(struct hl_backend_tree_summary *summary) {
+static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, struct hl_backend_tree_summary *summary) {
     memset(summary, 0, sizeof *summary);
-    if (g_backend_tree == NULL) return;
-    summary->root_pid = (uint64_t)atomic_load_explicit(&g_backend_tree->root_pid, memory_order_acquire);
-    summary->duplicate_finalize = atomic_load_explicit(&g_backend_tree->duplicate_finalize, memory_order_relaxed);
-    uint64_t missing_claims = atomic_load_explicit(&g_backend_tree->missing_claims, memory_order_relaxed);
+    if (shared == NULL) return;
+    summary->root_pid = (uint64_t)atomic_load_explicit(&shared->root_pid, memory_order_acquire);
+    summary->duplicate_finalize = atomic_load_explicit(&shared->duplicate_finalize, memory_order_relaxed);
+    uint64_t missing_claims = atomic_load_explicit(&shared->missing_claims, memory_order_relaxed);
     for (uint32_t index = 0; index < HL_BACKEND_TREE_SLOTS; ++index) {
-        struct hl_backend_tree_slot *slot = &g_backend_tree->slots[index];
+        struct hl_backend_tree_slot *slot = &shared->slots[index];
         int pid = atomic_load_explicit(&slot->pid, memory_order_acquire);
         if (pid <= 0) continue;
         ++summary->claimed;
@@ -297,42 +339,57 @@ static void hl_backend_tree_summary(struct hl_backend_tree_summary *summary) {
     if (reason_total < summary->crossings) summary->reason_other += summary->crossings - reason_total;
 }
 
-static void hl_backend_tree_report(void) {
-    if (!hl_backend_tree_is_root() || !hl_backend_tree_is_finalized()) return;
-    if (!hl_backend_tree_reap_barrier()) return;
+static void hl_backend_tree_summary(struct hl_backend_tree_summary *summary) {
+    hl_backend_tree_summary_in(g_backend_tree, summary);
+}
+
+static int hl_backend_tree_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
+    struct hl_backend_tree_summary summary;
+    hl_backend_tree_summary_in(shared, &summary);
+    return snprintf(
+        record, capacity,
+        "[diag] backend-tree version=1 root_pid=%llu claimed=%llu completed=%llu abnormal=%llu missing=%llu "
+        "duplicate_finalize=%llu crossings=%llu translated_entries=%llu interpreted_entries=%llu "
+        "translated_steps=%llu interpreted_steps=%llu translations=%llu map_hits=%llu stw_retries=%llu "
+        "irq_pending=%llu reason0=%llu reason1=%llu reason2=%llu reason3=%llu reason4=%llu reason5=%llu "
+        "reason6=%llu reason7=%llu reason8=%llu reason9=%llu reason10=%llu reason11=%llu reason12=%llu "
+        "reason13=%llu reason14=%llu reason15=%llu reason_other=%llu\n",
+        (unsigned long long)summary.root_pid, (unsigned long long)summary.claimed,
+        (unsigned long long)summary.completed, (unsigned long long)summary.abnormal,
+        (unsigned long long)summary.missing, (unsigned long long)summary.duplicate_finalize,
+        (unsigned long long)summary.crossings, (unsigned long long)summary.translated_entries,
+        (unsigned long long)summary.interpreted_entries, (unsigned long long)summary.translated_steps,
+        (unsigned long long)summary.interpreted_steps, (unsigned long long)summary.translations,
+        (unsigned long long)summary.map_hits, (unsigned long long)summary.stw_retries,
+        (unsigned long long)summary.irq_pending, (unsigned long long)summary.reason[0],
+        (unsigned long long)summary.reason[1], (unsigned long long)summary.reason[2],
+        (unsigned long long)summary.reason[3], (unsigned long long)summary.reason[4],
+        (unsigned long long)summary.reason[5], (unsigned long long)summary.reason[6],
+        (unsigned long long)summary.reason[7], (unsigned long long)summary.reason[8],
+        (unsigned long long)summary.reason[9], (unsigned long long)summary.reason[10],
+        (unsigned long long)summary.reason[11], (unsigned long long)summary.reason[12],
+        (unsigned long long)summary.reason[13], (unsigned long long)summary.reason[14],
+        (unsigned long long)summary.reason[15], (unsigned long long)summary.reason_other);
+}
+
+void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_linux_abi *box) {
+    struct hl_backend_tree_shared *shared = opaque;
+    if (shared == NULL || shared_size != sizeof *shared || box == NULL) return;
+    int root_pid = atomic_load_explicit(&shared->root_pid, memory_order_acquire);
+    if (root_pid <= 0 || !hl_backend_tree_parent_barrier(shared, root_pid)) return;
     uint32_t expected = 0;
-    if (!atomic_compare_exchange_strong_explicit(&g_backend_tree->reported, &expected, 1, memory_order_acq_rel,
+    if (!atomic_compare_exchange_strong_explicit(&shared->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    struct hl_backend_tree_summary summary;
-    hl_backend_tree_summary(&summary);
     char record[2048];
-    int size =
-        snprintf(record, sizeof record,
-                 "[diag] backend-tree version=1 root_pid=%llu claimed=%llu completed=%llu abnormal=%llu missing=%llu "
-                 "duplicate_finalize=%llu crossings=%llu translated_entries=%llu interpreted_entries=%llu "
-                 "translated_steps=%llu interpreted_steps=%llu translations=%llu map_hits=%llu stw_retries=%llu "
-                 "irq_pending=%llu reason0=%llu reason1=%llu reason2=%llu reason3=%llu reason4=%llu reason5=%llu "
-                 "reason6=%llu reason7=%llu reason8=%llu reason9=%llu reason10=%llu reason11=%llu reason12=%llu "
-                 "reason13=%llu reason14=%llu reason15=%llu reason_other=%llu\n",
-                 (unsigned long long)summary.root_pid, (unsigned long long)summary.claimed,
-                 (unsigned long long)summary.completed, (unsigned long long)summary.abnormal,
-                 (unsigned long long)summary.missing, (unsigned long long)summary.duplicate_finalize,
-                 (unsigned long long)summary.crossings, (unsigned long long)summary.translated_entries,
-                 (unsigned long long)summary.interpreted_entries, (unsigned long long)summary.translated_steps,
-                 (unsigned long long)summary.interpreted_steps, (unsigned long long)summary.translations,
-                 (unsigned long long)summary.map_hits, (unsigned long long)summary.stw_retries,
-                 (unsigned long long)summary.irq_pending, (unsigned long long)summary.reason[0],
-                 (unsigned long long)summary.reason[1], (unsigned long long)summary.reason[2],
-                 (unsigned long long)summary.reason[3], (unsigned long long)summary.reason[4],
-                 (unsigned long long)summary.reason[5], (unsigned long long)summary.reason[6],
-                 (unsigned long long)summary.reason[7], (unsigned long long)summary.reason[8],
-                 (unsigned long long)summary.reason[9], (unsigned long long)summary.reason[10],
-                 (unsigned long long)summary.reason[11], (unsigned long long)summary.reason[12],
-                 (unsigned long long)summary.reason[13], (unsigned long long)summary.reason[14],
-                 (unsigned long long)summary.reason[15], (unsigned long long)summary.reason_other);
-    if (size > 0 && (size_t)size < sizeof record)
-        (void)hl_linux_write(g_linux_box, STDERR_FILENO, record, (size_t)size);
+    int formatted = hl_backend_tree_format(shared, record, sizeof record);
+    if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    size_t offset = 0;
+    while (offset < (size_t)formatted) {
+        int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+        if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
+        offset += (size_t)written;
+    }
 }
 
 static _Noreturn void hl_backend_tree_abnormal_exit(int status) {
@@ -438,6 +495,22 @@ HL_API int HL_BACKEND_TREE_TEST_NAME(uint32_t scenario) {
 
 #else
 
+size_t hl_target_backend_tree_shared_size(int enabled) {
+    (void)enabled;
+    return 0;
+}
+
+void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
+    (void)shared;
+    (void)shared_size;
+}
+
+void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_linux_abi *box) {
+    (void)shared;
+    (void)shared_size;
+    (void)box;
+}
+
 #define hl_backend_tree_begin(enabled, host) ((void)0)
 #define hl_backend_tree_prepare_fork() NULL
 #define hl_backend_tree_after_fork(result, birth) ((void)(result), (void)(birth))
@@ -450,9 +523,7 @@ HL_API int HL_BACKEND_TREE_TEST_NAME(uint32_t scenario) {
 #define hl_backend_tree_irq_pending() ((void)0)
 #define hl_backend_tree_finalize(abnormal) 0
 #define hl_backend_tree_reaped(pid) ((void)0)
-#define hl_backend_tree_is_root() 0
 #define hl_backend_tree_is_finalized() 0
-#define hl_backend_tree_report() ((void)0)
 #define hl_backend_tree_abnormal_exit(status) _exit(status)
 
 #endif

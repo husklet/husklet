@@ -1650,11 +1650,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     thread_process_owner_register(&c);
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
-    if (!hl_backend_tree_is_finalized()) {
-        launch_reg_terminate_peers();
-        (void)hl_backend_tree_finalize(1);
-        hl_backend_tree_report();
-    }
+    if (!hl_backend_tree_is_finalized()) (void)hl_backend_tree_finalize(1);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
     // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
     // remain available through the canonical [prof] report emitted by the exit path; normal launches

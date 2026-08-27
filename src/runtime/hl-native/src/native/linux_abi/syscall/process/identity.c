@@ -222,9 +222,6 @@ static void process_last_thread_exit(int status) {
        through the restore driver that used to own the only call. */
     ckpt_restored_member_exit_code(status);
     (void)hl_backend_tree_finalize(0);
-    /* launch_reg_terminate_peers above is the root's process-tree barrier: after it returns no descendant
-       can still mutate the shared census. Child processes finalize silently; the root emits once. */
-    hl_backend_tree_report();
 }
 
 static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,

@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -46,6 +47,9 @@ uint64_t hl_run_linux_guest_translations(void);
 typedef struct hl_production_result_state {
     hl_host_memory_mapping mapping;
     hl_engine_child_result *record;
+    void *backend_tree;
+    size_t backend_tree_size;
+    hl_linux_abi *backend_tree_box;
 } hl_production_result_state;
 
 static hl_engine_child_result *active_result;
@@ -140,6 +144,8 @@ typedef struct hl_production_entry_context {
     hl_linux_abi *box;
     hl_options *options;
     hl_engine_child_result *result;
+    void *backend_tree;
+    size_t backend_tree_size;
     void *syscall_context;
     hl_syscall_trap_fn syscall_dispatch;
     int checkpoint_broker;
@@ -691,6 +697,7 @@ static int32_t hl_production_entry(void *opaque) {
         if (terminal_status != HL_STATUS_OK) return terminal_status;
     }
     active_result = context->result;
+    hl_target_backend_tree_child_begin(context->backend_tree, context->backend_tree_size);
     atomic_store_explicit(&result_published, 0, memory_order_release);
     hl_options *previous = hl_options_bind_process(context->options);
     hl_options process_state;
@@ -788,6 +795,12 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     hl_production_result_state *result;
     hl_host_result spawned;
     hl_host_result mapped;
+    const size_t backend_tree_size = hl_target_backend_tree_shared_size(
+        hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL && !hl_native_supervised_selected(options));
+    const size_t backend_tree_offset =
+        (sizeof(hl_engine_child_result) + _Alignof(max_align_t) - 1u) & ~(_Alignof(max_align_t) - 1u);
+    if (backend_tree_size > SIZE_MAX - backend_tree_offset) return HL_STATUS_RESOURCE_LIMIT;
+    const size_t shared_size = backend_tree_offset + backend_tree_size;
     if (hl_host_services_validate(host, HL_HOST_CAP_PROCESS | HL_HOST_CAP_MEMORY) != HL_STATUS_OK)
         return HL_STATUS_NOT_SUPPORTED;
     *process = HL_HOST_HANDLE_INVALID;
@@ -795,7 +808,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     result = calloc(1, sizeof(*result));
     if (result == NULL) return HL_STATUS_OUT_OF_MEMORY;
     result->mapping = (hl_host_memory_mapping){HL_HOST_MEMORY_MAPPING_ABI, sizeof(result->mapping), 0, 0, 0, 0};
-    mapped = host->memory->map_anonymous(host->context, 0, sizeof(hl_engine_child_result),
+    mapped = host->memory->map_anonymous(host->context, 0, shared_size,
                                          HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_SHARED,
                                          &result->mapping);
     if (mapped.status != HL_STATUS_OK) {
@@ -804,6 +817,10 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     }
     result->record = (hl_engine_child_result *)(uintptr_t)result->mapping.address;
     memset(result->record, 0, sizeof(*result->record));
+    result->backend_tree_size = backend_tree_size;
+    result->backend_tree =
+        backend_tree_size == 0 ? NULL : (void *)((uintptr_t)result->mapping.address + backend_tree_offset);
+    result->backend_tree_box = box;
 #if defined(__APPLE__)
     /* The production backend enters the Linux personality in a fork child.  Resolve
      * macOS' lazy Foundation-backed resolver state in the parent: doing this from
@@ -858,6 +875,8 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.box = box;
     entry.options = options;
     entry.result = result->record;
+    entry.backend_tree = result->backend_tree;
+    entry.backend_tree_size = result->backend_tree_size;
     entry.syscall_context = syscall_context;
     entry.syscall_dispatch = syscall_dispatch;
     entry.checkpoint_broker = checkpoint_broker;
@@ -946,6 +965,8 @@ static hl_status hl_production_finish_process(const hl_host_services *host, hl_h
                                               uint64_t *translations) {
     hl_production_result_state *state = (hl_production_result_state *)(uintptr_t)token;
     hl_engine_child_result record;
+    if (state != NULL)
+        hl_target_backend_tree_reap_report(state->backend_tree, state->backend_tree_size, state->backend_tree_box);
     if (waited->detail == HL_HOST_PROCESS_EXIT_SIGNAL) {
         hl_production_result_release(host, token);
         result->kind = HL_ENGINE_EXIT_SIGNAL;
