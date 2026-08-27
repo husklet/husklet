@@ -171,8 +171,22 @@ static uint64_t translit_sse2_store_movdqu;
 static uint64_t translit_sse2_store_family_runs;
 static uint64_t translit_sse2_pxor_admitted;
 static uint64_t translit_sse2_pxor_runs_admitted;
+static uint64_t translit_sse2_punpcklqdq_admitted;
+static uint64_t translit_sse2_punpcklqdq_runs_admitted;
 static uint64_t translit_sse2_movd_admitted;
 static uint64_t translit_sse2_movd_runs_admitted;
+#define TRANSLIT_PUNPCKLQDQ_PROFILE                                                                    \
+    " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu"
+#define TRANSLIT_PUNPCKLQDQ_ARGUMENTS                                                                  \
+    , (unsigned long long)sse2_punpcklqdq_admitted, (unsigned long long)sse2_punpcklqdq_runs_admitted
+#define TRANSLIT_MOVD_PROFILE " sse2_movd_admitted=%llu sse2_movd_runs_admitted=%llu"
+#define TRANSLIT_MOVD_ARGUMENTS                                                                        \
+    , (unsigned long long)sse2_movd_admitted, (unsigned long long)sse2_movd_runs_admitted
+#else
+#define TRANSLIT_PUNPCKLQDQ_PROFILE ""
+#define TRANSLIT_PUNPCKLQDQ_ARGUMENTS
+#define TRANSLIT_MOVD_PROFILE ""
+#define TRANSLIT_MOVD_ARGUMENTS
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -272,7 +286,8 @@ static int translit_classify_two(const struct insn *insn) {
     if (insn->p66 && !insn->rep && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg &&
         !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm) {
         if (op == 0x6F ||
-            ((op == 0x6E || op == 0xDB || op == 0xDF || op == 0xEB || op == 0xEF) && insn->mod == 3))
+            ((op == 0x6C || op == 0x6E || op == 0xDB || op == 0xDF || op == 0xEB || op == 0xEF) &&
+             insn->mod == 3))
             return TL_SSE2;
         // First landing keeps 7E to its register destination: a guest-memory store has separate SMC and
         // store-observer retirement requirements and is not silently treated as an ordinary host store.
@@ -1000,6 +1015,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 39) {
         static const uint8_t admitted[][6] = {{0x66, 0x0F, 0xDB, 0xC1}, {0x66, 0x0F, 0xDF, 0xC1},
+                                               {0x66, 0x0F, 0x6C, 0xC1}, {0x66, 0x45, 0x0F, 0x6C, 0xC1},
                                                {0x66, 0x0F, 0x6E, 0xC1}, {0x66, 0x4D, 0x0F, 0x6E, 0xD9},
                                                {0x66, 0x0F, 0xEF, 0xC1}, {0x66, 0x45, 0x0F, 0xEF, 0xC1},
                                                {0x66, 0x0F, 0x6F, 0x00}, {0xF3, 0x0F, 0x6F, 0x01},
@@ -1010,13 +1026,16 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                                {0x44, 0x0F, 0x11, 0x4F, 1}, {0x44, 0x0F, 0x29, 0x0C, 0x24},
                                                {0xF3, 0x44, 0x0F, 0x7F, 0x4F, 0x13}};
         static const uint8_t refused[][6] = {{0xF0, 0x66, 0x0F, 0xDB, 0xC1}, // LOCK
+                                              {0xF0, 0x66, 0x0F, 0x6C, 0xC1},
                                               {0xF0, 0x66, 0x0F, 0x6E, 0xC1},
                                               {0xF2, 0x0F, 0xDB, 0xC1},       // wrong mandatory prefix
+                                              {0xF3, 0x0F, 0x6C, 0xC1},
                                               {0xF3, 0x0F, 0x6E, 0xC1},
                                               {0xF2, 0x0F, 0x6F, 0xC1},
                                               {0x67, 0x66, 0x0F, 0xEB, 0xC1}, // address-size override
                                               {0x66, 0x0F, 0x73, 0x18, 1},    // group form requires mod=3
                                               {0x66, 0x0F, 0xDB, 0x00},       // aligned-memory contract deferred
+                                              {0x66, 0x0F, 0x6C, 0x00},       // PUNPCKLQDQ memory source deferred
                                               {0x66, 0x0F, 0x6E, 0x00},       // MOVD/Q memory source deferred
                                               {0x66, 0x0F, 0xEF, 0x00},       // PXOR memory source deferred
                                               {0xF3, 0x0F, 0xEF, 0xC1},       // wrong mandatory prefix
@@ -1119,10 +1138,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t sse2_store_count = 0;
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
     uint64_t sse2_pxor_count = 0;
+    uint64_t sse2_punpcklqdq_count = 0;
     uint64_t sse2_movd_count = 0;
     int sse2_next_family_seen = 0;
     int sse2_store_family_seen = 0;
     int sse2_pxor_seen = 0;
+    int sse2_punpcklqdq_seen = 0;
     int sse2_movd_seen = 0;
 #endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
@@ -1191,14 +1212,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                              (insn.op == 0x11 || insn.op == 0x29 || (insn.rep && insn.op == 0x7F));
             int sse2_gpr_source = insn.op == 0x6E;
             int destination = insn.op == 0x73 ? insn.rm_reg : insn.reg;
-            // MOVD/MOVQ sources a canonical guest GPR, already resident in the matching host GPR. It
-            // overwrites the whole XMM destination (including zeroing its upper lanes), so unlike an
-            // XMM binary operation it deliberately performs no cpu->v preload.
+            // MOVD/MOVQ sources a canonical guest GPR and overwrites the complete XMM destination.
             if (sse2_gpr_source) {
-                // No preload.
+                // No XMM preload.
             } else if (sse2_store) {
                 translit_xmm_cpu(a, insn.reg, 1);
-            } else if (insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB || insn.op == 0xEF) {
+            } else if (insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
+                       insn.op == 0xEF) {
                 translit_xmm_cpu(a, insn.reg, 1);
                 if (!insn.is_mem && insn.rm_reg != insn.reg) translit_xmm_cpu(a, insn.rm_reg, 1);
             } else if (insn.op == 0x6F || insn.op == 0x10 || insn.op == 0x28) {
@@ -1234,12 +1254,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             sse2_store_movaps += (uint64_t)(sse2_store && insn.op == 0x29);
             sse2_store_movdqu += (uint64_t)(sse2_store && insn.op == 0x7F);
             sse2_pxor_count += (uint64_t)(insn.op == 0xEF);
+            sse2_punpcklqdq_count += (uint64_t)(insn.op == 0x6C);
             sse2_movd_count += (uint64_t)(insn.op == 0x6E);
             if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
                 sse2_next_family_seen = 1;
             if ((sse2_signature & UINT64_C(0xFFFFFFFF)) == UINT64_C(0x6F11297F))
                 sse2_store_family_seen = 1;
             if (insn.op == 0xEF) sse2_pxor_seen = 1;
+            if (insn.op == 0x6C) sse2_punpcklqdq_seen = 1;
             if (insn.op == 0x6E) sse2_movd_seen = 1;
 #endif
             continue;
@@ -1447,6 +1469,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             (void)__atomic_fetch_add(&translit_sse2_store_family_runs, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_pxor_admitted, sse2_pxor_count, __ATOMIC_RELAXED);
         if (sse2_pxor_seen) (void)__atomic_fetch_add(&translit_sse2_pxor_runs_admitted, 1, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_admitted, sse2_punpcklqdq_count, __ATOMIC_RELAXED);
+        if (sse2_punpcklqdq_seen)
+            (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_movd_admitted, sse2_movd_count, __ATOMIC_RELAXED);
         if (sse2_movd_seen) (void)__atomic_fetch_add(&translit_sse2_movd_runs_admitted, 1, __ATOMIC_RELAXED);
     }
@@ -1516,6 +1541,10 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_store_family_runs = __atomic_load_n(&translit_sse2_store_family_runs, __ATOMIC_RELAXED);
     uint64_t sse2_pxor_admitted = __atomic_load_n(&translit_sse2_pxor_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_pxor_runs_admitted = __atomic_load_n(&translit_sse2_pxor_runs_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_punpcklqdq_admitted =
+        __atomic_load_n(&translit_sse2_punpcklqdq_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_punpcklqdq_runs_admitted =
+        __atomic_load_n(&translit_sse2_punpcklqdq_runs_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movd_admitted = __atomic_load_n(&translit_sse2_movd_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movd_runs_admitted = __atomic_load_n(&translit_sse2_movd_runs_admitted, __ATOMIC_RELAXED);
 #else
@@ -1525,7 +1554,6 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
     uint64_t sse2_store_family_runs = 0;
     uint64_t sse2_pxor_admitted = 0, sse2_pxor_runs_admitted = 0;
-    uint64_t sse2_movd_admitted = 0, sse2_movd_runs_admitted = 0;
 #endif
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
@@ -1558,6 +1586,25 @@ static int translit_report(char *out, size_t size) {
             displaced_refusal_count = count;
         }
     }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_option_get("HL_TRANSLIT_PROFILE_WIDE_TEST") != NULL) {
+        blocks = entries = declined = stitch_candidates = stitch_admitted = UINT64_MAX;
+        rip_indirect_lowered = provenance_fallback = body_owner_recovered = body_owner_published = UINT64_MAX;
+        sse2_runs_admitted = sse2_instructions_admitted = sse2_target_runs = sse2_next_family_runs = UINT64_MAX;
+        sse2_store_instructions = sse2_store_movups = sse2_store_movaps = sse2_store_movdqu = UINT64_MAX;
+        sse2_store_family_runs = sse2_pxor_admitted = sse2_pxor_runs_admitted = UINT64_MAX;
+        sse2_punpcklqdq_admitted = sse2_punpcklqdq_runs_admitted = UINT64_MAX;
+        sse2_movd_admitted = sse2_movd_runs_admitted = UINT64_MAX;
+        displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
+        displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
+        displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
+        displaced_lea_lowered = natural_abs32_lowered = natural_lea_lowered = UINT64_MAX;
+        displaced_refusal_count = displaced_refusal_prefix = displaced_refusal_width = UINT64_MAX;
+        displaced_refusal_rsp = displaced_refusal_opcode_other = UINT64_MAX;
+        jcc_fall_candidates = jcc_fall_admitted = jcc_fall_page_refused = UINT64_MAX;
+        jcc_fall_successor_page_refused = jcc_fall_decode_refused = jcc_fall_executed = UINT64_MAX;
+    }
+#endif
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
     if (g_nonpie_lo != 0)
         return snprintf(out, size,
@@ -1603,7 +1650,8 @@ static int translit_report(char *out, size_t size) {
                     " sse2_store_movups=%llu sse2_store_movaps=%llu sse2_store_movdqu=%llu"
                     " sse2_store_family_runs=%llu"
                     " sse2_pxor_admitted=%llu sse2_pxor_runs_admitted=%llu"
-                    " sse2_movd_admitted=%llu sse2_movd_runs_admitted=%llu"
+                    TRANSLIT_PUNPCKLQDQ_PROFILE
+                    TRANSLIT_MOVD_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -1619,8 +1667,8 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)sse2_store_movups, (unsigned long long)sse2_store_movaps,
                     (unsigned long long)sse2_store_movdqu,
                     (unsigned long long)sse2_store_family_runs,
-                    (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted,
-                    (unsigned long long)sse2_movd_admitted, (unsigned long long)sse2_movd_runs_admitted,
+                    (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted
+                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
