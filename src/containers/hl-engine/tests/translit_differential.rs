@@ -126,6 +126,7 @@ struct Backend {
     shape_fault: u64,
     shape_other: u64,
     would_link_candidates: u64,
+    would_link_refusals: u64,
     would_link_line: String,
     unsupported_line: String,
     tree_line: String,
@@ -373,6 +374,13 @@ fn backend(stderr: &[u8]) -> Backend {
             .into_iter()
             .map(|family| would_link_counter(&format!("{family}_candidate=")))
             .sum(),
+        would_link_refusals: ["fall", "jmp", "call"]
+            .into_iter()
+            .map(|family| {
+                would_link_counter(&format!("{family}_candidate="))
+                    - would_link_counter(&format!("{family}_eligible="))
+            })
+            .sum(),
         would_link_line: would_link.to_owned(),
         unsupported_line: unsupported.to_owned(),
         tree_line: tree.to_owned(),
@@ -404,6 +412,11 @@ fn unsupported_census_records_successful_interpreter_steps() {
     assert!(selected_report.translated_steps >= selected_report.translated_entries);
     assert!(
         selected_report.would_link_candidates > 0,
+        "{}",
+        selected_report.would_link_line
+    );
+    assert!(
+        selected_report.would_link_refusals > 0,
         "{}",
         selected_report.would_link_line
     );
