@@ -1104,6 +1104,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         const uint64_t generation = UINT64_MAX - 35, rw = UINT64_C(0x600000000);
         uint32_t token;
         uint64_t owner = 0;
+        uint32_t preserve = 0;
         jit_body_owner_drop_generation(generation);
         jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
         if (set == NULL) return 49;
@@ -1112,13 +1113,16 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (!jit_body_owner_reserve(generation, &token) ||
             !jit_body_owner_publish(generation, token, rw, rw + 8, 0))
             return 49;
-        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2},
-                                        {rw + 0x20, rw + 0x28, 3}};
+        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1, 1u << 10},
+                                        {rw + 0x18, rw + 0x20, 2, 1u << 11},
+                                        {rw + 0x20, rw + 0x28, 3, 0}};
         int ok = jit_body_owner_reserve_n(generation, 3, &token) && token == 1 &&
                  jit_body_owner_publish_n(generation, token, range, 3) &&
-                 jit_body_owner_lookup(rw + 0x17, &owner) && owner == 1 &&
-                 jit_body_owner_lookup(rw + CACHE_SZ * 2u + 0x18, &owner) && owner == 2 &&
-                 jit_body_owner_lookup(rw + 0x27, &owner) && owner == 3 &&
+                 jit_body_owner_lookup_preserve(rw + 0x17, &owner, &preserve) && owner == 1 &&
+                 preserve == (1u << 10) &&
+                 jit_body_owner_lookup_preserve(rw + CACHE_SZ * 2u + 0x18, &owner, &preserve) && owner == 2 &&
+                 preserve == (1u << 11) && jit_body_owner_lookup_preserve(rw + 0x27, &owner, &preserve) &&
+                 owner == 3 && preserve == 0 &&
                  !jit_body_owner_lookup(rw + 8, &owner) && !jit_body_owner_lookup(rw + 0x28, &owner);
         jit_body_owner_drop_generation(generation);
         return ok ? 0 : 49;
@@ -1130,8 +1134,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
         if (set == NULL) return 50;
         set->rw = (uint8_t *)(uintptr_t)rw;
-        jit_body_owner_range unsorted[] = {{rw + 0x20, rw + 0x28, 1}, {rw + 0x10, rw + 0x18, 2}};
-        jit_body_owner_range overlap[] = {{rw + 0x10, rw + 0x20, 1}, {rw + 0x18, rw + 0x28, 2}};
+        jit_body_owner_range unsorted[] = {{rw + 0x20, rw + 0x28, 1, 0}, {rw + 0x10, rw + 0x18, 2, 0}};
+        jit_body_owner_range overlap[] = {{rw + 0x10, rw + 0x20, 1, 0}, {rw + 0x18, rw + 0x28, 2, 0}};
         int ok = jit_body_owner_reserve_n(generation, 2, &token) &&
                  !jit_body_owner_publish_n(generation, token, unsorted, 2) &&
                  atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
@@ -1155,8 +1159,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         set->rw2rx = 0;
         if (!jit_body_owner_reserve_n(generation, 3, &token)) return 51;
         translit_body_owner_batch batch = {
-            generation, token, {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2},
-                                {rw + 0x20, rw + 0x28, 3}}};
+            generation, token, {{rw + 0x10, rw + 0x18, 1, 0}, {rw + 0x18, rw + 0x20, 2, 0},
+                                {rw + 0x20, rw + 0x28, 3, 0}}};
         atomic_store_explicit(&g_body_owner_batch_pause, 1, memory_order_release);
         if (pthread_create(&thread, NULL, translit_body_owner_batch_worker, &batch) != 0) {
             atomic_store_explicit(&g_body_owner_batch_pause, 0, memory_order_release);
@@ -1188,7 +1192,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (set == NULL) return 52;
         set->rw = (uint8_t *)(uintptr_t)rw;
         atomic_store_explicit(&set->count, token, memory_order_relaxed);
-        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2}};
+        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1, 0}, {rw + 0x18, rw + 0x20, 2, 0}};
         int rejected = !jit_body_owner_publish_n(generation, token, range, 2);
         int unchanged = atomic_load_explicit(&set->count, memory_order_acquire) == token;
         jit_body_owner_drop_generation(generation);
@@ -1634,9 +1638,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 break;
             }
             fs_owner[fs_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc};
+                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc, preserve};
             fs_owner[fs_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)commit_end, (uint64_t)(uintptr_t)a->cursor, next};
+                (uint64_t)(uintptr_t)commit_end, (uint64_t)(uintptr_t)a->cursor, next, preserve};
             jit_instruction_map_put_preserve((uint64_t)(uintptr_t)instruction_start,
                                              (uint64_t)(uintptr_t)commit_end, pc, preserve);
             jit_instruction_map_put_preserve((uint64_t)(uintptr_t)commit_end,
@@ -1681,7 +1685,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             }
             uint8_t *commit_end = a->cursor;
             sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc};
+                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc, 0};
             jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start,
                                     (uint64_t)(uintptr_t)commit_end, pc);
             pc = next;
@@ -1883,10 +1887,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (a->overflow) return NULL;
         if (sse2_run)
             sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc};
+                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
         if (fs_run)
             fs_owner[fs_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc};
+                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
     }
 
     int owner_published = fs_run
@@ -2242,9 +2246,8 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         (void)__atomic_fetch_add(&translit_provenance_fallback, 1, __ATOMIC_RELAXED);
     }
 #endif
-    if (!exact_pc && jit_body_owner_lookup(host_pc, &guest_pc)) {
+    if (!exact_pc && jit_body_owner_lookup_preserve(host_pc, &guest_pc, &preserve_registers)) {
         exact_pc = 1;
-        preserve_registers = 0;
         (void)__atomic_fetch_add(&translit_body_owner_recovered, 1, __ATOMIC_RELAXED);
     }
     for (int i = 0; i < 16; i++) {

@@ -293,7 +293,7 @@ fn fs_disp32_fault_restarts_at_guest_source_with_old_destination() {
     assert_eq!(native.stdout, selected);
     assert_eq!(
         selected,
-        b"fs-fault delivered=1 rip=2 old=1 subold=1 flags=1 result=8877665544332211 sub=1122334455667788\n"
+        b"fs-fault delivered=1 rip=4 destination=4 scratch=4 flags=2 result=8877665544332211 high=33445566778899aa sub=1122334455667788 subhigh=33445566778899aa\n"
     );
     assert!(selected_backend.fs_mem_admitted > 0, "{}", selected_backend.line);
     assert!(selected_backend.provenance_fallback > 0, "{}", selected_backend.line);
