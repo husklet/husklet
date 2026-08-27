@@ -69,3 +69,12 @@ fn duplicate_finalize_is_counted_without_changing_the_first_outcome() {
             .unwrap_or_else(|status| panic!("ISA {isa} backend-tree duplicate-finalize scenario failed: {status}"));
     }
 }
+
+#[test]
+fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 8)
+            .unwrap_or_else(|status| panic!("ISA {isa} backend-shape aggregation scenario failed: {status}"));
+    }
+}

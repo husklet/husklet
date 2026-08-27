@@ -42,13 +42,23 @@ static inline int smc_seen(void) {
 #define G_HOT_CONTEXT_CREATE() hl_x86_hot_context_create(x86_guest_fetch_exec_context, NULL)
 #define G_HOT_CONTEXT_DESTROY(context) hl_x86_hot_context_destroy(context)
 #define G_MAP_HOST_CACHE map_host_cache_current()
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void *interp_backend_shape_map_host(void *cache, uint64_t gpc);
+#define G_MAP_HOST(cache, gpc) interp_backend_shape_map_host((cache), (gpc))
+#else
 #define G_MAP_HOST(cache, gpc) map_host_cached((cache), (gpc))
+#endif
 #define G_TRANSLATE_BLOCK(context, pc) translate_block(context, pc)
 #define G_RUN_BLOCK(context, cpu, code) run_block(context, cpu, code)
 #define G_BACKEND_TREE_RUN_OWNED 1
 
 // Publish the absence of an IBTC base (header note).
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
+#define G_DISPATCH_ENTER(c) interp_backend_shape_dispatch_enter(c)
+#else
 #define G_DISPATCH_ENTER(c) ((c)->ibtc_base = 0)
+#endif
 
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \

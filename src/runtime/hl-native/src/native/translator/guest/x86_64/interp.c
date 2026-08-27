@@ -128,6 +128,25 @@ static __thread hl_x86_guest_data_pins g_interp_data_pins;
 static __thread int g_interp_data_active;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static __thread uint64_t g_dispatch_census_interp_steps;
+static __thread unsigned g_backend_shape_open;
+static __thread unsigned g_backend_shape_interp_stop;
+static __thread uint64_t g_backend_shape_interp_stop_form;
+static __thread int g_backend_shape_edge_pending;
+static __thread unsigned g_backend_shape_edge_family;
+static __thread uint64_t g_backend_shape_edge_target;
+static __thread uint64_t g_backend_shape_edge_source_generation;
+static __thread int g_backend_shape_edge_source_resolved;
+static __thread uintptr_t g_backend_shape_edge_source_host_lo;
+static __thread uintptr_t g_backend_shape_edge_source_host_hi;
+static __thread int g_backend_shape_edge_same_page;
+
+static void interp_backend_shape_dispatch_enter(struct cpu *cpu) {
+    cpu->ibtc_base = 0;
+    g_backend_shape_open = 0;
+    g_backend_shape_edge_pending = 0;
+    g_backend_shape_edge_source_resolved = 0;
+}
+
 #endif
 
 // ---- The past-EOF SIGBUS ledger. mem.c re-maps the past-EOF tail of a MAP_PRIVATE file mapping as
@@ -405,7 +424,59 @@ static void interp_store_bytes(uint64_t guest_address, const void *source, unsig
 
 // The address CALL pushes is guest-visible: DWARF FDE lookup, dladdr and unwinding need a biased ET_EXEC's
 // LINK address; instruction fetch projects it onto storage after RET. Must stay byte-for-byte translate.c's.
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int interp_backend_shape_rel32_reachable(int source_resolved, uintptr_t source_lo,
+                                                uintptr_t source_hi, uintptr_t target);
+#endif
 #include "interp/execution.c"
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int interp_backend_shape_rel32_reachable(int source_resolved, uintptr_t source_lo,
+                                                uintptr_t source_hi, uintptr_t target) {
+    if (!source_resolved) return 0;
+    if (source_hi < source_lo) return 0;
+    uint64_t from_lo = source_lo > target ? source_lo - target : target - source_lo;
+    uint64_t from_hi = source_hi > target ? source_hi - target : target - source_hi;
+    /* Requiring both ends of the immutable emitted span to reach the target is conservative for every
+       possible branch site within it.  Same-generation spans are guaranteed by CACHE_SZ's static bound;
+       retained/current arena pairs are measured rather than assumed. */
+    return from_lo <= INT32_MAX && from_hi <= INT32_MAX;
+}
+
+static void *interp_backend_shape_map_host(void *opaque, uint64_t gpc) {
+    hl_map_host_cache_entry *cache = opaque;
+    void *code = map_host_cached(cache, gpc);
+    if (!g_backend_shape_edge_pending) return code;
+    unsigned family = g_backend_shape_edge_family;
+    if (gpc != g_backend_shape_edge_target) {
+        hl_backend_tree_direct_edge_resolution(family, HL_BACKEND_SHAPE_EDGE_INTERRUPTED, 0, 0, 0, 0);
+    } else if (code == NULL) {
+        hl_backend_tree_direct_edge_resolution(family, HL_BACKEND_SHAPE_EDGE_UNMAPPED, 0, 0, 0, 0);
+    } else {
+        struct interp_block *target_block = code;
+        void *target_rx = NULL;
+        uint64_t target_generation = UINT64_MAX;
+        int target_resolved = jit_resolve_rw_code(code, &target_rx, &target_generation);
+        int target_translated = target_resolved && target_block->host_entry_off != 0;
+        int current_generation = target_translated && g_backend_shape_edge_source_resolved &&
+                                 g_backend_shape_edge_source_generation == g_cache_gen &&
+                                 target_generation == g_cache_gen && target_block->generation == g_cache_gen;
+        uintptr_t target_entry = target_translated
+                                     ? (uintptr_t)target_rx + target_block->host_entry_off
+                                     : 0;
+        int rel32_reachable = target_translated &&
+                              interp_backend_shape_rel32_reachable(g_backend_shape_edge_source_resolved,
+                                                                   g_backend_shape_edge_source_host_lo,
+                                                                   g_backend_shape_edge_source_host_hi, target_entry);
+        int eligible = family == HL_BACKEND_SHAPE_EDGE_JCC_TAKEN && g_backend_shape_edge_same_page &&
+                       target_translated && current_generation && rel32_reachable;
+        hl_backend_tree_direct_edge_resolution(family, HL_BACKEND_SHAPE_EDGE_MAPPED, target_translated,
+                                               current_generation, rel32_reachable, eligible);
+    }
+    g_backend_shape_edge_pending = 0;
+    return code;
+}
+#endif
 
 static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     // VEX/EVEX -> avx.c, which advances rip itself, so rip must name THIS instruction on the way out.
@@ -419,6 +490,35 @@ static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t
     return interp_step_one_byte(cpu, insn, pc, next);
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct insn *insn, uint64_t next) {
+    switch (translit_classify(insn)) {
+    case TL_JCC:
+        return cpu->rip == next ? HL_BACKEND_SHAPE_S_COND_NOT_TAKEN : HL_BACKEND_SHAPE_S_COND_TAKEN;
+    case TL_JMP: return HL_BACKEND_SHAPE_S_DIRECT_JUMP;
+    case TL_CALL: return HL_BACKEND_SHAPE_S_DIRECT_CALL;
+    case TL_RET: return HL_BACKEND_SHAPE_S_RETURN;
+    case TL_JMP_REG:
+    case TL_JMP_RIP: return HL_BACKEND_SHAPE_S_INDIRECT_BRANCH;
+    case TL_CALL_REG:
+    case TL_CALL_RIP: return HL_BACKEND_SHAPE_S_INDIRECT_CALL;
+    case TL_SYSCALL: return HL_BACKEND_SHAPE_S_SYSCALL;
+    default: return cpu->reason == R_BRANCH ? HL_BACKEND_SHAPE_S_OTHER : HL_BACKEND_SHAPE_S_SERVICE;
+    }
+}
+
+static unsigned interp_backend_shape_edge_family(unsigned terminator) {
+    switch (terminator) {
+    case HL_BACKEND_SHAPE_T_FALLTHROUGH: return HL_BACKEND_SHAPE_EDGE_FALLTHROUGH;
+    case HL_BACKEND_SHAPE_T_COND_TAKEN: return HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
+    case HL_BACKEND_SHAPE_T_COND_NOT_TAKEN: return HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN;
+    case HL_BACKEND_SHAPE_T_DIRECT_JUMP: return HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP;
+    case HL_BACKEND_SHAPE_T_DIRECT_CALL: return HL_BACKEND_SHAPE_EDGE_DIRECT_CALL;
+    default: return HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT;
+    }
+}
+#endif
+
 // Every guest control transfer ends the block, keeping run_guest's per-iteration work (signal poll,
 // safepoints) at block granularity.
 static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
@@ -431,6 +531,10 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         if (hl_x86_decode_context(context, pc, &insn) < 0) {
             // Fetch failed the executable-mapping check: a guest fault, not an engine crash.
             (void)interp_guest_trap(cpu, pc, 11, 2);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            g_backend_shape_interp_stop = HL_BACKEND_SHAPE_S_FAULT;
+            g_backend_shape_interp_stop_form = 0;
+#endif
             return;
         }
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
@@ -440,7 +544,13 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         // a service which may still fail or trap, so only the in-interpreter committed path is counted.
         if (g_prof) translit_unsupported_record_completed(&insn, pc, step != STEP_END);
 #endif
-        if (step == STEP_END) return;
+        if (step == STEP_END) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            g_backend_shape_interp_stop = interp_backend_shape_stop(cpu, &insn, pc + (uint64_t)insn.len);
+            g_backend_shape_interp_stop_form = translit_unsupported_key(&insn);
+#endif
+            return;
+        }
     }
 }
 
@@ -473,6 +583,16 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         // A guest access was abandoned; both routes already set cpu->reason and left cpu->rip on it.
         g_interp_guest_access = 0;
         interp_data_release_abandoned();
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (g_backend_shape_open == 1) {
+            unsigned packed = cpu->backend_shape;
+            hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_FAULT, (packed >> 16) & 0xffu,
+                                            (packed >> 8) & 0xffu);
+        } else if (g_backend_shape_open == 2) {
+            hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_FAULT, 0);
+        }
+        g_backend_shape_open = 0;
+#endif
         g_interp_pad_armed = previous;
         g_interp_pad_cpu = previous_cpu;
         return;
@@ -483,15 +603,63 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
     // re-tested here because they are runtime facts: an image that takes a PROT_EXEC mapping or an emulated
     // MAP_SHARED alias mid-run must stop executing verbatim stores, and the descriptor is still a valid
     // interpreter block, so falling back costs nothing but speed.
-    if (block->host_entry_off != 0 && translit_image_ok() && translit_bind_cpu(cpu)) {
+    int image_ok = translit_image_ok();
+    int translated = block->host_entry_off != 0 && image_ok && translit_bind_cpu(cpu);
+    if (translated) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        cpu->backend_shape = HL_BACKEND_SHAPE_T_OTHER;
+        g_backend_shape_open = 1;
+#endif
         hl_backend_tree_run_begin(1, block->profile_insns);
         translit_run(cpu, block);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        unsigned packed = cpu->backend_shape;
+        unsigned terminator = packed & 0xffu;
+        unsigned exit_kind = cpu->irq != 0 ? HL_BACKEND_SHAPE_T_IRQ : terminator;
+        hl_backend_tree_translated_exit(exit_kind, (packed >> 16) & 0xffu, (packed >> 8) & 0xffu);
+        unsigned family = interp_backend_shape_edge_family(terminator);
+        if (family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) {
+            if (g_backend_shape_edge_pending)
+                hl_backend_tree_direct_edge_resolution(g_backend_shape_edge_family,
+                                                       HL_BACKEND_SHAPE_EDGE_INTERRUPTED, 0, 0, 0, 0);
+            uint64_t source_page = (block->gpc & ~UINT64_C(0xfff)) +
+                                   ((uint64_t)((packed >> 24) & 0xffu) << 12);
+            int same_page = (source_page >> 12) == (cpu->rip >> 12);
+            hl_backend_tree_direct_edge(family, same_page);
+            g_backend_shape_edge_pending = 1;
+            g_backend_shape_edge_family = family;
+            g_backend_shape_edge_target = cpu->rip;
+            void *source_rx = NULL;
+            uint64_t source_generation = UINT64_MAX;
+            int source_resolved = jit_resolve_host_rx_code(block, &source_rx, &source_generation);
+            g_backend_shape_edge_source_resolved = source_resolved;
+            g_backend_shape_edge_source_generation = source_resolved ? source_generation : UINT64_MAX;
+            g_backend_shape_edge_source_host_lo =
+                source_resolved ? (uintptr_t)source_rx + block->host_entry_off : 0;
+            g_backend_shape_edge_source_host_hi =
+                source_resolved ? g_backend_shape_edge_source_host_lo + block->host_len : 0;
+            g_backend_shape_edge_same_page = same_page;
+        }
+        g_backend_shape_open = 0;
+#endif
         hl_backend_tree_reason(cpu->reason);
     } else {
         hl_backend_tree_run_begin(0, 0);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        unsigned fallback = block->host_entry_off == 0
+                                ? block->profile_fallback_kind
+                                : !image_ok ? HL_BACKEND_SHAPE_I_RUNTIME_IMAGE : HL_BACKEND_SHAPE_I_RUNTIME_BIND;
+        hl_backend_tree_interpreter_entry(fallback, block->profile_fallback_form);
+        g_backend_shape_interp_stop = HL_BACKEND_SHAPE_S_OTHER;
+        g_backend_shape_interp_stop_form = 0;
+        g_backend_shape_open = 2;
+#endif
         interp_execute(context, cpu);
 #if defined(HL_NATIVE_TEST_HOOKS)
         hl_backend_tree_interpreted_steps(g_dispatch_census_interp_steps);
+        unsigned stop = cpu->irq != 0 ? HL_BACKEND_SHAPE_S_IRQ : g_backend_shape_interp_stop;
+        hl_backend_tree_interpreter_stop(stop, g_backend_shape_interp_stop_form);
+        g_backend_shape_open = 0;
 #endif
         hl_backend_tree_reason(cpu->reason);
     }

@@ -15,6 +15,9 @@ __attribute__((naked, noinline, aligned(4096))) static long conditional(long tak
 }
 
 int main(void) {
+    // The first taken edge materializes its interior target as a standalone descriptor. The reported call
+    // below then proves the diagnostic's target-live/current-generation eligibility path is non-vacuous.
+    long warm = conditional(1);
     printf("fall=%ld taken=%ld\n", conditional(0), conditional(1));
-    return 0;
+    return warm != 41;
 }
