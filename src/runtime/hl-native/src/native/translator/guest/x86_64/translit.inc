@@ -176,6 +176,8 @@ static uint64_t translit_sse2_punpcklqdq_runs_admitted;
 static uint64_t translit_sse2_movd_admitted;
 static uint64_t translit_sse2_movd_runs_admitted;
 static uint64_t translit_sse2_movhlps_admitted;
+static uint64_t translit_fs_mem_admitted;
+static uint64_t translit_fs_fixture_admitted;
 #define TRANSLIT_PUNPCKLQDQ_PROFILE                                                                    \
     " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu sse2_movhlps_admitted=%llu"
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS                                                                  \
@@ -184,6 +186,9 @@ static uint64_t translit_sse2_movhlps_admitted;
 #define TRANSLIT_MOVD_PROFILE " sse2_movd_admitted=%llu sse2_movd_runs_admitted=%llu"
 #define TRANSLIT_MOVD_ARGUMENTS                                                                        \
     , (unsigned long long)sse2_movd_admitted, (unsigned long long)sse2_movd_runs_admitted
+#define TRANSLIT_FS_PROFILE " fs_mem_admitted=%llu fs_fixture_admitted=%llu"
+#define TRANSLIT_FS_ARGUMENTS                                                                         \
+    , (unsigned long long)fs_mem_admitted, (unsigned long long)fs_fixture_admitted
 
 #define TL_UNSUPPORTED_FORM_N 4096u
 #define TL_UNSUPPORTED_SITE_N 8192u
@@ -215,6 +220,8 @@ static _Atomic uint32_t translit_unsupported_pause_stage, translit_unsupported_p
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS
 #define TRANSLIT_MOVD_PROFILE ""
 #define TRANSLIT_MOVD_ARGUMENTS
+#define TRANSLIT_FS_PROFILE ""
+#define TRANSLIT_FS_ARGUMENTS
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -286,6 +293,7 @@ static int translit_image_ok(void) {
 enum {
     TL_NO = 0,   // not transliterable: end the block before it
     TL_COPY,     // copy the bytes verbatim
+    TL_FS_MEM,   // narrow FS:disp32 64-bit register load/sub; guest FS comes from cpu state
     TL_SSE2,     // mandatory-66 SSE2 run with deferred guest retirement
     TL_JCC,      // conditional branch: host jcc to a second epilogue
     TL_JMP,      // direct jmp rel
@@ -348,7 +356,18 @@ static int translit_classify(const struct insn *insn) {
     // accesses against cpu->fs_base/gs_base. 0x67: 32-bit addressing wraps, which a verbatim copy would
     // apply to a 64-bit host address. VEX/EVEX/0F38/0F3A and x87: guest xmm/ST live in cpu->v/cpu->st and
     // are never loaded into host registers by this backend.
-    if (insn->len <= 0 || insn->vex || insn->evex || insn->map3 || insn->seg || insn->addr32) return TL_NO;
+    if (insn->len <= 0 || insn->vex || insn->evex || insn->map3 || insn->addr32) return TL_NO;
+    // First TLS family: exactly `64 REX.W 8b|2b mod00 r/m=100 sib=25 disp32`.  This is the dominant
+    // compiler TLS form and has no guest base/index register to project.  Everything wider (GS, an
+    // address-size or other prefix, a real SIB operand, stores) remains in the authoritative interpreter.
+    if (insn->seg) {
+        if (insn->seg == 1 && insn->has_rex && insn->rexW && !insn->rexX && !insn->rexB &&
+            !insn->p66 && !insn->lock && !insn->rep && !insn->repne && !insn->two &&
+            (insn->op == 0x8B || insn->op == 0x2B) && insn->has_modrm && insn->is_mem &&
+            insn->mod == 0 && insn->rm == 4 && !insn->m_hasbase && !insn->m_hasindex && !insn->rip_rel)
+            return TL_FS_MEM;
+        return TL_NO;
+    }
     if (insn->two) return translit_classify_two(insn);
     uint8_t op = insn->op;
     if (op < 0x40 && (op & 7) <= 5) return TL_COPY; // the eight ALU groups
@@ -1085,6 +1104,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         const uint64_t generation = UINT64_MAX - 35, rw = UINT64_C(0x600000000);
         uint32_t token;
         uint64_t owner = 0;
+        uint32_t preserve = 0;
         jit_body_owner_drop_generation(generation);
         jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
         if (set == NULL) return 49;
@@ -1093,13 +1113,16 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (!jit_body_owner_reserve(generation, &token) ||
             !jit_body_owner_publish(generation, token, rw, rw + 8, 0))
             return 49;
-        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2},
-                                        {rw + 0x20, rw + 0x28, 3}};
+        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1, 1u << 10},
+                                        {rw + 0x18, rw + 0x20, 2, 1u << 11},
+                                        {rw + 0x20, rw + 0x28, 3, 0}};
         int ok = jit_body_owner_reserve_n(generation, 3, &token) && token == 1 &&
                  jit_body_owner_publish_n(generation, token, range, 3) &&
-                 jit_body_owner_lookup(rw + 0x17, &owner) && owner == 1 &&
-                 jit_body_owner_lookup(rw + CACHE_SZ * 2u + 0x18, &owner) && owner == 2 &&
-                 jit_body_owner_lookup(rw + 0x27, &owner) && owner == 3 &&
+                 jit_body_owner_lookup_preserve(rw + 0x17, &owner, &preserve) && owner == 1 &&
+                 preserve == (1u << 10) &&
+                 jit_body_owner_lookup_preserve(rw + CACHE_SZ * 2u + 0x18, &owner, &preserve) && owner == 2 &&
+                 preserve == (1u << 11) && jit_body_owner_lookup_preserve(rw + 0x27, &owner, &preserve) &&
+                 owner == 3 && preserve == 0 &&
                  !jit_body_owner_lookup(rw + 8, &owner) && !jit_body_owner_lookup(rw + 0x28, &owner);
         jit_body_owner_drop_generation(generation);
         return ok ? 0 : 49;
@@ -1111,8 +1134,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         jit_body_owner_set *set = jit_body_owner_set_for(generation, 1);
         if (set == NULL) return 50;
         set->rw = (uint8_t *)(uintptr_t)rw;
-        jit_body_owner_range unsorted[] = {{rw + 0x20, rw + 0x28, 1}, {rw + 0x10, rw + 0x18, 2}};
-        jit_body_owner_range overlap[] = {{rw + 0x10, rw + 0x20, 1}, {rw + 0x18, rw + 0x28, 2}};
+        jit_body_owner_range unsorted[] = {{rw + 0x20, rw + 0x28, 1, 0}, {rw + 0x10, rw + 0x18, 2, 0}};
+        jit_body_owner_range overlap[] = {{rw + 0x10, rw + 0x20, 1, 0}, {rw + 0x18, rw + 0x28, 2, 0}};
         int ok = jit_body_owner_reserve_n(generation, 2, &token) &&
                  !jit_body_owner_publish_n(generation, token, unsorted, 2) &&
                  atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
@@ -1136,8 +1159,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         set->rw2rx = 0;
         if (!jit_body_owner_reserve_n(generation, 3, &token)) return 51;
         translit_body_owner_batch batch = {
-            generation, token, {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2},
-                                {rw + 0x20, rw + 0x28, 3}}};
+            generation, token, {{rw + 0x10, rw + 0x18, 1, 0}, {rw + 0x18, rw + 0x20, 2, 0},
+                                {rw + 0x20, rw + 0x28, 3, 0}}};
         atomic_store_explicit(&g_body_owner_batch_pause, 1, memory_order_release);
         if (pthread_create(&thread, NULL, translit_body_owner_batch_worker, &batch) != 0) {
             atomic_store_explicit(&g_body_owner_batch_pause, 0, memory_order_release);
@@ -1169,7 +1192,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (set == NULL) return 52;
         set->rw = (uint8_t *)(uintptr_t)rw;
         atomic_store_explicit(&set->count, token, memory_order_relaxed);
-        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1}, {rw + 0x18, rw + 0x20, 2}};
+        jit_body_owner_range range[] = {{rw + 0x10, rw + 0x18, 1, 0}, {rw + 0x18, rw + 0x20, 2, 0}};
         int rejected = !jit_body_owner_publish_n(generation, token, range, 2);
         int unchanged = atomic_load_explicit(&set->count, memory_order_acquire) == token;
         jit_body_owner_drop_generation(generation);
@@ -1407,6 +1430,60 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 60;
     }
+    if (scenario == 47 || scenario == 48) {
+        struct insn fs = {.len = 9,
+                          .has_rex = 1,
+                          .rexW = 1,
+                          .opsize = 8,
+                          .seg = 1,
+                          .op = scenario == 47 ? 0x8B : 0x2B,
+                          .has_modrm = 1,
+                          .is_mem = 1,
+                          .mod = 0,
+                          .rm = 4,
+                          .reg = scenario == 47 ? 15 : 2,
+                          .disp = 0x12345678};
+        if (translit_classify(&fs) != TL_FS_MEM) return 61;
+        struct insn rejected = fs;
+#define FS_MUST_REFUSE(field, value) \
+    do {                               \
+        rejected = fs;                \
+        rejected.field = (value);     \
+        if (translit_classify(&rejected) != TL_NO) return 62; \
+    } while (0)
+        FS_MUST_REFUSE(seg, 2);
+        FS_MUST_REFUSE(rexW, 0);
+        FS_MUST_REFUSE(addr32, 1);
+        FS_MUST_REFUSE(rep, 1);
+        FS_MUST_REFUSE(lock, 1);
+        FS_MUST_REFUSE(m_hasbase, 1);
+        FS_MUST_REFUSE(m_hasindex, 1);
+        FS_MUST_REFUSE(op, 0x89);
+#undef FS_MUST_REFUSE
+        return 0;
+    }
+    if (scenario == 49) {
+        uint8_t emitted[16] = {0};
+        hl_x64_asm output = {emitted, emitted + sizeof emitted, 0};
+        hl_x64_reg_mem_disp32(&output, 0x8B, 15, 11, INT32_C(0x12345678));
+        static const uint8_t expected[] = {0x4D, 0x8B, 0xBB, 0x78, 0x56, 0x34, 0x12};
+        return !output.overflow && output.cursor - emitted == (ptrdiff_t)sizeof expected &&
+                       memcmp(emitted, expected, sizeof expected) == 0
+                   ? 0
+                   : 63;
+    }
+    if (scenario == 50) {
+        uint64_t base = UINT64_C(0x12345000);
+        uint64_t guest = 0;
+        uint32_t preserve = 0;
+        jit_instruction_map_put_preserve(base, base + 10, UINT64_C(0x11110000), 1u << 11);
+        jit_instruction_map_put_preserve(base + 10, base + 20, UINT64_C(0x22220000), 1u << 11);
+        int source = jit_instruction_map_lookup(base + 9, &guest, &preserve) &&
+                     guest == UINT64_C(0x11110000) && preserve == (1u << 11);
+        int postcommit = jit_instruction_map_lookup(base + 10, &guest, &preserve) &&
+                         guest == UINT64_C(0x22220000) && preserve == (1u << 11);
+        return source && postcommit ? 0 : 64;
+    }
     return 6;
 }
 #endif
@@ -1434,6 +1511,18 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (translit_enabled()) (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
         return NULL;
     }
+    struct insn first_insn;
+    int first_kind = hl_x86_decode_context(context, gpc, &first_insn) > 0 ? translit_classify(&first_insn) : TL_NO;
+    int sse2_run = first_kind == TL_SSE2;
+    int fs_run = first_kind == TL_FS_MEM;
+    // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
+    // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
+    int fs_authority = g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active();
+#if defined(HL_NATIVE_TEST_HOOKS)
+    fs_authority = fs_authority || hl_option_get("HL_TRANSLIT_FS_AUTHORITY_TEST") != NULL;
+#endif
+    if (fs_run && fs_authority)
+        return NULL;
     uint32_t owner_token;
 #if defined(HL_NATIVE_TEST_HOOKS)
     const char *exhaust = hl_option_get("HL_TRANSLIT_BODY_OWNER_EXHAUST");
@@ -1442,10 +1531,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (set != NULL) atomic_store_explicit(&set->count, JIT_BODY_OWNER_N, memory_order_relaxed);
     }
 #endif
-    if (!jit_body_owner_reserve(g_cache_gen, &owner_token)) return NULL;
-    struct insn first_insn;
-    int sse2_run = hl_x86_decode_context(context, gpc, &first_insn) > 0 &&
-                   translit_classify(&first_insn) == TL_SSE2;
+    if (fs_run) {
+        if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) return NULL;
+    } else if (!jit_body_owner_reserve(g_cache_gen, &owner_token)) {
+        return NULL;
+    }
     // Reserve the worst case before emitting a byte.  Publication advances only the exact populated
     // prefix; conservative capacity refusal falls back to the interpreter with no reachable partial body.
     if (sse2_run && !jit_body_owner_reserve_n(g_cache_gen, TL_MAX_INSNS + 1, &owner_token)) return NULL;
@@ -1473,6 +1563,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
     uint32_t sse2_owner_count = 0;
+    jit_body_owner_range fs_owner[3];
+    uint32_t fs_owner_count = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     int jcc_fall_stitched = 0;
 #endif
@@ -1482,7 +1574,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         struct insn insn;
         if (hl_x86_decode_context(context, pc, &insn) <= 0) break;
         int kind = translit_classify(&insn);
-        if ((sse2_run && kind != TL_SSE2) || (!sse2_run && kind == TL_SSE2)) break;
+        if ((sse2_run && kind != TL_SSE2) || (!sse2_run && kind == TL_SSE2) ||
+            (fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) break;
         if (kind == TL_NO) break;
         if (!translit_displaced_safe(&insn, kind)) {
             (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
@@ -1532,6 +1625,31 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             continue;
         }
 
+        if (kind == TL_FS_MEM) {
+            int scratch = insn.reg == HL_X64_R11 ? 10 : HL_X64_R11;
+            uint32_t preserve = translit_preserve_mask(scratch);
+            hl_x64_store_gs(a, scratch, R_OFF(scratch));
+            hl_x64_load_gs(a, scratch, OFF_FS);
+            hl_x64_reg_mem_disp32(a, insn.op, insn.reg, scratch, (int32_t)insn.disp);
+            uint8_t *commit_end = a->cursor;
+            hl_x64_load_gs(a, scratch, R_OFF(scratch));
+            if (a->overflow) {
+                a->cursor = instruction_start;
+                break;
+            }
+            fs_owner[fs_owner_count++] = (jit_body_owner_range){
+                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc, preserve};
+            fs_owner[fs_owner_count++] = (jit_body_owner_range){
+                (uint64_t)(uintptr_t)commit_end, (uint64_t)(uintptr_t)a->cursor, next, preserve};
+            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)instruction_start,
+                                             (uint64_t)(uintptr_t)commit_end, pc, preserve);
+            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)commit_end,
+                                             (uint64_t)(uintptr_t)a->cursor, next, preserve);
+            pc = next;
+            count++;
+            break; // one transaction per descriptor keeps the persistent owner map exact and bounded
+        }
+
         if (kind == TL_SSE2) {
             int sse2_store = insn.is_mem &&
                              (insn.op == 0x11 || insn.op == 0x29 || (insn.rep && insn.op == 0x7F));
@@ -1567,7 +1685,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             }
             uint8_t *commit_end = a->cursor;
             sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc};
+                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc, 0};
             jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start,
                                     (uint64_t)(uintptr_t)commit_end, pc);
             pc = next;
@@ -1769,10 +1887,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (a->overflow) return NULL;
         if (sse2_run)
             sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc};
+                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
+        if (fs_run)
+            fs_owner[fs_owner_count++] = (jit_body_owner_range){
+                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
     }
 
-    int owner_published = sse2_run
+    int owner_published = fs_run
+                              ? jit_body_owner_publish_n(g_cache_gen, owner_token, fs_owner, fs_owner_count)
+                          : sse2_run
                               ? jit_body_owner_publish_n(g_cache_gen, owner_token, sse2_owner, sse2_owner_count)
                               : jit_body_owner_publish(g_cache_gen, owner_token, (uint64_t)(uintptr_t)start,
                                                        (uint64_t)(uintptr_t)a->cursor, gpc);
@@ -1801,6 +1924,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_movd_admitted, sse2_movd_count, __ATOMIC_RELAXED);
         if (sse2_movd_seen) (void)__atomic_fetch_add(&translit_sse2_movd_runs_admitted, 1, __ATOMIC_RELAXED);
+    }
+    if (fs_run) {
+        (void)__atomic_fetch_add(&translit_fs_mem_admitted, 1, __ATOMIC_RELAXED);
+        if (first_insn.disp == INT64_C(0x12340) || first_insn.disp == INT64_C(0x12348) ||
+            first_insn.disp == INT64_C(0x12350) || first_insn.disp == INT64_C(0x12358) ||
+            first_insn.disp == -INT64_C(0x2340))
+            (void)__atomic_fetch_add(&translit_fs_fixture_admitted, 1, __ATOMIC_RELAXED);
     }
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
@@ -1950,6 +2080,8 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_movd_admitted = __atomic_load_n(&translit_sse2_movd_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movd_runs_admitted = __atomic_load_n(&translit_sse2_movd_runs_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movhlps_admitted = __atomic_load_n(&translit_sse2_movhlps_admitted, __ATOMIC_RELAXED);
+    uint64_t fs_mem_admitted = __atomic_load_n(&translit_fs_mem_admitted, __ATOMIC_RELAXED);
+    uint64_t fs_fixture_admitted = __atomic_load_n(&translit_fs_fixture_admitted, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
@@ -1999,6 +2131,8 @@ static int translit_report(char *out, size_t size) {
         sse2_punpcklqdq_admitted = sse2_punpcklqdq_runs_admitted = UINT64_MAX;
         sse2_movd_admitted = sse2_movd_runs_admitted = UINT64_MAX;
         sse2_movhlps_admitted = UINT64_MAX;
+        fs_mem_admitted = UINT64_MAX;
+        fs_fixture_admitted = UINT64_MAX;
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
@@ -2056,6 +2190,7 @@ static int translit_report(char *out, size_t size) {
                     " sse2_pxor_admitted=%llu sse2_pxor_runs_admitted=%llu"
                     TRANSLIT_PUNPCKLQDQ_PROFILE
                     TRANSLIT_MOVD_PROFILE
+                    TRANSLIT_FS_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -2072,7 +2207,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)sse2_store_movdqu,
                     (unsigned long long)sse2_store_family_runs,
                     (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted
-                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS,
+                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS TRANSLIT_FS_ARGUMENTS,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
@@ -2111,9 +2246,8 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         (void)__atomic_fetch_add(&translit_provenance_fallback, 1, __ATOMIC_RELAXED);
     }
 #endif
-    if (!exact_pc && jit_body_owner_lookup(host_pc, &guest_pc)) {
+    if (!exact_pc && jit_body_owner_lookup_preserve(host_pc, &guest_pc, &preserve_registers)) {
         exact_pc = 1;
-        preserve_registers = 0;
         (void)__atomic_fetch_add(&translit_body_owner_recovered, 1, __ATOMIC_RELAXED);
     }
     for (int i = 0; i < 16; i++) {

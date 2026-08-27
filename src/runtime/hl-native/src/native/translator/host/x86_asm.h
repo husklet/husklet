@@ -89,6 +89,16 @@ static inline void hl_x64_load_ind(hl_x64_asm *a, int reg, int base) {
     hl_x64_u8(a, (uint8_t)(((reg & 7) << 3) | (base & 7)));
 }
 
+// <op> disp32(%base), %reg (64-bit).  The same-ISA TLS lowering uses this only after loading the
+// guest's FS base from canonical cpu state; it never borrows the host FS register.
+static inline void hl_x64_reg_mem_disp32(hl_x64_asm *a, uint8_t op, int reg, int base, int32_t disp) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 4 : 0) | ((base >= 8) ? 1 : 0)));
+    hl_x64_u8(a, op);
+    hl_x64_u8(a, (uint8_t)(0x80 | ((reg & 7) << 3) | (base & 7)));
+    if ((base & 7) == 4) hl_x64_u8(a, (uint8_t)(0x20 | (base & 7))); // no index, selected base
+    hl_x64_u32(a, (uint32_t)disp);
+}
+
 // movl $imm32, disp8(%rsp) -- the one guest store the transliterator itself performs (a CALL's pushed
 // return address, written as two halves so no register is clobbered before the store can fault).
 static inline void hl_x64_store_rsp_imm32(hl_x64_asm *a, int8_t disp, uint32_t value) {
