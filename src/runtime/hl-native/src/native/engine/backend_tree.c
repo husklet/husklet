@@ -102,6 +102,19 @@ enum hl_backend_would_link_disposition {
     HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT,
 };
 
+enum hl_backend_family_div_outcome {
+    HL_BACKEND_FAMILY_DIV_INLINE,
+    HL_BACKEND_FAMILY_DIV_SERVICE64,
+    HL_BACKEND_FAMILY_DIV_DE,
+    HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT,
+};
+
+enum {
+    HL_BACKEND_FAMILY_DIV_UNSIGNED,
+    HL_BACKEND_FAMILY_DIV_SIGNED,
+    HL_BACKEND_FAMILY_DIV_KIND_COUNT,
+};
+
 struct hl_backend_shape_form {
     _Atomic uint32_t state; /* 0 empty, 1 metadata reserved, 2 published */
     uint64_t key;
@@ -157,6 +170,9 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t jcc_taken_ineligible;
     _Atomic uint64_t would_link[HL_BACKEND_WOULD_LINK_FAMILY_COUNT]
                                [HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT];
+    _Atomic uint64_t family_jmem;
+    _Atomic uint64_t family_div[HL_BACKEND_FAMILY_DIV_KIND_COUNT][HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT];
+    _Atomic uint64_t family_div_service64_completed[HL_BACKEND_FAMILY_DIV_KIND_COUNT];
 };
 
 struct hl_backend_tree_shared {
@@ -218,6 +234,9 @@ struct hl_backend_tree_summary {
     uint64_t jcc_taken_ineligible;
     uint64_t would_link[HL_BACKEND_WOULD_LINK_FAMILY_COUNT]
                         [HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT];
+    uint64_t family_jmem;
+    uint64_t family_div[HL_BACKEND_FAMILY_DIV_KIND_COUNT][HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT];
+    uint64_t family_div_service64_completed[HL_BACKEND_FAMILY_DIV_KIND_COUNT];
     uint64_t fallback_form_total;
     uint64_t fallback_form_unique;
     uint64_t fallback_form_overflow;
@@ -496,6 +515,25 @@ static inline void hl_backend_tree_would_link(unsigned family, unsigned disposit
     atomic_fetch_add_explicit(&slot->would_link[family][disposition], 1, memory_order_relaxed);
 }
 
+static inline void hl_backend_tree_family_jmem(void) {
+    if (g_backend_tree_self != NULL)
+        atomic_fetch_add_explicit(&g_backend_tree_self->family_jmem, 1, memory_order_relaxed);
+}
+
+static inline void hl_backend_tree_family_div(unsigned is_signed, unsigned outcome) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL || is_signed >= HL_BACKEND_FAMILY_DIV_KIND_COUNT ||
+        outcome >= HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT)
+        return;
+    atomic_fetch_add_explicit(&slot->family_div[is_signed][outcome], 1, memory_order_relaxed);
+}
+
+static inline void hl_backend_tree_family_div_service64_completed(unsigned is_signed) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL || is_signed >= HL_BACKEND_FAMILY_DIV_KIND_COUNT) return;
+    atomic_fetch_add_explicit(&slot->family_div_service64_completed[is_signed], 1, memory_order_relaxed);
+}
+
 static inline void hl_backend_tree_translation(void) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->translations, 1, memory_order_relaxed);
@@ -680,6 +718,14 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
             for (uint32_t disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
                 summary->would_link[family][disposition] +=
                     atomic_load_explicit(&slot->would_link[family][disposition], memory_order_relaxed);
+        summary->family_jmem += atomic_load_explicit(&slot->family_jmem, memory_order_relaxed);
+        for (uint32_t kind = 0; kind < HL_BACKEND_FAMILY_DIV_KIND_COUNT; ++kind) {
+            for (uint32_t outcome = 0; outcome < HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT; ++outcome)
+                summary->family_div[kind][outcome] +=
+                    atomic_load_explicit(&slot->family_div[kind][outcome], memory_order_relaxed);
+            summary->family_div_service64_completed[kind] +=
+                atomic_load_explicit(&slot->family_div_service64_completed[kind], memory_order_relaxed);
+        }
     }
     uint64_t jcc_links = atomic_load_explicit(&shared->jcc_links, memory_order_relaxed);
     unsigned jcc_family = HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
@@ -773,6 +819,15 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
                                     summary.translated_stitch_cond_fall;
     for (unsigned family = 0; family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT; family++)
         translated_transfers += summary.direct_edge_chained[family];
+    uint64_t family_div_total = summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_INLINE] +
+                                summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED]
+                                                  [HL_BACKEND_FAMILY_DIV_SERVICE64] +
+                                summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_DE];
+    uint64_t family_idiv_total = summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_INLINE] +
+                                 summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED]
+                                                   [HL_BACKEND_FAMILY_DIV_SERVICE64] +
+                                 summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE];
+    uint64_t family_total = summary.family_jmem + family_div_total + family_idiv_total;
     return snprintf(
         record, capacity,
         "[diag] backend-shape version=1 translated_entries=%llu translated_transfers=%llu "
@@ -798,6 +853,10 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "s_indirect_branch=%llu s_indirect_call=%llu s_syscall=%llu s_irq=%llu s_fault=%llu "
         "s_service=%llu s_other=%llu fallback_total=%llu fallback_unique=%llu fallback_overflow=%llu "
         "stop_total=%llu stop_unique=%llu stop_overflow=%llu "
+        "family_jmem=%llu family_div_total=%llu family_div_inline=%llu family_div_service64=%llu "
+        "family_div_service64_completed=%llu family_div_de=%llu family_idiv_total=%llu "
+        "family_idiv_inline=%llu family_idiv_service64=%llu family_idiv_service64_completed=%llu "
+        "family_idiv_de=%llu family_total=%llu "
         "fallback0_key=%llu fallback0_count=%llu fallback1_key=%llu fallback1_count=%llu "
         "fallback2_key=%llu fallback2_count=%llu fallback3_key=%llu fallback3_count=%llu "
         "fallback4_key=%llu fallback4_count=%llu fallback5_key=%llu fallback5_count=%llu "
@@ -900,6 +959,17 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.fallback_form_total, (unsigned long long)summary.fallback_form_unique,
         (unsigned long long)summary.fallback_form_overflow, (unsigned long long)summary.stop_form_total,
         (unsigned long long)summary.stop_form_unique, (unsigned long long)summary.stop_form_overflow,
+        (unsigned long long)summary.family_jmem, (unsigned long long)family_div_total,
+        (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_INLINE],
+        (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64],
+        (unsigned long long)summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_UNSIGNED],
+        (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_DE],
+        (unsigned long long)family_idiv_total,
+        (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_INLINE],
+        (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64],
+        (unsigned long long)summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED],
+        (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE],
+        (unsigned long long)family_total,
         (unsigned long long)summary.fallback_top_key[0], (unsigned long long)summary.fallback_top_count[0],
         (unsigned long long)summary.fallback_top_key[1], (unsigned long long)summary.fallback_top_count[1],
         (unsigned long long)summary.fallback_top_key[2], (unsigned long long)summary.fallback_top_count[2],
@@ -1016,7 +1086,21 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         }
         if (scenario == 7) _exit(0); /* backend entry whose process dies before returning a reason */
         hl_backend_tree_reason(1);
-        if (scenario == 1 || scenario == 8 || scenario == 9) {
+        if (scenario == 10) {
+            for (unsigned repeat = 0; repeat < 2; ++repeat) hl_backend_tree_family_jmem();
+            for (unsigned repeat = 0; repeat < 2; ++repeat) {
+                hl_backend_tree_family_div(HL_BACKEND_FAMILY_DIV_UNSIGNED,
+                                           HL_BACKEND_FAMILY_DIV_SERVICE64);
+                hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_UNSIGNED);
+                hl_backend_tree_family_div(HL_BACKEND_FAMILY_DIV_SIGNED, HL_BACKEND_FAMILY_DIV_DE);
+            }
+            for (unsigned form = 0; form < 4; ++form) {
+                if (form != 0) hl_backend_tree_run_begin(0, 0);
+                hl_backend_tree_interpreter_entry(HL_BACKEND_SHAPE_I_UNSUPPORTED, 100 + form);
+                hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_SERVICE, 200 + form);
+            }
+        }
+        if (scenario == 1 || scenario == 8 || scenario == 9 || scenario == 10) {
             struct hl_backend_tree_slot *grandchild_birth = hl_backend_tree_prepare_fork();
             pid_t grandchild = fork();
             hl_backend_tree_after_fork(grandchild, grandchild_birth);
@@ -1034,6 +1118,20 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                                                HL_BACKEND_WOULD_LINK_ELIGIBLE);
                     hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL,
                                                HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED);
+                }
+                if (scenario == 10) {
+                    for (unsigned repeat = 0; repeat < 3; ++repeat) {
+                        hl_backend_tree_family_jmem();
+                        hl_backend_tree_family_div(HL_BACKEND_FAMILY_DIV_UNSIGNED,
+                                                   HL_BACKEND_FAMILY_DIV_DE);
+                        hl_backend_tree_family_div(HL_BACKEND_FAMILY_DIV_SIGNED,
+                                                   HL_BACKEND_FAMILY_DIV_INLINE);
+                    }
+                    for (unsigned form = 0; form < 4; ++form) {
+                        hl_backend_tree_run_begin(0, 0);
+                        hl_backend_tree_interpreter_entry(HL_BACKEND_SHAPE_I_UNSUPPORTED, 104 + form);
+                        hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_SERVICE, 204 + form);
+                    }
                 }
                 hl_backend_tree_reason(5);
                 (void)hl_backend_tree_finalize(0);
@@ -1066,6 +1164,17 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_GENERATION);
         hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_TARGET_PAGE);
         hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_REL32);
+    }
+    if (scenario == 10) {
+        hl_backend_tree_family_jmem();
+        hl_backend_tree_family_div(HL_BACKEND_FAMILY_DIV_UNSIGNED, HL_BACKEND_FAMILY_DIV_INLINE);
+        hl_backend_tree_family_div(HL_BACKEND_FAMILY_DIV_SIGNED, HL_BACKEND_FAMILY_DIV_SERVICE64);
+        hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_SIGNED);
+        for (unsigned form = 0; form < 4; ++form) {
+            hl_backend_tree_run_begin(0, 0);
+            hl_backend_tree_interpreter_entry(HL_BACKEND_SHAPE_I_UNSUPPORTED, 108 + form);
+            hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_SERVICE, 208 + form);
+        }
     }
     hl_backend_tree_reason(0);
     (void)hl_backend_tree_finalize(0);
@@ -1151,6 +1260,22 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                    ? 0
                    : 37;
     }
+    if (scenario == 10) {
+        return summary.family_jmem == 6 &&
+                       summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_INLINE] == 1 &&
+                       summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] == 2 &&
+                       summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_UNSIGNED] == 2 &&
+                       summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_DE] == 3 &&
+                       summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_INLINE] == 3 &&
+                       summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] == 1 &&
+                       summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED] == 1 &&
+                       summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] == 2 &&
+                       summary.fallback_form_total == 12 && summary.fallback_form_unique == 12 &&
+                       summary.fallback_top_count[7] == 1 && summary.stop_form_total == 12 &&
+                       summary.stop_form_unique == 12 && summary.stop_top_count[7] == 1
+                   ? 0
+                   : 38;
+    }
     return 40;
 }
 #endif
@@ -1211,6 +1336,9 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 #define hl_backend_tree_direct_edge(family, same_page) ((void)0)
 #define hl_backend_tree_direct_edge_resolution(family, resolution, translated, current, rel32, eligible) ((void)0)
 #define hl_backend_tree_would_link(family, disposition) ((void)0)
+#define hl_backend_tree_family_jmem() ((void)0)
+#define hl_backend_tree_family_div(is_signed, outcome) ((void)0)
+#define hl_backend_tree_family_div_service64_completed(is_signed) ((void)0)
 #define hl_backend_tree_translation() ((void)0)
 #define hl_backend_tree_map_hit() ((void)0)
 #define hl_backend_tree_stw_retry() ((void)0)

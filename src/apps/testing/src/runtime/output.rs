@@ -128,6 +128,18 @@ const BACKEND_SHAPE_FIELDS: &[&str] = &[
     "stop_total",
     "stop_unique",
     "stop_overflow",
+    "family_jmem",
+    "family_div_total",
+    "family_div_inline",
+    "family_div_service64",
+    "family_div_service64_completed",
+    "family_div_de",
+    "family_idiv_total",
+    "family_idiv_inline",
+    "family_idiv_service64",
+    "family_idiv_service64_completed",
+    "family_idiv_de",
+    "family_total",
     "fallback0_key",
     "fallback0_count",
     "fallback1_key",
@@ -422,6 +434,20 @@ fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
     if fields["fallback_total"] != fields["i_unsupported"] {
         return Err("backend-shape fallback forms do not reconcile with unsupported entries".into());
     }
+    if sum(&["family_div_inline", "family_div_service64", "family_div_de"]) != Some(fields["family_div_total"]) {
+        return Err("backend-shape DIV family outcomes do not reconcile".into());
+    }
+    if sum(&["family_idiv_inline", "family_idiv_service64", "family_idiv_de"]) != Some(fields["family_idiv_total"]) {
+        return Err("backend-shape IDIV family outcomes do not reconcile".into());
+    }
+    if fields["family_div_service64_completed"] > fields["family_div_service64"]
+        || fields["family_idiv_service64_completed"] > fields["family_idiv_service64"]
+    {
+        return Err("backend-shape deferred divide completions exceed requests".into());
+    }
+    if sum(&["family_jmem", "family_div_total", "family_idiv_total"]) != Some(fields["family_total"]) {
+        return Err("backend-shape executed-family totals do not reconcile".into());
+    }
     Ok(fields)
 }
 
@@ -533,7 +559,7 @@ mod tests {
     }
 
     const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
-    const SHAPE: &str = "[diag] backend-shape version=1 translated_entries=2 translated_transfers=5 t_fallthrough=1 t_cond_taken=1 t_cond_not_taken=0 t_direct_jump=0 t_direct_call=0 t_return=0 t_indirect_branch=0 t_indirect_call=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0 stitch_jmp=1 stitch_cond_fall=2 e_fall_total=1 e_fall_mapped=1 e_fall_unmapped=0 e_fall_interrupted=0 e_fall_chained=0 e_fall_dispatcher=1 e_jt_total=1 e_jt_mapped=1 e_jt_unmapped=0 e_jt_interrupted=0 e_jt_chained=0 e_jt_dispatcher=1 e_jn_total=0 e_jn_mapped=0 e_jn_unmapped=0 e_jn_interrupted=0 e_jn_chained=0 e_jn_dispatcher=0 e_jmp_total=0 e_jmp_mapped=0 e_jmp_unmapped=0 e_jmp_interrupted=0 e_jmp_chained=0 e_jmp_dispatcher=0 e_call_total=0 e_call_mapped=0 e_call_unmapped=0 e_call_interrupted=0 e_call_chained=0 e_call_dispatcher=0 jt_same_page=1 jt_cross_page=0 jt_target_translated=1 jt_target_interpreted=0 jt_generation_current=1 jt_generation_retired=0 jt_rel32=1 jt_rel32_unreachable=0 jt_eligible=1 jt_ineligible=0 interpreted_entries=3 i_disabled=0 i_image=0 i_decode=0 i_unsupported=2 i_authority=0 i_resource=0 i_emit=0 i_runtime_image=1 i_runtime_bind=0 i_other=0 s_fallthrough=0 s_cond_taken=0 s_cond_not_taken=0 s_direct_jump=0 s_direct_call=1 s_return=0 s_indirect_branch=0 s_indirect_call=0 s_syscall=0 s_irq=0 s_fault=1 s_service=1 s_other=0 fallback_total=2 fallback_unique=1 fallback_overflow=0 stop_total=3 stop_unique=3 stop_overflow=0 fallback0_key=17 fallback0_count=2 fallback1_key=0 fallback1_count=0 fallback2_key=0 fallback2_count=0 fallback3_key=0 fallback3_count=0 fallback4_key=0 fallback4_count=0 fallback5_key=0 fallback5_count=0 fallback6_key=0 fallback6_count=0 fallback7_key=0 fallback7_count=0 stop0_key=1 stop0_count=1 stop1_key=2 stop1_count=1 stop2_key=3 stop2_count=1 stop3_key=0 stop3_count=0 stop4_key=0 stop4_count=0 stop5_key=0 stop5_count=0 stop6_key=0 stop6_count=0 stop7_key=0 stop7_count=0\n";
+    const SHAPE: &str = "[diag] backend-shape version=1 translated_entries=2 translated_transfers=5 t_fallthrough=1 t_cond_taken=1 t_cond_not_taken=0 t_direct_jump=0 t_direct_call=0 t_return=0 t_indirect_branch=0 t_indirect_call=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0 stitch_jmp=1 stitch_cond_fall=2 e_fall_total=1 e_fall_mapped=1 e_fall_unmapped=0 e_fall_interrupted=0 e_fall_chained=0 e_fall_dispatcher=1 e_jt_total=1 e_jt_mapped=1 e_jt_unmapped=0 e_jt_interrupted=0 e_jt_chained=0 e_jt_dispatcher=1 e_jn_total=0 e_jn_mapped=0 e_jn_unmapped=0 e_jn_interrupted=0 e_jn_chained=0 e_jn_dispatcher=0 e_jmp_total=0 e_jmp_mapped=0 e_jmp_unmapped=0 e_jmp_interrupted=0 e_jmp_chained=0 e_jmp_dispatcher=0 e_call_total=0 e_call_mapped=0 e_call_unmapped=0 e_call_interrupted=0 e_call_chained=0 e_call_dispatcher=0 jt_same_page=1 jt_cross_page=0 jt_target_translated=1 jt_target_interpreted=0 jt_generation_current=1 jt_generation_retired=0 jt_rel32=1 jt_rel32_unreachable=0 jt_eligible=1 jt_ineligible=0 interpreted_entries=3 i_disabled=0 i_image=0 i_decode=0 i_unsupported=2 i_authority=0 i_resource=0 i_emit=0 i_runtime_image=1 i_runtime_bind=0 i_other=0 s_fallthrough=0 s_cond_taken=0 s_cond_not_taken=0 s_direct_jump=0 s_direct_call=1 s_return=0 s_indirect_branch=0 s_indirect_call=0 s_syscall=0 s_irq=0 s_fault=1 s_service=1 s_other=0 fallback_total=2 fallback_unique=1 fallback_overflow=0 stop_total=3 stop_unique=3 stop_overflow=0 family_jmem=1 family_div_total=3 family_div_inline=1 family_div_service64=1 family_div_service64_completed=1 family_div_de=1 family_idiv_total=3 family_idiv_inline=1 family_idiv_service64=1 family_idiv_service64_completed=1 family_idiv_de=1 family_total=7 fallback0_key=17 fallback0_count=2 fallback1_key=0 fallback1_count=0 fallback2_key=0 fallback2_count=0 fallback3_key=0 fallback3_count=0 fallback4_key=0 fallback4_count=0 fallback5_key=0 fallback5_count=0 fallback6_key=0 fallback6_count=0 fallback7_key=0 fallback7_count=0 stop0_key=1 stop0_count=1 stop1_key=2 stop1_count=1 stop2_key=3 stop2_count=1 stop3_key=0 stop3_count=0 stop4_key=0 stop4_count=0 stop5_key=0 stop5_count=0 stop6_key=0 stop6_count=0 stop7_key=0 stop7_count=0\n";
 
     fn census() -> String {
         format!("{TREE}{SHAPE}")
@@ -578,6 +604,32 @@ mod tests {
                 .to_string()
                 .contains("translated transfers")
         );
+    }
+
+    #[test]
+    fn executed_family_outcomes_are_typed_and_reconciled() {
+        validate_backend_tree(census().as_bytes(), true).unwrap();
+        for (needle, replacement, message) in [
+            (" family_jmem=1", "", "omitted field"),
+            (
+                " family_div_total=3",
+                " family_div_total=3 family_div_total=3",
+                "duplicates field",
+            ),
+            (" family_div_total=3", " family_div_total=4", "DIV family outcomes"),
+            (
+                " family_idiv_service64_completed=1",
+                " family_idiv_service64_completed=2",
+                "completions exceed requests",
+            ),
+            (" family_total=7", " family_total=8", "executed-family totals"),
+        ] {
+            let shape = SHAPE.replacen(needle, replacement, 1);
+            let error = validate_backend_tree(format!("{TREE}{shape}").as_bytes(), true)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(message), "{error}");
+        }
     }
 
     #[test]

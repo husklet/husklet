@@ -507,6 +507,32 @@ static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct in
     }
 }
 
+// Dedicated terminal-family counts are taken only after interp_step has returned. A faulting memory
+// operand longjmps before this point, so these are completed instructions rather than decode attempts.
+// The 64-bit divide service has a second completion counter in interp_dispatch.h, after RAX/RDX commit.
+static void interp_backend_family_completed(const struct cpu *cpu, const struct insn *insn, int step) {
+    if (translit_classify(insn) != TL_NO || insn->two || insn->map3 || insn->vex || insn->evex ||
+        !insn->has_modrm)
+        return;
+    unsigned operation = (unsigned)insn->reg & 7u;
+    if (insn->op == 0xFF && operation == 4 && insn->is_mem && !insn->rip_rel &&
+        step == STEP_END && cpu->reason == R_BRANCH) {
+        hl_backend_tree_family_jmem();
+        return;
+    }
+    if ((insn->op != 0xF6 && insn->op != 0xF7) || (operation != 6 && operation != 7)) return;
+    unsigned is_signed = operation == 7;
+    unsigned expected_reason = is_signed ? R_IDIV : R_DIV;
+    if (step != STEP_END) {
+        hl_backend_tree_family_div(is_signed, HL_BACKEND_FAMILY_DIV_INLINE);
+    } else if ((unsigned)cpu->reason == expected_reason && cpu->divop != 0 &&
+               insn->op == 0xF7 && insn->opsize == 8) {
+        hl_backend_tree_family_div(is_signed, HL_BACKEND_FAMILY_DIV_SERVICE64);
+    } else if ((unsigned)cpu->reason == expected_reason && cpu->divop == 0) {
+        hl_backend_tree_family_div(is_signed, HL_BACKEND_FAMILY_DIV_DE);
+    }
+}
+
 static unsigned interp_backend_shape_edge_family(unsigned terminator) {
     switch (terminator) {
     case HL_BACKEND_SHAPE_T_FALLTHROUGH: return HL_BACKEND_SHAPE_EDGE_FALLTHROUGH;
@@ -540,6 +566,7 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         }
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
 #if defined(HL_NATIVE_TEST_HOOKS)
+        interp_backend_family_completed(cpu, &insn, step);
         if (step != STEP_END) g_dispatch_census_interp_steps++;
         // This is an execution census, not an admission/attempt census. STEP_END hands deferred work to
         // a service which may still fail or trap, so only the in-interpreter committed path is counted.

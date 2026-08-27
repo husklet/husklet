@@ -170,6 +170,7 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
         unsigned __int128 num = ((unsigned __int128)(c)->r[RDX] << 64) | (c)->r[RAX];                                  \
         (c)->r[RAX] = (uint64_t)(num / d);                                                                             \
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
+        hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_UNSIGNED);                               \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_IDIV) { /* 128/64 signed idiv */                                                              \
@@ -193,6 +194,7 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
         }                                                                                                              \
         (c)->r[RAX] = (uint64_t)(num / d);                                                                             \
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
+        hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_SIGNED);                                 \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_TRAP) { /* int3/UD2; cpu->divop = signo|code<<8 */                                            \

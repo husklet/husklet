@@ -128,6 +128,18 @@ struct Backend {
     shape_jcc_taken_dispatcher: u64,
     shape_fault: u64,
     shape_other: u64,
+    family_jmem: u64,
+    family_div_total: u64,
+    family_div_inline: u64,
+    family_div_service64: u64,
+    family_div_service64_completed: u64,
+    family_div_de: u64,
+    family_idiv_total: u64,
+    family_idiv_inline: u64,
+    family_idiv_service64: u64,
+    family_idiv_service64_completed: u64,
+    family_idiv_de: u64,
+    family_total: u64,
     would_link_candidates: u64,
     would_link_refusals: u64,
     would_fall_candidate: u64,
@@ -206,6 +218,13 @@ fn backend(stderr: &[u8]) -> Backend {
             .find_map(|field| field.strip_prefix(name))
             .and_then(|value| value.parse().ok())
             .unwrap_or(0)
+    };
+    let family_counter = |name: &str| {
+        shape
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("missing typed executed-family field {name} in {shape}"))
     };
     let would_links = text
         .lines()
@@ -327,6 +346,33 @@ fn backend(stderr: &[u8]) -> Backend {
         shape_counter("e_jt_total="),
         "{shape}"
     );
+    assert_eq!(
+        family_counter("family_div_total="),
+        family_counter("family_div_inline=")
+            + family_counter("family_div_service64=")
+            + family_counter("family_div_de="),
+        "{shape}"
+    );
+    assert_eq!(
+        family_counter("family_idiv_total="),
+        family_counter("family_idiv_inline=")
+            + family_counter("family_idiv_service64=")
+            + family_counter("family_idiv_de="),
+        "{shape}"
+    );
+    assert!(
+        family_counter("family_div_service64_completed=") <= family_counter("family_div_service64="),
+        "{shape}"
+    );
+    assert!(
+        family_counter("family_idiv_service64_completed=") <= family_counter("family_idiv_service64="),
+        "{shape}"
+    );
+    assert_eq!(
+        family_counter("family_total="),
+        family_counter("family_jmem=") + family_counter("family_div_total=") + family_counter("family_idiv_total="),
+        "{shape}"
+    );
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
@@ -401,6 +447,18 @@ fn backend(stderr: &[u8]) -> Backend {
         shape_jcc_taken_dispatcher: shape_counter("e_jt_dispatcher="),
         shape_fault: shape_counter("t_fault="),
         shape_other: shape_counter("t_other="),
+        family_jmem: family_counter("family_jmem="),
+        family_div_total: family_counter("family_div_total="),
+        family_div_inline: family_counter("family_div_inline="),
+        family_div_service64: family_counter("family_div_service64="),
+        family_div_service64_completed: family_counter("family_div_service64_completed="),
+        family_div_de: family_counter("family_div_de="),
+        family_idiv_total: family_counter("family_idiv_total="),
+        family_idiv_inline: family_counter("family_idiv_inline="),
+        family_idiv_service64: family_counter("family_idiv_service64="),
+        family_idiv_service64_completed: family_counter("family_idiv_service64_completed="),
+        family_idiv_de: family_counter("family_idiv_de="),
+        family_total: family_counter("family_total="),
         would_link_candidates: ["fall", "jmp", "call"]
             .into_iter()
             .map(|family| would_link_counter(&format!("{family}_candidate=")))
@@ -469,6 +527,45 @@ fn unsupported_census_records_successful_interpreter_steps() {
         report.unsupported_line.contains("9830009d4:128"),
         "{}",
         report.unsupported_line
+    );
+}
+
+#[test]
+fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "executed_families");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, report) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native executed-family fixture");
+    assert_eq!(interpreted_status, 0);
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(native.status.code(), Some(0));
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected, native.stdout);
+    assert!(report.family_jmem >= 1, "{}", report.shape_line);
+    assert!(report.family_div_inline >= 1, "{}", report.shape_line);
+    assert!(report.family_div_service64 >= 1, "{}", report.shape_line);
+    assert!(report.family_div_de >= 1, "{}", report.shape_line);
+    assert!(report.family_idiv_inline >= 1, "{}", report.shape_line);
+    assert!(report.family_idiv_service64 >= 1, "{}", report.shape_line);
+    assert!(report.family_idiv_de >= 1, "{}", report.shape_line);
+    assert_eq!(
+        report.family_div_service64_completed, report.family_div_service64,
+        "{}",
+        report.shape_line
+    );
+    assert_eq!(
+        report.family_idiv_service64_completed, report.family_idiv_service64,
+        "{}",
+        report.shape_line
+    );
+    assert_eq!(
+        report.family_total,
+        report.family_jmem + report.family_div_total + report.family_idiv_total,
+        "{}",
+        report.shape_line
     );
 }
 
@@ -1491,9 +1588,15 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         "the warmed target CALL must execute after its cold-target publication: {}",
         selected_backend.would_link_line
     );
-    assert_eq!(selected_backend.would_fall_candidate, selected_backend.shape_fallthrough);
+    assert_eq!(
+        selected_backend.would_fall_candidate,
+        selected_backend.shape_fallthrough
+    );
     assert_eq!(selected_backend.would_jmp_candidate, selected_backend.shape_direct_jump);
-    assert_eq!(selected_backend.would_call_candidate, selected_backend.shape_direct_call);
+    assert_eq!(
+        selected_backend.would_call_candidate,
+        selected_backend.shape_direct_call
+    );
     assert!(
         selected_backend.shape_jcc_taken_dispatcher > 0,
         "{}",

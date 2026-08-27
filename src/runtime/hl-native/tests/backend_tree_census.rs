@@ -87,3 +87,12 @@ fn publication_would_link_dispositions_reconcile_across_nested_processes() {
             .unwrap_or_else(|status| panic!("ISA {isa} would-link aggregation scenario failed: {status}"));
     }
 }
+
+#[test]
+fn executed_family_counts_aggregate_across_forks_and_ignore_top8_saturation() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 10)
+            .unwrap_or_else(|status| panic!("ISA {isa} executed-family aggregation scenario failed: {status}"));
+    }
+}
