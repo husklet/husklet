@@ -1324,6 +1324,11 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
     assert!(selected_backend.jcc_link_admitted > 0, "{}", selected_backend.line);
     assert!(selected_backend.jcc_link_taken > 0, "{}", selected_backend.line);
     assert!(selected_backend.jcc_link_irq_fallback > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.jcc_link_irq_fallback < selected_backend.jcc_link_taken,
+        "{}",
+        selected_backend.line
+    );
     assert!(selected_backend.jcc_link_dispatcher > 0, "{}", selected_backend.line);
     assert_eq!(
         selected_backend.shape_jcc_taken_chained,
