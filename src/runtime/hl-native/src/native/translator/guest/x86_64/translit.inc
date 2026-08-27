@@ -751,6 +751,53 @@ static struct interp_block *translit_jcc_link_target(uint64_t source, uint64_t t
     return target_block;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* Classify at source publication, before map_put makes this source visible.  The stored first refusal is
+   immutable: run_block must never repeat map_host and accidentally credit a target published later. */
+static int translit_test_would_link_rel32_refusal;
+static uint8_t translit_would_link_classify(struct interp_block *source_block, const uint8_t *source_start,
+                                            const uint8_t *source_end, uint64_t source, uint64_t target) {
+    void *source_rx_lo = NULL, *source_rx_last = NULL;
+    uint64_t source_generation = UINT64_MAX, source_last_generation = UINT64_MAX;
+    if (source_start == NULL || source_end == NULL || source_end <= source_start ||
+        !jit_resolve_rw_code((void *)source_start, &source_rx_lo, &source_generation) ||
+        !jit_resolve_rw_code((void *)(source_end - 1), &source_rx_last, &source_last_generation))
+        return HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED;
+    uint64_t page = source & ~UINT64_C(0xfff);
+    if (page > UINT64_MAX - UINT64_C(0x1000) || (target & ~UINT64_C(0xfff)) != page)
+        return HL_BACKEND_WOULD_LINK_CROSS_PAGE;
+    struct interp_block *target_block = (struct interp_block *)map_host(target);
+    if (target_block == NULL) return HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED;
+    if (target_block->magic != INTERP_BLOCK_MAGIC || target_block->host_entry_off == 0 ||
+        target_block->host_len == 0)
+        return HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED;
+    void *target_rx = NULL;
+    uint64_t target_generation = UINT64_MAX;
+    if (!jit_resolve_rw_code(target_block, &target_rx, &target_generation))
+        return HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED;
+    uintptr_t target_block_rx = (uintptr_t)target_rx;
+    uintptr_t target_entry = target_block_rx + target_block->host_entry_off;
+    uintptr_t target_block_rw = (uintptr_t)target_block;
+    uintptr_t target_entry_rw = target_block_rw + target_block->host_entry_off;
+    if (target_entry < target_block_rx || target_entry_rw < target_block_rw ||
+        target_block_rw < (uintptr_t)g_cache || target_entry_rw > (uintptr_t)g_cp ||
+        target_block->host_len > (uintptr_t)g_cp - target_entry_rw)
+        return HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED;
+    if (source_block->generation != g_cache_gen || source_generation != g_cache_gen ||
+        source_last_generation != g_cache_gen || target_generation != g_cache_gen ||
+        target_block->generation != g_cache_gen)
+        return HL_BACKEND_WOULD_LINK_GENERATION;
+    if (target_block->guest_start < page || target_block->guest_end > page + UINT64_C(0x1000))
+        return HL_BACKEND_WOULD_LINK_TARGET_PAGE;
+    uintptr_t source_lo = (uintptr_t)source_rx_lo;
+    uintptr_t source_hi = (uintptr_t)source_rx_last + 1;
+    if (source_hi == 0 || translit_test_would_link_rel32_refusal ||
+        !interp_backend_shape_rel32_reachable(1, source_lo, source_hi, target_entry))
+        return HL_BACKEND_WOULD_LINK_REL32;
+    return HL_BACKEND_WOULD_LINK_ELIGIBLE;
+}
+#endif
+
 static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *hi) {
     uint64_t page = source & ~UINT64_C(0xfff);
     if (page < *lo) *lo = page;
@@ -1799,6 +1846,62 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         g_cache_gen = saved_generation;
         return before_reset && absent_after_reset && readmitted ? 0 : 72;
     }
+    if (scenario >= 58 && scenario <= 66) {
+        _Alignas(struct interp_block) uint8_t arena[1024] = {0};
+        uint8_t *saved_cache = g_cache;
+        uint8_t *saved_cp = g_cp;
+        uint64_t saved_generation = g_cache_gen;
+        struct interp_block *target_block = (struct interp_block *)arena;
+        struct interp_block *source_block = (struct interp_block *)(arena + 128);
+        const uint8_t *source_start = arena + 256;
+        const uint8_t *source_end = arena + 320;
+        uint64_t source = UINT64_C(0x1200), target = UINT64_C(0x1100);
+        g_cache = arena;
+        g_cp = arena + sizeof arena;
+        g_cache_gen = 66;
+        target_block->magic = INTERP_BLOCK_MAGIC;
+        target_block->generation = g_cache_gen;
+        target_block->host_entry_off = sizeof *target_block;
+        target_block->host_len = 1;
+        target_block->guest_start = UINT64_C(0x1000);
+        target_block->guest_end = UINT64_C(0x2000);
+        source_block->generation = g_cache_gen;
+        map_clear();
+        if (scenario != 61 && scenario != 66)
+            map_put(target, UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
+        if (scenario == 59) source_start = (const uint8_t *)(uintptr_t)UINT64_C(0x1000);
+        if (scenario == 60) target = UINT64_C(0x2100);
+        if (scenario == 62) target_block->host_entry_off = 0;
+        if (scenario == 63) target_block->generation--;
+        if (scenario == 64) target_block->guest_end = UINT64_C(0x2001);
+        if (scenario == 65) translit_test_would_link_rel32_refusal = 1;
+        uint8_t disposition =
+            translit_would_link_classify(source_block, source_start, source_end, source, target);
+        int ok;
+        if (scenario == 66) {
+            source_block->profile_would_link_disposition = disposition;
+            map_put(target, UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
+            uint8_t after_mapping =
+                translit_would_link_classify(source_block, source_start, source_end, source, target);
+            ok = disposition == HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED &&
+                 source_block->profile_would_link_disposition == HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED &&
+                 after_mapping == HL_BACKEND_WOULD_LINK_ELIGIBLE;
+        } else {
+            static const uint8_t expected[] = {
+                HL_BACKEND_WOULD_LINK_ELIGIBLE,          HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED,
+                HL_BACKEND_WOULD_LINK_CROSS_PAGE,        HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED,
+                HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED, HL_BACKEND_WOULD_LINK_GENERATION,
+                HL_BACKEND_WOULD_LINK_TARGET_PAGE,       HL_BACKEND_WOULD_LINK_REL32,
+            };
+            ok = disposition == expected[scenario - 58];
+        }
+        translit_test_would_link_rel32_refusal = 0;
+        map_clear();
+        g_cache = saved_cache;
+        g_cp = saved_cp;
+        g_cache_gen = saved_generation;
+        return ok ? 0 : 73;
+    }
     return 6;
 }
 #endif
@@ -1909,6 +2012,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int sse2_pxor_seen = 0;
     int sse2_punpcklqdq_seen = 0;
     int sse2_movd_seen = 0;
+    unsigned would_link_family = HL_BACKEND_WOULD_LINK_FAMILY_COUNT;
+    uint64_t would_link_source = 0, would_link_target = 0;
 #endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
     uint32_t sse2_owner_count = 0;
@@ -2153,6 +2258,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            would_link_family = HL_BACKEND_WOULD_LINK_DIRECT_JUMP;
+            would_link_source = pc;
+            would_link_target = next + (uint64_t)insn.imm;
+#endif
             break;
         case TL_JCC: {
             uint64_t target = next + (uint64_t)insn.imm;
@@ -2217,6 +2327,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             else
                 translit_emit_exit_preset(a, R_BRANCH);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (kind == TL_CALL) {
+                would_link_family = HL_BACKEND_WOULD_LINK_DIRECT_CALL;
+                would_link_source = pc;
+                would_link_target = next + (uint64_t)insn.imm;
+            }
+#endif
             break;
         }
         case TL_JMP_REG:
@@ -2288,6 +2405,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
                             (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
         translit_emit_exit_const(a, pc, R_BRANCH);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        would_link_family = HL_BACKEND_WOULD_LINK_FALLTHROUGH;
+        would_link_source = pc - 1;
+        would_link_target = pc;
+#endif
         if (a->overflow) {
 #if defined(HL_NATIVE_TEST_HOOKS)
             block->profile_fallback_kind = HL_BACKEND_SHAPE_I_EMIT;
@@ -2317,6 +2439,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
     (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
     (void)__atomic_fetch_add(&translit_jcc_link_admitted, jcc_link_admitted, __ATOMIC_RELAXED);
+    if (would_link_family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT) {
+        block->profile_would_link_family = (uint8_t)would_link_family;
+        block->profile_would_link_disposition =
+            translit_would_link_classify(block, start, a->cursor, would_link_source, would_link_target);
+    }
     if (sse2_run) {
         (void)__atomic_fetch_add(&translit_sse2_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_instructions_admitted, (uint64_t)count, __ATOMIC_RELAXED);

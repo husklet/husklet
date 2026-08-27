@@ -195,6 +195,38 @@ fn backend(stderr: &[u8]) -> Backend {
             .and_then(|value| value.parse().ok())
             .unwrap_or(0)
     };
+    let would_links = text
+        .lines()
+        .filter(|line| line.starts_with("[diag] backend-would-link "))
+        .collect::<Vec<_>>();
+    assert_eq!(would_links.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
+    let would_link = would_links[0];
+    let would_link_counter = |name: &str| {
+        would_link
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("missing typed would-link field {name} in {would_link}"))
+    };
+    for family in ["fall", "jmp", "call"] {
+        let refusals = [
+            "source_unresolved",
+            "cross_page",
+            "target_unmapped",
+            "target_untranslated",
+            "generation",
+            "target_page",
+            "rel32",
+        ]
+        .into_iter()
+        .map(|reason| would_link_counter(&format!("{family}_{reason}=")))
+        .sum::<u64>();
+        assert_eq!(
+            would_link_counter(&format!("{family}_candidate=")),
+            would_link_counter(&format!("{family}_eligible=")) + refusals,
+            "{would_link}"
+        );
+    }
     let translated_exit_total = [
         "t_fallthrough=",
         "t_cond_taken=",

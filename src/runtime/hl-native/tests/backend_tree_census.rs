@@ -78,3 +78,12 @@ fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
             .unwrap_or_else(|status| panic!("ISA {isa} backend-shape aggregation scenario failed: {status}"));
     }
 }
+
+#[test]
+fn publication_would_link_dispositions_reconcile_across_nested_processes() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 9)
+            .unwrap_or_else(|status| panic!("ISA {isa} would-link aggregation scenario failed: {status}"));
+    }
+}

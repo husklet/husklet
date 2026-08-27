@@ -517,6 +517,15 @@ static unsigned interp_backend_shape_edge_family(unsigned terminator) {
     default: return HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT;
     }
 }
+
+static unsigned interp_backend_would_link_family(unsigned terminator) {
+    switch (terminator) {
+    case HL_BACKEND_SHAPE_T_FALLTHROUGH: return HL_BACKEND_WOULD_LINK_FALLTHROUGH;
+    case HL_BACKEND_SHAPE_T_DIRECT_JUMP: return HL_BACKEND_WOULD_LINK_DIRECT_JUMP;
+    case HL_BACKEND_SHAPE_T_DIRECT_CALL: return HL_BACKEND_WOULD_LINK_DIRECT_CALL;
+    default: return HL_BACKEND_WOULD_LINK_FAMILY_COUNT;
+    }
+}
 #endif
 
 // Every interpreted guest control transfer ends the block. Transliterated taken JCCs may cross one
@@ -617,6 +626,9 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         unsigned terminator = packed & 0xffu;
         unsigned exit_kind = cpu->irq != 0 ? HL_BACKEND_SHAPE_T_IRQ : terminator;
         hl_backend_tree_translated_exit(exit_kind, (packed >> 16) & 0xffu, (packed >> 8) & 0xffu);
+        unsigned would_link_family = interp_backend_would_link_family(terminator);
+        if (cpu->irq == 0 && would_link_family == block->profile_would_link_family)
+            hl_backend_tree_would_link(would_link_family, block->profile_would_link_disposition);
         unsigned family = interp_backend_shape_edge_family(terminator);
         if (family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) {
             if (g_backend_shape_edge_pending)

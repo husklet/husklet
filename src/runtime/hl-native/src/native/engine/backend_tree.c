@@ -82,6 +82,26 @@ enum hl_backend_shape_edge_resolution {
     HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT,
 };
 
+enum hl_backend_would_link_family {
+    HL_BACKEND_WOULD_LINK_FALLTHROUGH,
+    HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
+    HL_BACKEND_WOULD_LINK_DIRECT_CALL,
+    HL_BACKEND_WOULD_LINK_FAMILY_COUNT,
+};
+
+/* Ordered, first-refusal-wins publication facts.  ELIGIBLE is deliberately last. */
+enum hl_backend_would_link_disposition {
+    HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED,
+    HL_BACKEND_WOULD_LINK_CROSS_PAGE,
+    HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED,
+    HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED,
+    HL_BACKEND_WOULD_LINK_GENERATION,
+    HL_BACKEND_WOULD_LINK_TARGET_PAGE,
+    HL_BACKEND_WOULD_LINK_REL32,
+    HL_BACKEND_WOULD_LINK_ELIGIBLE,
+    HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT,
+};
+
 struct hl_backend_shape_form {
     _Atomic uint32_t state; /* 0 empty, 1 metadata reserved, 2 published */
     uint64_t key;
@@ -135,6 +155,8 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t jcc_taken_rel32_unreachable;
     _Atomic uint64_t jcc_taken_eligible;
     _Atomic uint64_t jcc_taken_ineligible;
+    _Atomic uint64_t would_link[HL_BACKEND_WOULD_LINK_FAMILY_COUNT]
+                               [HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT];
 };
 
 struct hl_backend_tree_shared {
@@ -194,6 +216,8 @@ struct hl_backend_tree_summary {
     uint64_t jcc_taken_rel32_unreachable;
     uint64_t jcc_taken_eligible;
     uint64_t jcc_taken_ineligible;
+    uint64_t would_link[HL_BACKEND_WOULD_LINK_FAMILY_COUNT]
+                        [HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT];
     uint64_t fallback_form_total;
     uint64_t fallback_form_unique;
     uint64_t fallback_form_overflow;
@@ -464,6 +488,14 @@ static inline void hl_backend_tree_direct_edge_resolution(unsigned family, unsig
                               memory_order_relaxed);
 }
 
+static inline void hl_backend_tree_would_link(unsigned family, unsigned disposition) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL || family >= HL_BACKEND_WOULD_LINK_FAMILY_COUNT ||
+        disposition >= HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT)
+        return;
+    atomic_fetch_add_explicit(&slot->would_link[family][disposition], 1, memory_order_relaxed);
+}
+
 static inline void hl_backend_tree_translation(void) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->translations, 1, memory_order_relaxed);
@@ -644,6 +676,10 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
             atomic_load_explicit(&slot->jcc_taken_rel32_unreachable, memory_order_relaxed);
         summary->jcc_taken_eligible += atomic_load_explicit(&slot->jcc_taken_eligible, memory_order_relaxed);
         summary->jcc_taken_ineligible += atomic_load_explicit(&slot->jcc_taken_ineligible, memory_order_relaxed);
+        for (uint32_t family = 0; family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT; ++family)
+            for (uint32_t disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
+                summary->would_link[family][disposition] +=
+                    atomic_load_explicit(&slot->would_link[family][disposition], memory_order_relaxed);
     }
     uint64_t jcc_links = atomic_load_explicit(&shared->jcc_links, memory_order_relaxed);
     unsigned jcc_family = HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
@@ -882,6 +918,41 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.stop_top_key[7], (unsigned long long)summary.stop_top_count[7]);
 }
 
+static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
+    struct hl_backend_tree_summary summary;
+    hl_backend_tree_summary_in(shared, &summary);
+    uint64_t candidate[HL_BACKEND_WOULD_LINK_FAMILY_COUNT] = {0};
+    for (unsigned family = 0; family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT; ++family)
+        for (unsigned disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
+            candidate[family] += summary.would_link[family][disposition];
+#define WL_ARGS(family)                                                                                               \
+    (unsigned long long)candidate[family],                                                                            \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_ELIGIBLE],                               \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED],                      \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_CROSS_PAGE],                             \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED],                        \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED],                    \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_GENERATION],                             \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_TARGET_PAGE],                            \
+        (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_REL32]
+    int formatted = snprintf(
+        record, capacity,
+        "[diag] backend-would-link version=1 "
+        "fall_candidate=%llu fall_eligible=%llu fall_source_unresolved=%llu fall_cross_page=%llu "
+        "fall_target_unmapped=%llu fall_target_untranslated=%llu fall_generation=%llu "
+        "fall_target_page=%llu fall_rel32=%llu "
+        "jmp_candidate=%llu jmp_eligible=%llu jmp_source_unresolved=%llu jmp_cross_page=%llu "
+        "jmp_target_unmapped=%llu jmp_target_untranslated=%llu jmp_generation=%llu "
+        "jmp_target_page=%llu jmp_rel32=%llu "
+        "call_candidate=%llu call_eligible=%llu call_source_unresolved=%llu call_cross_page=%llu "
+        "call_target_unmapped=%llu call_target_untranslated=%llu call_generation=%llu "
+        "call_target_page=%llu call_rel32=%llu\n",
+        WL_ARGS(HL_BACKEND_WOULD_LINK_FALLTHROUGH), WL_ARGS(HL_BACKEND_WOULD_LINK_DIRECT_JUMP),
+        WL_ARGS(HL_BACKEND_WOULD_LINK_DIRECT_CALL));
+#undef WL_ARGS
+    return formatted;
+}
+
 void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_linux_abi *box) {
     struct hl_backend_tree_shared *shared = opaque;
     if (shared == NULL || shared_size != sizeof *shared || box == NULL) return;
@@ -897,6 +968,9 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
     int shape = hl_backend_shape_format(shared, record + formatted, sizeof record - (size_t)formatted);
     if (shape <= 0 || (size_t)shape >= sizeof record - (size_t)formatted) return;
     formatted += shape;
+    int would_link = hl_backend_would_link_format(shared, record + formatted, sizeof record - (size_t)formatted);
+    if (would_link <= 0 || (size_t)would_link >= sizeof record - (size_t)formatted) return;
+    formatted += would_link;
     size_t offset = 0;
     while (offset < (size_t)formatted) {
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
@@ -942,7 +1016,7 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         }
         if (scenario == 7) _exit(0); /* backend entry whose process dies before returning a reason */
         hl_backend_tree_reason(1);
-        if (scenario == 1 || scenario == 8) {
+        if (scenario == 1 || scenario == 8 || scenario == 9) {
             struct hl_backend_tree_slot *grandchild_birth = hl_backend_tree_prepare_fork();
             pid_t grandchild = fork();
             hl_backend_tree_after_fork(grandchild, grandchild_birth);
@@ -955,12 +1029,21 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                     hl_backend_tree_direct_edge_resolution(HL_BACKEND_SHAPE_EDGE_JCC_TAKEN,
                                                            HL_BACKEND_SHAPE_EDGE_MAPPED, 1, 1, 1, 1);
                 }
+                if (scenario == 9) {
+                    hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
+                                               HL_BACKEND_WOULD_LINK_ELIGIBLE);
+                    hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL,
+                                               HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED);
+                }
                 hl_backend_tree_reason(5);
                 (void)hl_backend_tree_finalize(0);
                 _exit(0);
             }
             if (hl_backend_tree_wait(grandchild, 1) != 0) hl_backend_tree_abnormal_exit(13);
         }
+        if (scenario == 9)
+            hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_FALLTHROUGH,
+                                       HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED);
         if (scenario == 2 || scenario == 3 || scenario == 6)
             _exit(0); /* exercise parent reaping, missing, and pre-child-execution publication separately */
         if (scenario == 5) hl_backend_tree_abnormal_exit(0);
@@ -975,6 +1058,14 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         hl_backend_tree_direct_edge(HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP, 0);
         hl_backend_tree_direct_edge_resolution(HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP,
                                                HL_BACKEND_SHAPE_EDGE_UNMAPPED, 0, 0, 0, 0);
+    }
+    if (scenario == 9) {
+        hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_FALLTHROUGH, HL_BACKEND_WOULD_LINK_CROSS_PAGE);
+        hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
+                                   HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED);
+        hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_GENERATION);
+        hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_TARGET_PAGE);
+        hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_REL32);
     }
     hl_backend_tree_reason(0);
     (void)hl_backend_tree_finalize(0);
@@ -1033,6 +1124,33 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                        summary.stop_top_key[0] == 23 && summary.stop_top_count[0] == 1
                    ? 0
                    : 36;
+    if (scenario == 9) {
+        uint64_t candidates[HL_BACKEND_WOULD_LINK_FAMILY_COUNT] = {0};
+        for (unsigned family = 0; family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT; ++family)
+            for (unsigned disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
+                candidates[family] += summary.would_link[family][disposition];
+        return candidates[HL_BACKEND_WOULD_LINK_FALLTHROUGH] == 2 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_FALLTHROUGH]
+                                                 [HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED] == 1 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_FALLTHROUGH]
+                                                 [HL_BACKEND_WOULD_LINK_CROSS_PAGE] == 1 &&
+                       candidates[HL_BACKEND_WOULD_LINK_DIRECT_JUMP] == 2 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_JUMP]
+                                                 [HL_BACKEND_WOULD_LINK_ELIGIBLE] == 1 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_JUMP]
+                                                 [HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED] == 1 &&
+                       candidates[HL_BACKEND_WOULD_LINK_DIRECT_CALL] == 4 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_CALL]
+                                                 [HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED] == 1 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_CALL]
+                                                 [HL_BACKEND_WOULD_LINK_GENERATION] == 1 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_CALL]
+                                                 [HL_BACKEND_WOULD_LINK_TARGET_PAGE] == 1 &&
+                       summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_CALL]
+                                                 [HL_BACKEND_WOULD_LINK_REL32] == 1
+                   ? 0
+                   : 37;
+    }
     return 40;
 }
 #endif
@@ -1092,6 +1210,7 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 #define hl_backend_tree_interpreter_stop(kind, stop_form) ((void)0)
 #define hl_backend_tree_direct_edge(family, same_page) ((void)0)
 #define hl_backend_tree_direct_edge_resolution(family, resolution, translated, current, rel32, eligible) ((void)0)
+#define hl_backend_tree_would_link(family, disposition) ((void)0)
 #define hl_backend_tree_translation() ((void)0)
 #define hl_backend_tree_map_hit() ((void)0)
 #define hl_backend_tree_stw_retry() ((void)0)
