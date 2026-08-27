@@ -383,7 +383,9 @@ struct interp_block {
     uint32_t host_len;
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint8_t profile_jcc_fall_stitches;
+    uint8_t profile_fallback_kind;
     uint16_t profile_insns;
+    uint64_t profile_fallback_form;
 #endif
 };
 
@@ -407,9 +409,9 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->host_len = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_insns = 0;
-#endif
-#if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
+    block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;
+    block->profile_fallback_form = 0;
 #endif
     (void)translit_build(context, block, gpc);
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by

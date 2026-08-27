@@ -47,6 +47,8 @@ _Static_assert(__builtin_offsetof(struct cpu, r) == 0, "translit bakes r[] at of
 // every other block and the dispatcher flushes wholesale when it fills.
 #define TL_MAX_INSNS 192
 #define TL_MAX_BYTES 3072
+_Static_assert(TL_MAX_INSNS < 256,
+               "hook marker's source-page delta must represent every monotonic block instruction");
 #ifndef TL_STITCH_MAX_JMPS
 #define TL_STITCH_MAX_JMPS 8
 #endif
@@ -706,6 +708,24 @@ static void translit_emit_exit_const(hl_x64_asm *a, uint64_t rip, uint64_t reaso
 static void translit_emit_exit_preset(hl_x64_asm *a, uint64_t reason) {
     translit_emit_spill(a);
     translit_emit_return(a, reason);
+}
+
+static void translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitched_jmp,
+                                unsigned stitched_cond_fall, unsigned source_page_delta) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    /* pc is monotonic: sequential decode can advance at most one page per instruction, while admitted
+       JMP stitching stays forward on its current page. TL_MAX_INSNS therefore bounds this immutable
+       source-page delta to the marker's high byte. run_block combines it with block->gpc's page. */
+    uint32_t packed = (kind & 0xffu) | (stitched_cond_fall & 0xffu) << 8 | (stitched_jmp & 0xffu) << 16 |
+                      (source_page_delta & 0xffu) << 24;
+    hl_x64_store_gs_imm32(a, (int32_t)packed, OFF_BACKEND_SHAPE);
+#else
+    (void)a;
+    (void)kind;
+    (void)stitched_jmp;
+    (void)stitched_cond_fall;
+    (void)source_page_delta;
+#endif
 }
 
 // ---- the one operand whose meaning depends on where the bytes live
@@ -1583,6 +1603,49 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                          guest == UINT64_C(0x22220000) && preserve == (1u << 11);
         return source && postcommit ? 0 : 64;
     }
+    if (scenario == 51) {
+        uint8_t *saved_cache = g_cache;
+        ptrdiff_t saved_rw2rx = g_rw2rx;
+        uint64_t saved_generation = g_cache_gen;
+        int saved_nretired = g_nretired;
+        __typeof__(g_retired[0]) saved_retired = g_retired[0];
+        uintptr_t current_rw = UINT64_C(0x100000000);
+        ptrdiff_t current_delta = (ptrdiff_t)(CACHE_SZ * 8u);
+        uintptr_t retired_rw = UINT64_C(0x200000000);
+        ptrdiff_t retired_delta = (ptrdiff_t)(CACHE_SZ * 12u);
+        g_cache = (uint8_t *)current_rw;
+        g_rw2rx = current_delta;
+        g_cache_gen = 51;
+        g_nretired = 1;
+        g_retired[0].rw = (uint8_t *)retired_rw;
+        g_retired[0].rw2rx = retired_delta;
+        g_retired[0].gen = 50;
+        void *current_from_rw = NULL, *current_from_rx = NULL;
+        void *retired_from_rw = NULL, *retired_from_rx = NULL;
+        uint64_t current_rw_gen = 0, current_rx_gen = 0, retired_rw_gen = 0, retired_rx_gen = 0;
+        int ok = jit_resolve_host_rx_code((void *)(current_rw + 0x100), &current_from_rw, &current_rw_gen) &&
+                 jit_resolve_host_rx_code((void *)(current_rw + (uintptr_t)current_delta + 0x100),
+                                          &current_from_rx, &current_rx_gen) &&
+                 jit_resolve_host_rx_code((void *)(retired_rw + 0x200), &retired_from_rw, &retired_rw_gen) &&
+                 jit_resolve_host_rx_code((void *)(retired_rw + (uintptr_t)retired_delta + 0x200),
+                                          &retired_from_rx, &retired_rx_gen) &&
+                 current_from_rw == (void *)(current_rw + (uintptr_t)current_delta + 0x100) &&
+                 current_from_rx == current_from_rw && current_rw_gen == 51 && current_rx_gen == 51 &&
+                 retired_from_rw == (void *)(retired_rw + (uintptr_t)retired_delta + 0x200) &&
+                 retired_from_rx == retired_from_rw && retired_rw_gen == 50 && retired_rx_gen == 50;
+        g_cache = saved_cache;
+        g_rw2rx = saved_rw2rx;
+        g_cache_gen = saved_generation;
+        g_nretired = saved_nretired;
+        g_retired[0] = saved_retired;
+        return ok ? 0 : 65;
+    }
+    if (scenario == 52)
+        return !interp_backend_shape_rel32_reachable(0, 0, 0, UINT64_C(0x1000)) &&
+                       interp_backend_shape_rel32_reachable(1, UINT64_C(0x1000), UINT64_C(0x1100),
+                                                            UINT64_C(0x1200))
+                   ? 0
+                   : 66;
     return 6;
 }
 #endif
@@ -1608,10 +1671,22 @@ static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, 
 static void *translit_build(hl_x86_hot_context *context, struct interp_block *block, uint64_t gpc) {
     if (!translit_image_ok()) {
         if (translit_enabled()) (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        block->profile_fallback_kind = translit_enabled() ? HL_BACKEND_SHAPE_I_IMAGE : HL_BACKEND_SHAPE_I_DISABLED;
+#endif
         return NULL;
     }
     struct insn first_insn;
-    int first_kind = hl_x86_decode_context(context, gpc, &first_insn) > 0 ? translit_classify(&first_insn) : TL_NO;
+    int first_decoded = hl_x86_decode_context(context, gpc, &first_insn);
+    int first_kind = first_decoded > 0 ? translit_classify(&first_insn) : TL_NO;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (first_decoded <= 0)
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_DECODE;
+    else if (first_kind == TL_NO) {
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_UNSUPPORTED;
+        block->profile_fallback_form = translit_unsupported_key(&first_insn);
+    }
+#endif
     int sse2_run = first_kind == TL_SSE2;
     int fs_run = first_kind == TL_FS_MEM;
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
@@ -1620,8 +1695,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
     fs_authority = fs_authority || hl_option_get("HL_TRANSLIT_FS_AUTHORITY_TEST") != NULL;
 #endif
-    if (fs_run && fs_authority)
+    if (fs_run && fs_authority) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_AUTHORITY;
+#endif
         return NULL;
+    }
     uint32_t owner_token;
 #if defined(HL_NATIVE_TEST_HOOKS)
     const char *exhaust = hl_option_get("HL_TRANSLIT_BODY_OWNER_EXHAUST");
@@ -1631,16 +1710,34 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
 #endif
     if (fs_run) {
-        if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) return NULL;
+        if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
+#endif
+            return NULL;
+        }
     } else if (!jit_body_owner_reserve(g_cache_gen, &owner_token)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
+#endif
         return NULL;
     }
     // Reserve the worst case before emitting a byte.  Publication advances only the exact populated
     // prefix; conservative capacity refusal falls back to the interpreter with no reachable partial body.
-    if (sse2_run && !jit_body_owner_reserve_n(g_cache_gen, TL_MAX_INSNS + 1, &owner_token)) return NULL;
+    if (sse2_run && !jit_body_owner_reserve_n(g_cache_gen, TL_MAX_INSNS + 1, &owner_token)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
+#endif
+        return NULL;
+    }
     uint8_t *arena_limit = (uint8_t *)g_cache + CACHE_SZ - CACHE_EMIT_HEADROOM;
     uint8_t *start = g_cp;
-    if (start + TL_MAX_BYTES > arena_limit) return NULL;
+    if (start + TL_MAX_BYTES > arena_limit) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
+#endif
+        return NULL;
+    }
     struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
 
@@ -1664,9 +1761,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint32_t sse2_owner_count = 0;
     jit_body_owner_range fs_owner[3];
     uint32_t fs_owner_count = 0;
-#if defined(HL_NATIVE_TEST_HOOKS)
     int jcc_fall_stitched = 0;
-#endif
+    int direct_jmp_stitched = 0;
     uint8_t bytes[16];
 
     while (count < TL_MAX_INSNS && !a->overflow) {
@@ -1685,6 +1781,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
 
         uint64_t next = pc + (uint64_t)insn.len;
+        unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
         uint8_t *instruction_start = a->cursor;
         int preserve_register = -1;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
@@ -1829,8 +1926,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     (void)__atomic_fetch_add(&translit_jcc_fall_successor_page_refused, 1, __ATOMIC_RELAXED);
                 } else {
                     uint8_t *fall = hl_x64_jcc_rel32(a, translit_condition(&insn) ^ 1);
+                    translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
+                                        (unsigned)jcc_fall_stitched, source_page_delta);
                     translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
                     hl_x64_patch_rel32(a, fall, a->cursor);
+                    translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)direct_jmp_stitched,
+                                        (unsigned)(jcc_fall_stitched + 1), source_page_delta);
                     if (a->overflow) {
                         a->cursor = instruction_start;
                         break;
@@ -1840,9 +1941,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     pc = next;
                     count++;
                     stitched++;
-#if defined(HL_NATIVE_TEST_HOOKS)
                     jcc_fall_stitched++;
-#endif
                     (void)__atomic_fetch_add(&translit_jcc_fall_admitted, 1, __ATOMIC_RELAXED);
                     continue;
                 }
@@ -1861,9 +1960,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 struct insn successor;
                 if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode_context(context, target, &successor) > 0 &&
                     successor.len > 0) {
+                    translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)(direct_jmp_stitched + 1),
+                                        (unsigned)jcc_fall_stitched, source_page_delta);
+                    if (a->overflow) {
+                        a->cursor = instruction_start;
+                        break;
+                    }
                     pc = target;
                     count++;
                     stitched++;
+                    direct_jmp_stitched++;
                     (void)__atomic_fetch_add(&translit_stitch_admitted, 1, __ATOMIC_RELAXED);
                     continue;
                 }
@@ -1876,13 +1982,23 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         switch (kind) {
         case TL_SYSCALL:
             // The frontend convention is that rip is already past the 0F 05 when the block exits.
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_SYSCALL, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next, R_SYSCALL);
             break;
-        case TL_JMP: translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH); break;
+        case TL_JMP:
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
+            translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
+            break;
         case TL_JCC: {
             uint8_t *taken = hl_x64_jcc_rel32(a, translit_condition(&insn));
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_NOT_TAKEN, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next, R_BRANCH);
             hl_x64_patch_rel32(a, taken, a->cursor);
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             break;
         }
@@ -1922,6 +2038,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
                 hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
+            translit_shape_exit(a,
+                                kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                                : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+                                (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
             if (kind == TL_CALL)
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             else
@@ -1930,6 +2050,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
         case TL_JMP_REG:
             hl_x64_store_gs(a, insn.rm_reg, OFF_RIP);
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
         case TL_JMP_RIP: {
@@ -1944,6 +2066,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             preserve_register = HL_X64_R11;
             hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
             hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
         }
@@ -1956,6 +2080,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
             hl_x64_load_gs(a, HL_X64_RAX, TL_MM_ENTRY);
             hl_x64_lea_rsp(a, insn.op == 0xC2 ? (int32_t)(8 + (uint16_t)insn.imm) : 8);
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
         }
@@ -1979,11 +2105,24 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         break;
     }
 
-    if (count == 0 || a->overflow) return NULL;
+    if (count == 0 || a->overflow) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (block->profile_fallback_kind == HL_BACKEND_SHAPE_I_OTHER)
+            block->profile_fallback_kind = HL_BACKEND_SHAPE_I_EMIT;
+#endif
+        return NULL;
+    }
     if (!terminated) {
         uint8_t *tail = a->cursor;
+        translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
+                            (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
         translit_emit_exit_const(a, pc, R_BRANCH);
-        if (a->overflow) return NULL;
+        if (a->overflow) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            block->profile_fallback_kind = HL_BACKEND_SHAPE_I_EMIT;
+#endif
+            return NULL;
+        }
         if (sse2_run)
             sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
                 (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
@@ -1998,8 +2137,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                               ? jit_body_owner_publish_n(g_cache_gen, owner_token, sse2_owner, sse2_owner_count)
                               : jit_body_owner_publish(g_cache_gen, owner_token, (uint64_t)(uintptr_t)start,
                                                        (uint64_t)(uintptr_t)a->cursor, gpc);
-    if (!owner_published)
+    if (!owner_published) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
+#endif
         return NULL;
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
     if (sse2_run) {

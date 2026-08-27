@@ -193,6 +193,11 @@ struct cpu {
     uint64_t checkpoint_syscall;
     int64_t checkpoint_timeout_ns;
     uint32_t checkpoint_continuation;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    /* Hook-only per-entry handoff written by same-ISA emitted exits and consumed immediately by run_block.
+       Production layout and checkpoint ABI remain byte-for-byte unchanged. */
+    uint32_t backend_shape;
+#endif
     /* The emitted guard reads this array; the soft_* scalars above stay the
        most-recently-installed entry and remain the direct-store span cache.
        LAST in the struct on purpose: an entry is addressed as
@@ -206,7 +211,11 @@ _Static_assert(__builtin_offsetof(struct cpu, stw_slot) == __builtin_offsetof(st
                "stw_slot must occupy the existing post-tid padding");
 _Static_assert(__builtin_offsetof(struct cpu, seccomp_filters) == __builtin_offsetof(struct cpu, tid) + 8,
                "stw_slot must not move serialized CPU fields");
+#if defined(HL_NATIVE_TEST_HOOKS)
+_Static_assert(sizeof(struct cpu) == 0x54e0, "hook-only backend shape must stay inside checkpoint padding");
+#else
 _Static_assert(sizeof(struct cpu) == 0x54e0, "stw_slot must not change the x86 CPU checkpoint size");
+#endif
 
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
 #define OFF_FCRES ((int)__builtin_offsetof(struct cpu, fastclk_resume))
@@ -223,6 +232,9 @@ _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offs
 #define OFF_EXITED ((int)__builtin_offsetof(struct cpu, exited)) // int exited; int exit_code (the next word)
 #define OFF_IBSRC ((int)__builtin_offsetof(struct cpu, dbg_ibsrc))
 #define OFF_ICMISS ((int)__builtin_offsetof(struct cpu, ic_miss))
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define OFF_BACKEND_SHAPE ((int)__builtin_offsetof(struct cpu, backend_shape))
+#endif
 #define OFF_ST ((int)__builtin_offsetof(struct cpu, st))
 #define OFF_FPTOP ((int)__builtin_offsetof(struct cpu, fptop))
 #define OFF_FPSW ((int)__builtin_offsetof(struct cpu, fpsw))

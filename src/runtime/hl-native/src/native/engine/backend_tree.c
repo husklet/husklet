@@ -16,6 +16,77 @@
 
 #define HL_BACKEND_TREE_SLOTS 4096u
 #define HL_BACKEND_TREE_REASON_COUNT 16u
+#define HL_BACKEND_SHAPE_FORM_SLOTS 4096u
+#define HL_BACKEND_SHAPE_TOP_FORMS 8u
+
+enum hl_backend_shape_translated_exit {
+    HL_BACKEND_SHAPE_T_FALLTHROUGH,
+    HL_BACKEND_SHAPE_T_COND_TAKEN,
+    HL_BACKEND_SHAPE_T_COND_NOT_TAKEN,
+    HL_BACKEND_SHAPE_T_DIRECT_JUMP,
+    HL_BACKEND_SHAPE_T_DIRECT_CALL,
+    HL_BACKEND_SHAPE_T_RETURN,
+    HL_BACKEND_SHAPE_T_INDIRECT_BRANCH,
+    HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+    HL_BACKEND_SHAPE_T_SYSCALL,
+    HL_BACKEND_SHAPE_T_IRQ,
+    HL_BACKEND_SHAPE_T_FAULT,
+    HL_BACKEND_SHAPE_T_OTHER,
+    HL_BACKEND_SHAPE_T_COUNT,
+};
+
+enum hl_backend_shape_interpreter_entry {
+    HL_BACKEND_SHAPE_I_DISABLED,
+    HL_BACKEND_SHAPE_I_IMAGE,
+    HL_BACKEND_SHAPE_I_DECODE,
+    HL_BACKEND_SHAPE_I_UNSUPPORTED,
+    HL_BACKEND_SHAPE_I_AUTHORITY,
+    HL_BACKEND_SHAPE_I_RESOURCE,
+    HL_BACKEND_SHAPE_I_EMIT,
+    HL_BACKEND_SHAPE_I_RUNTIME_IMAGE,
+    HL_BACKEND_SHAPE_I_RUNTIME_BIND,
+    HL_BACKEND_SHAPE_I_OTHER,
+    HL_BACKEND_SHAPE_I_COUNT,
+};
+
+enum hl_backend_shape_interpreter_stop {
+    HL_BACKEND_SHAPE_S_FALLTHROUGH,
+    HL_BACKEND_SHAPE_S_COND_TAKEN,
+    HL_BACKEND_SHAPE_S_COND_NOT_TAKEN,
+    HL_BACKEND_SHAPE_S_DIRECT_JUMP,
+    HL_BACKEND_SHAPE_S_DIRECT_CALL,
+    HL_BACKEND_SHAPE_S_RETURN,
+    HL_BACKEND_SHAPE_S_INDIRECT_BRANCH,
+    HL_BACKEND_SHAPE_S_INDIRECT_CALL,
+    HL_BACKEND_SHAPE_S_SYSCALL,
+    HL_BACKEND_SHAPE_S_IRQ,
+    HL_BACKEND_SHAPE_S_FAULT,
+    HL_BACKEND_SHAPE_S_SERVICE,
+    HL_BACKEND_SHAPE_S_OTHER,
+    HL_BACKEND_SHAPE_S_COUNT,
+};
+
+enum hl_backend_shape_edge_family {
+    HL_BACKEND_SHAPE_EDGE_FALLTHROUGH,
+    HL_BACKEND_SHAPE_EDGE_JCC_TAKEN,
+    HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN,
+    HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP,
+    HL_BACKEND_SHAPE_EDGE_DIRECT_CALL,
+    HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT,
+};
+
+enum hl_backend_shape_edge_resolution {
+    HL_BACKEND_SHAPE_EDGE_MAPPED,
+    HL_BACKEND_SHAPE_EDGE_UNMAPPED,
+    HL_BACKEND_SHAPE_EDGE_INTERRUPTED,
+    HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT,
+};
+
+struct hl_backend_shape_form {
+    _Atomic uint32_t state; /* 0 empty, 1 metadata reserved, 2 published */
+    uint64_t key;
+    _Atomic uint64_t count;
+};
 
 #if ATOMIC_INT_LOCK_FREE != 2
 #error "backend-tree signal finalization requires lock-free 32-bit atomics"
@@ -44,6 +115,26 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t irq_pending;
     _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     _Atomic uint64_t reason_other;
+    _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    _Atomic uint64_t translated_stitch_jmp;
+    _Atomic uint64_t translated_stitch_cond_fall;
+    _Atomic uint64_t interpreter_entry[HL_BACKEND_SHAPE_I_COUNT];
+    _Atomic uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
+    _Atomic uint64_t direct_edge[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT];
+    _Atomic uint64_t direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT]
+                                                   [HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT];
+    _Atomic uint64_t direct_edge_chained[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT];
+    _Atomic uint64_t direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT];
+    _Atomic uint64_t jcc_taken_same_page;
+    _Atomic uint64_t jcc_taken_cross_page;
+    _Atomic uint64_t jcc_taken_target_translated;
+    _Atomic uint64_t jcc_taken_target_interpreted;
+    _Atomic uint64_t jcc_taken_generation_current;
+    _Atomic uint64_t jcc_taken_generation_retired;
+    _Atomic uint64_t jcc_taken_rel32;
+    _Atomic uint64_t jcc_taken_rel32_unreachable;
+    _Atomic uint64_t jcc_taken_eligible;
+    _Atomic uint64_t jcc_taken_ineligible;
 };
 
 struct hl_backend_tree_shared {
@@ -51,6 +142,14 @@ struct hl_backend_tree_shared {
     _Atomic uint64_t missing_claims;
     _Atomic uint64_t duplicate_finalize;
     _Atomic uint32_t reported;
+    struct hl_backend_shape_form fallback_forms[HL_BACKEND_SHAPE_FORM_SLOTS];
+    struct hl_backend_shape_form stop_forms[HL_BACKEND_SHAPE_FORM_SLOTS];
+    _Atomic uint64_t fallback_form_total;
+    _Atomic uint64_t fallback_form_unique;
+    _Atomic uint64_t fallback_form_overflow;
+    _Atomic uint64_t stop_form_total;
+    _Atomic uint64_t stop_form_unique;
+    _Atomic uint64_t stop_form_overflow;
     struct hl_backend_tree_slot slots[HL_BACKEND_TREE_SLOTS];
 };
 
@@ -72,11 +171,89 @@ struct hl_backend_tree_summary {
     uint64_t irq_pending;
     uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     uint64_t reason_other;
+    uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    uint64_t translated_stitch_jmp;
+    uint64_t translated_stitch_cond_fall;
+    uint64_t interpreter_entry[HL_BACKEND_SHAPE_I_COUNT];
+    uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
+    uint64_t direct_edge[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT];
+    uint64_t direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT]
+                                   [HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT];
+    uint64_t direct_edge_chained[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT];
+    uint64_t direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT];
+    uint64_t jcc_taken_same_page;
+    uint64_t jcc_taken_cross_page;
+    uint64_t jcc_taken_target_translated;
+    uint64_t jcc_taken_target_interpreted;
+    uint64_t jcc_taken_generation_current;
+    uint64_t jcc_taken_generation_retired;
+    uint64_t jcc_taken_rel32;
+    uint64_t jcc_taken_rel32_unreachable;
+    uint64_t jcc_taken_eligible;
+    uint64_t jcc_taken_ineligible;
+    uint64_t fallback_form_total;
+    uint64_t fallback_form_unique;
+    uint64_t fallback_form_overflow;
+    uint64_t stop_form_total;
+    uint64_t stop_form_unique;
+    uint64_t stop_form_overflow;
+    uint64_t fallback_top_key[HL_BACKEND_SHAPE_TOP_FORMS];
+    uint64_t fallback_top_count[HL_BACKEND_SHAPE_TOP_FORMS];
+    uint64_t stop_top_key[HL_BACKEND_SHAPE_TOP_FORMS];
+    uint64_t stop_top_count[HL_BACKEND_SHAPE_TOP_FORMS];
 };
 
 static struct hl_backend_tree_shared *g_backend_tree;
 static struct hl_backend_tree_slot *g_backend_tree_self;
 static int g_backend_tree_lifecycle_owned;
+
+static uint64_t hl_backend_shape_mix(uint64_t value) {
+    value ^= value >> 33;
+    value *= UINT64_C(0xff51afd7ed558ccd);
+    value ^= value >> 33;
+    value *= UINT64_C(0xc4ceb9fe1a85ec53);
+    return value ^ (value >> 33);
+}
+
+static void hl_backend_shape_form_record(struct hl_backend_shape_form forms[HL_BACKEND_SHAPE_FORM_SLOTS],
+                                         _Atomic uint64_t *total, _Atomic uint64_t *unique,
+                                         _Atomic uint64_t *overflow, uint64_t key) {
+    if (g_backend_tree_self == NULL || g_backend_tree == NULL) return;
+    atomic_fetch_add_explicit(total, 1, memory_order_relaxed);
+    unsigned start = (unsigned)hl_backend_shape_mix(key) & (HL_BACKEND_SHAPE_FORM_SLOTS - 1u);
+    for (unsigned probe = 0; probe < HL_BACKEND_SHAPE_FORM_SLOTS; ++probe) {
+        struct hl_backend_shape_form *form = &forms[(start + probe) & (HL_BACKEND_SHAPE_FORM_SLOTS - 1u)];
+        uint32_t state = atomic_load_explicit(&form->state, memory_order_acquire);
+        /* A process can die after reserving a shared slot and before publishing its key.  Never wait on
+           another process's transient state: retain the exact total and expose the lost form detail as
+           overflow instead of allowing an abnormal child to wedge every surviving recorder. */
+        if (state == 1) {
+            atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+            return;
+        }
+        if (state == 0) {
+            uint32_t expected = 0;
+            if (atomic_compare_exchange_strong_explicit(&form->state, &expected, 1, memory_order_acquire,
+                                                        memory_order_relaxed)) {
+                form->key = key;
+                atomic_store_explicit(&form->count, 1, memory_order_relaxed);
+                atomic_store_explicit(&form->state, 2, memory_order_release);
+                atomic_fetch_add_explicit(unique, 1, memory_order_relaxed);
+                return;
+            }
+            state = atomic_load_explicit(&form->state, memory_order_acquire);
+            if (state == 1) {
+                atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+                return;
+            }
+        }
+        if (state == 2 && form->key == key) {
+            atomic_fetch_add_explicit(&form->count, 1, memory_order_relaxed);
+            return;
+        }
+    }
+    atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+}
 
 static struct hl_backend_tree_slot *hl_backend_tree_reserve(void) {
     if (g_backend_tree == NULL) return NULL;
@@ -205,6 +382,77 @@ static inline void hl_backend_tree_reason(unsigned reason) {
         atomic_fetch_add_explicit(&slot->reason_other, 1, memory_order_relaxed);
 }
 
+static inline void hl_backend_tree_translated_exit(unsigned kind, unsigned stitched_jmp,
+                                                   unsigned stitched_cond_fall) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL) return;
+    if (kind >= HL_BACKEND_SHAPE_T_COUNT) kind = HL_BACKEND_SHAPE_T_OTHER;
+    atomic_fetch_add_explicit(&slot->translated_exit[kind], 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->translated_stitch_jmp, stitched_jmp, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->translated_stitch_cond_fall, stitched_cond_fall, memory_order_relaxed);
+}
+
+static inline void hl_backend_tree_interpreter_entry(unsigned kind, uint64_t fallback_form) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL) return;
+    if (kind >= HL_BACKEND_SHAPE_I_COUNT) kind = HL_BACKEND_SHAPE_I_OTHER;
+    atomic_fetch_add_explicit(&slot->interpreter_entry[kind], 1, memory_order_relaxed);
+    if (kind == HL_BACKEND_SHAPE_I_UNSUPPORTED)
+        hl_backend_shape_form_record(g_backend_tree->fallback_forms, &g_backend_tree->fallback_form_total,
+                                     &g_backend_tree->fallback_form_unique,
+                                     &g_backend_tree->fallback_form_overflow, fallback_form);
+}
+
+static inline void hl_backend_tree_interpreter_stop(unsigned kind, uint64_t stop_form) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL) return;
+    if (kind >= HL_BACKEND_SHAPE_S_COUNT) kind = HL_BACKEND_SHAPE_S_OTHER;
+    atomic_fetch_add_explicit(&slot->interpreter_stop[kind], 1, memory_order_relaxed);
+    hl_backend_shape_form_record(g_backend_tree->stop_forms, &g_backend_tree->stop_form_total,
+                                 &g_backend_tree->stop_form_unique, &g_backend_tree->stop_form_overflow,
+                                 stop_form);
+}
+
+static inline void hl_backend_tree_direct_edge(unsigned family, int same_page) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL || family >= HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) return;
+    atomic_fetch_add_explicit(&slot->direct_edge[family], 1, memory_order_relaxed);
+    /* This same-ISA backend emits no external inter-block address.  Every direct family returns through
+       the dispatcher; the following ordinary locked map lookup supplies its per-family map disposition. */
+    atomic_fetch_add_explicit(&slot->direct_edge_dispatcher[family], 1, memory_order_relaxed);
+    if (family == HL_BACKEND_SHAPE_EDGE_JCC_TAKEN)
+        atomic_fetch_add_explicit(same_page ? &slot->jcc_taken_same_page : &slot->jcc_taken_cross_page, 1,
+                                  memory_order_relaxed);
+}
+
+static inline void hl_backend_tree_direct_edge_resolution(unsigned family, unsigned resolution,
+                                                           int target_translated, int current_generation,
+                                                           int rel32_reachable, int eligible) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL || family >= HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) return;
+    if (resolution >= HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT) resolution = HL_BACKEND_SHAPE_EDGE_INTERRUPTED;
+    atomic_fetch_add_explicit(&slot->direct_edge_resolution[family][resolution], 1, memory_order_relaxed);
+    if (family != HL_BACKEND_SHAPE_EDGE_JCC_TAKEN || resolution == HL_BACKEND_SHAPE_EDGE_INTERRUPTED) return;
+    if (resolution == HL_BACKEND_SHAPE_EDGE_UNMAPPED) {
+        atomic_fetch_add_explicit(&slot->jcc_taken_ineligible, 1, memory_order_relaxed);
+        return;
+    }
+    atomic_fetch_add_explicit(target_translated ? &slot->jcc_taken_target_translated
+                                                : &slot->jcc_taken_target_interpreted,
+                              1, memory_order_relaxed);
+    if (!target_translated) {
+        atomic_fetch_add_explicit(&slot->jcc_taken_ineligible, 1, memory_order_relaxed);
+        return;
+    }
+    atomic_fetch_add_explicit(current_generation ? &slot->jcc_taken_generation_current
+                                                 : &slot->jcc_taken_generation_retired,
+                              1, memory_order_relaxed);
+    atomic_fetch_add_explicit(rel32_reachable ? &slot->jcc_taken_rel32 : &slot->jcc_taken_rel32_unreachable, 1,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(eligible ? &slot->jcc_taken_eligible : &slot->jcc_taken_ineligible, 1,
+                              memory_order_relaxed);
+}
+
 static inline void hl_backend_tree_translation(void) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->translations, 1, memory_order_relaxed);
@@ -302,6 +550,27 @@ static int hl_backend_tree_parent_barrier(struct hl_backend_tree_shared *shared,
 #define hl_backend_tree_parent_barrier(shared, root_pid) 0
 #endif
 
+static void hl_backend_shape_top(const struct hl_backend_shape_form forms[HL_BACKEND_SHAPE_FORM_SLOTS],
+                                 uint64_t top_key[HL_BACKEND_SHAPE_TOP_FORMS],
+                                 uint64_t top_count[HL_BACKEND_SHAPE_TOP_FORMS]) {
+    for (unsigned slot = 0; slot < HL_BACKEND_SHAPE_FORM_SLOTS; ++slot) {
+        if (atomic_load_explicit(&forms[slot].state, memory_order_acquire) != 2) continue;
+        uint64_t key = forms[slot].key;
+        uint64_t count = atomic_load_explicit(&forms[slot].count, memory_order_relaxed);
+        unsigned rank = 0;
+        while (rank < HL_BACKEND_SHAPE_TOP_FORMS &&
+               (top_count[rank] > count || (top_count[rank] == count && top_key[rank] <= key)))
+            ++rank;
+        if (rank == HL_BACKEND_SHAPE_TOP_FORMS) continue;
+        for (unsigned move = HL_BACKEND_SHAPE_TOP_FORMS - 1; move > rank; --move) {
+            top_key[move] = top_key[move - 1];
+            top_count[move] = top_count[move - 1];
+        }
+        top_key[rank] = key;
+        top_count[rank] = count;
+    }
+}
+
 static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, struct hl_backend_tree_summary *summary) {
     memset(summary, 0, sizeof *summary);
     if (shared == NULL) return;
@@ -327,6 +596,43 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
         for (uint32_t reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason)
             summary->reason[reason] += atomic_load_explicit(&slot->reason[reason], memory_order_relaxed);
         summary->reason_other += atomic_load_explicit(&slot->reason_other, memory_order_relaxed);
+        for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
+            summary->translated_exit[kind] +=
+                atomic_load_explicit(&slot->translated_exit[kind], memory_order_relaxed);
+        summary->translated_stitch_jmp += atomic_load_explicit(&slot->translated_stitch_jmp, memory_order_relaxed);
+        summary->translated_stitch_cond_fall +=
+            atomic_load_explicit(&slot->translated_stitch_cond_fall, memory_order_relaxed);
+        for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_I_COUNT; ++kind)
+            summary->interpreter_entry[kind] +=
+                atomic_load_explicit(&slot->interpreter_entry[kind], memory_order_relaxed);
+        for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_S_COUNT; ++kind)
+            summary->interpreter_stop[kind] +=
+                atomic_load_explicit(&slot->interpreter_stop[kind], memory_order_relaxed);
+        for (uint32_t family = 0; family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT; ++family) {
+            summary->direct_edge[family] += atomic_load_explicit(&slot->direct_edge[family], memory_order_relaxed);
+            for (uint32_t resolution = 0; resolution < HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT; ++resolution)
+                summary->direct_edge_resolution[family][resolution] +=
+                    atomic_load_explicit(&slot->direct_edge_resolution[family][resolution], memory_order_relaxed);
+            summary->direct_edge_chained[family] +=
+                atomic_load_explicit(&slot->direct_edge_chained[family], memory_order_relaxed);
+            summary->direct_edge_dispatcher[family] +=
+                atomic_load_explicit(&slot->direct_edge_dispatcher[family], memory_order_relaxed);
+        }
+        summary->jcc_taken_same_page += atomic_load_explicit(&slot->jcc_taken_same_page, memory_order_relaxed);
+        summary->jcc_taken_cross_page += atomic_load_explicit(&slot->jcc_taken_cross_page, memory_order_relaxed);
+        summary->jcc_taken_target_translated +=
+            atomic_load_explicit(&slot->jcc_taken_target_translated, memory_order_relaxed);
+        summary->jcc_taken_target_interpreted +=
+            atomic_load_explicit(&slot->jcc_taken_target_interpreted, memory_order_relaxed);
+        summary->jcc_taken_generation_current +=
+            atomic_load_explicit(&slot->jcc_taken_generation_current, memory_order_relaxed);
+        summary->jcc_taken_generation_retired +=
+            atomic_load_explicit(&slot->jcc_taken_generation_retired, memory_order_relaxed);
+        summary->jcc_taken_rel32 += atomic_load_explicit(&slot->jcc_taken_rel32, memory_order_relaxed);
+        summary->jcc_taken_rel32_unreachable +=
+            atomic_load_explicit(&slot->jcc_taken_rel32_unreachable, memory_order_relaxed);
+        summary->jcc_taken_eligible += atomic_load_explicit(&slot->jcc_taken_eligible, memory_order_relaxed);
+        summary->jcc_taken_ineligible += atomic_load_explicit(&slot->jcc_taken_ineligible, memory_order_relaxed);
     }
     summary->claimed += missing_claims;
     summary->missing = summary->claimed - summary->completed - summary->abnormal;
@@ -337,6 +643,37 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
     /* A process killed inside run_block has an entry and no returned reason. Preserve exact accounting
        without pretending the interrupted backend supplied a reason code. */
     if (reason_total < summary->crossings) summary->reason_other += summary->crossings - reason_total;
+    uint64_t translated_exit_total = 0;
+    for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
+        translated_exit_total += summary->translated_exit[kind];
+    if (translated_exit_total < summary->translated_entries)
+        summary->translated_exit[HL_BACKEND_SHAPE_T_OTHER] += summary->translated_entries - translated_exit_total;
+    uint64_t interpreter_entry_total = 0, interpreter_stop_total = 0;
+    for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_I_COUNT; ++kind)
+        interpreter_entry_total += summary->interpreter_entry[kind];
+    for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_S_COUNT; ++kind)
+        interpreter_stop_total += summary->interpreter_stop[kind];
+    if (interpreter_entry_total < summary->interpreted_entries)
+        summary->interpreter_entry[HL_BACKEND_SHAPE_I_OTHER] +=
+            summary->interpreted_entries - interpreter_entry_total;
+    if (interpreter_stop_total < summary->interpreted_entries)
+        summary->interpreter_stop[HL_BACKEND_SHAPE_S_OTHER] += summary->interpreted_entries - interpreter_stop_total;
+    for (uint32_t family = 0; family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT; ++family) {
+        uint64_t resolutions = 0;
+        for (uint32_t resolution = 0; resolution < HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT; ++resolution)
+            resolutions += summary->direct_edge_resolution[family][resolution];
+        if (resolutions < summary->direct_edge[family])
+            summary->direct_edge_resolution[family][HL_BACKEND_SHAPE_EDGE_INTERRUPTED] +=
+                summary->direct_edge[family] - resolutions;
+    }
+    summary->fallback_form_total = atomic_load_explicit(&shared->fallback_form_total, memory_order_relaxed);
+    summary->fallback_form_unique = atomic_load_explicit(&shared->fallback_form_unique, memory_order_relaxed);
+    summary->fallback_form_overflow = atomic_load_explicit(&shared->fallback_form_overflow, memory_order_relaxed);
+    summary->stop_form_total = atomic_load_explicit(&shared->stop_form_total, memory_order_relaxed);
+    summary->stop_form_unique = atomic_load_explicit(&shared->stop_form_unique, memory_order_relaxed);
+    summary->stop_form_overflow = atomic_load_explicit(&shared->stop_form_overflow, memory_order_relaxed);
+    hl_backend_shape_top(shared->fallback_forms, summary->fallback_top_key, summary->fallback_top_count);
+    hl_backend_shape_top(shared->stop_forms, summary->stop_top_key, summary->stop_top_count);
 }
 
 static void hl_backend_tree_summary(struct hl_backend_tree_summary *summary) {
@@ -372,6 +709,156 @@ static int hl_backend_tree_format(struct hl_backend_tree_shared *shared, char *r
         (unsigned long long)summary.reason[15], (unsigned long long)summary.reason_other);
 }
 
+static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
+    struct hl_backend_tree_summary summary;
+    hl_backend_tree_summary_in(shared, &summary);
+    uint64_t translated_transfers = summary.translated_entries + summary.translated_stitch_jmp +
+                                    summary.translated_stitch_cond_fall;
+    return snprintf(
+        record, capacity,
+        "[diag] backend-shape version=1 translated_entries=%llu translated_transfers=%llu "
+        "t_fallthrough=%llu t_cond_taken=%llu t_cond_not_taken=%llu t_direct_jump=%llu "
+        "t_direct_call=%llu t_return=%llu t_indirect_branch=%llu t_indirect_call=%llu t_syscall=%llu "
+        "t_irq=%llu t_fault=%llu t_other=%llu stitch_jmp=%llu stitch_cond_fall=%llu "
+        "e_fall_total=%llu e_fall_mapped=%llu e_fall_unmapped=%llu e_fall_interrupted=%llu "
+        "e_fall_chained=%llu e_fall_dispatcher=%llu "
+        "e_jt_total=%llu e_jt_mapped=%llu e_jt_unmapped=%llu e_jt_interrupted=%llu "
+        "e_jt_chained=%llu e_jt_dispatcher=%llu "
+        "e_jn_total=%llu e_jn_mapped=%llu e_jn_unmapped=%llu e_jn_interrupted=%llu "
+        "e_jn_chained=%llu e_jn_dispatcher=%llu "
+        "e_jmp_total=%llu e_jmp_mapped=%llu e_jmp_unmapped=%llu e_jmp_interrupted=%llu "
+        "e_jmp_chained=%llu e_jmp_dispatcher=%llu "
+        "e_call_total=%llu e_call_mapped=%llu e_call_unmapped=%llu e_call_interrupted=%llu "
+        "e_call_chained=%llu e_call_dispatcher=%llu "
+        "jt_same_page=%llu jt_cross_page=%llu jt_target_translated=%llu jt_target_interpreted=%llu "
+        "jt_generation_current=%llu jt_generation_retired=%llu jt_rel32=%llu jt_rel32_unreachable=%llu "
+        "jt_eligible=%llu jt_ineligible=%llu interpreted_entries=%llu "
+        "i_disabled=%llu i_image=%llu i_decode=%llu i_unsupported=%llu i_authority=%llu i_resource=%llu "
+        "i_emit=%llu i_runtime_image=%llu i_runtime_bind=%llu i_other=%llu s_fallthrough=%llu "
+        "s_cond_taken=%llu s_cond_not_taken=%llu s_direct_jump=%llu s_direct_call=%llu s_return=%llu "
+        "s_indirect_branch=%llu s_indirect_call=%llu s_syscall=%llu s_irq=%llu s_fault=%llu "
+        "s_service=%llu s_other=%llu fallback_total=%llu fallback_unique=%llu fallback_overflow=%llu "
+        "stop_total=%llu stop_unique=%llu stop_overflow=%llu "
+        "fallback0_key=%llu fallback0_count=%llu fallback1_key=%llu fallback1_count=%llu "
+        "fallback2_key=%llu fallback2_count=%llu fallback3_key=%llu fallback3_count=%llu "
+        "fallback4_key=%llu fallback4_count=%llu fallback5_key=%llu fallback5_count=%llu "
+        "fallback6_key=%llu fallback6_count=%llu fallback7_key=%llu fallback7_count=%llu "
+        "stop0_key=%llu stop0_count=%llu stop1_key=%llu stop1_count=%llu "
+        "stop2_key=%llu stop2_count=%llu stop3_key=%llu stop3_count=%llu "
+        "stop4_key=%llu stop4_count=%llu stop5_key=%llu stop5_count=%llu "
+        "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu\n",
+        (unsigned long long)summary.translated_entries, (unsigned long long)translated_transfers,
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_NOT_TAKEN],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_JUMP],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_CALL],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_RETURN],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_SYSCALL],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_IRQ],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FAULT],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_OTHER],
+        (unsigned long long)summary.translated_stitch_jmp,
+        (unsigned long long)summary.translated_stitch_cond_fall,
+        (unsigned long long)summary.direct_edge[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH]
+                                                                  [HL_BACKEND_SHAPE_EDGE_MAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH]
+                                                                  [HL_BACKEND_SHAPE_EDGE_UNMAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH]
+                                                                  [HL_BACKEND_SHAPE_EDGE_INTERRUPTED],
+        (unsigned long long)summary.direct_edge_chained[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH],
+        (unsigned long long)summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH],
+        (unsigned long long)summary.direct_edge[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN]
+                                                                  [HL_BACKEND_SHAPE_EDGE_MAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN]
+                                                                  [HL_BACKEND_SHAPE_EDGE_UNMAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN]
+                                                                  [HL_BACKEND_SHAPE_EDGE_INTERRUPTED],
+        (unsigned long long)summary.direct_edge_chained[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN],
+        (unsigned long long)summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN],
+        (unsigned long long)summary.direct_edge[HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN]
+                                                                  [HL_BACKEND_SHAPE_EDGE_MAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN]
+                                                                  [HL_BACKEND_SHAPE_EDGE_UNMAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN]
+                                                                  [HL_BACKEND_SHAPE_EDGE_INTERRUPTED],
+        (unsigned long long)summary.direct_edge_chained[HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN],
+        (unsigned long long)summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN],
+        (unsigned long long)summary.direct_edge[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP]
+                                                                  [HL_BACKEND_SHAPE_EDGE_MAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP]
+                                                                  [HL_BACKEND_SHAPE_EDGE_UNMAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP]
+                                                                  [HL_BACKEND_SHAPE_EDGE_INTERRUPTED],
+        (unsigned long long)summary.direct_edge_chained[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP],
+        (unsigned long long)summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP],
+        (unsigned long long)summary.direct_edge[HL_BACKEND_SHAPE_EDGE_DIRECT_CALL],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_CALL]
+                                                                  [HL_BACKEND_SHAPE_EDGE_MAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_CALL]
+                                                                  [HL_BACKEND_SHAPE_EDGE_UNMAPPED],
+        (unsigned long long)summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_CALL]
+                                                                  [HL_BACKEND_SHAPE_EDGE_INTERRUPTED],
+        (unsigned long long)summary.direct_edge_chained[HL_BACKEND_SHAPE_EDGE_DIRECT_CALL],
+        (unsigned long long)summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_DIRECT_CALL],
+        (unsigned long long)summary.jcc_taken_same_page, (unsigned long long)summary.jcc_taken_cross_page,
+        (unsigned long long)summary.jcc_taken_target_translated,
+        (unsigned long long)summary.jcc_taken_target_interpreted,
+        (unsigned long long)summary.jcc_taken_generation_current,
+        (unsigned long long)summary.jcc_taken_generation_retired, (unsigned long long)summary.jcc_taken_rel32,
+        (unsigned long long)summary.jcc_taken_rel32_unreachable,
+        (unsigned long long)summary.jcc_taken_eligible, (unsigned long long)summary.jcc_taken_ineligible,
+        (unsigned long long)summary.interpreted_entries,
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_DISABLED],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_IMAGE],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_DECODE],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_UNSUPPORTED],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_AUTHORITY],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_RESOURCE],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_EMIT],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_RUNTIME_IMAGE],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_RUNTIME_BIND],
+        (unsigned long long)summary.interpreter_entry[HL_BACKEND_SHAPE_I_OTHER],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_FALLTHROUGH],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_COND_TAKEN],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_COND_NOT_TAKEN],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_DIRECT_JUMP],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_DIRECT_CALL],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_RETURN],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_INDIRECT_BRANCH],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_INDIRECT_CALL],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_SYSCALL],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_IRQ],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_FAULT],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_SERVICE],
+        (unsigned long long)summary.interpreter_stop[HL_BACKEND_SHAPE_S_OTHER],
+        (unsigned long long)summary.fallback_form_total, (unsigned long long)summary.fallback_form_unique,
+        (unsigned long long)summary.fallback_form_overflow, (unsigned long long)summary.stop_form_total,
+        (unsigned long long)summary.stop_form_unique, (unsigned long long)summary.stop_form_overflow,
+        (unsigned long long)summary.fallback_top_key[0], (unsigned long long)summary.fallback_top_count[0],
+        (unsigned long long)summary.fallback_top_key[1], (unsigned long long)summary.fallback_top_count[1],
+        (unsigned long long)summary.fallback_top_key[2], (unsigned long long)summary.fallback_top_count[2],
+        (unsigned long long)summary.fallback_top_key[3], (unsigned long long)summary.fallback_top_count[3],
+        (unsigned long long)summary.fallback_top_key[4], (unsigned long long)summary.fallback_top_count[4],
+        (unsigned long long)summary.fallback_top_key[5], (unsigned long long)summary.fallback_top_count[5],
+        (unsigned long long)summary.fallback_top_key[6], (unsigned long long)summary.fallback_top_count[6],
+        (unsigned long long)summary.fallback_top_key[7], (unsigned long long)summary.fallback_top_count[7],
+        (unsigned long long)summary.stop_top_key[0], (unsigned long long)summary.stop_top_count[0],
+        (unsigned long long)summary.stop_top_key[1], (unsigned long long)summary.stop_top_count[1],
+        (unsigned long long)summary.stop_top_key[2], (unsigned long long)summary.stop_top_count[2],
+        (unsigned long long)summary.stop_top_key[3], (unsigned long long)summary.stop_top_count[3],
+        (unsigned long long)summary.stop_top_key[4], (unsigned long long)summary.stop_top_count[4],
+        (unsigned long long)summary.stop_top_key[5], (unsigned long long)summary.stop_top_count[5],
+        (unsigned long long)summary.stop_top_key[6], (unsigned long long)summary.stop_top_count[6],
+        (unsigned long long)summary.stop_top_key[7], (unsigned long long)summary.stop_top_count[7]);
+}
+
 void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_linux_abi *box) {
     struct hl_backend_tree_shared *shared = opaque;
     if (shared == NULL || shared_size != sizeof *shared || box == NULL) return;
@@ -381,9 +868,12 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
     if (!atomic_compare_exchange_strong_explicit(&shared->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    char record[2048];
+    char record[8192];
     int formatted = hl_backend_tree_format(shared, record, sizeof record);
     if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    int shape = hl_backend_shape_format(shared, record + formatted, sizeof record - (size_t)formatted);
+    if (shape <= 0 || (size_t)shape >= sizeof record - (size_t)formatted) return;
+    formatted += shape;
     size_t offset = 0;
     while (offset < (size_t)formatted) {
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
@@ -423,15 +913,25 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
     if (child == 0) {
         hl_backend_tree_run_begin(0, 0);
         hl_backend_tree_interpreted_steps(3);
+        if (scenario == 8) {
+            hl_backend_tree_interpreter_entry(HL_BACKEND_SHAPE_I_UNSUPPORTED, 17);
+            hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_SERVICE, 23);
+        }
         if (scenario == 7) _exit(0); /* backend entry whose process dies before returning a reason */
         hl_backend_tree_reason(1);
-        if (scenario == 1) {
+        if (scenario == 1 || scenario == 8) {
             struct hl_backend_tree_slot *grandchild_birth = hl_backend_tree_prepare_fork();
             pid_t grandchild = fork();
             hl_backend_tree_after_fork(grandchild, grandchild_birth);
             if (grandchild < 0) hl_backend_tree_abnormal_exit(12);
             if (grandchild == 0) {
                 hl_backend_tree_run_begin(1, 5);
+                if (scenario == 8) {
+                    hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_COND_TAKEN, 1, 2);
+                    hl_backend_tree_direct_edge(HL_BACKEND_SHAPE_EDGE_JCC_TAKEN, 1);
+                    hl_backend_tree_direct_edge_resolution(HL_BACKEND_SHAPE_EDGE_JCC_TAKEN,
+                                                           HL_BACKEND_SHAPE_EDGE_MAPPED, 1, 1, 1, 1);
+                }
                 hl_backend_tree_reason(5);
                 (void)hl_backend_tree_finalize(0);
                 _exit(0);
@@ -447,6 +947,12 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
     int child_status = hl_backend_tree_wait(child, scenario == 2 || scenario == 5 || scenario == 6 || scenario == 7);
     if (child_status != 0) return 14;
     hl_backend_tree_run_begin(1, 7);
+    if (scenario == 8) {
+        hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_DIRECT_JUMP, 3, 4);
+        hl_backend_tree_direct_edge(HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP, 0);
+        hl_backend_tree_direct_edge_resolution(HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP,
+                                               HL_BACKEND_SHAPE_EDGE_UNMAPPED, 0, 0, 0, 0);
+    }
     hl_backend_tree_reason(0);
     (void)hl_backend_tree_finalize(0);
     struct hl_backend_tree_summary summary;
@@ -480,6 +986,30 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                        summary.reason_other == 1
                    ? 0
                    : 35;
+    if (scenario == 8)
+        return summary.claimed == 3 && summary.completed == 3 && summary.translated_entries == 2 &&
+                       summary.interpreted_entries == 1 &&
+                       summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN] == 1 &&
+                       summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_JUMP] == 1 &&
+                       summary.translated_stitch_jmp == 4 && summary.translated_stitch_cond_fall == 6 &&
+                       summary.direct_edge[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN] == 1 &&
+                       summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN]
+                                                             [HL_BACKEND_SHAPE_EDGE_MAPPED] == 1 &&
+                       summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_JCC_TAKEN] == 1 &&
+                       summary.direct_edge[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP] == 1 &&
+                       summary.direct_edge_resolution[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP]
+                                                             [HL_BACKEND_SHAPE_EDGE_UNMAPPED] == 1 &&
+                       summary.direct_edge_dispatcher[HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP] == 1 &&
+                       summary.jcc_taken_same_page == 1 && summary.jcc_taken_target_translated == 1 &&
+                       summary.jcc_taken_generation_current == 1 && summary.jcc_taken_rel32 == 1 &&
+                       summary.jcc_taken_eligible == 1 && summary.jcc_taken_ineligible == 0 &&
+                       summary.interpreter_entry[HL_BACKEND_SHAPE_I_UNSUPPORTED] == 1 &&
+                       summary.interpreter_stop[HL_BACKEND_SHAPE_S_SERVICE] == 1 &&
+                       summary.fallback_form_total == 1 && summary.fallback_top_key[0] == 17 &&
+                       summary.fallback_top_count[0] == 1 && summary.stop_form_total == 1 &&
+                       summary.stop_top_key[0] == 23 && summary.stop_top_count[0] == 1
+                   ? 0
+                   : 36;
     return 40;
 }
 #endif
@@ -494,6 +1024,23 @@ HL_API int HL_BACKEND_TREE_TEST_NAME(uint32_t scenario) {
 }
 
 #else
+
+/* Hook-disabled translit_shape_exit calls compile to no-ops, but retaining the symbolic kinds keeps the
+   hook and production control-flow source identical. */
+enum {
+    HL_BACKEND_SHAPE_T_FALLTHROUGH,
+    HL_BACKEND_SHAPE_T_COND_TAKEN,
+    HL_BACKEND_SHAPE_T_COND_NOT_TAKEN,
+    HL_BACKEND_SHAPE_T_DIRECT_JUMP,
+    HL_BACKEND_SHAPE_T_DIRECT_CALL,
+    HL_BACKEND_SHAPE_T_RETURN,
+    HL_BACKEND_SHAPE_T_INDIRECT_BRANCH,
+    HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+    HL_BACKEND_SHAPE_T_SYSCALL,
+    HL_BACKEND_SHAPE_T_IRQ,
+    HL_BACKEND_SHAPE_T_FAULT,
+    HL_BACKEND_SHAPE_T_OTHER,
+};
 
 size_t hl_target_backend_tree_shared_size(int enabled) {
     (void)enabled;
@@ -517,6 +1064,11 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 #define hl_backend_tree_run_begin(translated, steps) ((void)0)
 #define hl_backend_tree_interpreted_steps(steps) ((void)0)
 #define hl_backend_tree_reason(reason) ((void)0)
+#define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
+#define hl_backend_tree_interpreter_entry(kind, fallback_form) ((void)0)
+#define hl_backend_tree_interpreter_stop(kind, stop_form) ((void)0)
+#define hl_backend_tree_direct_edge(family, same_page) ((void)0)
+#define hl_backend_tree_direct_edge_resolution(family, resolution, translated, current, rel32, eligible) ((void)0)
 #define hl_backend_tree_translation() ((void)0)
 #define hl_backend_tree_map_hit() ((void)0)
 #define hl_backend_tree_stw_retry() ((void)0)
