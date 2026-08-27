@@ -89,6 +89,9 @@ struct Backend {
     sse2_pxor_runs_admitted: u64,
     sse2_punpcklqdq_admitted: u64,
     sse2_punpcklqdq_runs_admitted: u64,
+    sse2_movd_admitted: u64,
+    sse2_movd_runs_admitted: u64,
+    sse2_movhlps_admitted: u64,
     translations: u64,
     unsupported_total: u64,
     unsupported_keyed: u64,
@@ -170,6 +173,9 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_pxor_runs_admitted: counter("sse2_pxor_runs_admitted="),
         sse2_punpcklqdq_admitted: counter("sse2_punpcklqdq_admitted="),
         sse2_punpcklqdq_runs_admitted: counter("sse2_punpcklqdq_runs_admitted="),
+        sse2_movd_admitted: counter("sse2_movd_admitted="),
+        sse2_movd_runs_admitted: counter("sse2_movd_runs_admitted="),
+        sse2_movhlps_admitted: counter("sse2_movhlps_admitted="),
         translations,
         unsupported_total: unsupported_counter("total="),
         unsupported_keyed: unsupported_counter("keyed="),
@@ -203,10 +209,31 @@ fn unsupported_census_records_successful_interpreter_steps() {
         report.unsupported_sites + report.unsupported_repeats + report.unsupported_site_overflow
     );
     assert!(
-        report.unsupported_line.contains("198718096e:128"),
+        report.unsupported_line.contains("9830009d4:128"),
         "{}",
         report.unsupported_line
     );
+}
+
+#[test]
+fn register_movhlps_matches_native_for_distinct_high_alias_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_movhlps");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native MOVHLPS fixture");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"distinct=30dfcefdec9b8ab9:10ffeeddccbbaa99 high=30dfcefdec9b8ab9:10ffeeddccbbaa99 \
+alias=10ffeeddccbbaa99:10ffeeddccbbaa99 flags=0c95:0c95:0000\n"
+    );
+    assert_eq!(selected_backend.sse2_movhlps_admitted, 3, "{}", selected_backend.line);
 }
 
 #[test]
@@ -288,6 +315,48 @@ fn register_punpcklqdq_matches_native_for_distinct_high_alias_and_flags() {
     let image = std::fs::read(executable).unwrap();
     assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0x6c, 0xc1]));
     assert!(image.windows(5).any(|bytes| bytes == [0x66, 0x45, 0x0f, 0x6c, 0xc1]));
+}
+
+#[test]
+fn register_movd_movq_matches_native_for_width_high_registers_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_movd");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native MOVD/MOVQ fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"d32=0000000055667788:0000000000000000 q64=1122334455667788:0000000000000000 high32=00000000ccddeeff:0000000000000000 high64=8899aabbccddeeff:0000000000000000 flags=0c95:0c95:0000\n"
+    );
+    assert!(selected_backend.sse2_movd_admitted >= 4, "{}", selected_backend.line);
+    assert!(
+        selected_backend.sse2_movd_runs_admitted > 0,
+        "{}",
+        selected_backend.line
+    );
+    let image = std::fs::read(executable).unwrap();
+    let contains = |bytes: &[u8]| image.windows(bytes.len()).any(|window| window == bytes);
+    assert!(contains(&[0x66, 0x0f, 0x6e, 0xc0]));
+    assert!(contains(&[0x66, 0x48, 0x0f, 0x6e, 0xc8]));
+    assert!(contains(&[0x66, 0x45, 0x0f, 0x6e, 0xd1]));
+    assert!(contains(&[0x66, 0x4d, 0x0f, 0x6e, 0xd9]));
+}
+
+#[test]
+fn movd_movq_body_owner_exhaustion_falls_back_without_partial_authority() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_movd");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true);
+    assert_eq!((selected_status, selected), (interpreted_status, interpreted));
+    assert_eq!(selected_backend.entries, 0, "{}", selected_backend.line);
+    assert_eq!(selected_backend.sse2_movd_admitted, 0, "{}", selected_backend.line);
+    assert_eq!(selected_backend.sse2_movd_runs_admitted, 0, "{}", selected_backend.line);
 }
 
 #[test]
