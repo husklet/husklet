@@ -1772,19 +1772,20 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return ok ? 0 : 70;
     }
     if (scenario == 57) {
-        if (g_cache == NULL || g_cp == NULL || g_cache + sizeof(struct interp_block) + 1 > g_cache + CACHE_SZ)
-            return 71;
-        struct interp_block *target_block = (struct interp_block *)g_cache;
-        struct interp_block saved = *target_block;
+        _Alignas(struct interp_block) uint8_t arena[sizeof(struct interp_block) + 1] = {0};
+        uint8_t *saved_cache = g_cache;
         uint8_t *saved_cp = g_cp;
-        memset(target_block, 0, sizeof *target_block);
+        uint64_t saved_generation = g_cache_gen;
+        g_cache = arena;
+        g_cp = arena + sizeof arena;
+        g_cache_gen = 57;
+        struct interp_block *target_block = (struct interp_block *)arena;
         target_block->magic = INTERP_BLOCK_MAGIC;
         target_block->generation = g_cache_gen;
         target_block->host_entry_off = sizeof *target_block;
         target_block->host_len = 1;
         target_block->guest_start = UINT64_C(0x1000);
         target_block->guest_end = UINT64_C(0x2000);
-        g_cp = g_cache + sizeof *target_block + 1;
         map_clear();
         map_put(UINT64_C(0x1100), UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
         int before_reset = translit_jcc_link_target(UINT64_C(0x1200), UINT64_C(0x1100)) == target_block;
@@ -1793,8 +1794,9 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         map_put(UINT64_C(0x1100), UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
         int readmitted = translit_jcc_link_target(UINT64_C(0x1200), UINT64_C(0x1100)) == target_block;
         map_clear();
-        *target_block = saved;
+        g_cache = saved_cache;
         g_cp = saved_cp;
+        g_cache_gen = saved_generation;
         return before_reset && absent_after_reset && readmitted ? 0 : 72;
     }
     return 6;
