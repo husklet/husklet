@@ -1536,6 +1536,23 @@ static int translit_report(char *out, size_t size) {
             displaced_refusal_count = count;
         }
     }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_option_get("HL_TRANSLIT_PROFILE_WIDE_TEST") != NULL) {
+        blocks = entries = declined = stitch_candidates = stitch_admitted = UINT64_MAX;
+        rip_indirect_lowered = provenance_fallback = body_owner_recovered = body_owner_published = UINT64_MAX;
+        sse2_runs_admitted = sse2_instructions_admitted = sse2_target_runs = sse2_next_family_runs = UINT64_MAX;
+        sse2_store_instructions = sse2_store_movups = sse2_store_movaps = sse2_store_movdqu = UINT64_MAX;
+        sse2_store_family_runs = sse2_pxor_admitted = sse2_pxor_runs_admitted = UINT64_MAX;
+        displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
+        displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
+        displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
+        displaced_lea_lowered = natural_abs32_lowered = natural_lea_lowered = UINT64_MAX;
+        displaced_refusal_count = displaced_refusal_prefix = displaced_refusal_width = UINT64_MAX;
+        displaced_refusal_rsp = displaced_refusal_opcode_other = UINT64_MAX;
+        jcc_fall_candidates = jcc_fall_admitted = jcc_fall_page_refused = UINT64_MAX;
+        jcc_fall_successor_page_refused = jcc_fall_decode_refused = jcc_fall_executed = UINT64_MAX;
+    }
+#endif
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
     if (g_nonpie_lo != 0)
         return snprintf(out, size,

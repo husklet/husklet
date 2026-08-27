@@ -248,6 +248,27 @@ static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
+// Profile records are a machine-readable interface.  Render the variable-width transliterator record at its exact
+// size and issue it as one checked write: appending snprintf's would-have-written length to a fixed dispatcher buffer
+// silently truncated the tail and its newline, so the following diagnostic write became part of the same line.
+static int profile_record_write(const char *record, size_t length) {
+    return record != NULL && length != 0 && record[length - 1u] == '\n' &&
+           hl_linux_write(g_linux_box, STDERR_FILENO, record, length) == (int64_t)length;
+}
+
+static int translit_profile_write(void) {
+    int required = translit_report(NULL, 0);
+    if (required <= 0) return 0;
+    size_t length = (size_t)required;
+    char *record = malloc(length + 1u);
+    if (record == NULL) return 0;
+    int rendered = translit_report(record, length + 1u);
+    int complete = rendered == required && record[length] == '\0' && record[length - 1u] == '\n';
+    int written = complete && profile_record_write(record, length);
+    free(record);
+    return written;
+}
+
 static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                        uint64_t a5) {
     switch (nr) {
@@ -276,20 +297,11 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
                 (unsigned long long)g_prof_smc_commit, (unsigned long long)g_prof_soft_guard_bytes,
                 (unsigned long long)g_prof_soft_shared_sites, (unsigned long long)g_prof_soft_inline_sites);
-            // The same-ISA transliterator (translator/guest/x86_64/translit.inc), and -- when it produced
-            // nothing -- which of its two SILENT refusals fired: a non-PIE image at a storage bias, or a
-            // guest that took an executable mapping. Both are permanent for the process and neither is
-            // visible anywhere else, so without this an operator can only tell "transliterated" from
-            // "refused" by timing the run. The hook exists on every host; off a Linux x86-64 one it says
-            // so rather than printing a counter that can only read zero.
-            if (profile_size > 0 && (size_t)profile_size < sizeof profile) {
-                int translit_size = translit_report(profile + profile_size, sizeof profile - (size_t)profile_size);
-                if (translit_size > 0) profile_size += translit_size;
-            }
-            if (profile_size > 0) {
-                size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1;
-                (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
-            }
+            if (profile_size > 0 && (size_t)profile_size < sizeof profile)
+                (void)profile_record_write(profile, (size_t)profile_size);
+            // The transliterator record is variable-width and owns its newline; keep it out of the fixed dispatcher
+            // record so neither can silently consume the other's capacity.
+            (void)translit_profile_write();
             char boundary[1024];
             int boundary_size = snprintf(
                 boundary, sizeof boundary,
