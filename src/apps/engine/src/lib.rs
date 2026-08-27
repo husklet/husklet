@@ -73,6 +73,12 @@ struct LaunchArguments {
     /// Print the guest's exit kind, status and detail to standard error when it finishes.
     #[arg(long)]
     report_exit: bool,
+    /// Emit the exact executable and native-library paths and hashes opened by this process.
+    #[arg(long)]
+    loader_receipt: bool,
+    /// Exact native engine artifact selected before construction.
+    #[arg(long, value_name = "PATH")]
+    native_library: Option<PathBuf>,
     /// Emit native-engine diagnostics, including the translation backend receipt.
     #[arg(long)]
     diagnostics: bool,
@@ -273,6 +279,10 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--native-test-option requires --rootfs; raw host-path launches do not carry launch options".to_owned(),
         ));
     }
+    if let Some(path) = &launch.native_library {
+        hl_native::select_artifact(path)
+            .map_err(|reason| Failure::Request(format!("cannot select native library: {reason}")))?;
+    }
     let engine = if let Some(rootfs) = &launch.rootfs {
         let plan = rootfs_plan(rootfs, launch)?;
         hl_engine::runtime::Engine::from_plan(guest.isa(), plan)?
@@ -283,6 +293,11 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
         }
         builder.build()?
     };
+    if launch.loader_receipt {
+        let receipt =
+            loader_receipt().map_err(|reason| Failure::Request(format!("cannot emit loader receipt: {reason}")))?;
+        eprintln!("[hl-loader]\t{receipt}");
+    }
     engine.start()?;
     let exit = engine.wait()?;
     engine.destroy()?;
@@ -428,14 +443,49 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     }
 
     let executable = std::env::current_exe().map_err(|error| format!("this executable has no path: {error}"))?;
-    let mut file = std::fs::File::open(&executable)
-        .map_err(|error| format!("cannot read {} to hash it: {error}", executable.display()))?;
+    let hex = hash_path(&executable)?;
+    Ok(format!(
+        "{{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"{hex}\"}}"
+    ))
+}
+
+#[cfg(unix)]
+fn loader_receipt() -> Result<String, String> {
+    let paths = hl_native::artifact_paths().ok_or_else(|| "the native loader exposed no path".to_owned())?;
+    let mut canonical = paths
+        .iter()
+        .map(|path| std::fs::canonicalize(path).map_err(|error| format!("cannot resolve {}: {error}", path.display())))
+        .collect::<Result<Vec<_>, _>>()?;
+    canonical.sort();
+    canonical.dedup();
+    let [library] = canonical.as_slice() else {
+        return Err(format!(
+            "native lifecycle symbols resolved to {} libraries",
+            canonical.len()
+        ));
+    };
+    Ok(serde_json::json!({
+        "schema": "husklet-engine-loader-v1",
+        "library_sha256": hash_path(library)?,
+        "library_path": library,
+    })
+    .to_string())
+}
+
+#[cfg(not(unix))]
+fn loader_receipt() -> Result<String, String> {
+    Err("loader receipts are available only on Unix".into())
+}
+
+fn hash_path(path: &std::path::Path) -> Result<String, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|error| format!("cannot read {} to hash it: {error}", path.display()))?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
-            .map_err(|error| format!("cannot read {} to hash it: {error}", executable.display()))?;
+            .map_err(|error| format!("cannot read {} to hash it: {error}", path.display()))?;
         if count == 0 {
             break;
         }
@@ -447,9 +497,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
         use std::fmt::Write as _;
         write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
     }
-    Ok(format!(
-        "{{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"{hex}\"}}"
-    ))
+    Ok(hex)
 }
 
 #[cfg(test)]
