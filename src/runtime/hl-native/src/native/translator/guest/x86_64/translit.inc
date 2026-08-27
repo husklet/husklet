@@ -1061,7 +1061,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t sse2_signature = 0;
+#endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
     uint32_t sse2_owner_count = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -1154,7 +1156,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                     (uint64_t)(uintptr_t)commit_end, pc);
             pc = next;
             count++;
+#if defined(HL_NATIVE_TEST_HOOKS)
             sse2_signature = (sse2_signature << 8) | insn.op;
+#endif
             continue;
         }
 
