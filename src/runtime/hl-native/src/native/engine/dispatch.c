@@ -306,7 +306,10 @@ static void run_guest(struct cpu *c) {
            zero path. A racing zero-to-one either remains set or has its already-
            published pending bit observed by the scan and re-armed. */
         int interrupt_consumed = dispatch_interrupt_consume(c);
-        if (g_dispatch_profile.enabled && interrupt_consumed) hl_dispatch_profile_pending(&g_dispatch_profile);
+        if (interrupt_consumed) {
+            hl_backend_tree_irq_pending();
+            if (g_dispatch_profile.enabled) hl_dispatch_profile_pending(&g_dispatch_profile);
+        }
         dispatch_interrupt_rearm(c);
         // A checkpoint freezes the registry while holding g_jit_lock. Peers must acknowledge and park at
         // this already-spilled dispatcher boundary BEFORE cache lookup attempts to acquire that same lock.
@@ -351,6 +354,7 @@ static void run_guest(struct cpu *c) {
         if (g_threaded) jit_dispatch_lock();
         void *code = G_MAP_HOST(map_cache, G_PC(c));
         hl_dispatch_profile_map(&g_dispatch_profile, code != NULL);
+        if (code != NULL) hl_backend_tree_map_hit();
         if (!code) {
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;
             // near full -> wholesale flush
@@ -421,6 +425,7 @@ static void run_guest(struct cpu *c) {
                 c->exited = 1;
                 continue;
             }
+            hl_backend_tree_translation();
             // THEN chain existing blocks to it (still write mode). Frontend hook: aarch64 chains here;
             // x86's translate_block already chained internally, so its hook is a no-op.
             G_DISPATCH_CHAIN(c);
@@ -487,6 +492,7 @@ static void run_guest(struct cpu *c) {
             if (profile_sample)
                 hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_STW, profile_stw_start, now_ns());
             hl_dispatch_profile_reason(&g_dispatch_profile, 0, 1);
+            hl_backend_tree_stw_retry();
             continue;
         }
         uint64_t profile_block_start = 0;
@@ -496,7 +502,13 @@ static void run_guest(struct cpu *c) {
             profile_block_start = now;
         }
         // map_host()/translate_block() return RW-alias addresses; execute via the RX alias.
+#ifndef G_BACKEND_TREE_RUN_OWNED
+        hl_backend_tree_run_begin(1, 0);
+#endif
         G_RUN_BLOCK(hot_context, c, rxcode);
+#ifndef G_BACKEND_TREE_RUN_OWNED
+        hl_backend_tree_reason(c->reason);
+#endif
         // The translated image is fully spilled at block return. Release STW ownership before reason handling:
         // clone and mapping syscalls may themselves initiate a stop-the-world operation and must not wait on
         // their own caller. Checkpoint capture still occurs at the next loop-top dispatcher safepoint.

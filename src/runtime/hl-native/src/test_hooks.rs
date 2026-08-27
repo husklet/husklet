@@ -299,6 +299,16 @@ pub(crate) fn dispatch_profile_test(isa: u32) -> i32 {
     }
 }
 
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn backend_tree_census_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    scenario_status(
+        isa,
+        test_api().aarch64_backend_tree_census,
+        test_api().x86_64_backend_tree_census,
+        scenario,
+    )
+}
+
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(crate) fn stw_cpu_slot_lifecycle_test() -> i32 {
     // SAFETY: the native hook owns its private zeroed CPU fixture and restores the STW registry

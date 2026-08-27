@@ -45,6 +45,7 @@ static inline int smc_seen(void) {
 #define G_MAP_HOST(cache, gpc) map_host_cached((cache), (gpc))
 #define G_TRANSLATE_BLOCK(context, pc) translate_block(context, pc)
 #define G_RUN_BLOCK(context, cpu, code) run_block(context, cpu, code)
+#define G_BACKEND_TREE_RUN_OWNED 1
 
 // Publish the absence of an IBTC base (header note).
 #define G_DISPATCH_ENTER(c) ((c)->ibtc_base = 0)

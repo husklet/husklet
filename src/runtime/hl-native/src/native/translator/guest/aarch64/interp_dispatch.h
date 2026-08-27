@@ -69,3 +69,4 @@ static uint64_t g_smc_flushes;
 
 // interp.c has its own run_block/block_return, so dispatch.c must not emit the shared AArch64 pair.
 #define G_OWN_TRAMPOLINES 1
+#define G_BACKEND_TREE_RUN_OWNED 1

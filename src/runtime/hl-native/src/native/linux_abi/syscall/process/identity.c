@@ -221,6 +221,7 @@ static void process_last_thread_exit(int status) {
        report belongs here: exit_group(2) reaches the host _exit straight from the syscall and never returns
        through the restore driver that used to own the only call. */
     ckpt_restored_member_exit_code(status);
+    (void)hl_backend_tree_finalize(0);
 }
 
 static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,

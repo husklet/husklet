@@ -1,5 +1,43 @@
 use super::{Error, diagnostic::Excerpt as _};
+use std::collections::BTreeMap;
 use std::io::Write;
+
+const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
+const BACKEND_TREE_FIELDS: [&str; 33] = [
+    "version",
+    "root_pid",
+    "claimed",
+    "completed",
+    "abnormal",
+    "missing",
+    "duplicate_finalize",
+    "crossings",
+    "translated_entries",
+    "interpreted_entries",
+    "translated_steps",
+    "interpreted_steps",
+    "translations",
+    "map_hits",
+    "stw_retries",
+    "irq_pending",
+    "reason0",
+    "reason1",
+    "reason2",
+    "reason3",
+    "reason4",
+    "reason5",
+    "reason6",
+    "reason7",
+    "reason8",
+    "reason9",
+    "reason10",
+    "reason11",
+    "reason12",
+    "reason13",
+    "reason14",
+    "reason15",
+    "reason_other",
+];
 
 pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
     let mut crossings = None;
@@ -29,8 +67,107 @@ pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
     Ok(())
 }
 
+pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), Error> {
+    let records = stderr
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.starts_with(BACKEND_TREE_PREFIX.as_bytes()))
+        .count();
+    let expected = usize::from(enabled);
+    if records != expected {
+        return Err(format!("backend-tree diagnostic appeared {records} times, expected {expected}").into());
+    }
+    if !enabled {
+        return Ok(());
+    }
+    let text = std::str::from_utf8(stderr).map_err(|_| "backend-tree diagnostic stderr is not UTF-8")?;
+    let _ = backend_tree(text)?;
+    Ok(())
+}
+
+fn backend_tree(stderr: &str) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(BACKEND_TREE_PREFIX))
+        .collect::<Vec<_>>();
+    if records.is_empty() {
+        return Ok(None);
+    }
+    if records.len() != 1 {
+        return Err(format!(
+            "backend-tree diagnostic appeared {} times, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let mut fields = BTreeMap::new();
+    for field in records[0].split_whitespace() {
+        let Some((name, value)) = field.split_once('=') else {
+            return Err(format!("backend-tree diagnostic has malformed field {field:?}").into());
+        };
+        if !BACKEND_TREE_FIELDS.contains(&name) {
+            return Err(format!("backend-tree diagnostic has unknown field {name:?}").into());
+        }
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| format!("backend-tree field {name:?} is not an integer"))?;
+        if fields.insert(name, value).is_some() {
+            return Err(format!("backend-tree diagnostic duplicates field {name:?}").into());
+        }
+    }
+    for name in BACKEND_TREE_FIELDS {
+        if !fields.contains_key(name) {
+            return Err(format!("backend-tree diagnostic omitted field {name:?}").into());
+        }
+    }
+    if fields["version"] != 1 || fields["root_pid"] == 0 {
+        return Err("backend-tree diagnostic has invalid version or root pid".into());
+    }
+    let lifecycle = fields["completed"]
+        .checked_add(fields["abnormal"])
+        .and_then(|value| value.checked_add(fields["missing"]));
+    if lifecycle != Some(fields["claimed"]) {
+        return Err("backend-tree lifecycle totals do not reconcile".into());
+    }
+    if fields["translated_entries"].checked_add(fields["interpreted_entries"]) != Some(fields["crossings"]) {
+        return Err("backend-tree entry totals do not reconcile with crossings".into());
+    }
+    let reasons = (0..16).try_fold(0_u64, |total, reason| {
+        total.checked_add(fields[format!("reason{reason}").as_str()])
+    });
+    let reasons = reasons.and_then(|total| total.checked_add(fields["reason_other"]));
+    if reasons != Some(fields["crossings"]) {
+        return Err("backend-tree reason totals do not reconcile with crossings".into());
+    }
+    Ok(Some(fields))
+}
+
+pub(crate) fn backend_tree_digest(stderr: &[u8]) -> String {
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return String::new();
+    };
+    let Ok(Some(fields)) = backend_tree(text) else {
+        return String::new();
+    };
+    format!(
+        "backend-tree claimed={} completed={} abnormal={} missing={} duplicate_finalize={} crossings={} translated_entries={} interpreted_entries={} translated_steps={} interpreted_steps={}",
+        fields["claimed"],
+        fields["completed"],
+        fields["abnormal"],
+        fields["missing"],
+        fields["duplicate_finalize"],
+        fields["crossings"],
+        fields["translated_entries"],
+        fields["interpreted_entries"],
+        fields["translated_steps"],
+        fields["interpreted_steps"]
+    )
+}
+
 pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::Result<()> {
-    for line in stderr.lines().filter(|line| valid_profile_line(line)) {
+    for line in stderr
+        .lines()
+        .filter(|line| valid_profile_line(line) || line.starts_with(BACKEND_TREE_PREFIX))
+    {
         writeln!(output, "{line}")?;
     }
     Ok(())
@@ -109,6 +246,81 @@ mod tests {
     #[test]
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
         validate_profile("[prof] dispatcher crossings=41 translations=7\n").unwrap();
+        validate_backend_tree(b"ordinary guest stderr\n", false).unwrap();
+    }
+
+    const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
+
+    #[test]
+    fn backend_tree_record_is_exact_and_reconciled() {
+        validate_backend_tree(TREE.as_bytes(), true).unwrap();
+        let digest = backend_tree_digest(TREE.as_bytes());
+        assert!(digest.contains("claimed=3 completed=1"), "{digest}");
+        assert!(
+            digest.contains("crossings=5 translated_entries=2 interpreted_entries=3"),
+            "{digest}"
+        );
+    }
+
+    #[test]
+    fn backend_tree_rejects_missing_duplicate_unknown_and_unreconciled_fields() {
+        let profile = |tree: &str| format!("[prof] crossings=1 translations=1\n{tree}");
+        assert!(
+            validate_backend_tree(b"[prof] crossings=1 translations=1\n", true)
+                .unwrap_err()
+                .to_string()
+                .contains("appeared 0 times")
+        );
+        assert!(
+            validate_backend_tree(TREE.as_bytes(), false)
+                .unwrap_err()
+                .to_string()
+                .contains("expected 0")
+        );
+        let missing = TREE.replace(" map_hits=3", "");
+        assert!(
+            validate_backend_tree(profile(&missing).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("omitted field")
+        );
+        let duplicate = TREE.replace(" map_hits=3", " map_hits=3 map_hits=3");
+        assert!(
+            validate_backend_tree(profile(&duplicate).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicates field")
+        );
+        assert!(
+            validate_backend_tree(
+                format!("[prof] crossings=1 translations=1\n{TREE}{TREE}").as_bytes(),
+                true
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("appeared 2 times")
+        );
+        let unknown = TREE.replace(" map_hits=3", " map_hits=3 mystery=9");
+        assert!(
+            validate_backend_tree(profile(&unknown).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+        let entries = TREE.replace(" translated_entries=2", " translated_entries=1");
+        assert!(
+            validate_backend_tree(profile(&entries).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("entry totals")
+        );
+        let reasons = TREE.replace(" reason_other=1", " reason_other=0");
+        assert!(
+            validate_backend_tree(profile(&reasons).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("reason totals")
+        );
     }
 
     #[test]

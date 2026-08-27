@@ -2040,6 +2040,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
+    block->profile_insns = (uint16_t)count;
 #endif
     g_cp = a->cursor;
     (void)__atomic_fetch_add(&translit_blocks, 1, __ATOMIC_RELAXED);

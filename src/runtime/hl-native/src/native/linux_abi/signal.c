@@ -753,7 +753,7 @@ static void signal_after_fork(struct cpu *cpu) {
     for (int slot = 0; slot < HL_SFD_MAX; ++slot) {
         if (g_sfd[slot].refs <= 0 || g_sfd[slot].rd < 0) continue;
         int pair[2];
-        if (pipe(pair) < 0) _exit(127);
+        if (pipe(pair) < 0) hl_backend_tree_abnormal_exit(127);
         int status = fcntl(g_sfd[slot].rd, F_GETFL);
         if (status >= 0) (void)fcntl(pair[0], F_SETFL, status);
         int private_write = fcntl(pair[1], F_DUPFD_CLOEXEC, 1 << 20);
@@ -761,7 +761,7 @@ static void signal_after_fork(struct cpu *cpu) {
         if (private_write < 0) {
             close(pair[0]);
             close(pair[1]);
-            _exit(127);
+            hl_backend_tree_abnormal_exit(127);
         }
         close(pair[1]);
         int seed = pair[0];
@@ -776,7 +776,7 @@ static void signal_after_fork(struct cpu *cpu) {
         if (canonical < 0) {
             close(seed);
             close(private_write);
-            _exit(127);
+            hl_backend_tree_abnormal_exit(127);
         }
         if (seed != canonical) close(seed);
         close(g_sfd[slot].wr);
@@ -834,6 +834,9 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv);
    this one. Silent for every process that is not a restored member of a checkpoint image. */
 static void ckpt_restored_member_exit_signal(int signal);
 
+/* Defined by the activation registry, which follows this file in both target unity builds. */
+static void launch_reg_terminate_peers(void);
+
 static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
     sig_diag_raise_default(c, sig);
     if (container_pid() != 1) {
@@ -848,6 +851,9 @@ static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
        exited 0 produced identical records. Sent before _exit for the same reason the status is published
        above -- after it there is no process left to send anything. */
     ckpt_restored_member_exit_signal(sig);
+    /* The census contribution is a single lock-free atomic transition. The lifecycle parent owns every
+       blocking teardown, reap and report operation after this signal context reaches _exit. */
+    (void)hl_backend_tree_finalize(1);
     _exit(128 + sig);
 }
 

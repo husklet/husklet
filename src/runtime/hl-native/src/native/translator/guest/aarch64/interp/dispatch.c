@@ -138,6 +138,8 @@ static void run_block(struct cpu *cpu, void *code) {
         return;
     }
 
+    hl_backend_tree_run_begin(0, 0);
+
     // savemask=0 -- this is the hottest line in the engine (once per guest block) and savemask=1 makes glibc
     // issue a real rt_sigprocmask here. interp_restore_handler_mask does the restore on the fault path
     // instead, where it is paid once per fault rather than once per block. sigsetjmp/siglongjmp and NOT
@@ -148,6 +150,7 @@ static void run_block(struct cpu *cpu, void *code) {
         g_interp_access_active = 0;
         g_interp_marker_armed = 0;
         g_interp_marker_cpu = NULL;
+        hl_backend_tree_reason(cpu->reason);
         return;
     }
     g_interp_marker_cpu = cpu;
@@ -171,6 +174,8 @@ static void run_block(struct cpu *cpu, void *code) {
 
     g_interp_marker_armed = 0;
     g_interp_marker_cpu = NULL;
+    hl_backend_tree_interpreted_steps(executed);
+    hl_backend_tree_reason(cpu->reason);
 }
 
 // Nothing here is executable so nothing branches in, but the symbol must exist and be address-taken:

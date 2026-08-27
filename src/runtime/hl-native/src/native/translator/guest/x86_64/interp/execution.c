@@ -383,6 +383,7 @@ struct interp_block {
     uint32_t host_len;
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint8_t profile_jcc_fall_stitches;
+    uint16_t profile_insns;
 #endif
 };
 
@@ -404,6 +405,9 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->guest_end = gpc + 1;
     block->host_entry_off = 0;
     block->host_len = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    block->profile_insns = 0;
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
 #endif

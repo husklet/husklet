@@ -187,6 +187,10 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
+#define HL_BACKEND_TREE_TEST_NAME hl_x86_64_backend_tree_census_test
+#include "../backend_tree.c"
+#undef HL_BACKEND_TREE_TEST_NAME
+
 static void jit86_store_alias_changed(uint64_t guest, size_t size);
 static int jit86_store_alias_observation_active(void);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -1632,6 +1636,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
         return 70;
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);
+    hl_backend_tree_begin(g_prof, effective_host_services());
 
     struct cpu c;
     memset(&c, 0, sizeof c);
@@ -1645,6 +1650,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     thread_process_owner_register(&c);
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
+    if (!hl_backend_tree_is_finalized()) (void)hl_backend_tree_finalize(1);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
     // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
     // remain available through the canonical [prof] report emitted by the exit path; normal launches

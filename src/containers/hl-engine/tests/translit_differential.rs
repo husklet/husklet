@@ -101,7 +101,20 @@ struct Backend {
     unsupported_sites: u64,
     unsupported_repeats: u64,
     unsupported_site_overflow: u64,
+    translated_entries: u64,
+    interpreted_entries: u64,
+    translated_steps: u64,
+    interpreted_steps: u64,
+    root_pid: u64,
+    claimed: u64,
+    completed: u64,
+    abnormal: u64,
+    missing: u64,
+    duplicate_finalize: u64,
+    crossings: u64,
+    reason_total: u64,
     unsupported_line: String,
+    tree_line: String,
 }
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
@@ -140,6 +153,22 @@ fn backend(stderr: &[u8]) -> Backend {
             .and_then(|value| value.parse().ok())
             .unwrap_or(0)
     };
+    let trees = text
+        .lines()
+        .filter(|line| line.starts_with("[diag] backend-tree "))
+        .collect::<Vec<_>>();
+    assert_eq!(trees.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
+    let tree = trees[0];
+    let tree_counter = |name: &str| {
+        tree.split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+    };
+    let reason_total = (0..16)
+        .map(|reason| tree_counter(&format!("reason{reason}=")))
+        .sum::<u64>()
+        + tree_counter("reason_other=");
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
@@ -187,7 +216,20 @@ fn backend(stderr: &[u8]) -> Backend {
         unsupported_sites: unsupported_counter("sites="),
         unsupported_repeats: unsupported_counter("repeats="),
         unsupported_site_overflow: unsupported_counter("site_overflow="),
+        translated_entries: tree_counter("translated_entries="),
+        interpreted_entries: tree_counter("interpreted_entries="),
+        translated_steps: tree_counter("translated_steps="),
+        interpreted_steps: tree_counter("interpreted_steps="),
+        root_pid: tree_counter("root_pid="),
+        claimed: tree_counter("claimed="),
+        completed: tree_counter("completed="),
+        abnormal: tree_counter("abnormal="),
+        missing: tree_counter("missing="),
+        duplicate_finalize: tree_counter("duplicate_finalize="),
+        crossings: tree_counter("crossings="),
+        reason_total,
         unsupported_line: unsupported.to_owned(),
+        tree_line: tree.to_owned(),
         line,
     }
 }
@@ -197,13 +239,23 @@ fn unsupported_census_records_successful_interpreter_steps() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "unsupported_census");
     let (interpreted, status, report) = run(&executable, "0");
+    let (selected, selected_status, selected_report) = run(&executable, "1");
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native unsupported-census fixture");
     assert_eq!(status, 0);
     assert_eq!(native.status.code(), Some(0));
     assert_eq!(interpreted, native.stdout);
+    assert_eq!((selected_status, selected), (status, interpreted.clone()));
     assert!(report.unsupported_total > 0, "{}", report.line);
+    assert!(
+        selected_report.translated_entries > 0 && selected_report.interpreted_entries > 0,
+        "{}; {}",
+        selected_report.line,
+        selected_report.tree_line,
+    );
+    assert!(selected_report.translated_steps >= selected_report.translated_entries);
+    assert!(report.interpreted_steps >= report.interpreted_entries);
     assert_eq!(
         report.unsupported_total,
         report.unsupported_keyed + report.unsupported_overflow
@@ -773,6 +825,60 @@ fn a_host_profiler_resolves_transliterated_block_identities() {
     assert!(backend.entries > 0, "{}", backend.line);
 }
 
+#[test]
+fn fatal_signal_is_reported_once_by_the_safe_lifecycle_parent() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "fatal_signal");
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).unwrap();
+    options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    assert_eq!(exit.kind, hl_engine::engine::ExitKind::Signal);
+    assert_eq!(exit.guest_status, 11);
+
+    let stderr = captured.err.lock().unwrap().clone();
+    let text = String::from_utf8(stderr).unwrap();
+    let records = text
+        .lines()
+        .filter(|line| line.starts_with("[diag] backend-tree "))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{text}");
+    let value = |name: &str| {
+        records[0]
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|field| field.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("missing {name} in {}", records[0]))
+    };
+    assert_eq!(value("claimed="), 1, "{}", records[0]);
+    assert_eq!(value("completed="), 0, "{}", records[0]);
+    assert_eq!(value("abnormal="), 1, "{}", records[0]);
+    assert_eq!(value("missing="), 0, "{}", records[0]);
+    assert_eq!(value("duplicate_finalize="), 0, "{}", records[0]);
+    assert_eq!(
+        value("crossings="),
+        value("translated_entries=") + value("interpreted_entries="),
+        "{}",
+        records[0]
+    );
+    let reasons = (0..16).map(|reason| value(&format!("reason{reason}="))).sum::<u64>() + value("reason_other=");
+    assert_eq!(reasons, value("crossings="), "{}", records[0]);
+}
+
 fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -825,7 +931,7 @@ fn full_width_translit_profile_is_complete_for_exit_and_exit_group() {
 }
 
 /// The whole contract: the backend selection must not be observable in the guest's output.
-fn agrees(name: &str) {
+fn agrees(name: &str) -> Backend {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), name);
     let (interpreted, interpreted_status, interpreted_backend) = run(&executable, "0");
@@ -870,6 +976,7 @@ fn agrees(name: &str) {
         String::from_utf8_lossy(&interpreted),
         "{name}: the engine disagrees with the host running the same image natively"
     );
+    transliterated_backend
 }
 
 /// Flag round-trip across block boundaries, including the PF byte-parity encoding.
@@ -909,7 +1016,23 @@ fn signals_delivered_into_transliterated_frames_agree_with_the_interpreter() {
 /// `%gs` republication for a cloned thread, a fork child, a vfork+execve and a raw clone.
 #[test]
 fn threads_fork_and_exec_agree_with_the_interpreter() {
-    agrees("procs");
+    let tree = agrees("procs");
+    assert!(tree.root_pid > 0, "{}", tree.tree_line);
+    assert_eq!(tree.claimed, 17, "{}", tree.tree_line);
+    assert_eq!(tree.completed, tree.claimed, "{}", tree.tree_line);
+    assert_eq!(
+        (tree.abnormal, tree.missing, tree.duplicate_finalize),
+        (0, 0, 0),
+        "{}",
+        tree.tree_line
+    );
+    assert_eq!(
+        tree.translated_entries + tree.interpreted_entries,
+        tree.crossings,
+        "{}",
+        tree.tree_line
+    );
+    assert_eq!(tree.reason_total, tree.crossings, "{}", tree.tree_line);
 }
 
 /// RIP-relative operands, indirect terminators, string operations and deep call/ret.

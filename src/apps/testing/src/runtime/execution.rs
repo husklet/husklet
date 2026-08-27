@@ -453,7 +453,7 @@ impl<'a> CaseExecution<'a> {
         *observed = Some(status);
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
-        let mut profile_validation = Ok(());
+        let mut profile_validation = output::validate_backend_tree(&logs.stderr, self.execution.diagnostics());
         if self.execution.diagnostics() {
             let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
             // Preserve a missing profile as a failure for otherwise-correct diagnostic runs, but do not let
@@ -463,10 +463,11 @@ impl<'a> CaseExecution<'a> {
             // An explicitly orchestrated signal ends the engine before its normal dispatcher
             // epilogue. The lifecycle result is the contract for that typed path; all ordinary
             // exits still require the complete profile summary.
-            profile_validation = self
+            let retained_profile = self
                 .case
                 .expected_signal
                 .map_or_else(|| output::validate_profile(text), |_| Ok(()));
+            profile_validation = profile_validation.and(retained_profile);
             output::forward_profile(text, std::io::stderr().lock())?;
             logs.stderr = output::guest_stderr(text);
         }
