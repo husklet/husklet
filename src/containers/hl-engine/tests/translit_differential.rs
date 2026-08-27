@@ -701,6 +701,114 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     run_with_arguments(executable, translit, &[], false, false, false)
 }
 
+fn run_with_perf_map(executable: &Path, directory: &Path) -> (Vec<u8>, i32, Backend) {
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).unwrap();
+    options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    options
+        .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
+        .unwrap();
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    let out = captured.out.lock().unwrap().clone();
+    let report = backend(&captured.err.lock().unwrap());
+    (out, exit.guest_status, report)
+}
+
+#[test]
+fn transliterated_blocks_publish_perf_map_identities() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "forward_jump");
+    let maps = work.path().join("maps");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, status, backend) = run_with_perf_map(&executable, &maps);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"42\n");
+    let files: Vec<_> = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 2, "{files:?}");
+    let map = files
+        .iter()
+        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("perf-"))
+        .unwrap();
+    let dump = files
+        .iter()
+        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("jit-"))
+        .unwrap();
+    let dump_bytes = std::fs::read(dump).unwrap();
+    assert_eq!(&dump_bytes[..4], &0x4A695444u32.to_ne_bytes());
+    let text = std::fs::read_to_string(map).unwrap();
+    let mut records = 0;
+    for line in text.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        assert_eq!(fields.len(), 3, "{line}");
+        assert!(u64::from_str_radix(fields[0], 16).unwrap() != 0, "{line}");
+        assert!(u64::from_str_radix(fields[1], 16).unwrap() != 0, "{line}");
+        assert!(fields[2].starts_with("hl_tl_"), "{line}");
+        assert!(!fields[2].contains("unfingerprinted"), "{line}");
+        assert!(fields[2].contains("_g"), "{line}");
+        assert!(fields[2].contains("_gl"), "{line}");
+        assert!(fields[2].contains("_i"), "{line}");
+        records += 1;
+    }
+    assert!(
+        records > 0 && records as u64 == backend.blocks,
+        "records={records} {}",
+        backend.line
+    );
+}
+
+#[test]
+fn forked_translators_publish_process_owned_perf_files() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "perf_map_fork");
+    let maps = work.path().join("maps");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, status, _) = run_with_perf_map(&executable, &maps);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"fork-map=42 child=0\n");
+    let names: Vec<_> = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names.iter().filter(|name| name.starts_with("perf-")).count(),
+        2,
+        "{names:?}"
+    );
+    assert_eq!(
+        names.iter().filter(|name| name.starts_with("jit-")).count(),
+        2,
+        "{names:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires HL_PROFILE_TRANSLIT_EXECUTABLE and a host perf recording"]
+fn a_host_profiler_resolves_transliterated_block_identities() {
+    let executable =
+        PathBuf::from(std::env::var_os("HL_PROFILE_TRANSLIT_EXECUTABLE").expect("HL_PROFILE_TRANSLIT_EXECUTABLE"));
+    let (output, status, backend) = run_with_perf_map(&executable, Path::new("/tmp"));
+    assert_eq!(status, 0);
+    assert!(output.is_empty());
+    assert!(backend.entries > 0, "{}", backend.line);
+}
+
 #[test]
 fn fatal_signal_is_reported_once_by_the_safe_lifecycle_parent() {
     let work = TempDir::new().unwrap();
@@ -1327,15 +1435,12 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
 /// Manual profile arm for a captured, real non-PIE tool. The caller supplies an owned root copy and
 /// newline-delimited argv; keeping this ignored prevents a machine-local compiler corpus from becoming
 /// a gate dependency. Reserving the link page in this process is the same collision seam as the exact
-/// differential above, so a `translit: displaced` receipt is mandatory rather than inferred.
-#[test]
-#[ignore = "requires HL_PROFILE_CC1_ROOT and HL_PROFILE_CC1_ARGV"]
-fn a_captured_cc1_runs_from_displaced_storage() {
-    let root = PathBuf::from(std::env::var_os("HL_PROFILE_CC1_ROOT").expect("HL_PROFILE_CC1_ROOT"));
-    let argv_path = PathBuf::from(std::env::var_os("HL_PROFILE_CC1_ARGV").expect("HL_PROFILE_CC1_ARGV"));
-    let selected = std::env::var("HL_PROFILE_CC1_TRANSLIT").expect("HL_PROFILE_CC1_TRANSLIT");
+/// differential above, so a `translit: displaced` receipt is mandatory rather than inferred. A caller
+/// may additionally supply an owned perf-map directory; it is handed to the launch option store rather
+/// than read ambiently by the engine.
+fn captured_cc1_profile(root: &Path, argv_path: &Path, selected: &str, perf_map: Option<&Path>) {
     assert!(selected == "0" || selected == "1");
-    let mut arguments: Vec<Vec<u8>> = std::fs::read(&argv_path)
+    let mut arguments: Vec<Vec<u8>> = std::fs::read(argv_path)
         .expect("cc1 argv")
         .split(|byte| *byte == b'\n')
         .filter(|argument| !argument.is_empty())
@@ -1354,8 +1459,13 @@ fn a_captured_cc1_runs_from_displaced_storage() {
             .unwrap(),
     );
     let mut options = Options::default();
-    options.set("HL_TRANSLIT", &selected, true).unwrap();
+    options.set("HL_TRANSLIT", selected, true).unwrap();
     options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    if let Some(directory) = perf_map {
+        options
+            .set_bytes("HL_TRANSLIT_PERF_MAP", directory.as_os_str().as_encoded_bytes(), true)
+            .expect("HL_TRANSLIT_PERF_MAP");
+    }
     let plan = RuntimePlan {
         rootfs: Some(root.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(executable_host.as_os_str().as_encoded_bytes().to_vec()),
@@ -1390,4 +1500,47 @@ fn a_captured_cc1_runs_from_displaced_storage() {
         report.line
     );
     occupied.verify_and_release();
+}
+
+#[test]
+fn canonical_cc1_profile_hands_off_caller_owned_perf_map_directory() {
+    let work = TempDir::new().unwrap();
+    let root = work.path().join("root");
+    let executable = root.join("usr/bin/cc1-profile");
+    let argv = root.join("work/cc1.argv");
+    let maps = work.path().join("maps");
+    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(argv.parent().unwrap()).unwrap();
+    std::fs::create_dir(&maps).unwrap();
+    std::fs::copy(displaced_fixture(work.path(), "profile_termination"), &executable).unwrap();
+    std::fs::write(&argv, b"/usr/bin/cc1-profile\n-o\n/work/output.s\n").unwrap();
+
+    captured_cc1_profile(&root, &argv, "1", Some(&maps));
+
+    let files: Vec<_> = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 2, "{files:?}");
+    for prefix in ["perf-", "jit-"] {
+        let file = files
+            .iter()
+            .find(|path| path.file_name().unwrap().to_string_lossy().starts_with(prefix))
+            .unwrap_or_else(|| panic!("missing {prefix} file in {files:?}"));
+        assert!(
+            std::fs::metadata(file).unwrap().len() > 0,
+            "{} is empty",
+            file.display()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires HL_PROFILE_CC1_ROOT and HL_PROFILE_CC1_ARGV"]
+fn a_captured_cc1_runs_from_displaced_storage() {
+    let root = PathBuf::from(std::env::var_os("HL_PROFILE_CC1_ROOT").expect("HL_PROFILE_CC1_ROOT"));
+    let argv_path = PathBuf::from(std::env::var_os("HL_PROFILE_CC1_ARGV").expect("HL_PROFILE_CC1_ARGV"));
+    let selected = std::env::var("HL_PROFILE_CC1_TRANSLIT").expect("HL_PROFILE_CC1_TRANSLIT");
+    let perf_map = std::env::var_os("HL_PROFILE_CC1_PERF_MAP").map(PathBuf::from);
+    captured_cc1_profile(&root, &argv_path, &selected, perf_map.as_deref());
 }
