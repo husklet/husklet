@@ -1252,7 +1252,14 @@ impl CheckpointSource for AtomicStore {
 #[derive(Default)]
 struct TestTerminalPort {
     closed: Mutex<bool>,
+    bytes: Mutex<Vec<u8>>,
     changed: Condvar,
+}
+
+impl TestTerminalPort {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).into_owned()
+    }
 }
 
 impl TerminalPort for TestTerminalPort {
@@ -1268,6 +1275,10 @@ impl TerminalPort for TestTerminalPort {
     }
 
     fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+        self.bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(input);
         Ok(input.len())
     }
 
@@ -2600,7 +2611,9 @@ impl PhaseTimings {
 
 fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Duration, translit: bool) {
     let timings = PhaseTimings::new(isa, fixture_compile);
-    let diagnostics = Arc::new(CapturedOutput::default());
+    let capture_terminal = Arc::new(TestTerminalPort::default());
+    let recapture_terminal = Arc::new(TestTerminalPort::default());
+    let restore_terminal = Arc::new(TestTerminalPort::default());
     eprintln!(
         "checkpoint_phase_timing\tisa={}\tphase=fixture_compile\tduration_us={}",
         match isa {
@@ -2619,7 +2632,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         Engine::with_checkpoint(
             isa,
             daily_dev_phase_plan(isa, executable, directory.path(), false, true, translit),
-            streams(true).with_output(diagnostics.clone()),
+            StandardStreams::default().with_terminal(Terminal::new(capture_terminal.clone(), 24, 80).unwrap()),
             first.clone(),
             first.clone(),
         )
@@ -2646,7 +2659,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         Engine::with_checkpoint(
             isa,
             daily_dev_phase_plan(isa, executable, directory.path(), true, true, translit),
-            streams(true).with_output(diagnostics.clone()),
+            StandardStreams::default().with_terminal(Terminal::new(recapture_terminal.clone(), 24, 80).unwrap()),
             second.clone(),
             first,
         )
@@ -2670,7 +2683,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         Engine::with_checkpoint(
             isa,
             daily_dev_phase_plan(isa, executable, directory.path(), true, false, translit),
-            streams(true).with_output(diagnostics.clone()),
+            StandardStreams::default().with_terminal(Terminal::new(restore_terminal.clone(), 24, 80).unwrap()),
             second.clone(),
             second,
         )
@@ -2691,7 +2704,12 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     assert_eq!(output.matches("JCC-LINK phase=1 value=43").count(), 1, "{output}");
     assert_eq!(output.matches("JCC-LINK phase=2 value=44").count(), 1, "{output}");
     if translit {
-        let diagnostic_text = diagnostics.text();
+        let diagnostic_text = [
+            capture_terminal.text(),
+            recapture_terminal.text(),
+            restore_terminal.text(),
+        ]
+        .concat();
         let admissions = diagnostic_text
             .lines()
             .filter(|line| line.starts_with("[prof] translit:"))
