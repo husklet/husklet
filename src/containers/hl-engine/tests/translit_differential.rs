@@ -66,6 +66,7 @@ struct Backend {
     jcc_fall_successor_page_refused: u64,
     jcc_fall_executed: u64,
     operand_declined: u64,
+    sse2_memory_declined: u64,
     riprel_lowered: u64,
     scratch_lowered: u64,
     lea_lowered: u64,
@@ -75,6 +76,9 @@ struct Backend {
     provenance_fallback: u64,
     body_owner_recovered: u64,
     body_owner_published: u64,
+    sse2_runs_admitted: u64,
+    sse2_instructions_admitted: u64,
+    sse2_target_runs: u64,
     translations: u64,
 }
 
@@ -115,6 +119,7 @@ fn backend(stderr: &[u8]) -> Backend {
         jcc_fall_successor_page_refused: counter("jcc_fall_successor_page_refused="),
         jcc_fall_executed: counter("jcc_fall_executed="),
         operand_declined: counter("operand_declined="),
+        sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
         scratch_lowered: counter("scratch_lowered="),
         lea_lowered: counter("lea_lowered="),
@@ -124,9 +129,57 @@ fn backend(stderr: &[u8]) -> Backend {
         provenance_fallback: counter("provenance_fallback="),
         body_owner_recovered: counter("body_owner_recovered="),
         body_owner_published: counter("body_owner_published="),
+        sse2_runs_admitted: counter("sse2_runs_admitted="),
+        sse2_instructions_admitted: counter("sse2_instructions_admitted="),
+        sse2_target_runs: counter("sse2_target_runs="),
         translations,
         line,
     }
+}
+
+#[test]
+fn a_contiguous_sse2_run_matches_interpreter_and_native() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse2_chain");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native SSE2 fixture");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"sse2=00070005\n");
+    assert!(selected_backend.sse2_runs_admitted > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.sse2_instructions_admitted >= 5,
+        "{}",
+        selected_backend.line
+    );
+    assert_eq!(selected_backend.sse2_target_runs, 1, "{}", selected_backend.line);
+}
+
+#[test]
+fn sse2_alignment_faults_replay_old_vectors_and_boundary_immediates_match_native() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse2_fault");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false);
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native SSE2 fault fixture");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert!(
+        selected_backend.sse2_instructions_admitted >= 8,
+        "{}",
+        selected_backend.line
+    );
+    assert!(selected_backend.provenance_fallback > 0, "{}", selected_backend.line);
+    assert!(selected_backend.body_owner_recovered > 0, "{}", selected_backend.line);
 }
 
 /// Builds one fixture position-independent and statically linked.
@@ -647,7 +700,14 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
     let _link_range = NONPIE_LINK_RANGE.lock().unwrap();
     let occupied = LinkPage::occupy(2);
     let work = TempDir::new().unwrap();
-    for name in ["flags", "operands", "sigs", "displaced_memory", "displaced_fault"] {
+    for name in [
+        "flags",
+        "operands",
+        "sigs",
+        "displaced_memory",
+        "displaced_fault",
+        "sse2_displaced_memory",
+    ] {
         let executable = displaced_fixture(work.path(), name);
         let (interpreted, interpreted_status, _) = run(&executable, "0");
         let (selected, selected_status, selected_backend) = run(&executable, "1");
@@ -673,6 +733,9 @@ fn an_occupied_nonpie_link_address_falls_back_without_clobbering() {
             "{name}: fixture reached no refused operand"
         );
         assert_eq!(selected_backend.operand_declined, selected_backend.declined);
+        if name == "sse2_displaced_memory" {
+            assert!(selected_backend.sse2_memory_declined > 0, "{}", selected_backend.line);
+        }
         if name == "displaced_memory" || name == "displaced_fault" {
             assert!(
                 selected_backend.riprel_lowered > 0,
