@@ -94,6 +94,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only exhaust immutable same-ISA body-owner capacity", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",
                         "test-only render every same-ISA profile counter at UINT64 width", HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_PERF_MAP",
+                        "test-only directory for same-ISA perf map publication", HL_OPTION_PATH),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",

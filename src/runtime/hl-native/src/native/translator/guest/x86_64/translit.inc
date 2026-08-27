@@ -224,6 +224,105 @@ static uint64_t translit_displaced_lea_low;
 static uint64_t translit_displaced_riprel_unreachable;
 static uint64_t translit_displaced_riprel_lowered;
 static uint64_t translit_displaced_scratch_lowered;
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static FILE *translit_perf_map_file;
+static pid_t translit_perf_map_pid;
+static FILE *translit_jitdump_file;
+static void *translit_jitdump_marker;
+static pid_t translit_jitdump_pid;
+static uint64_t translit_jitdump_index;
+extern const char *hl_c_backend_build_fingerprint(void);
+
+typedef struct __attribute__((packed)) translit_jitdump_header {
+    uint32_t magic, version, total_size, elf_mach, pad1, pid;
+    uint64_t timestamp, flags;
+} translit_jitdump_header;
+
+typedef struct __attribute__((packed)) translit_jitdump_load {
+    uint32_t id, total_size;
+    uint64_t timestamp;
+    uint32_t pid, tid;
+    uint64_t vma, code_addr, code_size, code_index;
+} translit_jitdump_load;
+
+static uint64_t translit_jitdump_now(void) {
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC, &now) == 0
+               ? (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec
+               : 0;
+}
+
+static void translit_jitdump_open(const char *directory, pid_t pid) {
+    if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
+    if (translit_jitdump_file != NULL) fclose(translit_jitdump_file);
+    translit_jitdump_file = NULL;
+    translit_jitdump_marker = NULL;
+    char path[PATH_MAX];
+    int length = snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)pid);
+    if (length <= 0 || (size_t)length >= sizeof path) return;
+    translit_jitdump_file = fopen(path, "w+b");
+    if (translit_jitdump_file == NULL) return;
+    translit_jitdump_header header = {UINT32_C(0x4A695444), 1, sizeof header, 62, 0, (uint32_t)pid,
+                                      translit_jitdump_now(), 0};
+    if (fwrite(&header, sizeof header, 1, translit_jitdump_file) != 1 || fflush(translit_jitdump_file) != 0) {
+        fclose(translit_jitdump_file);
+        translit_jitdump_file = NULL;
+        return;
+    }
+    translit_jitdump_marker = mmap(NULL, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE,
+                                   fileno(translit_jitdump_file), 0);
+    if (translit_jitdump_marker == MAP_FAILED) {
+        translit_jitdump_marker = NULL;
+        fclose(translit_jitdump_file);
+        translit_jitdump_file = NULL;
+        return;
+    }
+    (void)setvbuf(translit_jitdump_file, NULL, _IONBF, 0);
+    translit_jitdump_pid = pid;
+    translit_jitdump_index = 0;
+}
+
+static void translit_perf_map_publish(const struct interp_block *block, const uint8_t *start, uint32_t host_len,
+                                      uint32_t instruction_count) {
+    const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
+    if (!g_prof || directory == NULL || directory[0] == '\0' || host_len == 0) return;
+    pid_t pid = getpid();
+    if (translit_perf_map_file == NULL || translit_perf_map_pid != pid) {
+        if (translit_perf_map_file != NULL) fclose(translit_perf_map_file);
+        char path[PATH_MAX];
+        int length = snprintf(path, sizeof path, "%s/perf-%lld.map", directory, (long long)pid);
+        if (length <= 0 || (size_t)length >= sizeof path) return;
+        translit_perf_map_file = fopen(path, "a");
+        if (translit_perf_map_file == NULL) return;
+        (void)setvbuf(translit_perf_map_file, NULL, _IONBF, 0);
+        translit_perf_map_pid = pid;
+    }
+    const char *fingerprint = hl_c_backend_build_fingerprint();
+    uint64_t guest_length = block->guest_end >= block->gpc ? block->guest_end - block->gpc : 0;
+    char name[256];
+    int name_length = snprintf(name, sizeof name, "hl_tl_%s_g%llx_gl%llu_i%u", fingerprint,
+                               (unsigned long long)block->gpc, (unsigned long long)guest_length,
+                               instruction_count);
+    if (name_length <= 0 || (size_t)name_length >= sizeof name) return;
+    (void)fprintf(translit_perf_map_file, "%llx %x %s\n",
+                  (unsigned long long)(uintptr_t)J_RX(start), host_len, name);
+    if (translit_jitdump_file == NULL || translit_jitdump_pid != pid) translit_jitdump_open(directory, pid);
+    if (translit_jitdump_file == NULL) return;
+    translit_jitdump_load load = {0,
+                                  (uint32_t)(sizeof load + (size_t)name_length + 1u + host_len),
+                                  translit_jitdump_now(),
+                                  (uint32_t)pid,
+                                  (uint32_t)syscall(SYS_gettid),
+                                  (uint64_t)(uintptr_t)J_RX(start),
+                                  (uint64_t)(uintptr_t)J_RX(start),
+                                  host_len,
+                                  ++translit_jitdump_index};
+    (void)fwrite(&load, sizeof load, 1, translit_jitdump_file);
+    (void)fwrite(name, (size_t)name_length + 1u, 1, translit_jitdump_file);
+    (void)fwrite(start, host_len, 1, translit_jitdump_file);
+}
+#endif
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
 static uint64_t translit_natural_lea_lowered;
@@ -1806,6 +1905,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
     block->host_len = (uint32_t)(a->cursor - start);
     block->guest_end = pc;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_perf_map_publish(block, start, block->host_len, (uint32_t)count);
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
 #endif

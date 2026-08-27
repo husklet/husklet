@@ -141,6 +141,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_PERF_MAP",
+        "test-only directory for same-ISA perf map publication",
+        Path
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",
         Flag
