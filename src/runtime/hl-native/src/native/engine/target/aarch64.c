@@ -1029,7 +1029,8 @@ uint64_t hl_run_linux_guest_translations(void) {
 #if defined(HL_NATIVE_TEST_HOOKS)
 HL_API int hl_aarch64_dispatch_profile_test(void) {
     int result = hl_dispatch_profile_accumulator_test();
-    return result == 0 ? dispatch_profile_thread_stress_test() : result;
+    if (result == 0) result = dispatch_profile_thread_stress_test();
+    return result == 0 ? dispatch_interrupt_race_test() : result;
 }
 
 /*

@@ -227,6 +227,34 @@ static void block_return(void) {
 #endif
 
 // ---------------- dispatcher ----------------
+#if defined(HL_NATIVE_TEST_HOOKS)
+typedef void (*dispatch_interrupt_consume_test_hook)(struct cpu *cpu);
+static dispatch_interrupt_consume_test_hook g_dispatch_interrupt_consume_test_hook;
+static uint64_t g_dispatch_interrupt_consume_test_attempts;
+static uint64_t g_dispatch_interrupt_clear_test_writes;
+#endif
+
+static inline void dispatch_interrupt_clear(struct cpu *c) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    g_dispatch_interrupt_clear_test_writes++;
+#endif
+    __atomic_store_n(&c->irq, 0, __ATOMIC_SEQ_CST);
+}
+
+static inline int dispatch_interrupt_consume(struct cpu *c) {
+    int pending = __atomic_load_n(&c->irq, __ATOMIC_SEQ_CST);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    g_dispatch_interrupt_consume_test_attempts++;
+    if (g_dispatch_interrupt_consume_test_hook) g_dispatch_interrupt_consume_test_hook(c);
+#endif
+    if (pending) dispatch_interrupt_clear(c);
+    return pending;
+}
+
+static inline void dispatch_interrupt_rearm(struct cpu *c) {
+    if (signal_deliverable_for_cpu(c)) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
+}
+
 static void run_guest(struct cpu *c) {
     G_HOT_CONTEXT_TYPE *hot_context = G_HOT_CONTEXT_CREATE();
     hl_map_host_cache_entry *map_cache = G_MAP_HOST_CACHE;
@@ -272,12 +300,14 @@ static void run_guest(struct cpu *c) {
            re-arm it when a deliverable signal is already pending.  A host signal
            can arrive after the preceding bottom-of-loop delivery check but before
            this iteration: clearing irq without consulting pending state loses that
-           only kick and lets a translated hot loop run forever.  Store zero first;
-           a signal racing after the pending scan writes one itself. */
-        if (g_dispatch_profile.enabled && __atomic_load_n(&c->irq, __ATOMIC_SEQ_CST))
-            hl_dispatch_profile_pending(&g_dispatch_profile);
-        __atomic_store_n(&c->irq, 0, __ATOMIC_SEQ_CST);
-        if (signal_deliverable_for_cpu(c)) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
+           only kick and lets a translated hot loop run forever.  Clear a consumed
+           kick before the scan; a signal racing after the scan writes one itself.
+           Loading first avoids a locked seq_cst store on the overwhelmingly common
+           zero path. A racing zero-to-one either remains set or has its already-
+           published pending bit observed by the scan and re-armed. */
+        int interrupt_consumed = dispatch_interrupt_consume(c);
+        if (g_dispatch_profile.enabled && interrupt_consumed) hl_dispatch_profile_pending(&g_dispatch_profile);
+        dispatch_interrupt_rearm(c);
         // A checkpoint freezes the registry while holding g_jit_lock. Peers must acknowledge and park at
         // this already-spilled dispatcher boundary BEFORE cache lookup attempts to acquire that same lock.
         // The threaded gate is also the precise boundary needed by mapping activation; single-threaded runs
@@ -518,6 +548,132 @@ static void run_guest(struct cpu *c) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static void dispatch_interrupt_test_publish(struct cpu *cpu, int signal) {
+    process_pending_set(signal);
+    __atomic_store_n(&cpu->irq, 1, __ATOMIC_SEQ_CST);
+}
+
+static void dispatch_interrupt_test_publish_ten(struct cpu *cpu) {
+    dispatch_interrupt_test_publish(cpu, 10);
+}
+
+static int dispatch_interrupt_race_test(void) {
+    enum { signal = 10 };
+    struct cpu cpu = { 0 };
+    uint64_t saved_pending = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
+    uint64_t saved_pending_hi = __atomic_load_n(&g_pending_hi, __ATOMIC_SEQ_CST);
+    uint64_t bit = signal_pending_bit(signal);
+    int result = 0;
+    __atomic_store_n(&g_pending, saved_pending & ~bit, __ATOMIC_SEQ_CST);
+    g_dispatch_interrupt_consume_test_hook = NULL;
+    g_dispatch_interrupt_consume_test_attempts = 0;
+    g_dispatch_interrupt_clear_test_writes = 0;
+
+    // No interrupt is overwhelmingly the hot case: observe zero without writing the cache line.
+    if (dispatch_interrupt_consume(&cpu) != 0 || __atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 0 ||
+        g_dispatch_interrupt_consume_test_attempts != 1 || g_dispatch_interrupt_clear_test_writes != 0) {
+        result = 30;
+        goto out;
+    }
+
+    // A consumed kick is cleared when no signal remains deliverable.
+    __atomic_store_n(&cpu.irq, 1, __ATOMIC_SEQ_CST);
+    if (dispatch_interrupt_consume(&cpu) != 1 || __atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 0) {
+        result = 31;
+        goto out;
+    }
+    if (g_dispatch_interrupt_consume_test_attempts != 2 || g_dispatch_interrupt_clear_test_writes != 1) {
+        result = 40;
+        goto out;
+    }
+
+    // Publication after the load but before its consumed-one clear is recovered by the later scan.
+    __atomic_store_n(&g_pending, saved_pending & ~bit, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&cpu.irq, 1, __ATOMIC_SEQ_CST);
+    g_dispatch_interrupt_consume_test_hook = dispatch_interrupt_test_publish_ten;
+    if (dispatch_interrupt_consume(&cpu) != 1) {
+        result = 41;
+        goto out;
+    }
+    g_dispatch_interrupt_consume_test_hook = NULL;
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) {
+        result = 42;
+        goto out;
+    }
+
+    // The seq_cst race has three total-order positions. Publication before consume is recovered by the scan.
+    dispatch_interrupt_test_publish(&cpu, signal);
+    if (dispatch_interrupt_consume(&cpu) != 1) {
+        result = 32;
+        goto out;
+    }
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) {
+        result = 33;
+        goto out;
+    }
+
+    // Publication between consume and scan is visible to the scan and remains armed.
+    __atomic_store_n(&cpu.irq, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending, saved_pending & ~bit, __ATOMIC_SEQ_CST);
+    if (dispatch_interrupt_consume(&cpu) != 0) {
+        result = 34;
+        goto out;
+    }
+    dispatch_interrupt_test_publish(&cpu, signal);
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) {
+        result = 35;
+        goto out;
+    }
+
+    // Publication after the scan writes the kick itself.
+    __atomic_store_n(&cpu.irq, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending, saved_pending & ~bit, __ATOMIC_SEQ_CST);
+    if (dispatch_interrupt_consume(&cpu) != 0) {
+        result = 36;
+        goto out;
+    }
+    dispatch_interrupt_rearm(&cpu);
+    dispatch_interrupt_test_publish(&cpu, signal);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) {
+        result = 37;
+        goto out;
+    }
+
+    // A masked pending signal is retained but does not bounce every block through the dispatcher.
+    cpu.sigmask = UINT64_C(1) << (signal - 1);
+    if (dispatch_interrupt_consume(&cpu) != 1) {
+        result = 38;
+        goto out;
+    }
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 0) result = 39;
+    cpu.sigmask = 0;
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) result = 43;
+
+    // Thread-directed and RT-high pending words feed the same authoritative scan.
+    __atomic_store_n(&g_pending, saved_pending & ~bit, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&cpu.irq, 0, __ATOMIC_SEQ_CST);
+    thread_pending_set(&cpu, signal);
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) result = 44;
+    thread_pending_clear(&cpu, signal);
+    __atomic_store_n(&cpu.irq, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending_hi, 0, __ATOMIC_SEQ_CST);
+    process_pending_set(64);
+    dispatch_interrupt_rearm(&cpu);
+    if (__atomic_load_n(&cpu.irq, __ATOMIC_SEQ_CST) != 1) result = 45;
+
+out:
+    g_dispatch_interrupt_consume_test_hook = NULL;
+    __atomic_store_n(&g_pending, saved_pending, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending_hi, saved_pending_hi, __ATOMIC_SEQ_CST);
+    return result;
+}
+
 struct dispatch_profile_stress_context {
     hl_dispatch_profile *profile;
     uint64_t iterations;

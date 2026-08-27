@@ -1686,7 +1686,7 @@ static void stw_park_handler(int sig, siginfo_t *si, void *ucv) {
         int slot = g_my_stw_slot;
         if (slot >= 0 && g_stw_threads[slot].cpu) {
             struct cpu *cpu = g_stw_threads[slot].cpu;
-            cpu->irq = 1;
+            __atomic_store_n(&cpu->irq, 1, __ATOMIC_RELAXED);
             if (!atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_acquire) &&
                 !__atomic_load_n(&cpu->in_service, __ATOMIC_SEQ_CST)) {
                 while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire)) {

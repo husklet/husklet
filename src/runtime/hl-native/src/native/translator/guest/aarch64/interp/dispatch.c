@@ -156,7 +156,7 @@ static void run_block(struct cpu *cpu, void *code) {
     uint64_t executed = 0;
     for (;;) {
         // Poll AFTER one instruction retires: exiting with cpu->pc unchanged gets the same block forever.
-        if (executed && cpu->irq) {
+        if (executed && __atomic_load_n(&cpu->irq, __ATOMIC_RELAXED)) {
             cpu->reason = R_BRANCH;
             break;
         }
