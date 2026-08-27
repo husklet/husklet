@@ -79,6 +79,7 @@ struct Backend {
     sse2_runs_admitted: u64,
     sse2_instructions_admitted: u64,
     sse2_target_runs: u64,
+    sse2_next_family_runs: u64,
     translations: u64,
 }
 
@@ -132,6 +133,7 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_runs_admitted: counter("sse2_runs_admitted="),
         sse2_instructions_admitted: counter("sse2_instructions_admitted="),
         sse2_target_runs: counter("sse2_target_runs="),
+        sse2_next_family_runs: counter("sse2_next_family_runs="),
         translations,
         line,
     }
@@ -467,7 +469,16 @@ fn exact_sse2_integer_forms_match_the_native_host() {
 
 #[test]
 fn next_sse_family_matches_native_for_unaligned_high_rip_alias_flags_and_prefixes() {
-    agrees("sse_next_family");
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_next_family");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable).output().expect("native next SSE family fixture");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert!(selected_backend.sse2_next_family_runs > 0, "{}", selected_backend.line);
 }
 
 #[test]

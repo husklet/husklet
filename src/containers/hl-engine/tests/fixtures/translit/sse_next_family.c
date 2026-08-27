@@ -15,6 +15,8 @@ __attribute__((noinline)) static uint64_t unaligned_chain(const uint8_t *p) {
     uint8_t out[16];
     uint64_t before, after;
     __asm__ volatile("pushfq; pop %0\n\t"
+                     "jmp 1f\n\t"
+                     "1:\n\t"
                      "movdqu 1(%2), %%xmm0\n\t"
                      "movdqu 17(%2), %%xmm1\n\t"
                      "pandn %%xmm1, %%xmm0\n\t"

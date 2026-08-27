@@ -163,6 +163,7 @@ static uint64_t translit_body_owner_published;
 static uint64_t translit_sse2_runs_admitted;
 static uint64_t translit_sse2_instructions_admitted;
 static uint64_t translit_sse2_target_runs;
+static uint64_t translit_sse2_next_family_runs;
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -1367,6 +1368,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         (void)__atomic_fetch_add(&translit_sse2_instructions_admitted, (uint64_t)count, __ATOMIC_RELAXED);
         if (count == 6 && sse2_signature == UINT64_C(0x6FDB6F73EB7E))
             (void)__atomic_fetch_add(&translit_sse2_target_runs, 1, __ATOMIC_RELAXED);
+        // A compiler may extend the descriptor after this family; the low opcode suffix still proves
+        // these three literal instructions were contiguous in one published body.
+        if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
+            (void)__atomic_fetch_add(&translit_sse2_next_family_runs, 1, __ATOMIC_RELAXED);
     }
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
@@ -1426,9 +1431,11 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_instructions_admitted =
         __atomic_load_n(&translit_sse2_instructions_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_target_runs = __atomic_load_n(&translit_sse2_target_runs, __ATOMIC_RELAXED);
+    uint64_t sse2_next_family_runs = __atomic_load_n(&translit_sse2_next_family_runs, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
-    uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0;
+    uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
+             sse2_next_family_runs = 0;
 #endif
     uint64_t displaced_blocks = __atomic_load_n(&translit_displaced_blocks, __ATOMIC_RELAXED);
     uint64_t displaced_entries = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
@@ -1501,6 +1508,7 @@ static int translit_report(char *out, size_t size) {
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
                     " body_owner_recovered=%llu body_owner_published=%llu"
                     " sse2_runs_admitted=%llu sse2_instructions_admitted=%llu sse2_target_runs=%llu"
+                    " sse2_next_family_runs=%llu"
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -1511,7 +1519,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
                     (unsigned long long)body_owner_recovered, (unsigned long long)body_owner_published,
                     (unsigned long long)sse2_runs_admitted, (unsigned long long)sse2_instructions_admitted,
-                    (unsigned long long)sse2_target_runs,
+                    (unsigned long long)sse2_target_runs, (unsigned long long)sse2_next_family_runs,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
