@@ -201,6 +201,8 @@ static _Atomic uint64_t translit_unsupported_site_unique;
 static _Atomic uint64_t translit_unsupported_site_repeats, translit_unsupported_site_collisions;
 static _Atomic uint64_t translit_unsupported_site_overflow;
 static _Atomic uint64_t translit_unsupported_deferred_excluded;
+static _Atomic uint32_t translit_unsupported_pause_stage, translit_unsupported_pause_ready,
+    translit_unsupported_pause_release;
 #else
 #define TRANSLIT_PUNPCKLQDQ_PROFILE ""
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS
@@ -389,10 +391,10 @@ static uint64_t translit_unsupported_key(const struct insn *insn) {
            (uint64_t)(insn->has_modrm != 0) << 24 | (uint64_t)insn->modrm << 25 |
            (uint64_t)(insn->is_mem != 0) << 33 | (uint64_t)(insn->rip_rel != 0) << 34 |
            (uint64_t)translit_unsupported_width(insn) << 35 | (uint64_t)immediate << 38 |
-           (uint64_t)(insn->vex_map & 7) << 40 | (uint64_t)(insn->vex_pp & 3) << 43 |
-           (uint64_t)(insn->vex_l & 3) << 45 | (uint64_t)(insn->vex_w != 0) << 47 |
-           (uint64_t)(insn->vvvv & 31) << 48 | (uint64_t)(insn->evex_mask & 7) << 53 |
-           (uint64_t)(insn->evex_z != 0) << 56 | (uint64_t)(insn->evex_b != 0) << 57;
+           (uint64_t)(insn->vex_map & 31) << 40 | (uint64_t)(insn->vex_pp & 3) << 45 |
+           (uint64_t)(insn->vex_l & 3) << 47 | (uint64_t)(insn->vex_w != 0) << 49 |
+           (uint64_t)(insn->vvvv & 31) << 50 | (uint64_t)(insn->evex_mask & 7) << 55 |
+           (uint64_t)(insn->evex_z != 0) << 58 | (uint64_t)(insn->evex_b != 0) << 59;
 }
 
 static uint64_t translit_unsupported_mix(uint64_t value) {
@@ -420,6 +422,11 @@ static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
             uint32_t empty = 0;
             if (atomic_compare_exchange_strong_explicit(&slot->state, &empty, 1, memory_order_acquire,
                                                         memory_order_relaxed)) {
+                if (atomic_load_explicit(&translit_unsupported_pause_stage, memory_order_relaxed) == 1) {
+                    atomic_store_explicit(&translit_unsupported_pause_ready, 1, memory_order_release);
+                    while (!atomic_load_explicit(&translit_unsupported_pause_release, memory_order_acquire))
+                        sched_yield();
+                }
                 slot->key = key;
                 atomic_store_explicit(&slot->count, 1, memory_order_relaxed);
                 atomic_store_explicit(&slot->state, 2, memory_order_release);
@@ -427,7 +434,9 @@ static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
                 keyed = 1;
                 break;
             }
-            continue;
+            // A competing publisher won this exact slot after our initial load. Wait for that slot's
+            // metadata rather than probing onward and creating a duplicate key.
+            state = translit_unsupported_published(&slot->state);
         }
         if (state == 2 && slot->key == key) {
             atomic_fetch_add_explicit(&slot->count, 1, memory_order_relaxed);
@@ -448,6 +457,11 @@ static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
             uint32_t empty = 0;
             if (atomic_compare_exchange_strong_explicit(&slot->state, &empty, 1, memory_order_acquire,
                                                         memory_order_relaxed)) {
+                if (atomic_load_explicit(&translit_unsupported_pause_stage, memory_order_relaxed) == 2) {
+                    atomic_store_explicit(&translit_unsupported_pause_ready, 1, memory_order_release);
+                    while (!atomic_load_explicit(&translit_unsupported_pause_release, memory_order_acquire))
+                        sched_yield();
+                }
                 slot->pc = pc;
                 slot->key = key;
                 atomic_store_explicit(&slot->count, 1, memory_order_relaxed);
@@ -455,7 +469,8 @@ static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
                 atomic_fetch_add_explicit(&translit_unsupported_site_unique, 1, memory_order_relaxed);
                 return;
             }
-            continue;
+            // As above, a failed empty-slot CAS must retry the slot that became reserved.
+            state = translit_unsupported_published(&slot->state);
         }
         if (state == 2 && slot->pc == pc && slot->key == key) {
             atomic_fetch_add_explicit(&slot->count, 1, memory_order_relaxed);
@@ -752,14 +767,14 @@ static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, 
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 typedef struct {
-    _Atomic uint32_t state, started, done, observed;
-} translit_unsupported_wait_test;
+    struct insn insn;
+    uint64_t pc;
+    _Atomic uint32_t done;
+} translit_unsupported_record_test;
 
-static void *translit_unsupported_wait_thread(void *opaque) {
-    translit_unsupported_wait_test *test = opaque;
-    atomic_store_explicit(&test->started, 1, memory_order_release);
-    uint32_t observed = translit_unsupported_published(&test->state);
-    atomic_store_explicit(&test->observed, observed, memory_order_relaxed);
+static void *translit_unsupported_record_thread(void *opaque) {
+    translit_unsupported_record_test *test = opaque;
+    translit_unsupported_record(&test->insn, test->pc);
     atomic_store_explicit(&test->done, 1, memory_order_release);
     return NULL;
 }
@@ -1233,8 +1248,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    : 56;
     }
     if (scenario == 43) {
-        struct insn forms[19] = {0};
-        for (unsigned i = 0; i < 19; i++) forms[i].op = 0x12;
+        struct insn forms[20] = {0};
+        for (unsigned i = 0; i < 20; i++) forms[i].op = 0x12;
         forms[1].p66 = 1;
         forms[2].rep = 1;
         forms[3].repne = 1;
@@ -1262,14 +1277,85 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         forms[17].evex_z = 1;
         forms[18].vex = forms[18].evex = 1;
         forms[18].evex_b = 1;
-        uint64_t keys[19];
-        for (unsigned i = 0; i < 19; i++) keys[i] = translit_unsupported_key(&forms[i]);
-        for (unsigned i = 0; i < 19; i++)
-            for (unsigned j = i + 1; j < 19; j++)
+        forms[19] = forms[13];
+        forms[19].vex_map = 10;
+        uint64_t keys[20];
+        for (unsigned i = 0; i < 20; i++) keys[i] = translit_unsupported_key(&forms[i]);
+        for (unsigned i = 0; i < 20; i++)
+            for (unsigned j = i + 1; j < 20; j++)
                 if (keys[i] == keys[j]) return 57;
         return 0;
     }
     if (scenario == 44) {
+        // Pause the winning publisher after the real CAS in each table. A second recorder of the same
+        // key/site must wait for that slot rather than probing onward and publishing a duplicate.
+        for (unsigned stage = 1; stage <= 2; stage++) {
+            translit_unsupported_record_test first = {
+                .insn = {.op = (uint8_t)(0xe0 + stage),
+                         .vex = 1,
+                         .vex_map = (uint8_t)(28 + stage),
+                         .vex_pp = 3,
+                         .has_modrm = 1,
+                         .modrm = 0xc1,
+                         .mod = 3},
+                .pc = UINT64_C(0xfedcba9876500000) + stage,
+            };
+            translit_unsupported_record_test second = {.insn = first.insn, .pc = first.pc};
+            uint64_t key = translit_unsupported_key(&first.insn);
+            uint64_t keyed = atomic_load_explicit(&translit_unsupported_keyed, memory_order_relaxed);
+            uint64_t form_unique = atomic_load_explicit(&translit_unsupported_form_unique, memory_order_relaxed);
+            uint64_t site_unique = atomic_load_explicit(&translit_unsupported_site_unique, memory_order_relaxed);
+            uint64_t repeats = atomic_load_explicit(&translit_unsupported_site_repeats, memory_order_relaxed);
+            uint64_t form_overflow = atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed);
+            uint64_t site_overflow = atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed);
+            atomic_store_explicit(&translit_unsupported_pause_ready, 0, memory_order_relaxed);
+            atomic_store_explicit(&translit_unsupported_pause_release, 0, memory_order_relaxed);
+            atomic_store_explicit(&translit_unsupported_pause_stage, stage, memory_order_release);
+            pthread_t publisher, waiter;
+            if (pthread_create(&publisher, NULL, translit_unsupported_record_thread, &first) != 0) return 58;
+            while (!atomic_load_explicit(&translit_unsupported_pause_ready, memory_order_acquire)) sched_yield();
+            if (pthread_create(&waiter, NULL, translit_unsupported_record_thread, &second) != 0) {
+                atomic_store_explicit(&translit_unsupported_pause_release, 1, memory_order_release);
+                (void)pthread_join(publisher, NULL);
+                return 58;
+            }
+            for (unsigned spin = 0; spin < 1000; spin++) sched_yield();
+            if (atomic_load_explicit(&first.done, memory_order_acquire) ||
+                atomic_load_explicit(&second.done, memory_order_acquire)) {
+                atomic_store_explicit(&translit_unsupported_pause_release, 1, memory_order_release);
+                (void)pthread_join(publisher, NULL);
+                (void)pthread_join(waiter, NULL);
+                return 58;
+            }
+            atomic_store_explicit(&translit_unsupported_pause_release, 1, memory_order_release);
+            if (pthread_join(publisher, NULL) != 0 || pthread_join(waiter, NULL) != 0) return 58;
+            atomic_store_explicit(&translit_unsupported_pause_stage, 0, memory_order_release);
+            unsigned form_matches = 0, site_matches = 0;
+            uint64_t form_count = 0, site_count = 0;
+            for (unsigned i = 0; i < TL_UNSUPPORTED_FORM_N; i++)
+                if (atomic_load_explicit(&translit_unsupported_forms[i].state, memory_order_acquire) == 2 &&
+                    translit_unsupported_forms[i].key == key) {
+                    form_matches++;
+                    form_count += atomic_load_explicit(&translit_unsupported_forms[i].count, memory_order_relaxed);
+                }
+            for (unsigned i = 0; i < TL_UNSUPPORTED_SITE_N; i++)
+                if (atomic_load_explicit(&translit_unsupported_sites[i].state, memory_order_acquire) == 2 &&
+                    translit_unsupported_sites[i].key == key && translit_unsupported_sites[i].pc == first.pc) {
+                    site_matches++;
+                    site_count += atomic_load_explicit(&translit_unsupported_sites[i].count, memory_order_relaxed);
+                }
+            if (form_matches != 1 || site_matches != 1 || form_count != 2 || site_count != 2 ||
+                atomic_load_explicit(&translit_unsupported_keyed, memory_order_relaxed) != keyed + 2 ||
+                atomic_load_explicit(&translit_unsupported_form_unique, memory_order_relaxed) != form_unique + 1 ||
+                atomic_load_explicit(&translit_unsupported_site_unique, memory_order_relaxed) != site_unique + 1 ||
+                atomic_load_explicit(&translit_unsupported_site_repeats, memory_order_relaxed) != repeats + 1 ||
+                atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed) != form_overflow ||
+                atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed) != site_overflow)
+                return 58;
+        }
+        return 0;
+    }
+    if (scenario == 45) {
         struct insn insn = {.op = 0x12, .two = 1, .has_modrm = 1, .modrm = 0xc1, .mod = 3};
         uint64_t key = translit_unsupported_key(&insn);
         for (unsigned i = 0; i < TL_UNSUPPORTED_FORM_N; i++) {
@@ -1287,22 +1373,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed) == form_overflow + 1 &&
                        atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed) == site_overflow + 1
                    ? 0
-                   : 58;
-    }
-    if (scenario == 45) {
-        for (unsigned table = 0; table < 2; table++) {
-            translit_unsupported_wait_test test = {.state = 1};
-            pthread_t thread;
-            if (pthread_create(&thread, NULL, translit_unsupported_wait_thread, &test) != 0) return 59;
-            while (!atomic_load_explicit(&test.started, memory_order_acquire)) sched_yield();
-            for (unsigned spin = 0; spin < 1000; spin++) sched_yield();
-            if (atomic_load_explicit(&test.done, memory_order_acquire)) return 59;
-            atomic_store_explicit(&test.state, 2, memory_order_release);
-            if (pthread_join(thread, NULL) != 0 || !atomic_load_explicit(&test.done, memory_order_acquire) ||
-                atomic_load_explicit(&test.observed, memory_order_relaxed) != 2)
-                return 59;
-        }
-        return 0;
+                   : 59;
     }
     if (scenario == 46) {
         struct insn insn = {.op = 0x12, .two = 1, .has_modrm = 1, .modrm = 0xc1, .mod = 3};
