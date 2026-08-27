@@ -98,6 +98,42 @@ fn executed_family_counts_aggregate_across_forks_and_ignore_top8_saturation() {
 }
 
 #[test]
+fn executed_fall_stop_reasons_reconcile_exactly_to_translated_fallthroughs() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 11)
+            .unwrap_or_else(|status| panic!("ISA {isa} fall-stop reconciliation scenario failed: {status}"));
+    }
+}
+
+#[test]
+fn each_real_translation_stop_site_keeps_its_exact_reason() {
+    // The hook scenarios exercise marker transport and exact counter reconciliation. This wiring
+    // clamp makes a mutation at any real build-loop assignment red as well: replacing one site by
+    // OTHER must not be masked by the sum invariant.
+    let source = include_str!("../src/native/translator/guest/x86_64/translit.inc");
+    for assignment in [
+        "fall_stop = HL_BACKEND_FALL_DECODE;",
+        "fall_stop = kind == TL_FS_MEM ? HL_BACKEND_FALL_SSE2_TO_FS : HL_BACKEND_FALL_SSE2_TO_NORMAL;",
+        "fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;",
+        "fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2 : HL_BACKEND_FALL_NORMAL_TO_FS;",
+        "fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;",
+        "fall_stop = HL_BACKEND_FALL_FETCH;",
+        "fall_stop = HL_BACKEND_FALL_RIPREL_LOWER;",
+        "fall_stop = HL_BACKEND_FALL_FS_TRANSACTION;",
+        "fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;",
+        "fall_stop = HL_BACKEND_FALL_CAP;",
+    ] {
+        assert_eq!(
+            source.matches(assignment).count(),
+            1,
+            "missing or duplicated real stop site: {assignment}"
+        );
+    }
+    assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_TL_NO;").count(), 2);
+}
+
+#[test]
 fn executed_family_hooks_follow_interpreter_and_dispatcher_commit_boundaries() {
     let interpreter = include_str!("../src/native/translator/guest/x86_64/interp.c");
     let execute = interpreter

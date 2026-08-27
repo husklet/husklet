@@ -35,6 +35,28 @@ enum hl_backend_shape_translated_exit {
     HL_BACKEND_SHAPE_T_COUNT,
 };
 
+/* Why a completed transliterated descriptor used its sequential dispatcher exit.  These are execution
+   facts, carried by the emitted terminal marker: counting them while building would include cold blocks
+   and would misattribute a linked ingress to the descriptor through which the dispatcher entered. */
+enum hl_backend_shape_fall_stop {
+    HL_BACKEND_FALL_CAP,
+    HL_BACKEND_FALL_DECODE,
+    HL_BACKEND_FALL_NORMAL_TO_SSE2,
+    HL_BACKEND_FALL_SSE2_TO_NORMAL,
+    HL_BACKEND_FALL_NORMAL_TO_FS,
+    HL_BACKEND_FALL_FS_TO_NORMAL,
+    HL_BACKEND_FALL_SSE2_TO_FS,
+    HL_BACKEND_FALL_FS_TO_SSE2,
+    HL_BACKEND_FALL_TL_NO,
+    HL_BACKEND_FALL_DISPLACED_UNSAFE,
+    HL_BACKEND_FALL_FETCH,
+    HL_BACKEND_FALL_RIPREL_LOWER,
+    HL_BACKEND_FALL_FS_TRANSACTION,
+    HL_BACKEND_FALL_SSE_RIPREL_LOWER,
+    HL_BACKEND_FALL_OTHER,
+    HL_BACKEND_FALL_COUNT,
+};
+
 enum hl_backend_shape_interpreter_entry {
     HL_BACKEND_SHAPE_I_DISABLED,
     HL_BACKEND_SHAPE_I_IMAGE,
@@ -149,6 +171,7 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    _Atomic uint64_t translated_fall_stop[HL_BACKEND_FALL_COUNT];
     _Atomic uint64_t translated_stitch_jmp;
     _Atomic uint64_t translated_stitch_cond_fall;
     _Atomic uint64_t interpreter_entry[HL_BACKEND_SHAPE_I_COUNT];
@@ -213,6 +236,7 @@ struct hl_backend_tree_summary {
     uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     uint64_t reason_other;
     uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    uint64_t translated_fall_stop[HL_BACKEND_FALL_COUNT];
     uint64_t translated_stitch_jmp;
     uint64_t translated_stitch_cond_fall;
     uint64_t interpreter_entry[HL_BACKEND_SHAPE_I_COUNT];
@@ -436,6 +460,13 @@ static inline void hl_backend_tree_translated_exit(unsigned kind, unsigned stitc
     atomic_fetch_add_explicit(&slot->translated_exit[kind], 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&slot->translated_stitch_jmp, stitched_jmp, memory_order_relaxed);
     atomic_fetch_add_explicit(&slot->translated_stitch_cond_fall, stitched_cond_fall, memory_order_relaxed);
+}
+
+static inline void hl_backend_tree_translated_fall_stop(unsigned reason) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL) return;
+    if (reason >= HL_BACKEND_FALL_COUNT) reason = HL_BACKEND_FALL_OTHER;
+    atomic_fetch_add_explicit(&slot->translated_fall_stop[reason], 1, memory_order_relaxed);
 }
 
 static inline void hl_backend_tree_interpreter_entry(unsigned kind, uint64_t fallback_form) {
@@ -680,6 +711,9 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
         for (uint32_t kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
             summary->translated_exit[kind] +=
                 atomic_load_explicit(&slot->translated_exit[kind], memory_order_relaxed);
+        for (uint32_t reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
+            summary->translated_fall_stop[reason] +=
+                atomic_load_explicit(&slot->translated_fall_stop[reason], memory_order_relaxed);
         summary->translated_stitch_jmp += atomic_load_explicit(&slot->translated_stitch_jmp, memory_order_relaxed);
         summary->translated_stitch_cond_fall +=
             atomic_load_explicit(&slot->translated_stitch_cond_fall, memory_order_relaxed);
@@ -828,12 +862,20 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
                                                    [HL_BACKEND_FAMILY_DIV_SERVICE64] +
                                  summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE];
     uint64_t family_total = summary.family_jmem + family_div_total + family_idiv_total;
+    uint64_t fall_stop_total = 0;
+    for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
+        fall_stop_total += summary.translated_fall_stop[reason];
     return snprintf(
         record, capacity,
         "[diag] backend-shape version=1 translated_entries=%llu translated_transfers=%llu "
         "t_fallthrough=%llu t_cond_taken=%llu t_cond_not_taken=%llu t_direct_jump=%llu "
         "t_direct_call=%llu t_return=%llu t_indirect_branch=%llu t_indirect_call=%llu t_syscall=%llu "
-        "t_irq=%llu t_fault=%llu t_other=%llu stitch_jmp=%llu stitch_cond_fall=%llu "
+        "t_irq=%llu t_fault=%llu t_other=%llu fall_total=%llu fall_cap=%llu fall_decode=%llu "
+        "fall_normal_to_sse2=%llu fall_sse2_to_normal=%llu fall_normal_to_fs=%llu "
+        "fall_fs_to_normal=%llu fall_sse2_to_fs=%llu fall_fs_to_sse2=%llu "
+        "fall_tl_no=%llu fall_displaced=%llu fall_fetch=%llu fall_riprel=%llu "
+        "fall_fs_transaction=%llu fall_sse_riprel=%llu fall_other=%llu "
+        "stitch_jmp=%llu stitch_cond_fall=%llu "
         "e_fall_total=%llu e_fall_mapped=%llu e_fall_unmapped=%llu e_fall_interrupted=%llu "
         "e_fall_chained=%llu e_fall_dispatcher=%llu "
         "e_jt_total=%llu e_jt_mapped=%llu e_jt_unmapped=%llu e_jt_interrupted=%llu "
@@ -878,6 +920,22 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_IRQ],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FAULT],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_OTHER],
+        (unsigned long long)fall_stop_total,
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_CAP],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_DECODE],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_NORMAL_TO_SSE2],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_SSE2_TO_NORMAL],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_NORMAL_TO_FS],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_FS_TO_NORMAL],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_SSE2_TO_FS],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_FS_TO_SSE2],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_TL_NO],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_DISPLACED_UNSAFE],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_FETCH],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_RIPREL_LOWER],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_FS_TRANSACTION],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_SSE_RIPREL_LOWER],
+        (unsigned long long)summary.translated_fall_stop[HL_BACKEND_FALL_OTHER],
         (unsigned long long)summary.translated_stitch_jmp,
         (unsigned long long)summary.translated_stitch_cond_fall,
         (unsigned long long)summary.direct_edge[HL_BACKEND_SHAPE_EDGE_FALLTHROUGH],
@@ -1072,6 +1130,32 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         struct hl_backend_tree_summary summary;
         hl_backend_tree_summary(&summary);
         return summary.claimed == 1 && summary.completed == 1 && summary.duplicate_finalize == 1 ? 0 : 42;
+    }
+    if (scenario == 11) {
+        for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason) {
+            hl_backend_tree_run_begin(1, 1);
+            hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_FALLTHROUGH, 0, 0);
+            hl_backend_tree_translated_fall_stop(reason);
+            hl_backend_tree_reason(R_BRANCH);
+        }
+        /* An out-of-range emitted value must remain attributable without creating an unbounded bucket. */
+        hl_backend_tree_run_begin(1, 1);
+        hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_FALLTHROUGH, 0, 0);
+        hl_backend_tree_translated_fall_stop(HL_BACKEND_FALL_COUNT + 7);
+        hl_backend_tree_reason(R_BRANCH);
+        (void)hl_backend_tree_finalize(0);
+        struct hl_backend_tree_summary summary;
+        hl_backend_tree_summary(&summary);
+        uint64_t reasons = 0;
+        for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
+            reasons += summary.translated_fall_stop[reason];
+        if (summary.claimed != 1 || summary.completed != 1 ||
+            summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH] != HL_BACKEND_FALL_COUNT + 1 ||
+            reasons != summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH])
+            return 43;
+        for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT - 1; ++reason)
+            if (summary.translated_fall_stop[reason] != 1) return 44;
+        return summary.translated_fall_stop[HL_BACKEND_FALL_OTHER] == 2 ? 0 : 45;
     }
     struct hl_backend_tree_slot *child_birth = hl_backend_tree_prepare_fork();
     pid_t child = fork();
@@ -1331,6 +1415,7 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 #define hl_backend_tree_interpreted_steps(steps) ((void)0)
 #define hl_backend_tree_reason(reason) ((void)0)
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
+#define hl_backend_tree_translated_fall_stop(reason) ((void)0)
 #define hl_backend_tree_interpreter_entry(kind, fallback_form) ((void)0)
 #define hl_backend_tree_interpreter_stop(kind, stop_form) ((void)0)
 #define hl_backend_tree_direct_edge(family, same_page) ((void)0)

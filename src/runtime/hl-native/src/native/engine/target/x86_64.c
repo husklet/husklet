@@ -1453,6 +1453,14 @@ static int guest_store_direct_valid(uint64_t address, size_t length) {
 }
 
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_fall_fixture_bytes != NULL && guest >= translit_fall_fixture_guest &&
+        length <= translit_fall_fixture_length &&
+        guest - translit_fall_fixture_guest <= translit_fall_fixture_length - length) {
+        memcpy(destination, translit_fall_fixture_bytes + (guest - translit_fall_fixture_guest), length);
+        return 0;
+    }
+#endif
     return hl_guest_fetch_exec(nonpie_fold(guest), destination, length);
 }
 

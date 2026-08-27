@@ -183,6 +183,15 @@ static uint64_t translit_sse2_movd_admitted;
 static uint64_t translit_sse2_movd_runs_admitted;
 static uint64_t translit_sse2_movhlps_admitted;
 static uint64_t translit_fs_mem_admitted;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static const uint8_t *translit_fall_fixture_bytes;
+static uint64_t translit_fall_fixture_guest;
+static size_t translit_fall_fixture_length;
+static uint32_t translit_test_last_fall_marker;
+static int translit_test_fall_marker_seen;
+static int translit_fall_fixture_test(unsigned scenario);
+static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
+#endif
 static uint64_t translit_fs_fixture_admitted;
 #define TRANSLIT_PUNPCKLQDQ_PROFILE                                                                    \
     " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu sse2_movhlps_admitted=%llu"
@@ -387,6 +396,9 @@ static int translit_bind_cpu(struct cpu *cpu) {
 //     (interp_store does that by hand), and a PROT_EXEC guest mapping needs SMC page protection the
 //     interpreter does not carry. Verbatim stores do neither.
 static int translit_image_ok(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_fall_fixture_bytes != NULL) return 1;
+#endif
     return translit_enabled() && !jit86_store_alias_observation_active();
 }
 
@@ -850,11 +862,13 @@ enum {
     TL_SHAPE_SOURCE_PAGE_SHIFT = 12,
     TL_SHAPE_WOULD_FAMILY_SHIFT = 20,
     TL_SHAPE_WOULD_DISPOSITION_SHIFT = 22,
+    TL_SHAPE_FALL_STOP_SHIFT = 25,
     TL_SHAPE_KIND_MASK = 0xf,
     TL_SHAPE_STITCH_MASK = 0xf,
     TL_SHAPE_SOURCE_PAGE_MASK = 0xff,
     TL_SHAPE_WOULD_FAMILY_MASK = 0x3,
     TL_SHAPE_WOULD_DISPOSITION_MASK = 0x7,
+    TL_SHAPE_FALL_STOP_MASK = 0x7f,
 };
 
 _Static_assert(TL_STITCH_MAX_JMPS <= TL_SHAPE_STITCH_MASK,
@@ -866,6 +880,16 @@ _Static_assert(HL_BACKEND_WOULD_LINK_FAMILY_COUNT <= TL_SHAPE_WOULD_FAMILY_MASK,
                "hook marker reserves its final family value for no would-link terminal");
 _Static_assert(HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT <= TL_SHAPE_WOULD_DISPOSITION_MASK + 1,
                "hook marker must represent every would-link disposition");
+_Static_assert(HL_BACKEND_FALL_COUNT <= TL_SHAPE_FALL_STOP_MASK + 1,
+               "hook marker must represent every fall-stop reason");
+_Static_assert(TL_SHAPE_KIND_SHIFT + 4 <= TL_SHAPE_COND_FALL_SHIFT &&
+                   TL_SHAPE_COND_FALL_SHIFT + 4 <= TL_SHAPE_JMP_SHIFT &&
+                   TL_SHAPE_JMP_SHIFT + 4 <= TL_SHAPE_SOURCE_PAGE_SHIFT &&
+                   TL_SHAPE_SOURCE_PAGE_SHIFT + 8 <= TL_SHAPE_WOULD_FAMILY_SHIFT &&
+                   TL_SHAPE_WOULD_FAMILY_SHIFT + 2 <= TL_SHAPE_WOULD_DISPOSITION_SHIFT &&
+                   TL_SHAPE_WOULD_DISPOSITION_SHIFT + 3 <= TL_SHAPE_FALL_STOP_SHIFT &&
+                   TL_SHAPE_FALL_STOP_SHIFT + 7 == 32,
+               "hook marker fields must be disjoint and fill exactly 32 bits");
 #endif
 
 static uint8_t *translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitched_jmp,
@@ -911,6 +935,27 @@ static void translit_shape_would_link_patch(uint8_t *marker, unsigned family, un
     marker[2] = (uint8_t)(packed >> 16);
     marker[3] = (uint8_t)(packed >> 24);
 }
+
+static uint8_t *translit_shape_fall_exit(hl_x64_asm *a, unsigned stitched_jmp,
+                                         unsigned stitched_cond_fall, unsigned source_page_delta,
+                                         unsigned stop_reason) {
+    uint8_t *marker = translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, stitched_jmp,
+                                          stitched_cond_fall, source_page_delta);
+    if (marker == NULL) return NULL;
+    uint32_t packed = (uint32_t)marker[0] | (uint32_t)marker[1] << 8 | (uint32_t)marker[2] << 16 |
+                      (uint32_t)marker[3] << 24;
+    packed &= ~((uint32_t)TL_SHAPE_FALL_STOP_MASK << TL_SHAPE_FALL_STOP_SHIFT);
+    packed |= (stop_reason & TL_SHAPE_FALL_STOP_MASK) << TL_SHAPE_FALL_STOP_SHIFT;
+    marker[0] = (uint8_t)packed;
+    marker[1] = (uint8_t)(packed >> 8);
+    marker[2] = (uint8_t)(packed >> 16);
+    marker[3] = (uint8_t)(packed >> 24);
+    return marker;
+}
+#else
+#define translit_shape_fall_exit(a, stitched_jmp, stitched_cond_fall, source_page_delta, stop_reason) \
+    translit_shape_exit((a), HL_BACKEND_SHAPE_T_FALLTHROUGH, (stitched_jmp),                      \
+                        (stitched_cond_fall), (source_page_delta))
 #endif
 
 // ---- the one operand whose meaning depends on where the bytes live
@@ -2094,6 +2139,34 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                  summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] == 1;
         return ok ? 0 : 87;
     }
+    if (scenario == 70) {
+        uint8_t emitted[32] = {0};
+        hl_x64_asm marker_output = {emitted, emitted + sizeof emitted, 0};
+        uint8_t *marker = translit_shape_fall_exit(&marker_output, 3, 2, 1, HL_BACKEND_FALL_FETCH);
+        if (marker == NULL || marker_output.overflow) return 88;
+        translit_shape_would_link_patch(marker, HL_BACKEND_WOULD_LINK_FALLTHROUGH,
+                                        HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED);
+        uint32_t packed = (uint32_t)marker[0] | (uint32_t)marker[1] << 8 | (uint32_t)marker[2] << 16 |
+                          (uint32_t)marker[3] << 24;
+        return ((packed >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK) == HL_BACKEND_SHAPE_T_FALLTHROUGH &&
+                       ((packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK) == 3 &&
+                       ((packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK) == 2 &&
+                       ((packed >> TL_SHAPE_SOURCE_PAGE_SHIFT) & TL_SHAPE_SOURCE_PAGE_MASK) == 1 &&
+                       ((packed >> TL_SHAPE_WOULD_FAMILY_SHIFT) & TL_SHAPE_WOULD_FAMILY_MASK) ==
+                           HL_BACKEND_WOULD_LINK_FALLTHROUGH &&
+                       ((packed >> TL_SHAPE_WOULD_DISPOSITION_SHIFT) & TL_SHAPE_WOULD_DISPOSITION_MASK) ==
+                           HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED &&
+                       ((packed >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK) == HL_BACKEND_FALL_FETCH
+                   ? 0
+                   : 89;
+    }
+    if (scenario >= 71 && scenario <= 77) {
+        pid_t child = fork();
+        if (child < 0) return 97;
+        if (child == 0) _exit(translit_fall_fixture_test(scenario));
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
+    }
     return 6;
 }
 #endif
@@ -2192,6 +2265,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
+    unsigned fall_stop = HL_BACKEND_FALL_OTHER;
     uint64_t sse2_signature = 0;
     uint64_t sse2_store_count = 0;
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
@@ -2220,18 +2294,48 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
-        if (hl_x86_decode_context(context, pc, &insn) <= 0) break;
+        if (hl_x86_decode_context(context, pc, &insn) <= 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            fall_stop = HL_BACKEND_FALL_DECODE;
+#endif
+            break;
+        }
         int kind = translit_classify(&insn);
         if ((sse2_run && kind != TL_SSE2) || (!sse2_run && kind == TL_SSE2) ||
-            (fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) break;
-        if (kind == TL_NO) break;
+            (fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (kind == TL_NO)
+                fall_stop = HL_BACKEND_FALL_TL_NO;
+            else if (sse2_run)
+                fall_stop = kind == TL_FS_MEM ? HL_BACKEND_FALL_SSE2_TO_FS : HL_BACKEND_FALL_SSE2_TO_NORMAL;
+            else if (fs_run)
+                fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;
+            else
+                fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2 : HL_BACKEND_FALL_NORMAL_TO_FS;
+#endif
+            break;
+        }
+        if (kind == TL_NO) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            fall_stop = HL_BACKEND_FALL_TL_NO;
+#endif
+            break;
+        }
         if (!translit_displaced_safe(&insn, kind)) {
             (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
             (void)__atomic_fetch_add(&translit_displaced_operand_declined, 1, __ATOMIC_RELAXED);
             translit_count_displaced_refusal(&insn);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;
+#endif
             break;
         }
-        if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
+        if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            fall_stop = HL_BACKEND_FALL_FETCH;
+#endif
+            break;
+        }
 
         uint64_t next = pc + (uint64_t)insn.len;
         unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
@@ -2256,6 +2360,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
                     if (g_nonpie_lo) translit_count_displaced_refusal(&insn);
                     a->cursor = instruction_start; // un-emit: the block ends before this instruction
+#if defined(HL_NATIVE_TEST_HOOKS)
+                    fall_stop = HL_BACKEND_FALL_RIPREL_LOWER;
+#endif
                     break;
                 }
                 uint64_t *counter = insn.op == 0x8D && !insn.two
@@ -2296,6 +2403,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                              (uint64_t)(uintptr_t)a->cursor, next, preserve);
             pc = next;
             count++;
+#if defined(HL_NATIVE_TEST_HOOKS)
+            fall_stop = HL_BACKEND_FALL_FS_TRANSACTION;
+#endif
             break; // one transaction per descriptor keeps the persistent owner map exact and bounded
         }
 
@@ -2325,6 +2435,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (a->overflow) break;
             if (insn.rip_rel && !translit_fix_riprel(&builder, &insn, next, guest_instruction)) {
                 a->cursor = instruction_start;
+#if defined(HL_NATIVE_TEST_HOOKS)
+                fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;
+#endif
                 break;
             }
             if (!sse2_store && insn.op != 0x7E) translit_xmm_cpu(a, destination, 0);
@@ -2609,14 +2722,17 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         return NULL;
     }
     if (!terminated) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (count == TL_MAX_INSNS) fall_stop = HL_BACKEND_FALL_CAP;
+#endif
         uint8_t *tail = a->cursor;
 #if defined(HL_NATIVE_TEST_HOOKS)
-        would_link_marker =
-            translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
+        would_link_marker = translit_shape_fall_exit(a, (unsigned)direct_jmp_stitched,
+                                                     (unsigned)jcc_fall_stitched,
+                                                     (unsigned)((pc >> 12) - (gpc >> 12)), fall_stop);
 #else
-        translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
-                            (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
+        translit_shape_fall_exit(a, (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched,
+                                 (unsigned)((pc >> 12) - (gpc >> 12)), 0);
 #endif
         translit_emit_exit_const(a, pc, R_BRANCH);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -2657,6 +2773,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         unsigned disposition =
             translit_would_link_classify(block, start, a->cursor, would_link_source, would_link_target, 0);
         translit_shape_would_link_patch(would_link_marker, would_link_family, disposition);
+        translit_test_last_fall_marker = (uint32_t)would_link_marker[0] |
+                                         (uint32_t)would_link_marker[1] << 8 |
+                                         (uint32_t)would_link_marker[2] << 16 |
+                                         (uint32_t)would_link_marker[3] << 24;
+        translit_test_fall_marker_seen = 1;
     }
     if (sse2_run) {
         (void)__atomic_fetch_add(&translit_sse2_runs_admitted, 1, __ATOMIC_RELAXED);
@@ -2706,6 +2827,96 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_blocks, 1, __ATOMIC_RELAXED);
     return start;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_fall_fixture_fetch(void *opaque, uint64_t guest, void *destination, size_t length) {
+    (void)opaque;
+    if (translit_fall_fixture_bytes == NULL || guest < translit_fall_fixture_guest ||
+        guest - translit_fall_fixture_guest >= translit_fall_fixture_length)
+        return -1;
+    size_t offset = (size_t)(guest - translit_fall_fixture_guest);
+    size_t copied = translit_fall_fixture_length - offset;
+    if (copied > length) copied = length;
+    memcpy(destination, translit_fall_fixture_bytes + offset, copied);
+    memset((uint8_t *)destination + copied, 0, length - copied);
+    return 0;
+}
+
+static int translit_fall_fixture_test(unsigned scenario) {
+    const size_t arena_size = 8192;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 98;
+    static const uint8_t normal_to_sse[] = {0x90, 0x66, 0x0f, 0xef, 0xc0};
+    static const uint8_t sse_to_normal[] = {0x66, 0x0f, 0xef, 0xc0, 0x90};
+    static const uint8_t normal_to_fs[] = {0x90, 0x64, 0x48, 0x8b, 0x04, 0x25, 0x40, 0x23, 0x01, 0x00};
+    static const uint8_t fs_transaction[] = {0x64, 0x48, 0x8b, 0x04, 0x25, 0x40, 0x23, 0x01, 0x00};
+    static const uint8_t tl_no[] = {0x90, 0x0f, 0x0b};
+    static const uint8_t sse_to_tl_no[] = {0x66, 0x0f, 0xef, 0xc0, 0x0f, 0x0b};
+    uint8_t cap[TL_MAX_INSNS + 1];
+    memset(cap, 0x90, TL_MAX_INSNS);
+    cap[TL_MAX_INSNS] = 0x0f;
+    const uint8_t *bytes = NULL;
+    size_t length = 0;
+    unsigned expected = HL_BACKEND_FALL_OTHER;
+    switch (scenario) {
+    case 71: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_NORMAL_TO_SSE2; break;
+    case 72: bytes = sse_to_normal; length = sizeof sse_to_normal; expected = HL_BACKEND_FALL_SSE2_TO_NORMAL; break;
+    case 73: bytes = normal_to_fs; length = sizeof normal_to_fs; expected = HL_BACKEND_FALL_NORMAL_TO_FS; break;
+    case 74: bytes = fs_transaction; length = sizeof fs_transaction; expected = HL_BACKEND_FALL_FS_TRANSACTION; break;
+    case 75: bytes = tl_no; length = sizeof tl_no; expected = HL_BACKEND_FALL_TL_NO; break;
+    case 76: bytes = cap; length = sizeof cap; expected = HL_BACKEND_FALL_CAP; break;
+    case 77: bytes = sse_to_tl_no; length = sizeof sse_to_tl_no; expected = HL_BACKEND_FALL_TL_NO; break;
+    default: return 90;
+    }
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - scenario;
+    struct interp_block *block = (struct interp_block *)arena;
+    translit_fall_fixture_bytes = bytes;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
+    translit_fall_fixture_length = length;
+    translit_test_last_fall_marker = 0;
+    translit_test_fall_marker_seen = 0;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL);
+    void *body = context == NULL ? NULL : translit_build(context, block, translit_fall_fixture_guest);
+    unsigned actual = (translit_test_last_fall_marker >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK;
+    unsigned kind = (translit_test_last_fall_marker >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK;
+    int built = body != NULL && translit_test_fall_marker_seen && kind == HL_BACKEND_SHAPE_T_FALLTHROUGH &&
+                actual == expected;
+    int cap_exact = scenario != 76 ||
+                    (block->profile_insns == TL_MAX_INSNS && block->guest_end == translit_fall_fixture_guest + TL_MAX_INSNS);
+    struct cpu fixture_cpu = {0};
+    fixture_cpu.rip = translit_fall_fixture_guest;
+    fixture_cpu.fs_base = (uint64_t)(uintptr_t)(arena + arena_size - 8) - UINT64_C(0x12340);
+    block->magic = INTERP_BLOCK_MAGIC;
+    block->gpc = translit_fall_fixture_guest;
+    hl_backend_tree_begin(1, effective_host_services());
+    if (built && cap_exact) run_block(context, &fixture_cpu, block);
+    struct hl_backend_tree_summary summary;
+    hl_backend_tree_summary(&summary);
+    int executed = fixture_cpu.irq == 0 &&
+                   ((fixture_cpu.backend_shape >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK) == expected &&
+                   summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH] == 1 &&
+                   summary.translated_fall_stop[expected] == 1;
+    for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; reason++)
+        if (reason != expected && summary.translated_fall_stop[reason] != 0) executed = 0;
+    translit_fall_fixture_bytes = NULL;
+    hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    munmap(arena, arena_size);
+    return built && cap_exact && executed ? 0 : 100 + (int)(scenario - 71);
+}
+#endif
 
 // Enter a transliterated block. The sigsetjmp pad run_block already arms covers this call: a guest fault
 // inside emitted code is captured by translit_signal_capture and leaves by the same siglongjmp the
