@@ -88,6 +88,12 @@ struct Backend {
     sse2_pxor_admitted: u64,
     sse2_pxor_runs_admitted: u64,
     translations: u64,
+    unsupported_total: u64,
+    unsupported_keyed: u64,
+    unsupported_overflow: u64,
+    unsupported_sites: u64,
+    unsupported_repeats: u64,
+    unsupported_site_overflow: u64,
 }
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
@@ -115,6 +121,17 @@ fn backend(stderr: &[u8]) -> Backend {
         })
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
+    let unsupported = text
+        .lines()
+        .find(|line| line.starts_with("[diag] unsupported "))
+        .unwrap_or("");
+    let unsupported_counter = |name: &str| {
+        unsupported
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+    };
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
@@ -149,8 +166,36 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_pxor_admitted: counter("sse2_pxor_admitted="),
         sse2_pxor_runs_admitted: counter("sse2_pxor_runs_admitted="),
         translations,
+        unsupported_total: unsupported_counter("total="),
+        unsupported_keyed: unsupported_counter("keyed="),
+        unsupported_overflow: unsupported_counter("overflow="),
+        unsupported_sites: unsupported_counter("sites="),
+        unsupported_repeats: unsupported_counter("repeats="),
+        unsupported_site_overflow: unsupported_counter("site_overflow="),
         line,
     }
+}
+
+#[test]
+fn unsupported_census_records_successful_interpreter_steps() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "unsupported_census");
+    let (interpreted, status, report) = run(&executable, "0");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native unsupported-census fixture");
+    assert_eq!(status, 0);
+    assert_eq!(native.status.code(), Some(0));
+    assert_eq!(interpreted, native.stdout);
+    assert!(report.unsupported_total > 0, "{}", report.line);
+    assert_eq!(
+        report.unsupported_total,
+        report.unsupported_keyed + report.unsupported_overflow
+    );
+    assert_eq!(
+        report.unsupported_total,
+        report.unsupported_sites + report.unsupported_repeats + report.unsupported_site_overflow
+    );
 }
 
 #[test]

@@ -528,6 +528,14 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, aarch64 guest\n");
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_unsupported_report(char *out, size_t size) {
+    (void)out;
+    (void)size;
+    return 0;
+}
+#endif
+
 // the syscall layer (service())
 #include "../../linux_abi/syscall/dispatch.c"
 // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted; OFF by default)

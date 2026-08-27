@@ -427,7 +427,13 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
             (void)interp_guest_trap(cpu, pc, 11, 2);
             return;
         }
-        if (interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len) == STEP_END) return;
+        int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (g_prof && !(step == STEP_END && (cpu->reason == R_TRAP || cpu->reason == R_BUS)) &&
+            translit_classify(&insn) == TL_NO)
+            translit_unsupported_record(&insn, pc);
+#endif
+        if (step == STEP_END) return;
     }
 }
 

@@ -290,6 +290,12 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1;
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
             }
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_HOST_CPU_X86_64)
+            char unsupported[1024];
+            int unsupported_size = translit_unsupported_report(unsupported, sizeof unsupported);
+            if (unsupported_size > 0 && (size_t)unsupported_size < sizeof unsupported)
+                (void)hl_linux_write(g_linux_box, STDERR_FILENO, unsupported, (size_t)unsupported_size);
+#endif
             char boundary[1024];
             int boundary_size = snprintf(
                 boundary, sizeof boundary,

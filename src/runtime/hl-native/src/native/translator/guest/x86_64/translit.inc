@@ -171,6 +171,27 @@ static uint64_t translit_sse2_store_movdqu;
 static uint64_t translit_sse2_store_family_runs;
 static uint64_t translit_sse2_pxor_admitted;
 static uint64_t translit_sse2_pxor_runs_admitted;
+
+#define TL_UNSUPPORTED_FORM_N 4096u
+#define TL_UNSUPPORTED_SITE_N 8192u
+typedef struct {
+    _Atomic uint32_t state;
+    uint64_t key;
+    _Atomic uint64_t count;
+} translit_unsupported_form;
+typedef struct {
+    _Atomic uint32_t state;
+    uint64_t pc, key;
+    _Atomic uint64_t count;
+} translit_unsupported_site;
+static translit_unsupported_form translit_unsupported_forms[TL_UNSUPPORTED_FORM_N];
+static translit_unsupported_site translit_unsupported_sites[TL_UNSUPPORTED_SITE_N];
+static _Atomic uint64_t translit_unsupported_keyed;
+static _Atomic uint64_t translit_unsupported_form_unique, translit_unsupported_form_collisions;
+static _Atomic uint64_t translit_unsupported_form_overflow;
+static _Atomic uint64_t translit_unsupported_site_unique;
+static _Atomic uint64_t translit_unsupported_site_repeats, translit_unsupported_site_collisions;
+static _Atomic uint64_t translit_unsupported_site_overflow;
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -338,6 +359,99 @@ static int translit_classify(const struct insn *insn) {
     }
     return TL_NO;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static unsigned translit_unsupported_prefix(const struct insn *insn) {
+    return insn->rep ? 1u : insn->repne ? 2u : insn->p66 ? 3u : 0u;
+}
+
+static unsigned translit_unsupported_width(const struct insn *insn) {
+    return insn->opsize == 1 ? 0u : insn->opsize == 2 ? 1u : insn->opsize == 4 ? 2u : insn->opsize == 8 ? 3u : 4u;
+}
+
+static uint64_t translit_unsupported_key(const struct insn *insn) {
+    unsigned map = insn->evex ? 4u : insn->vex ? 3u : insn->map3 ? 2u : insn->two ? 1u : 0u;
+    unsigned immediate = insn->imm_bytes == 0 ? 0u : insn->imm_bytes == 1 ? 1u : insn->imm_bytes <= 4 ? 2u : 3u;
+    return (uint64_t)insn->op | (uint64_t)map << 8 | (uint64_t)translit_unsupported_prefix(insn) << 11 |
+           (uint64_t)(insn->has_modrm != 0) << 13 | (uint64_t)(insn->mod & 3) << 14 |
+           (uint64_t)(insn->reg & 7) << 16 | (uint64_t)(insn->rm & 7) << 19 |
+           (uint64_t)(insn->is_mem != 0) << 22 | (uint64_t)(insn->rexW != 0) << 23 |
+           (uint64_t)(insn->rexR != 0) << 24 | (uint64_t)(insn->rexB != 0) << 25 |
+           (uint64_t)(insn->seg & 3) << 26 | (uint64_t)(insn->addr32 != 0) << 28 |
+           (uint64_t)(insn->lock != 0) << 29 | (uint64_t)immediate << 30 |
+           (uint64_t)translit_unsupported_width(insn) << 32 | (uint64_t)(insn->vex_map & 7) << 35 |
+           (uint64_t)(insn->rexX != 0) << 38;
+}
+
+static uint64_t translit_unsupported_mix(uint64_t value) {
+    value ^= value >> 33;
+    value *= UINT64_C(0xff51afd7ed558ccd);
+    value ^= value >> 33;
+    value *= UINT64_C(0xc4ceb9fe1a85ec53);
+    return value ^ (value >> 33);
+}
+
+static void translit_unsupported_record(const struct insn *insn, uint64_t pc) {
+    uint64_t key = translit_unsupported_key(insn);
+    unsigned start = (unsigned)translit_unsupported_mix(key) & (TL_UNSUPPORTED_FORM_N - 1u);
+    int keyed = 0;
+    for (unsigned probe = 0; probe < TL_UNSUPPORTED_FORM_N; probe++) {
+        translit_unsupported_form *slot = &translit_unsupported_forms[(start + probe) & (TL_UNSUPPORTED_FORM_N - 1u)];
+        uint32_t state = atomic_load_explicit(&slot->state, memory_order_acquire);
+        if (state == 0) {
+            uint32_t empty = 0;
+            if (atomic_compare_exchange_strong_explicit(&slot->state, &empty, 1, memory_order_acquire,
+                                                        memory_order_relaxed)) {
+                slot->key = key;
+                atomic_store_explicit(&slot->count, 1, memory_order_relaxed);
+                atomic_store_explicit(&slot->state, 2, memory_order_release);
+                atomic_fetch_add_explicit(&translit_unsupported_form_unique, 1, memory_order_relaxed);
+                keyed = 1;
+                break;
+            }
+            continue;
+        }
+        if (state == 2 && slot->key == key) {
+            atomic_fetch_add_explicit(&slot->count, 1, memory_order_relaxed);
+            keyed = 1;
+            break;
+        }
+        atomic_fetch_add_explicit(&translit_unsupported_form_collisions, 1, memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(keyed ? &translit_unsupported_keyed : &translit_unsupported_form_overflow, 1,
+                              memory_order_relaxed);
+
+    uint64_t mixed = translit_unsupported_mix(pc ^ (key * UINT64_C(0x9e3779b97f4a7c15)));
+    start = (unsigned)mixed & (TL_UNSUPPORTED_SITE_N - 1u);
+    for (unsigned probe = 0; probe < TL_UNSUPPORTED_SITE_N; probe++) {
+        translit_unsupported_site *slot = &translit_unsupported_sites[(start + probe) & (TL_UNSUPPORTED_SITE_N - 1u)];
+        uint32_t state = atomic_load_explicit(&slot->state, memory_order_acquire);
+        if (state == 0) {
+            uint32_t empty = 0;
+            if (atomic_compare_exchange_strong_explicit(&slot->state, &empty, 1, memory_order_acquire,
+                                                        memory_order_relaxed)) {
+                slot->pc = pc;
+                slot->key = key;
+                atomic_store_explicit(&slot->count, 1, memory_order_relaxed);
+                atomic_store_explicit(&slot->state, 2, memory_order_release);
+                atomic_fetch_add_explicit(&translit_unsupported_site_unique, 1, memory_order_relaxed);
+                return;
+            }
+            continue;
+        }
+        if (state == 2 && slot->pc == pc && slot->key == key) {
+            atomic_fetch_add_explicit(&slot->count, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&translit_unsupported_site_repeats, 1, memory_order_relaxed);
+            return;
+        }
+        atomic_fetch_add_explicit(&translit_unsupported_site_collisions, 1, memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(&translit_unsupported_site_overflow, 1, memory_order_relaxed);
+}
+
+static void translit_unsupported_top(const translit_unsupported_form *forms, unsigned form_count,
+                                     uint64_t top_key[8], uint64_t top_count[8]);
+#endif
 
 // A displaced ET_EXEC has distinct guest/link and host/storage coordinates. Stage one admits only
 // instructions whose copied bytes either touch no memory or carry a RIP-relative address that can be
@@ -1057,6 +1171,24 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return 0;
 #endif
     }
+    if (scenario == 42) {
+        translit_unsupported_form forms[3] = {0};
+        atomic_store_explicit(&forms[0].state, 2, memory_order_relaxed);
+        atomic_store_explicit(&forms[1].state, 2, memory_order_relaxed);
+        atomic_store_explicit(&forms[2].state, 2, memory_order_relaxed);
+        forms[0].key = 0x30;
+        forms[1].key = 0x10;
+        forms[2].key = 0x20;
+        atomic_store_explicit(&forms[0].count, 2, memory_order_relaxed);
+        atomic_store_explicit(&forms[1].count, 5, memory_order_relaxed);
+        atomic_store_explicit(&forms[2].count, 3, memory_order_relaxed);
+        uint64_t keys[8] = {0}, counts[8] = {0};
+        translit_unsupported_top(forms, 3, keys, counts);
+        return keys[0] == 0x10 && counts[0] == 5 && keys[1] == 0x20 && counts[1] == 3 &&
+                       keys[2] == 0x30 && counts[2] == 2
+                   ? 0
+                   : 56;
+    }
     return 6;
 }
 #endif
@@ -1459,6 +1591,63 @@ static void translit_run(struct cpu *cpu, struct interp_block *block) {
         (void)__atomic_fetch_add(&translit_jcc_fall_executed, block->profile_jcc_fall_stitches, __ATOMIC_RELAXED);
 #endif
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void translit_unsupported_top(const translit_unsupported_form *forms, unsigned form_count,
+                                     uint64_t top_key[8], uint64_t top_count[8]) {
+    for (unsigned slot = 0; slot < form_count; slot++) {
+        if (atomic_load_explicit(&forms[slot].state, memory_order_acquire) != 2) continue;
+        uint64_t key = forms[slot].key;
+        uint64_t count = atomic_load_explicit(&forms[slot].count, memory_order_relaxed);
+        unsigned rank = 0;
+        while (rank < 8 &&
+               (top_count[rank] > count || (top_count[rank] == count && top_key[rank] <= key)))
+            rank++;
+        if (rank == 8) continue;
+        for (unsigned move = 7; move > rank; move--) {
+            top_key[move] = top_key[move - 1];
+            top_count[move] = top_count[move - 1];
+        }
+        top_key[rank] = key;
+        top_count[rank] = count;
+    }
+}
+
+static int translit_unsupported_report(char *out, size_t size) {
+    uint64_t top_key[8] = {0}, top_count[8] = {0};
+    translit_unsupported_top(translit_unsupported_forms, TL_UNSUPPORTED_FORM_N, top_key, top_count);
+    uint64_t keyed = atomic_load_explicit(&translit_unsupported_keyed, memory_order_relaxed);
+    uint64_t overflow = atomic_load_explicit(&translit_unsupported_form_overflow, memory_order_relaxed);
+    uint64_t site_unique = atomic_load_explicit(&translit_unsupported_site_unique, memory_order_relaxed);
+    uint64_t site_repeats = atomic_load_explicit(&translit_unsupported_site_repeats, memory_order_relaxed);
+    uint64_t site_overflow = atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed);
+    int used = snprintf(out, size,
+                        "[diag] unsupported total=%llu keyed=%llu overflow=%llu forms=%llu collisions=%llu"
+                        " site_events=%llu sites=%llu repeats=%llu site_overflow=%llu site_collisions=%llu top=",
+                        (unsigned long long)(keyed + overflow), (unsigned long long)keyed,
+                        (unsigned long long)overflow,
+                        (unsigned long long)atomic_load_explicit(&translit_unsupported_form_unique,
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&translit_unsupported_form_collisions,
+                                                                memory_order_relaxed),
+                        (unsigned long long)(site_unique + site_repeats + site_overflow),
+                        (unsigned long long)site_unique, (unsigned long long)site_repeats,
+                        (unsigned long long)site_overflow,
+                        (unsigned long long)atomic_load_explicit(&translit_unsupported_site_collisions,
+                                                                memory_order_relaxed));
+    if (used < 0 || (size_t)used >= size) return -1;
+    for (unsigned rank = 0; rank < 8 && top_count[rank] != 0; rank++) {
+        int added = snprintf(out + used, size - (size_t)used, "%s%llx:%llu", rank == 0 ? "" : ",",
+                             (unsigned long long)top_key[rank], (unsigned long long)top_count[rank]);
+        if (added < 0 || (size_t)added >= size - (size_t)used) return -1;
+        used += added;
+    }
+    if ((size_t)used + 1u >= size) return -1;
+    out[used++] = '\n';
+    out[used] = '\0';
+    return used;
+}
+#endif
 
 // One line of the [prof] report (engine/target/x86_64.c), and the only place an operator can learn that
 // this backend was selected and then silently refused. Written here rather than there because the

@@ -493,7 +493,7 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_HOST_CPU_X86_64)
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     (void)scenario;
     return -1; // the x86 same-ISA transliterator is absent on this host
@@ -1680,6 +1680,12 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
             size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
             (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
         }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        char unsupported[1024];
+        int unsupported_size = translit_unsupported_report(unsupported, sizeof unsupported);
+        if (unsupported_size > 0 && (size_t)unsupported_size < sizeof unsupported)
+            (void)hl_linux_write(g_linux_box, STDERR_FILENO, unsupported, (size_t)unsupported_size);
+#endif
     }
     return c.exit_code;
 }
