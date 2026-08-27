@@ -618,14 +618,18 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
 #if defined(HL_NATIVE_TEST_HOOKS)
         unsigned packed = cpu->backend_shape;
         unsigned terminator = (packed >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK;
-        unsigned exit_kind = cpu->irq != 0 ? HL_BACKEND_SHAPE_T_IRQ : terminator;
+        /* Read once: an async kick may set irq at any instruction in this accounting sequence.  The
+           translated-exit family and its would-link publication disposition must describe the same
+           completed terminal, or exact family reconciliation gains a signal-sized race window. */
+        int terminal_completed = cpu->irq == 0;
+        unsigned exit_kind = terminal_completed ? terminator : HL_BACKEND_SHAPE_T_IRQ;
         hl_backend_tree_translated_exit(exit_kind, (packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK,
                                         (packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK);
         unsigned would_link_family =
             (packed >> TL_SHAPE_WOULD_FAMILY_SHIFT) & TL_SHAPE_WOULD_FAMILY_MASK;
         unsigned would_link_disposition =
             (packed >> TL_SHAPE_WOULD_DISPOSITION_SHIFT) & TL_SHAPE_WOULD_DISPOSITION_MASK;
-        if (cpu->irq == 0 && would_link_family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT)
+        if (terminal_completed && would_link_family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT)
             hl_backend_tree_would_link(would_link_family, would_link_disposition);
         unsigned family = interp_backend_shape_edge_family(terminator);
         if (family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) {
