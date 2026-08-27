@@ -99,6 +99,10 @@ struct Backend {
     unsupported_sites: u64,
     unsupported_repeats: u64,
     unsupported_site_overflow: u64,
+    translated_entries: u64,
+    interpreted_entries: u64,
+    translated_steps: u64,
+    interpreted_steps: u64,
     unsupported_line: String,
 }
 
@@ -183,6 +187,10 @@ fn backend(stderr: &[u8]) -> Backend {
         unsupported_sites: unsupported_counter("sites="),
         unsupported_repeats: unsupported_counter("repeats="),
         unsupported_site_overflow: unsupported_counter("site_overflow="),
+        translated_entries: unsupported_counter("translated_entries="),
+        interpreted_entries: unsupported_counter("interpreted_entries="),
+        translated_steps: unsupported_counter("translated_steps="),
+        interpreted_steps: unsupported_counter("interpreted_steps="),
         unsupported_line: unsupported.to_owned(),
         line,
     }
@@ -193,13 +201,19 @@ fn unsupported_census_records_successful_interpreter_steps() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "unsupported_census");
     let (interpreted, status, report) = run(&executable, "0");
+    let (selected, selected_status, selected_report) = run(&executable, "1");
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native unsupported-census fixture");
     assert_eq!(status, 0);
     assert_eq!(native.status.code(), Some(0));
     assert_eq!(interpreted, native.stdout);
+    assert_eq!((selected_status, selected), (status, interpreted.clone()));
     assert!(report.unsupported_total > 0, "{}", report.line);
+    assert!(selected_report.translated_entries > 0 && selected_report.interpreted_entries > 0,
+            "{}", selected_report.unsupported_line);
+    assert!(selected_report.translated_steps >= selected_report.translated_entries);
+    assert!(report.interpreted_steps >= report.interpreted_entries);
     assert_eq!(
         report.unsupported_total,
         report.unsupported_keyed + report.unsupported_overflow

@@ -1808,6 +1808,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     block->guest_end = pc;
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
+    block->profile_insns = (uint16_t)count;
 #endif
     g_cp = a->cursor;
     (void)__atomic_fetch_add(&translit_blocks, 1, __ATOMIC_RELAXED);
@@ -1870,10 +1871,14 @@ static int translit_unsupported_report(char *out, size_t size) {
     uint64_t site_unique = atomic_load_explicit(&translit_unsupported_site_unique, memory_order_relaxed);
     uint64_t site_repeats = atomic_load_explicit(&translit_unsupported_site_repeats, memory_order_relaxed);
     uint64_t site_overflow = atomic_load_explicit(&translit_unsupported_site_overflow, memory_order_relaxed);
+    uint64_t translated_entries = atomic_load_explicit(&g_dispatch_census_translated_entries, memory_order_relaxed);
+    uint64_t interpreted_entries = atomic_load_explicit(&g_dispatch_census_interpreted_entries, memory_order_relaxed);
     int used = snprintf(out, size,
                         "[diag] unsupported total=%llu keyed=%llu overflow=%llu forms=%llu collisions=%llu"
                         " site_events=%llu sites=%llu repeats=%llu site_overflow=%llu site_collisions=%llu"
-                        " deferred_excluded=%llu top=",
+                        " deferred_excluded=%llu translated_entries=%llu interpreted_entries=%llu"
+                        " translated_steps=%llu interpreted_steps=%llu translated_r0=%llu translated_r1=%llu"
+                        " interpreted_r0=%llu interpreted_r1=%llu interpreted_r5=%llu interpreted_r13=%llu top=",
                         (unsigned long long)(keyed + overflow), (unsigned long long)keyed,
                         (unsigned long long)overflow,
                         (unsigned long long)atomic_load_explicit(&translit_unsupported_form_unique,
@@ -1886,6 +1891,23 @@ static int translit_unsupported_report(char *out, size_t size) {
                         (unsigned long long)atomic_load_explicit(&translit_unsupported_site_collisions,
                                                                 memory_order_relaxed),
                         (unsigned long long)atomic_load_explicit(&translit_unsupported_deferred_excluded,
+                                                                memory_order_relaxed),
+                        (unsigned long long)translated_entries, (unsigned long long)interpreted_entries,
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_translated_steps,
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_interpreted_steps,
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_translated_reason[0],
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_translated_reason[1],
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_interpreted_reason[0],
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_interpreted_reason[1],
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_interpreted_reason[5],
+                                                                memory_order_relaxed),
+                        (unsigned long long)atomic_load_explicit(&g_dispatch_census_interpreted_reason[13],
                                                                 memory_order_relaxed));
     if (used < 0 || (size_t)used >= size) return -1;
     for (unsigned rank = 0; rank < 8 && top_count[rank] != 0; rank++) {

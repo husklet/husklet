@@ -126,6 +126,12 @@ static __thread volatile int g_interp_guest_access; // a guest access is in flig
 static __thread struct cpu *g_interp_pad_cpu;
 static __thread hl_x86_guest_data_pins g_interp_data_pins;
 static __thread int g_interp_data_active;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static __thread uint64_t g_dispatch_census_interp_steps;
+static _Atomic uint64_t g_dispatch_census_translated_entries, g_dispatch_census_interpreted_entries;
+static _Atomic uint64_t g_dispatch_census_translated_steps, g_dispatch_census_interpreted_steps;
+static _Atomic uint64_t g_dispatch_census_translated_reason[32], g_dispatch_census_interpreted_reason[32];
+#endif
 
 // ---- The past-EOF SIGBUS ledger. mem.c re-maps the past-EOF tail of a MAP_PRIVATE file mapping as
 // anonymous zero, so the host never raises BUS_ADRERR and the translator owes the guest SIGBUS out of
@@ -419,6 +425,9 @@ static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t
 // Every guest control transfer ends the block, keeping run_guest's per-iteration work (signal poll,
 // safepoints) at block granularity.
 static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    g_dispatch_census_interp_steps = 0;
+#endif
     for (;;) {
         uint64_t pc = cpu->rip; // a fault below reports precisely this PC
         struct insn insn;
@@ -429,6 +438,7 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         }
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
 #if defined(HL_NATIVE_TEST_HOOKS)
+        if (step != STEP_END) g_dispatch_census_interp_steps++;
         // This is an execution census, not an admission/attempt census. STEP_END hands deferred work to
         // a service which may still fail or trap, so only the in-interpreter committed path is counted.
         if (g_prof) translit_unsupported_record_completed(&insn, pc, step != STEP_END);
@@ -477,9 +487,24 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
     // MAP_SHARED alias mid-run must stop executing verbatim stores, and the descriptor is still a valid
     // interpreter block, so falling back costs nothing but speed.
     if (block->host_entry_off != 0 && translit_image_ok() && translit_bind_cpu(cpu)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        atomic_fetch_add_explicit(&g_dispatch_census_translated_entries, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_dispatch_census_translated_steps, block->profile_insns, memory_order_relaxed);
+#endif
         translit_run(cpu, block);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        atomic_fetch_add_explicit(&g_dispatch_census_translated_reason[cpu->reason < 32 ? cpu->reason : 31], 1,
+                                  memory_order_relaxed);
+#endif
     } else {
         interp_execute(context, cpu);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        atomic_fetch_add_explicit(&g_dispatch_census_interpreted_entries, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_dispatch_census_interpreted_steps, g_dispatch_census_interp_steps,
+                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_dispatch_census_interpreted_reason[cpu->reason < 32 ? cpu->reason : 31], 1,
+                                  memory_order_relaxed);
+#endif
     }
     g_interp_pad_armed = previous;
     g_interp_pad_cpu = previous_cpu;
