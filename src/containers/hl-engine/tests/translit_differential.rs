@@ -85,6 +85,8 @@ struct Backend {
     sse2_store_movaps: u64,
     sse2_store_movdqu: u64,
     sse2_store_family_runs: u64,
+    sse2_pxor_instructions: u64,
+    sse2_pxor_runs: u64,
     translations: u64,
 }
 
@@ -144,6 +146,8 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_store_movaps: counter("sse2_store_movaps="),
         sse2_store_movdqu: counter("sse2_store_movdqu="),
         sse2_store_family_runs: counter("sse2_store_family_runs="),
+        sse2_pxor_instructions: counter("sse2_pxor_instructions="),
+        sse2_pxor_runs: counter("sse2_pxor_runs="),
         translations,
         line,
     }
@@ -170,6 +174,33 @@ fn a_contiguous_sse2_run_matches_interpreter_and_native() {
         selected_backend.line
     );
     assert_eq!(selected_backend.sse2_target_runs, 1, "{}", selected_backend.line);
+}
+
+#[test]
+fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_pxor");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native PXOR fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"pxor=1010101010101010 high=1010101010101010 zero=0000000000000000 flags=0\n"
+    );
+    assert!(
+        selected_backend.sse2_pxor_instructions >= 3,
+        "{}",
+        selected_backend.line
+    );
+    assert!(selected_backend.sse2_pxor_runs > 0, "{}", selected_backend.line);
+    let image = std::fs::read(executable).unwrap();
+    assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0xef, 0xc1]));
+    assert!(image.windows(5).any(|bytes| bytes == [0x66, 0x45, 0x0f, 0xef, 0xc1]));
 }
 
 #[test]
