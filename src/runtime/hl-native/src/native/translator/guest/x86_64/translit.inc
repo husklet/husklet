@@ -1752,6 +1752,21 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 69;
     }
+    if (scenario == 56) {
+        uint64_t source_lo = UINT64_C(0x1800), source_hi = UINT64_C(0x1900);
+        const uint64_t dirty[1][2] = {{UINT64_C(0x1abc), UINT64_C(0x1abd)}};
+        translit_jcc_link_own_page(UINT64_C(0x1abc), &source_lo, &source_hi);
+        map_clear();
+        map_put(UINT64_C(0x1800), source_lo, source_hi, (void *)(uintptr_t)UINT64_C(0x111000),
+                (void *)(uintptr_t)UINT64_C(0x111001));
+        map_put(UINT64_C(0x2800), UINT64_C(0x2800), UINT64_C(0x2900),
+                (void *)(uintptr_t)UINT64_C(0x222000), (void *)(uintptr_t)UINT64_C(0x222001));
+        uint32_t removed = map_invalidate_source_ranges(dirty, 1);
+        int ok = removed == 1 && map_host(UINT64_C(0x1800)) == NULL &&
+                 (uintptr_t)map_host(UINT64_C(0x2800)) == UINT64_C(0x222000);
+        map_clear();
+        return ok ? 0 : 70;
+    }
     return 6;
 }
 #endif
