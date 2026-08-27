@@ -93,6 +93,7 @@ struct Backend {
     sse2_movd_runs_admitted: u64,
     sse2_movhlps_admitted: u64,
     fs_mem_admitted: u64,
+    fs_fixture_admitted: u64,
     translations: u64,
     unsupported_total: u64,
     unsupported_keyed: u64,
@@ -178,6 +179,7 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_movd_runs_admitted: counter("sse2_movd_runs_admitted="),
         sse2_movhlps_admitted: counter("sse2_movhlps_admitted="),
         fs_mem_admitted: counter("fs_mem_admitted="),
+        fs_fixture_admitted: counter("fs_fixture_admitted="),
         translations,
         unsupported_total: unsupported_counter("total="),
         unsupported_keyed: unsupported_counter("keyed="),
@@ -252,9 +254,10 @@ fn fs_disp32_mov_and_sub_match_interpreter_and_native() {
     assert_eq!(native.stdout, selected);
     assert_eq!(
         selected,
-        b"fs rc=0 mov=0123456789abcdef high=f0e1d2c3b4a59687 sub=edcba987654320ff flags=0094 threads=1 authority=0\n"
+        b"fs rc=0 mov=0123456789abcdef high=f0e1d2c3b4a59687 sub=edcba987654320ff flags=0094 r11=13579bdf2468ace0 r10=1020304050607080 neg=55aa33cc77ee11dd threads=1 authority=0\n"
     );
     assert!(selected_backend.fs_mem_admitted >= 3, "{}", selected_backend.line);
+    assert_eq!(selected_backend.fs_fixture_admitted, 5, "{}", selected_backend.line);
     assert!(selected_backend.entries >= 3, "{}", selected_backend.line);
 }
 
@@ -264,8 +267,7 @@ fn fs_disp32_loads_fall_back_after_executable_mapping_authority() {
     let executable = fixture(work.path(), "fs_tls");
     let args = [b"authority".as_slice()];
     let (interpreted, interpreted_status, _) = run_with_arguments(&executable, "0", &args, false, false);
-    let (selected, selected_status, selected_backend) =
-        run_with_arguments(&executable, "1", &args, false, false);
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &args, false, false);
     let native = std::process::Command::new(&executable)
         .arg("authority")
         .output()
@@ -275,6 +277,7 @@ fn fs_disp32_loads_fall_back_after_executable_mapping_authority() {
     assert_eq!(native.stdout, selected);
     assert!(selected.ends_with(b"threads=1 authority=1\n"));
     assert!(selected_backend.declined > 0, "{}", selected_backend.line);
+    assert_eq!(selected_backend.fs_fixture_admitted, 0, "{}", selected_backend.line);
 }
 
 #[test]
@@ -289,7 +292,10 @@ fn fs_disp32_fault_restarts_at_guest_source_with_old_destination() {
     assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
     assert_eq!(native.status.code(), Some(selected_status));
     assert_eq!(native.stdout, selected);
-    assert_eq!(selected, b"fs-fault delivered=1 rip=1 old=1 result=8877665544332211\n");
+    assert_eq!(
+        selected,
+        b"fs-fault delivered=1 rip=2 old=1 subold=1 flags=1 result=8877665544332211 sub=1122334455667788\n"
+    );
     assert!(selected_backend.fs_mem_admitted > 0, "{}", selected_backend.line);
     assert!(selected_backend.provenance_fallback > 0, "{}", selected_backend.line);
     assert!(selected_backend.body_owner_recovered > 0, "{}", selected_backend.line);

@@ -177,6 +177,7 @@ static uint64_t translit_sse2_movd_admitted;
 static uint64_t translit_sse2_movd_runs_admitted;
 static uint64_t translit_sse2_movhlps_admitted;
 static uint64_t translit_fs_mem_admitted;
+static uint64_t translit_fs_fixture_admitted;
 #define TRANSLIT_PUNPCKLQDQ_PROFILE                                                                    \
     " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu sse2_movhlps_admitted=%llu"
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS                                                                  \
@@ -185,8 +186,9 @@ static uint64_t translit_fs_mem_admitted;
 #define TRANSLIT_MOVD_PROFILE " sse2_movd_admitted=%llu sse2_movd_runs_admitted=%llu"
 #define TRANSLIT_MOVD_ARGUMENTS                                                                        \
     , (unsigned long long)sse2_movd_admitted, (unsigned long long)sse2_movd_runs_admitted
-#define TRANSLIT_FS_PROFILE " fs_mem_admitted=%llu"
-#define TRANSLIT_FS_ARGUMENTS , (unsigned long long)fs_mem_admitted
+#define TRANSLIT_FS_PROFILE " fs_mem_admitted=%llu fs_fixture_admitted=%llu"
+#define TRANSLIT_FS_ARGUMENTS                                                                         \
+    , (unsigned long long)fs_mem_admitted, (unsigned long long)fs_fixture_admitted
 
 #define TL_UNSUPPORTED_FORM_N 4096u
 #define TL_UNSUPPORTED_SITE_N 8192u
@@ -1903,7 +1905,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         (void)__atomic_fetch_add(&translit_sse2_movd_admitted, sse2_movd_count, __ATOMIC_RELAXED);
         if (sse2_movd_seen) (void)__atomic_fetch_add(&translit_sse2_movd_runs_admitted, 1, __ATOMIC_RELAXED);
     }
-    if (fs_run) (void)__atomic_fetch_add(&translit_fs_mem_admitted, 1, __ATOMIC_RELAXED);
+    if (fs_run) {
+        (void)__atomic_fetch_add(&translit_fs_mem_admitted, 1, __ATOMIC_RELAXED);
+        if (first_insn.disp == INT64_C(0x12340) || first_insn.disp == INT64_C(0x12348) ||
+            first_insn.disp == INT64_C(0x12350) || first_insn.disp == INT64_C(0x12358) ||
+            first_insn.disp == -INT64_C(0x2340))
+            (void)__atomic_fetch_add(&translit_fs_fixture_admitted, 1, __ATOMIC_RELAXED);
+    }
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
     block->host_len = (uint32_t)(a->cursor - start);
@@ -2053,6 +2061,7 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_movd_runs_admitted = __atomic_load_n(&translit_sse2_movd_runs_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movhlps_admitted = __atomic_load_n(&translit_sse2_movhlps_admitted, __ATOMIC_RELAXED);
     uint64_t fs_mem_admitted = __atomic_load_n(&translit_fs_mem_admitted, __ATOMIC_RELAXED);
+    uint64_t fs_fixture_admitted = __atomic_load_n(&translit_fs_fixture_admitted, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
@@ -2103,6 +2112,7 @@ static int translit_report(char *out, size_t size) {
         sse2_movd_admitted = sse2_movd_runs_admitted = UINT64_MAX;
         sse2_movhlps_admitted = UINT64_MAX;
         fs_mem_admitted = UINT64_MAX;
+        fs_fixture_admitted = UINT64_MAX;
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
