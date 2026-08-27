@@ -252,10 +252,29 @@ fn fs_disp32_mov_and_sub_match_interpreter_and_native() {
     assert_eq!(native.stdout, selected);
     assert_eq!(
         selected,
-        b"fs rc=0 mov=0123456789abcdef high=f0e1d2c3b4a59687 sub=edcba987654320ff flags=0094 threads=1\n"
+        b"fs rc=0 mov=0123456789abcdef high=f0e1d2c3b4a59687 sub=edcba987654320ff flags=0094 threads=1 authority=0\n"
     );
     assert!(selected_backend.fs_mem_admitted >= 3, "{}", selected_backend.line);
     assert!(selected_backend.entries >= 3, "{}", selected_backend.line);
+}
+
+#[test]
+fn fs_disp32_loads_fall_back_after_executable_mapping_authority() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "fs_tls");
+    let args = [b"authority".as_slice()];
+    let (interpreted, interpreted_status, _) = run_with_arguments(&executable, "0", &args, false, false);
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &args, false, false);
+    let native = std::process::Command::new(&executable)
+        .arg("authority")
+        .output()
+        .expect("native FS authority fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert!(selected.ends_with(b"threads=1 authority=1\n"));
+    assert!(selected_backend.declined > 0, "{}", selected_backend.line);
 }
 
 #[test]

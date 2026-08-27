@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 struct answer {
     uint64_t mov_rax, mov_r15, sub_rdx, flags;
@@ -37,7 +39,14 @@ __asm__(".text\n"
         "9: mov $-1,%rax\n"
         "8: add $16,%rsp; pop %r15; pop %r13; pop %r12; ret\n");
 
-int main(void) {
+int main(int argc, char **argv) {
+    (void)argv;
+    int authority = argc > 1;
+    if (authority) {
+        size_t page = (size_t)sysconf(_SC_PAGESIZE);
+        if (mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED)
+            return 2;
+    }
     unsigned char tls[64] = {0};
     struct answer answer = {0};
     *(uint64_t *)(tls + 0x20) = UINT64_C(0x0123456789abcdef);
@@ -59,9 +68,10 @@ int main(void) {
                     threads[i].answer.mov_rax == *(uint64_t *)(threads[i].tls + 0x20) &&
                     threads[i].answer.mov_r15 == *(uint64_t *)(threads[i].tls + 0x28);
     }
-    printf("fs rc=%ld mov=%016llx high=%016llx sub=%016llx flags=%04llx threads=%d\n", rc,
+    printf("fs rc=%ld mov=%016llx high=%016llx sub=%016llx flags=%04llx threads=%d authority=%d\n", rc,
            (unsigned long long)answer.mov_rax, (unsigned long long)answer.mov_r15,
-           (unsigned long long)answer.sub_rdx, (unsigned long long)(answer.flags & UINT64_C(0xcd5)), thread_ok);
+           (unsigned long long)answer.sub_rdx, (unsigned long long)(answer.flags & UINT64_C(0xcd5)), thread_ok,
+           authority);
     return rc == 0 && answer.mov_rax == UINT64_C(0x0123456789abcdef) &&
                    answer.mov_r15 == UINT64_C(0xf0e1d2c3b4a59687) &&
                    answer.sub_rdx == UINT64_C(0xedcba987654320ff) && thread_ok
