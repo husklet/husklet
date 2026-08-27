@@ -83,7 +83,7 @@ __asm__(".text\n"
         "movdqu (%rdi),%xmm0\n.byte 0x66,0x0f,0x7e,0x06\nret\n.size movd_memory32,.-movd_memory32\n"
         ".globl flags_unchanged\n.type flags_unchanged,@function\nflags_unchanged:\n"
         "movdqu (%rdi),%xmm0\nmovdqu (%rsi),%xmm1\n"
-        "pushq $0xcd7\npopfq\n"
+        "push %rdx\npopfq\n"
         ".byte 0x66,0x0f,0xdb,0xc1\n.byte 0x66,0x0f,0x6f,0xc0\n"
         ".byte 0x66,0x0f,0x73,0xd8,0x01\n.byte 0x66,0x0f,0xeb,0xc1\n"
         ".byte 0x66,0x0f,0x7e,0xc0\npushfq\npop %rax\ncld\nret\n"
@@ -107,7 +107,7 @@ extern void faulting_por(const void *, const void *, void *);
 extern void movd32(const void *, uint64_t *);
 extern void movd64(const void *, uint64_t *);
 extern void movd_memory32(const void *, void *);
-extern uint64_t flags_unchanged(const void *, const void *);
+extern uint64_t flags_unchanged(const void *, const void *, uint64_t);
 extern void invalid_lock(const void *);
 extern void invalid_f2(const void *);
 extern void invalid_f3(const void *);
@@ -181,7 +181,8 @@ int main(void) {
     movd_memory32(a, out + 1);
     if (memcmp(out + 1, a, 4) != 0 || out[0] != 0xa5 || out[5] != 0xa5) return 12;
 
-    if ((flags_unchanged(a, b) & UINT64_C(0xcd5)) != UINT64_C(0xcd5)) return 13;
+    if ((flags_unchanged(a, b, UINT64_C(0xcd7)) & UINT64_C(0xcd5)) != UINT64_C(0xcd5)) return 13;
+    if ((flags_unchanged(a, b, UINT64_C(0x002)) & UINT64_C(0xcd5)) != 0) return 13;
     if (!expect_ill(invalid_lock, a) || !expect_ill(invalid_f2, a) || !expect_ill(invalid_f3, a) ||
         !expect_ill(invalid_psr_memory, a))
         return 14;
