@@ -364,6 +364,28 @@ struct NativeLibrary {
 }
 
 static LOADED: OnceLock<Result<NativeLibrary, LoadError>> = OnceLock::new();
+static SELECTED: OnceLock<PathBuf> = OnceLock::new();
+
+pub(crate) fn select(path: &Path) -> Result<(), String> {
+    if LOADED.get().is_some() {
+        return Err("the native library has already been loaded".into());
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve selected native library {}: {error}", path.display()))?;
+    if !path.is_file() {
+        return Err(format!("selected native library is not a file: {}", path.display()));
+    }
+    match SELECTED.set(path.clone()) {
+        Ok(()) => Ok(()),
+        Err(_) if SELECTED.get() == Some(&path) => Ok(()),
+        Err(_) => Err("a different native library was already selected".into()),
+    }
+}
+
+fn selected() -> Vec<PathBuf> {
+    SELECTED.get().into_iter().cloned().collect()
+}
 
 pub(crate) fn api() -> Result<&'static BridgeApi, &'static LoadError> {
     loaded().map(|value| &value.api)
@@ -722,7 +744,9 @@ impl BridgeApi {
 // The release arm of this pair genuinely fails; both cfg arms share one signature.
 #[allow(clippy::unnecessary_wraps)]
 fn candidates() -> Result<Vec<PathBuf>, LoadError> {
-    Ok(vec![PathBuf::from(env!("HL_NATIVE_LIBRARY_PATH"))])
+    let mut candidates = selected();
+    candidates.push(PathBuf::from(env!("HL_NATIVE_LIBRARY_PATH")));
+    Ok(candidates)
 }
 
 #[cfg(not(debug_assertions))]
@@ -734,7 +758,8 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 #[cfg(any(not(debug_assertions), test))]
 fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
     let directory = executable.parent().ok_or_else(|| LoadError::NotFound(Vec::new()))?;
-    let mut candidates = installed_candidates(directory);
+    let mut candidates = selected();
+    candidates.extend(installed_candidates(directory));
     // A `--release` **test** binary lives in the Cargo target directory, which carries none of the
     // installed layouts above: `deps/`, `../lib/` and `../Frameworks/` are all absent, so the engine
     // was simply not found and every test that needs one ran against whatever fallback its subject
