@@ -141,6 +141,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_JCC_LINK_DISABLE",
+        "test-only disable already-published same-page JCC links",
+        Flag
+    ),
+    internal!(
         "HL_TRANSLIT_PROFILE_WIDE_TEST",
         "test-only render every same-ISA profile counter at UINT64 width",
         Flag
