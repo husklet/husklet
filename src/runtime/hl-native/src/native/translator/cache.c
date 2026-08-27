@@ -1408,6 +1408,7 @@ typedef struct {
     uint64_t guest;
 } jit_body_owner_entry;
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
+typedef uint16_t jit_body_owner_preserve;
 typedef struct {
     uint64_t generation;
     uint8_t *rw;
@@ -1433,7 +1434,9 @@ static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int creat
         if (empty == NULL && entries == NULL) empty = &g_body_owners[i];
     }
     if (!create || empty == NULL) return NULL;
-    jit_body_owner_entry *entries = calloc(JIT_BODY_OWNER_N, sizeof(*entries));
+    // Keep the 16-byte search entry compact: one parallel 16-bit mask per range carries the complete
+    // x86 GPR preserve set, in the same allocation and behind the same release publication as the entry.
+    jit_body_owner_entry *entries = calloc(JIT_BODY_OWNER_N, sizeof(*entries) + sizeof(jit_body_owner_preserve));
     if (entries == NULL) return NULL;
     empty->generation = generation;
     empty->rw = g_cache;
@@ -1468,6 +1471,10 @@ static int jit_body_owner_reserve_n(uint64_t generation, uint32_t wanted, uint32
     return 1;
 }
 
+static jit_body_owner_preserve *jit_body_owner_preserves(jit_body_owner_entry *entries) {
+    return (jit_body_owner_preserve *)(void *)(entries + JIT_BODY_OWNER_N);
+}
+
 static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t lo, uint64_t hi, uint64_t guest) {
     jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
     jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
@@ -1481,11 +1488,15 @@ static int jit_body_owner_publish(uint64_t generation, uint32_t token, uint64_t 
         if (previous->rw_end <= previous->rw_start || previous->rw_end > start) return 0;
     }
     entries[token] = (jit_body_owner_entry){start, end, guest};
+    jit_body_owner_preserves(entries)[token] = 0;
     atomic_store_explicit(&set->count, token + 1, memory_order_release);
     return 1;
 }
 
-typedef struct { uint64_t lo, hi, guest; } jit_body_owner_range;
+typedef struct {
+    uint64_t lo, hi, guest;
+    uint32_t preserve_registers;
+} jit_body_owner_range;
 
 static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
                                     const jit_body_owner_range *range, uint32_t wanted) {
@@ -1497,14 +1508,19 @@ static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
         return 0;
     uint32_t previous_end = token == 0 ? 0 : entries[token - 1].rw_end;
     for (uint32_t i = 0; i < wanted; i++) {
-        if (range[i].hi <= range[i].lo || range[i].lo < base || range[i].hi > base + CACHE_SZ) return 0;
+        if (range[i].hi <= range[i].lo || range[i].lo < base || range[i].hi > base + CACHE_SZ ||
+            range[i].preserve_registers > UINT16_MAX)
+            return 0;
         uint32_t start = (uint32_t)(range[i].lo - base), end = (uint32_t)(range[i].hi - base);
         if ((token != 0 || i != 0) && previous_end > start) return 0;
         previous_end = end;
     }
-    for (uint32_t i = 0; i < wanted; i++)
+    jit_body_owner_preserve *preserves = jit_body_owner_preserves(entries);
+    for (uint32_t i = 0; i < wanted; i++) {
         entries[token + i] = (jit_body_owner_entry){(uint32_t)(range[i].lo - base),
                                                     (uint32_t)(range[i].hi - base), range[i].guest};
+        preserves[token + i] = (jit_body_owner_preserve)range[i].preserve_registers;
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (atomic_load_explicit(&g_body_owner_batch_pause, memory_order_acquire) == 1) {
         atomic_store_explicit(&g_body_owner_batch_pause, 2, memory_order_release);
@@ -1515,7 +1531,7 @@ static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
     return 1;
 }
 
-static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
+static int jit_body_owner_lookup_preserve(uint64_t host_pc, uint64_t *guest, uint32_t *preserve_registers) {
     for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
         jit_body_owner_set *set = &g_body_owners[i];
         jit_body_owner_entry *entries = atomic_load_explicit(&set->entry, memory_order_acquire);
@@ -1541,11 +1557,17 @@ static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
                 lo = mid + 1;
             else {
                 *guest = entry->guest;
+                if (preserve_registers != NULL)
+                    *preserve_registers = jit_body_owner_preserves(entries)[mid];
                 return 1;
             }
         }
     }
     return 0;
+}
+
+static int jit_body_owner_lookup(uint64_t host_pc, uint64_t *guest) {
+    return jit_body_owner_lookup_preserve(host_pc, guest, NULL);
 }
 
 static void jit_body_owner_drop_generation(uint64_t generation) {
