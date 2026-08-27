@@ -91,6 +91,7 @@ struct Backend {
     sse2_punpcklqdq_runs_admitted: u64,
     sse2_movd_admitted: u64,
     sse2_movd_runs_admitted: u64,
+    sse2_movhlps_admitted: u64,
     translations: u64,
 }
 
@@ -156,9 +157,31 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_punpcklqdq_runs_admitted: counter("sse2_punpcklqdq_runs_admitted="),
         sse2_movd_admitted: counter("sse2_movd_admitted="),
         sse2_movd_runs_admitted: counter("sse2_movd_runs_admitted="),
+        sse2_movhlps_admitted: counter("sse2_movhlps_admitted="),
         translations,
         line,
     }
+}
+
+#[test]
+fn register_movhlps_matches_native_for_distinct_high_alias_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_movhlps");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native MOVHLPS fixture");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"distinct=30dfcefdec9b8ab9:10ffeeddccbbaa99 high=30dfcefdec9b8ab9:10ffeeddccbbaa99 \
+alias=10ffeeddccbbaa99:10ffeeddccbbaa99 flags=0c95:0c95:0000\n"
+    );
+    assert_eq!(selected_backend.sse2_movhlps_admitted, 3, "{}", selected_backend.line);
 }
 
 #[test]

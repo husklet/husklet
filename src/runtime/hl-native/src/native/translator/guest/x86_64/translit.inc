@@ -175,10 +175,12 @@ static uint64_t translit_sse2_punpcklqdq_admitted;
 static uint64_t translit_sse2_punpcklqdq_runs_admitted;
 static uint64_t translit_sse2_movd_admitted;
 static uint64_t translit_sse2_movd_runs_admitted;
+static uint64_t translit_sse2_movhlps_admitted;
 #define TRANSLIT_PUNPCKLQDQ_PROFILE                                                                    \
-    " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu"
+    " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu sse2_movhlps_admitted=%llu"
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS                                                                  \
-    , (unsigned long long)sse2_punpcklqdq_admitted, (unsigned long long)sse2_punpcklqdq_runs_admitted
+    , (unsigned long long)sse2_punpcklqdq_admitted, (unsigned long long)sse2_punpcklqdq_runs_admitted,   \
+        (unsigned long long)sse2_movhlps_admitted
 #define TRANSLIT_MOVD_PROFILE " sse2_movd_admitted=%llu sse2_movd_runs_admitted=%llu"
 #define TRANSLIT_MOVD_ARGUMENTS                                                                        \
     , (unsigned long long)sse2_movd_admitted, (unsigned long long)sse2_movd_runs_admitted
@@ -282,6 +284,7 @@ static int translit_classify_two(const struct insn *insn) {
         if (!insn->rep &&
             (op == 0x10 || op == 0x28 || ((op == 0x11 || op == 0x29) && insn->is_mem)))
             return TL_SSE2;
+        if (!insn->rep && op == 0x12 && insn->mod == 3) return TL_SSE2; // MOVHLPS xmm,xmm
     }
     if (insn->p66 && !insn->rep && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg &&
         !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm) {
@@ -1019,7 +1022,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                                {0x66, 0x0F, 0x6E, 0xC1}, {0x66, 0x4D, 0x0F, 0x6E, 0xD9},
                                                {0x66, 0x0F, 0xEF, 0xC1}, {0x66, 0x45, 0x0F, 0xEF, 0xC1},
                                                {0x66, 0x0F, 0x6F, 0x00}, {0xF3, 0x0F, 0x6F, 0x01},
-                                               {0x0F, 0x10, 0xC1}, {0x0F, 0x28, 0x01},
+                                               {0x0F, 0x10, 0xC1}, {0x0F, 0x28, 0x01}, {0x0F, 0x12, 0xC1},
+                                               {0x45, 0x0F, 0x12, 0xFF},
                                                {0x66, 0x0F, 0x73, 0xDA, 0}, {0x66, 0x0F, 0xEB, 0xC1},
                                                {0x66, 0x0F, 0x7E, 0xC0}, {0xF3, 0x0F, 0x7F, 0x00},
                                                {0x0F, 0x11, 0x00}, {0x0F, 0x29, 0x00},
@@ -1039,6 +1043,9 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                               {0x66, 0x0F, 0x6E, 0x00},       // MOVD/Q memory source deferred
                                               {0x66, 0x0F, 0xEF, 0x00},       // PXOR memory source deferred
                                               {0xF3, 0x0F, 0xEF, 0xC1},       // wrong mandatory prefix
+                                              {0x0F, 0x12, 0x00},             // MOVLPS memory form
+                                              {0x66, 0x0F, 0x12, 0xC1},       // wrong MOVHLPS prefix
+                                              {0xF2, 0x0F, 0x12, 0xC1}, {0xF3, 0x0F, 0x12, 0xC1},
                                               {0x66, 0x0F, 0x7E, 0x00},       // memory store deferred
                                               {0x66, 0x0F, 0xDF, 0x00},       // PANDN memory source deferred
                                               {0xF3, 0x0F, 0x7F, 0xC0},       // MOVDQU store requires memory
@@ -1140,6 +1147,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t sse2_pxor_count = 0;
     uint64_t sse2_punpcklqdq_count = 0;
     uint64_t sse2_movd_count = 0;
+    uint64_t sse2_movhlps_count = 0;
     int sse2_next_family_seen = 0;
     int sse2_store_family_seen = 0;
     int sse2_pxor_seen = 0;
@@ -1217,7 +1225,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 // No XMM preload.
             } else if (sse2_store) {
                 translit_xmm_cpu(a, insn.reg, 1);
-            } else if (insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
+            } else if (insn.op == 0x12 || insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
                        insn.op == 0xEF) {
                 translit_xmm_cpu(a, insn.reg, 1);
                 if (!insn.is_mem && insn.rm_reg != insn.reg) translit_xmm_cpu(a, insn.rm_reg, 1);
@@ -1256,6 +1264,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             sse2_pxor_count += (uint64_t)(insn.op == 0xEF);
             sse2_punpcklqdq_count += (uint64_t)(insn.op == 0x6C);
             sse2_movd_count += (uint64_t)(insn.op == 0x6E);
+            sse2_movhlps_count += (uint64_t)(insn.op == 0x12);
             if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
                 sse2_next_family_seen = 1;
             if ((sse2_signature & UINT64_C(0xFFFFFFFF)) == UINT64_C(0x6F11297F))
@@ -1470,6 +1479,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         (void)__atomic_fetch_add(&translit_sse2_pxor_admitted, sse2_pxor_count, __ATOMIC_RELAXED);
         if (sse2_pxor_seen) (void)__atomic_fetch_add(&translit_sse2_pxor_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_admitted, sse2_punpcklqdq_count, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_movhlps_admitted, sse2_movhlps_count, __ATOMIC_RELAXED);
         if (sse2_punpcklqdq_seen)
             (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_movd_admitted, sse2_movd_count, __ATOMIC_RELAXED);
@@ -1547,6 +1557,7 @@ static int translit_report(char *out, size_t size) {
         __atomic_load_n(&translit_sse2_punpcklqdq_runs_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movd_admitted = __atomic_load_n(&translit_sse2_movd_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movd_runs_admitted = __atomic_load_n(&translit_sse2_movd_runs_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_movhlps_admitted = __atomic_load_n(&translit_sse2_movhlps_admitted, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
@@ -1595,6 +1606,7 @@ static int translit_report(char *out, size_t size) {
         sse2_store_family_runs = sse2_pxor_admitted = sse2_pxor_runs_admitted = UINT64_MAX;
         sse2_punpcklqdq_admitted = sse2_punpcklqdq_runs_admitted = UINT64_MAX;
         sse2_movd_admitted = sse2_movd_runs_admitted = UINT64_MAX;
+        sse2_movhlps_admitted = UINT64_MAX;
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
