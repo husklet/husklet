@@ -7,14 +7,14 @@ __asm__(".text\n"
         ".global sse2_chain\n"
         ".type sse2_chain,@function\n"
         "sse2_chain:\n"
-        "movdqu (%rdi), %xmm0\n"
         "movdqu (%rsi), %xmm1\n"
         // The unsupported setup belongs to its own interpreter block.  This branch makes the target
         // PAND a real descriptor entry instead of letting the interpreter consume the entire function.
         "jmp .Lsse2_target\n"
         ".Lsse2_target:\n"
-        // The five admitted encodings are deliberately contiguous.  Changing any middle opcode must
+        // The six admitted encodings are deliberately contiguous.  Changing any middle opcode must
         // split the descriptor and the receipt assertion in translit_differential.rs must turn red.
+        "movdqu (%rdi), %xmm0\n"
         "pand %xmm1, %xmm0\n"
         "movdqa %xmm0, %xmm2\n"
         "psrldq $4, %xmm2\n"

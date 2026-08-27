@@ -153,7 +153,7 @@ fn a_contiguous_sse2_run_matches_interpreter_and_native() {
     assert_eq!(selected, b"sse2=00070005\n");
     assert!(selected_backend.sse2_runs_admitted > 0, "{}", selected_backend.line);
     assert!(
-        selected_backend.sse2_instructions_admitted >= 5,
+        selected_backend.sse2_instructions_admitted >= 6,
         "{}",
         selected_backend.line
     );
