@@ -1468,6 +1468,18 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 63;
     }
+    if (scenario == 50) {
+        uint64_t base = UINT64_C(0x12345000);
+        uint64_t guest = 0;
+        uint32_t preserve = 0;
+        jit_instruction_map_put_preserve(base, base + 10, UINT64_C(0x11110000), 1u << 11);
+        jit_instruction_map_put_preserve(base + 10, base + 20, UINT64_C(0x22220000), 1u << 11);
+        int source = jit_instruction_map_lookup(base + 9, &guest, &preserve) &&
+                     guest == UINT64_C(0x11110000) && preserve == (1u << 11);
+        int postcommit = jit_instruction_map_lookup(base + 10, &guest, &preserve) &&
+                         guest == UINT64_C(0x22220000) && preserve == (1u << 11);
+        return source && postcommit ? 0 : 64;
+    }
     return 6;
 }
 #endif
