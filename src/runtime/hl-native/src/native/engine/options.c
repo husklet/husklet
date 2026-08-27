@@ -92,6 +92,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_BODY_OWNER_EXHAUST",
                         "test-only exhaust immutable same-ISA body-owner capacity", HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_FS_AUTHORITY_TEST",
+                        "test-only force same-ISA FS direct-data authority refusal", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",
                         "test-only render every same-ISA profile counter at UINT64 width", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
