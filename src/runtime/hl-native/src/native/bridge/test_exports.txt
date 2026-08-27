@@ -1,3 +1,4 @@
+hl_aarch64_backend_tree_census_test
 hl_aarch64_bound_vector_io_test
 hl_aarch64_checkpoint_anon_shared_test
 hl_aarch64_checkpoint_channel_notify_test
@@ -95,6 +96,7 @@ hl_c_backend_translation_count
 hl_c_bridge_api_v1
 hl_engine_abi
 hl_engine_version
+hl_x86_64_backend_tree_census_test
 hl_x86_64_bound_vector_io_test
 hl_x86_64_checkpoint_anon_shared_test
 hl_x86_64_checkpoint_channel_notify_test

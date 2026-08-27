@@ -128,9 +128,6 @@ static __thread hl_x86_guest_data_pins g_interp_data_pins;
 static __thread int g_interp_data_active;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static __thread uint64_t g_dispatch_census_interp_steps;
-static _Atomic uint64_t g_dispatch_census_translated_entries, g_dispatch_census_interpreted_entries;
-static _Atomic uint64_t g_dispatch_census_translated_steps, g_dispatch_census_interpreted_steps;
-static _Atomic uint64_t g_dispatch_census_translated_reason[32], g_dispatch_census_interpreted_reason[32];
 #endif
 
 // ---- The past-EOF SIGBUS ledger. mem.c re-maps the past-EOF tail of a MAP_PRIVATE file mapping as
@@ -487,24 +484,16 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
     // MAP_SHARED alias mid-run must stop executing verbatim stores, and the descriptor is still a valid
     // interpreter block, so falling back costs nothing but speed.
     if (block->host_entry_off != 0 && translit_image_ok() && translit_bind_cpu(cpu)) {
-#if defined(HL_NATIVE_TEST_HOOKS)
-        atomic_fetch_add_explicit(&g_dispatch_census_translated_entries, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&g_dispatch_census_translated_steps, block->profile_insns, memory_order_relaxed);
-#endif
+        hl_backend_tree_run_begin(1, block->profile_insns);
         translit_run(cpu, block);
-#if defined(HL_NATIVE_TEST_HOOKS)
-        atomic_fetch_add_explicit(&g_dispatch_census_translated_reason[cpu->reason < 32 ? cpu->reason : 31], 1,
-                                  memory_order_relaxed);
-#endif
+        hl_backend_tree_reason(cpu->reason);
     } else {
+        hl_backend_tree_run_begin(0, 0);
         interp_execute(context, cpu);
 #if defined(HL_NATIVE_TEST_HOOKS)
-        atomic_fetch_add_explicit(&g_dispatch_census_interpreted_entries, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&g_dispatch_census_interpreted_steps, g_dispatch_census_interp_steps,
-                                  memory_order_relaxed);
-        atomic_fetch_add_explicit(&g_dispatch_census_interpreted_reason[cpu->reason < 32 ? cpu->reason : 31], 1,
-                                  memory_order_relaxed);
+        hl_backend_tree_interpreted_steps(g_dispatch_census_interp_steps);
 #endif
+        hl_backend_tree_reason(cpu->reason);
     }
     g_interp_pad_armed = previous;
     g_interp_pad_cpu = previous_cpu;

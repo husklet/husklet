@@ -613,7 +613,7 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     uint64_t heap_hint = hl_linux_snapshot_reserve(&g_ckpt_snapshot, 256u << 20);
     if (hl_gmap_map_anonymous(heap_hint, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
                               &heap) != HL_STATUS_OK)
-        _exit(127);
+        hl_backend_tree_abnormal_exit(127);
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);
     snprintf(g_exe_path_store, sizeof g_exe_path_store, "%s", prepared->guest_executable);

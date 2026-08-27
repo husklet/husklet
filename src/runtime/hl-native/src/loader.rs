@@ -155,6 +155,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_imported_path_guard: NoArgumentTest,
     pub(crate) aarch64_dispatch_profile: NoArgumentTest,
     pub(crate) x86_64_dispatch_profile: NoArgumentTest,
+    pub(crate) aarch64_backend_tree_census: ScenarioTest,
+    pub(crate) x86_64_backend_tree_census: ScenarioTest,
     #[cfg(test)]
     pub(crate) x86_64_stw_cpu_slot_lifecycle: NoArgumentTest,
     pub(crate) aarch64_clone3_extended_args: ScenarioTest,
@@ -520,6 +522,8 @@ impl TestApi {
             x86_64_imported_path_guard: symbol!("hl_x86_64_imported_path_guard_test", NoArgumentTest),
             aarch64_dispatch_profile: symbol!("hl_aarch64_dispatch_profile_test", NoArgumentTest),
             x86_64_dispatch_profile: symbol!("hl_x86_64_dispatch_profile_test", NoArgumentTest),
+            aarch64_backend_tree_census: symbol!("hl_aarch64_backend_tree_census_test", ScenarioTest),
+            x86_64_backend_tree_census: symbol!("hl_x86_64_backend_tree_census_test", ScenarioTest),
             #[cfg(test)]
             x86_64_stw_cpu_slot_lifecycle: symbol!("hl_x86_64_stw_cpu_slot_lifecycle_test", NoArgumentTest),
             aarch64_clone3_extended_args: symbol!("hl_aarch64_clone3_extended_args_test", ScenarioTest),

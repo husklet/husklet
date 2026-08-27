@@ -188,6 +188,13 @@ pub fn dispatch_profile_test(isa: u32) -> i32 {
     bindings::dispatch_profile_test(isa)
 }
 
+/// Exercises the hook-only MAP_SHARED backend census and its per-process lifecycle slots.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn backend_tree_census_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::backend_tree_census_test(isa, scenario)
+}
+
 /// Exercises clone3's versioned argument import through each target translation unit.
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]

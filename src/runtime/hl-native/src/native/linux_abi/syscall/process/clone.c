@@ -110,13 +110,15 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
+        struct hl_backend_tree_slot *backend_tree_birth = hl_backend_tree_prepare_fork();
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
+        hl_backend_tree_after_fork(pid, backend_tree_birth);
         if (pid < 0) fork_diagnostic_emit(c, nr, a0, "host-fork", fork_error, pids_total, &bound_fork);
         guest_child_pid =
             pid < 0 ? -1 : restore_process_identity_publish(guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
         if (pid >= 0 && guest_child_pid <= 0) {
-            if (pid == 0) _exit(127);
+            if (pid == 0) hl_backend_tree_abnormal_exit(127);
             fork_diagnostic_emit(c, nr, a0, "identity-publish", EAGAIN, pids_total, &bound_fork);
             kill(pid, SIGKILL);
             while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
@@ -144,7 +146,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (bound_status != 0) {
             fork_diagnostic_emit(c, nr, a0, "snapshot-complete", -bound_status, pids_total, &bound_fork);
             (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
-            if (pid == 0) _exit(127);
+            if (pid == 0) hl_backend_tree_abnormal_exit(127);
             if (pid > 0) {
                 int failed_status;
                 kill(pid, SIGKILL);
@@ -161,7 +163,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             uint64_t child_pid = (uint64_t)(pid == 0 ? getpid() : pid);
             uint64_t source_tid = (uint64_t)runtime_source_tid;
             if (!hl_target_task_event(c, HL_TASK_EVENT_FORK_PROCESS, child_pid, source_tid, pid == 0)) {
-                if (pid == 0) _exit(127);
+                if (pid == 0) hl_backend_tree_abnormal_exit(127);
                 fork_diagnostic_emit(c, nr, a0, "task-publish", EAGAIN, pids_total, &bound_fork);
                 int failed_status;
                 kill(pid, SIGKILL);
@@ -452,13 +454,15 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
+        struct hl_backend_tree_slot *backend_tree_birth = hl_backend_tree_prepare_fork();
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
+        hl_backend_tree_after_fork(pid, backend_tree_birth);
         if (pid < 0) fork_diagnostic_emit(c, nr, flags, "host-fork", fork_error, pids_total, &bound_fork);
         guest_child_pid =
             pid < 0 ? -1 : restore_process_identity_publish(guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
         if (pid >= 0 && guest_child_pid <= 0) {
-            if (pid == 0) _exit(127);
+            if (pid == 0) hl_backend_tree_abnormal_exit(127);
             fork_diagnostic_emit(c, nr, flags, "identity-publish", EAGAIN, pids_total, &bound_fork);
             kill(pid, SIGKILL);
             while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
@@ -471,7 +475,7 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (bound_status != 0) {
             fork_diagnostic_emit(c, nr, flags, "snapshot-complete", -bound_status, pids_total, &bound_fork);
             (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
-            if (pid == 0) _exit(127);
+            if (pid == 0) hl_backend_tree_abnormal_exit(127);
             if (pid > 0) {
                 int failed_status;
                 kill(pid, SIGKILL);
@@ -486,7 +490,7 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             uint64_t child_pid = (uint64_t)(pid == 0 ? getpid() : pid);
             if (!hl_target_task_event(c, HL_TASK_EVENT_FORK_PROCESS, child_pid, (uint64_t)runtime_source_tid,
                                       pid == 0)) {
-                if (pid == 0) _exit(127);
+                if (pid == 0) hl_backend_tree_abnormal_exit(127);
                 fork_diagnostic_emit(c, nr, flags, "task-publish", EAGAIN, pids_total, &bound_fork);
                 int failed_status;
                 kill(pid, SIGKILL);

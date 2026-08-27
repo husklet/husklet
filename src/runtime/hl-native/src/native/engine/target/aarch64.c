@@ -234,6 +234,10 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
+#define HL_BACKEND_TREE_TEST_NAME hl_aarch64_backend_tree_census_test
+#include "../backend_tree.c"
+#undef HL_BACKEND_TREE_TEST_NAME
+
 // Host-CPU fork: an AArch64 host takes the same-ISA transliterating JIT below; any other takes interp.c,
 // which supplies the same seam by decoding AArch64. Both share struct cpu: it is the checkpoint format.
 #include "../../host/cpu.h"
@@ -850,6 +854,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
         return 70;
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);
+    hl_backend_tree_begin(g_prof, effective_host_services());
 
     struct cpu c;
     memset(&c, 0, sizeof c);
@@ -862,6 +867,11 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     thread_process_owner_register(&c);
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
+    if (!hl_backend_tree_is_finalized()) {
+        launch_reg_terminate_peers();
+        (void)hl_backend_tree_finalize(1);
+        hl_backend_tree_report();
+    }
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
     if (g_prof && g_profile_output_owner) {
         char profile[160];
