@@ -113,8 +113,14 @@ struct Backend {
     duplicate_finalize: u64,
     crossings: u64,
     reason_total: u64,
+    shape_stitch_jmp: u64,
+    shape_stitch_cond_fall: u64,
+    shape_cond_taken: u64,
+    shape_fault: u64,
+    shape_other: u64,
     unsupported_line: String,
     tree_line: String,
+    shape_line: String,
 }
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
@@ -169,6 +175,42 @@ fn backend(stderr: &[u8]) -> Backend {
         .map(|reason| tree_counter(&format!("reason{reason}=")))
         .sum::<u64>()
         + tree_counter("reason_other=");
+    let shapes = text
+        .lines()
+        .filter(|line| line.starts_with("[diag] backend-shape "))
+        .collect::<Vec<_>>();
+    assert_eq!(shapes.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
+    let shape = shapes[0];
+    let shape_counter = |name: &str| {
+        shape
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+    };
+    let translated_exit_total = [
+        "t_fallthrough=",
+        "t_cond_taken=",
+        "t_cond_not_taken=",
+        "t_direct_jump=",
+        "t_direct_call=",
+        "t_return=",
+        "t_indirect_branch=",
+        "t_indirect_call=",
+        "t_syscall=",
+        "t_irq=",
+        "t_fault=",
+        "t_other=",
+    ]
+    .into_iter()
+    .map(shape_counter)
+    .sum::<u64>();
+    assert_eq!(translated_exit_total, tree_counter("translated_entries="), "{shape}");
+    assert_eq!(
+        shape_counter("translated_transfers="),
+        tree_counter("translated_entries=") + shape_counter("stitch_jmp=") + shape_counter("stitch_cond_fall="),
+        "{shape}"
+    );
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
@@ -228,8 +270,14 @@ fn backend(stderr: &[u8]) -> Backend {
         duplicate_finalize: tree_counter("duplicate_finalize="),
         crossings: tree_counter("crossings="),
         reason_total,
+        shape_stitch_jmp: shape_counter("stitch_jmp="),
+        shape_stitch_cond_fall: shape_counter("stitch_cond_fall="),
+        shape_cond_taken: shape_counter("t_cond_taken="),
+        shape_fault: shape_counter("t_fault="),
+        shape_other: shape_counter("t_other="),
         unsupported_line: unsupported.to_owned(),
         tree_line: tree.to_owned(),
+        shape_line: shape.to_owned(),
         line,
     }
 }
@@ -1147,6 +1195,7 @@ fn a_same_page_forward_jump_is_stitched_without_executing_its_gap() {
     assert_eq!(selected, b"42\n");
     assert!(selected_backend.stitch_candidates > 0, "{}", selected_backend.line);
     assert!(selected_backend.stitch_admitted > 0, "{}", selected_backend.line);
+    assert!(selected_backend.shape_stitch_jmp > 0, "{}", selected_backend.shape_line);
     assert!(
         selected_backend.stitch_admitted <= selected_backend.stitch_candidates,
         "{}",
@@ -1167,6 +1216,11 @@ fn a_same_page_conditional_fallthrough_stays_in_the_descriptor() {
     assert!(selected_backend.jcc_fall_candidates > 0, "{}", selected_backend.line);
     assert!(selected_backend.jcc_fall_admitted > 0, "{}", selected_backend.line);
     assert!(selected_backend.jcc_fall_executed > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.shape_stitch_cond_fall > 0 && selected_backend.shape_cond_taken > 0,
+        "{}",
+        selected_backend.shape_line
+    );
     assert!(
         selected_backend.jcc_fall_admitted <= selected_backend.jcc_fall_candidates,
         "{}",
@@ -1201,6 +1255,12 @@ fn a_fault_after_an_internalized_fallthrough_keeps_guest_provenance() {
     assert_eq!(selected, interpreted);
     assert_eq!(selected, b"fault=1 rip=1 r11=1 taken=7\n");
     assert!(selected_backend.jcc_fall_admitted > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.shape_stitch_cond_fall > 0 && selected_backend.shape_fault > 0,
+        "{}",
+        selected_backend.shape_line
+    );
+    assert_eq!(selected_backend.shape_other, 0, "{}", selected_backend.shape_line);
 }
 
 /// RIP-relative memory-indirect CALL/JMP, including a pointer load crossing into an unmapped page.

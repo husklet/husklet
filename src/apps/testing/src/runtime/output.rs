@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
+const BACKEND_SHAPE_PREFIX: &str = "[diag] backend-shape ";
 const BACKEND_TREE_FIELDS: [&str; 33] = [
     "version",
     "root_pid",
@@ -37,6 +38,96 @@ const BACKEND_TREE_FIELDS: [&str; 33] = [
     "reason14",
     "reason15",
     "reason_other",
+];
+
+const BACKEND_SHAPE_FIELDS: &[&str] = &[
+    "version",
+    "translated_entries",
+    "translated_transfers",
+    "t_fallthrough",
+    "t_cond_taken",
+    "t_cond_not_taken",
+    "t_direct_jump",
+    "t_direct_call",
+    "t_return",
+    "t_indirect_branch",
+    "t_indirect_call",
+    "t_syscall",
+    "t_irq",
+    "t_fault",
+    "t_other",
+    "stitch_jmp",
+    "stitch_cond_fall",
+    "direct_edges",
+    "edge_eligible",
+    "edge_ineligible",
+    "edge_resolved",
+    "edge_unresolved",
+    "edge_interrupted",
+    "edge_chained",
+    "edge_dispatcher",
+    "interpreted_entries",
+    "i_disabled",
+    "i_image",
+    "i_decode",
+    "i_unsupported",
+    "i_authority",
+    "i_resource",
+    "i_emit",
+    "i_runtime_image",
+    "i_runtime_bind",
+    "i_other",
+    "s_fallthrough",
+    "s_cond_taken",
+    "s_cond_not_taken",
+    "s_direct_jump",
+    "s_direct_call",
+    "s_return",
+    "s_indirect_branch",
+    "s_indirect_call",
+    "s_syscall",
+    "s_irq",
+    "s_fault",
+    "s_service",
+    "s_other",
+    "fallback_total",
+    "fallback_unique",
+    "fallback_overflow",
+    "stop_total",
+    "stop_unique",
+    "stop_overflow",
+    "fallback0_key",
+    "fallback0_count",
+    "fallback1_key",
+    "fallback1_count",
+    "fallback2_key",
+    "fallback2_count",
+    "fallback3_key",
+    "fallback3_count",
+    "fallback4_key",
+    "fallback4_count",
+    "fallback5_key",
+    "fallback5_count",
+    "fallback6_key",
+    "fallback6_count",
+    "fallback7_key",
+    "fallback7_count",
+    "stop0_key",
+    "stop0_count",
+    "stop1_key",
+    "stop1_count",
+    "stop2_key",
+    "stop2_count",
+    "stop3_key",
+    "stop3_count",
+    "stop4_key",
+    "stop4_count",
+    "stop5_key",
+    "stop5_count",
+    "stop6_key",
+    "stop6_count",
+    "stop7_key",
+    "stop7_count",
 ];
 
 pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
@@ -77,10 +168,23 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
         return Err(format!("backend-tree diagnostic appeared {records} times, expected {expected}").into());
     }
     if !enabled {
+        let shapes = stderr
+            .split(|byte| *byte == b'\n')
+            .filter(|line| line.starts_with(BACKEND_SHAPE_PREFIX.as_bytes()))
+            .count();
+        if shapes != 0 {
+            return Err(format!("backend-shape diagnostic appeared {shapes} times, expected 0").into());
+        }
         return Ok(());
     }
     let text = std::str::from_utf8(stderr).map_err(|_| "backend-tree diagnostic stderr is not UTF-8")?;
-    let _ = backend_tree(text)?;
+    let tree = backend_tree(text)?.expect("cardinality check established one backend-tree record");
+    let shape = backend_shape(text)?;
+    if tree["translated_entries"] != shape["translated_entries"]
+        || tree["interpreted_entries"] != shape["interpreted_entries"]
+    {
+        return Err("backend-shape entries do not match backend-tree".into());
+    }
     Ok(())
 }
 
@@ -141,6 +245,120 @@ fn backend_tree(stderr: &str) -> Result<Option<BTreeMap<&str, u64>>, Error> {
     Ok(Some(fields))
 }
 
+fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
+        .collect::<Vec<_>>();
+    if records.len() != 1 {
+        return Err(format!(
+            "backend-shape diagnostic appeared {} times, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let mut fields = BTreeMap::new();
+    for field in records[0].split_whitespace() {
+        let Some((name, value)) = field.split_once('=') else {
+            return Err(format!("backend-shape diagnostic has malformed field {field:?}").into());
+        };
+        if !BACKEND_SHAPE_FIELDS.contains(&name) {
+            return Err(format!("backend-shape diagnostic has unknown field {name:?}").into());
+        }
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| format!("backend-shape field {name:?} is not an integer"))?;
+        if fields.insert(name, value).is_some() {
+            return Err(format!("backend-shape diagnostic duplicates field {name:?}").into());
+        }
+    }
+    for name in BACKEND_SHAPE_FIELDS {
+        if !fields.contains_key(name) {
+            return Err(format!("backend-shape diagnostic omitted field {name:?}").into());
+        }
+    }
+    if fields["version"] != 1 {
+        return Err("backend-shape diagnostic has invalid version".into());
+    }
+    let sum = |names: &[&str]| {
+        names
+            .iter()
+            .try_fold(0_u64, |total, name| total.checked_add(fields[name]))
+    };
+    let translated_exits = sum(&[
+        "t_fallthrough",
+        "t_cond_taken",
+        "t_cond_not_taken",
+        "t_direct_jump",
+        "t_direct_call",
+        "t_return",
+        "t_indirect_branch",
+        "t_indirect_call",
+        "t_syscall",
+        "t_irq",
+        "t_fault",
+        "t_other",
+    ]);
+    if translated_exits != Some(fields["translated_entries"]) {
+        return Err("backend-shape translated exits do not reconcile with entries".into());
+    }
+    let transfers = fields["translated_entries"]
+        .checked_add(fields["stitch_jmp"])
+        .and_then(|value| value.checked_add(fields["stitch_cond_fall"]));
+    if transfers != Some(fields["translated_transfers"]) {
+        return Err("backend-shape translated transfers do not reconcile".into());
+    }
+    if fields["edge_eligible"].checked_add(fields["edge_ineligible"]) != Some(fields["direct_edges"]) {
+        return Err("backend-shape direct-edge eligibility does not reconcile".into());
+    }
+    let resolutions = fields["edge_resolved"]
+        .checked_add(fields["edge_unresolved"])
+        .and_then(|value| value.checked_add(fields["edge_interrupted"]));
+    if resolutions != Some(fields["edge_eligible"]) {
+        return Err("backend-shape direct-edge resolution does not reconcile".into());
+    }
+    if fields["edge_chained"].checked_add(fields["edge_dispatcher"]) != Some(fields["edge_eligible"]) {
+        return Err("backend-shape direct-edge disposition does not reconcile".into());
+    }
+    let interpreter_entries = sum(&[
+        "i_disabled",
+        "i_image",
+        "i_decode",
+        "i_unsupported",
+        "i_authority",
+        "i_resource",
+        "i_emit",
+        "i_runtime_image",
+        "i_runtime_bind",
+        "i_other",
+    ]);
+    if interpreter_entries != Some(fields["interpreted_entries"]) {
+        return Err("backend-shape interpreter entry causes do not reconcile".into());
+    }
+    let interpreter_stops = sum(&[
+        "s_fallthrough",
+        "s_cond_taken",
+        "s_cond_not_taken",
+        "s_direct_jump",
+        "s_direct_call",
+        "s_return",
+        "s_indirect_branch",
+        "s_indirect_call",
+        "s_syscall",
+        "s_irq",
+        "s_fault",
+        "s_service",
+        "s_other",
+    ]);
+    if interpreter_stops != Some(fields["interpreted_entries"]) {
+        return Err("backend-shape interpreter stop causes do not reconcile".into());
+    }
+    if fields["fallback_total"] != fields["i_unsupported"] {
+        return Err("backend-shape fallback forms do not reconcile with unsupported entries".into());
+    }
+    Ok(fields)
+}
+
 pub(crate) fn backend_tree_digest(stderr: &[u8]) -> String {
     let Ok(text) = std::str::from_utf8(stderr) else {
         return String::new();
@@ -164,10 +382,9 @@ pub(crate) fn backend_tree_digest(stderr: &[u8]) -> String {
 }
 
 pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::Result<()> {
-    for line in stderr
-        .lines()
-        .filter(|line| valid_profile_line(line) || line.starts_with(BACKEND_TREE_PREFIX))
-    {
+    for line in stderr.lines().filter(|line| {
+        valid_profile_line(line) || line.starts_with(BACKEND_TREE_PREFIX) || line.starts_with(BACKEND_SHAPE_PREFIX)
+    }) {
         writeln!(output, "{line}")?;
     }
     Ok(())
@@ -250,11 +467,16 @@ mod tests {
     }
 
     const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
+    const SHAPE: &str = "[diag] backend-shape version=1 translated_entries=2 translated_transfers=5 t_fallthrough=1 t_cond_taken=0 t_cond_not_taken=0 t_direct_jump=1 t_direct_call=0 t_return=0 t_indirect_branch=0 t_indirect_call=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0 stitch_jmp=1 stitch_cond_fall=2 direct_edges=2 edge_eligible=2 edge_ineligible=0 edge_resolved=1 edge_unresolved=1 edge_interrupted=0 edge_chained=0 edge_dispatcher=2 interpreted_entries=3 i_disabled=0 i_image=0 i_decode=0 i_unsupported=2 i_authority=0 i_resource=0 i_emit=0 i_runtime_image=1 i_runtime_bind=0 i_other=0 s_fallthrough=0 s_cond_taken=0 s_cond_not_taken=0 s_direct_jump=0 s_direct_call=1 s_return=0 s_indirect_branch=0 s_indirect_call=0 s_syscall=0 s_irq=0 s_fault=1 s_service=1 s_other=0 fallback_total=2 fallback_unique=1 fallback_overflow=0 stop_total=3 stop_unique=3 stop_overflow=0 fallback0_key=17 fallback0_count=2 fallback1_key=0 fallback1_count=0 fallback2_key=0 fallback2_count=0 fallback3_key=0 fallback3_count=0 fallback4_key=0 fallback4_count=0 fallback5_key=0 fallback5_count=0 fallback6_key=0 fallback6_count=0 fallback7_key=0 fallback7_count=0 stop0_key=1 stop0_count=1 stop1_key=2 stop1_count=1 stop2_key=3 stop2_count=1 stop3_key=0 stop3_count=0 stop4_key=0 stop4_count=0 stop5_key=0 stop5_count=0 stop6_key=0 stop6_count=0 stop7_key=0 stop7_count=0\n";
+
+    fn census() -> String {
+        format!("{TREE}{SHAPE}")
+    }
 
     #[test]
     fn backend_tree_record_is_exact_and_reconciled() {
-        validate_backend_tree(TREE.as_bytes(), true).unwrap();
-        let digest = backend_tree_digest(TREE.as_bytes());
+        validate_backend_tree(census().as_bytes(), true).unwrap();
+        let digest = backend_tree_digest(census().as_bytes());
         assert!(digest.contains("claimed=3 completed=1"), "{digest}");
         assert!(
             digest.contains("crossings=5 translated_entries=2 interpreted_entries=3"),
@@ -264,7 +486,7 @@ mod tests {
 
     #[test]
     fn backend_tree_rejects_missing_duplicate_unknown_and_unreconciled_fields() {
-        let profile = |tree: &str| format!("[prof] crossings=1 translations=1\n{tree}");
+        let profile = |tree: &str, shape: &str| format!("[prof] crossings=1 translations=1\n{tree}{shape}");
         assert!(
             validate_backend_tree(b"[prof] crossings=1 translations=1\n", true)
                 .unwrap_err()
@@ -272,28 +494,34 @@ mod tests {
                 .contains("appeared 0 times")
         );
         assert!(
-            validate_backend_tree(TREE.as_bytes(), false)
+            validate_backend_tree(census().as_bytes(), false)
                 .unwrap_err()
                 .to_string()
                 .contains("expected 0")
         );
+        assert!(
+            validate_backend_tree(SHAPE.as_bytes(), false)
+                .unwrap_err()
+                .to_string()
+                .contains("backend-shape diagnostic appeared 1 times, expected 0")
+        );
         let missing = TREE.replace(" map_hits=3", "");
         assert!(
-            validate_backend_tree(profile(&missing).as_bytes(), true)
+            validate_backend_tree(profile(&missing, SHAPE).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("omitted field")
         );
         let duplicate = TREE.replace(" map_hits=3", " map_hits=3 map_hits=3");
         assert!(
-            validate_backend_tree(profile(&duplicate).as_bytes(), true)
+            validate_backend_tree(profile(&duplicate, SHAPE).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("duplicates field")
         );
         assert!(
             validate_backend_tree(
-                format!("[prof] crossings=1 translations=1\n{TREE}{TREE}").as_bytes(),
+                format!("[prof] crossings=1 translations=1\n{TREE}{TREE}{SHAPE}").as_bytes(),
                 true
             )
             .unwrap_err()
@@ -302,24 +530,58 @@ mod tests {
         );
         let unknown = TREE.replace(" map_hits=3", " map_hits=3 mystery=9");
         assert!(
-            validate_backend_tree(profile(&unknown).as_bytes(), true)
+            validate_backend_tree(profile(&unknown, SHAPE).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("unknown field")
         );
         let entries = TREE.replace(" translated_entries=2", " translated_entries=1");
         assert!(
-            validate_backend_tree(profile(&entries).as_bytes(), true)
+            validate_backend_tree(profile(&entries, SHAPE).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("entry totals")
         );
         let reasons = TREE.replace(" reason_other=1", " reason_other=0");
         assert!(
-            validate_backend_tree(profile(&reasons).as_bytes(), true)
+            validate_backend_tree(profile(&reasons, SHAPE).as_bytes(), true)
                 .unwrap_err()
                 .to_string()
                 .contains("reason totals")
+        );
+        let shape_missing = SHAPE.replace(" t_fault=0", "");
+        assert!(
+            validate_backend_tree(profile(TREE, &shape_missing).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("omitted field")
+        );
+        let shape_unknown = SHAPE.replace(" t_fault=0", " t_fault=0 mystery=1");
+        assert!(
+            validate_backend_tree(profile(TREE, &shape_unknown).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+        let shape_exits = SHAPE.replace(" t_fault=0", " t_fault=1");
+        assert!(
+            validate_backend_tree(profile(TREE, &shape_exits).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("translated exits")
+        );
+        let shape_duplicate = SHAPE.replace(" t_fault=0", " t_fault=0 t_fault=0");
+        assert!(
+            validate_backend_tree(profile(TREE, &shape_duplicate).as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicates field")
+        );
+        assert!(
+            validate_backend_tree(format!("{TREE}{SHAPE}{SHAPE}").as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("appeared 2 times")
         );
     }
 
