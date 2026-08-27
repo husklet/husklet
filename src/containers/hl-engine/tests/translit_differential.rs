@@ -340,6 +340,22 @@ fn signal_ucontext_round_trips_pf_and_af() {
 }
 
 #[test]
+fn signal_ucontext_projects_but_does_not_restore_if_and_id() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "signal_if_id");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native IF/ID signal-ucontext fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"if-id frame=200200/000200 resumed=200200/200200\n");
+    assert!(selected_backend.entries > 0, "{}", selected_backend.line);
+}
+
+#[test]
 fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse_pxor");
