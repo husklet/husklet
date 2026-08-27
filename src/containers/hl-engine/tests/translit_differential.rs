@@ -324,6 +324,22 @@ fn a_contiguous_sse2_run_matches_interpreter_and_native() {
 }
 
 #[test]
+fn signal_ucontext_round_trips_pf_and_af() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "signal_pf_af");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native PF/AF signal-ucontext fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"pf-af frame=04/10 resumed=10/04\n");
+    assert!(selected_backend.entries > 0, "{}", selected_backend.line);
+}
+
+#[test]
 fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse_pxor");
