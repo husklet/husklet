@@ -136,6 +136,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_PROFILE_WIDE_TEST",
+        "test-only render every same-ISA profile counter at UINT64 width",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",
         Flag

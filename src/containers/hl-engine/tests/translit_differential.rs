@@ -442,6 +442,57 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     run_with_arguments(executable, translit, &[], false, false)
 }
 
+fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).unwrap();
+    options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    options.set("HL_TRANSLIT_PROFILE_WIDE_TEST", "1", true).unwrap();
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), termination.to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    let stderr = captured.err.lock().unwrap().clone();
+    (exit.guest_status, stderr)
+}
+
+#[test]
+fn full_width_translit_profile_is_complete_for_exit_and_exit_group() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "profile_termination");
+    for termination in [b"exit".as_slice(), b"group".as_slice()] {
+        let (status, stderr) = wide_profile(&executable, termination);
+        assert_eq!(status, 0);
+        assert_eq!(stderr.last(), Some(&b'\n'), "{}", String::from_utf8_lossy(&stderr));
+        let text = String::from_utf8(stderr).unwrap();
+        let lines: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("[prof] translit:"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{text}");
+        let line = lines[0];
+        assert!(line.contains("natural_lea_lowered=18446744073709551615"), "{line}");
+        assert!(line.contains("jcc_fall_executed=18446744073709551615"), "{line}");
+        assert!(!line.contains("[diag]"), "{line}");
+        if termination == b"group" {
+            assert!(
+                text.lines().any(|record| record.starts_with("[diag] boundary ")),
+                "{text}"
+            );
+        }
+    }
+}
+
 /// The whole contract: the backend selection must not be observable in the guest's output.
 fn agrees(name: &str) {
     let work = TempDir::new().unwrap();
