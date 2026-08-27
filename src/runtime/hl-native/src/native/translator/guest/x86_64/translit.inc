@@ -2003,6 +2003,58 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                      HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED;
         return ok ? 0 : 75;
     }
+    if (scenario == 69) {
+        hl_backend_tree_begin(1, effective_host_services());
+        if (g_backend_tree_self == NULL) return 76;
+        struct cpu family_cpu = {0};
+        struct insn family = {.len = 2, .op = 0xFF, .has_modrm = 1, .reg = 4, .is_mem = 1};
+        family_cpu.reason = R_BRANCH;
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        family.rip_rel = 1; // translated RIP-indirect control is not Jmem
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        family.rip_rel = 0;
+        family.reg = 2; // memory-indirect CALL is not Jmem
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+
+        family = (struct insn){.len = 2, .op = 0xF7, .has_modrm = 1, .reg = 6, .opsize = 4};
+        interp_backend_family_completed(&family_cpu, &family, 0 /* STEP_NEXT */);
+        family.opsize = 8;
+        family_cpu.reason = R_DIV;
+        family_cpu.divop = 7;
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_UNSIGNED);
+        family.op = 0xF6;
+        family.opsize = 1;
+        family_cpu.divop = 0;
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+
+        family.op = 0xF7;
+        family.opsize = 4;
+        family.reg = 7;
+        interp_backend_family_completed(&family_cpu, &family, 0 /* STEP_NEXT */);
+        family.opsize = 8;
+        family_cpu.reason = R_IDIV;
+        family_cpu.divop = 7;
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_SIGNED);
+        family.op = 0xF6;
+        family.opsize = 1;
+        family_cpu.divop = 0;
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+
+        struct hl_backend_tree_summary summary;
+        hl_backend_tree_summary(&summary);
+        int ok = summary.family_jmem == 1 &&
+                 summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_INLINE] == 1 &&
+                 summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] == 1 &&
+                 summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_UNSIGNED] == 1 &&
+                 summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_DE] == 1 &&
+                 summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_INLINE] == 1 &&
+                 summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] == 1 &&
+                 summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED] == 1 &&
+                 summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] == 1;
+        return ok ? 0 : 77;
+    }
     return 6;
 }
 #endif

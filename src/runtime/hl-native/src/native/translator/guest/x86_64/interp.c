@@ -427,6 +427,7 @@ static void interp_store_bytes(uint64_t guest_address, const void *source, unsig
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int interp_backend_shape_rel32_reachable(int source_resolved, uintptr_t source_lo,
                                                 uintptr_t source_hi, uintptr_t target);
+static void interp_backend_family_completed(const struct cpu *cpu, const struct insn *insn, int step);
 #endif
 #include "interp/execution.c"
 
