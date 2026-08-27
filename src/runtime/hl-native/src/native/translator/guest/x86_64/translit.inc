@@ -731,6 +731,10 @@ static void translit_emit_reload(hl_x64_asm *a) {
 // target's entire source hull must fit on the JCC's page: the source descriptor will own that whole page,
 // so any SMC/invalidation that can stale the bypassed target also removes the source link.
 static struct interp_block *translit_jcc_link_target(uint64_t source, uint64_t target) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *disabled = hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE");
+    if (disabled != NULL && disabled[0] != '0' && disabled[0] != 0) return NULL;
+#endif
     uint64_t page = source & ~UINT64_C(0xfff);
     if (page > UINT64_MAX - UINT64_C(0x1000) || (target & ~UINT64_C(0xfff)) != page) return NULL;
     struct interp_block *target_block = (struct interp_block *)map_host(target);
@@ -1766,6 +1770,32 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                  (uintptr_t)map_host(UINT64_C(0x2800)) == UINT64_C(0x222000);
         map_clear();
         return ok ? 0 : 70;
+    }
+    if (scenario == 57) {
+        if (g_cache == NULL || g_cp == NULL || g_cache + sizeof(struct interp_block) + 1 > g_cache + CACHE_SZ)
+            return 71;
+        struct interp_block *target_block = (struct interp_block *)g_cache;
+        struct interp_block saved = *target_block;
+        uint8_t *saved_cp = g_cp;
+        memset(target_block, 0, sizeof *target_block);
+        target_block->magic = INTERP_BLOCK_MAGIC;
+        target_block->generation = g_cache_gen;
+        target_block->host_entry_off = sizeof *target_block;
+        target_block->host_len = 1;
+        target_block->guest_start = UINT64_C(0x1000);
+        target_block->guest_end = UINT64_C(0x2000);
+        g_cp = g_cache + sizeof *target_block + 1;
+        map_clear();
+        map_put(UINT64_C(0x1100), UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
+        int before_reset = translit_jcc_link_target(UINT64_C(0x1200), UINT64_C(0x1100)) == target_block;
+        map_clear();
+        int absent_after_reset = translit_jcc_link_target(UINT64_C(0x1200), UINT64_C(0x1100)) == NULL;
+        map_put(UINT64_C(0x1100), UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
+        int readmitted = translit_jcc_link_target(UINT64_C(0x1200), UINT64_C(0x1100)) == target_block;
+        map_clear();
+        *target_block = saved;
+        g_cp = saved_cp;
+        return before_reset && absent_after_reset && readmitted ? 0 : 72;
     }
     return 6;
 }

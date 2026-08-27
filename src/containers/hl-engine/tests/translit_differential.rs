@@ -825,6 +825,33 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     run_with_arguments(executable, translit, &[], false, false, false)
 }
 
+fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).expect("HL_TRANSLIT");
+    options.set("HL_C_DIAGNOSTICS", "1", true).expect("HL_C_DIAGNOSTICS");
+    options
+        .set("HL_TRANSLIT_JCC_LINK_DISABLE", "1", true)
+        .expect("HL_TRANSLIT_JCC_LINK_DISABLE");
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).expect("launch");
+    engine.start().expect("start");
+    let exit = engine.wait().expect("wait");
+    engine.destroy().expect("destroy");
+    let out = captured.out.lock().unwrap().clone();
+    let report = backend(&captured.err.lock().unwrap());
+    (out, exit.guest_status, report)
+}
+
 fn run_with_perf_map(executable: &Path, directory: &Path) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -1318,8 +1345,11 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
     let executable = fixture(work.path(), "jcc_link");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
     let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let (disabled, disabled_status, disabled_backend) = run_with_jcc_link_disabled(&executable);
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
+    assert_eq!(disabled_status, interpreted_status);
+    assert_eq!(disabled, interpreted);
     assert!(String::from_utf8_lossy(&selected).contains("signals=1"));
     assert!(selected_backend.jcc_link_admitted > 0, "{}", selected_backend.line);
     assert!(selected_backend.jcc_link_taken > 0, "{}", selected_backend.line);
@@ -1330,6 +1360,14 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         selected_backend.line
     );
     assert!(selected_backend.jcc_link_dispatcher > 0, "{}", selected_backend.line);
+    assert_eq!(disabled_backend.jcc_link_admitted, 0, "{}", disabled_backend.line);
+    assert_eq!(disabled_backend.jcc_link_taken, 0, "{}", disabled_backend.line);
+    assert!(
+        disabled_backend.jcc_link_dispatcher > selected_backend.jcc_link_dispatcher,
+        "{}\n{}",
+        disabled_backend.line,
+        selected_backend.line
+    );
     assert_eq!(
         selected_backend.shape_jcc_taken_chained,
         selected_backend.jcc_link_taken,
@@ -1342,6 +1380,38 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         "{}",
         selected_backend.shape_line
     );
+}
+
+#[test]
+#[ignore = "same-box mechanism benchmark; run only under the exclusive measurement lock"]
+fn benchmark_same_binary_jcc_link_disabled_enabled_enabled_disabled() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jcc_link");
+    let mut reference = None;
+    for disabled in [true, false, false, true] {
+        let started = std::time::Instant::now();
+        let (out, status, backend) = if disabled {
+            run_with_jcc_link_disabled(&executable)
+        } else {
+            run(&executable, "1")
+        };
+        let elapsed = started.elapsed();
+        assert_eq!(status, 0);
+        if let Some(expected) = &reference {
+            assert_eq!(&out, expected);
+        } else {
+            reference = Some(out);
+        }
+        eprintln!(
+            "jcc_link disabled={} elapsed_ns={} admitted={} taken={} irq_fallback={} dispatcher={}",
+            disabled,
+            elapsed.as_nanos(),
+            backend.jcc_link_admitted,
+            backend.jcc_link_taken,
+            backend.jcc_link_irq_fallback,
+            backend.jcc_link_dispatcher
+        );
+    }
 }
 
 #[test]
