@@ -1603,6 +1603,43 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                          guest == UINT64_C(0x22220000) && preserve == (1u << 11);
         return source && postcommit ? 0 : 64;
     }
+    if (scenario == 51) {
+        uint8_t *saved_cache = g_cache;
+        ptrdiff_t saved_rw2rx = g_rw2rx;
+        uint64_t saved_generation = g_cache_gen;
+        int saved_nretired = g_nretired;
+        __typeof__(g_retired[0]) saved_retired = g_retired[0];
+        uintptr_t current_rw = UINT64_C(0x100000000);
+        ptrdiff_t current_delta = (ptrdiff_t)(CACHE_SZ * 8u);
+        uintptr_t retired_rw = UINT64_C(0x200000000);
+        ptrdiff_t retired_delta = (ptrdiff_t)(CACHE_SZ * 12u);
+        g_cache = (uint8_t *)current_rw;
+        g_rw2rx = current_delta;
+        g_cache_gen = 51;
+        g_nretired = 1;
+        g_retired[0].rw = (uint8_t *)retired_rw;
+        g_retired[0].rw2rx = retired_delta;
+        g_retired[0].gen = 50;
+        void *current_from_rw = NULL, *current_from_rx = NULL;
+        void *retired_from_rw = NULL, *retired_from_rx = NULL;
+        uint64_t current_rw_gen = 0, current_rx_gen = 0, retired_rw_gen = 0, retired_rx_gen = 0;
+        int ok = jit_resolve_host_rx_code((void *)(current_rw + 0x100), &current_from_rw, &current_rw_gen) &&
+                 jit_resolve_host_rx_code((void *)(current_rw + (uintptr_t)current_delta + 0x100),
+                                          &current_from_rx, &current_rx_gen) &&
+                 jit_resolve_host_rx_code((void *)(retired_rw + 0x200), &retired_from_rw, &retired_rw_gen) &&
+                 jit_resolve_host_rx_code((void *)(retired_rw + (uintptr_t)retired_delta + 0x200),
+                                          &retired_from_rx, &retired_rx_gen) &&
+                 current_from_rw == (void *)(current_rw + (uintptr_t)current_delta + 0x100) &&
+                 current_from_rx == current_from_rw && current_rw_gen == 51 && current_rx_gen == 51 &&
+                 retired_from_rw == (void *)(retired_rw + (uintptr_t)retired_delta + 0x200) &&
+                 retired_from_rx == retired_from_rw && retired_rw_gen == 50 && retired_rx_gen == 50;
+        g_cache = saved_cache;
+        g_rw2rx = saved_rw2rx;
+        g_cache_gen = saved_generation;
+        g_nretired = saved_nretired;
+        g_retired[0] = saved_retired;
+        return ok ? 0 : 65;
+    }
     return 6;
 }
 #endif

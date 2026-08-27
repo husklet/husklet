@@ -1641,6 +1641,16 @@ static inline __attribute__((always_inline)) int jit_resolve_rw_code(void *rwcod
     return 0;
 }
 
+#if HL_NATIVE_TEST_HOOKS
+/* Diagnostic callers can receive either alias: dispatch passes RX to run_block, while the map stores RW.
+   Normalize through the owning arena before asking the canonical resolver for its RX address/generation. */
+static int jit_resolve_host_rx_code(void *hostcode, void **rxcode, uint64_t *generation) {
+    uint64_t rwcode = 0;
+    return jit_host_to_rwpc((uint64_t)(uintptr_t)hostcode, &rwcode) &&
+           jit_resolve_rw_code((void *)(uintptr_t)rwcode, rxcode, generation);
+}
+#endif
+
 // Crash diagnostics: keep a bounded tombstone ring of retired caches we have unmapped. If a later crash PC
 // falls in one of these ranges, the process resumed through a stale cache pointer after reclamation.
 #define STW_FREED_MAX 4096

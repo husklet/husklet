@@ -620,10 +620,14 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
             g_backend_shape_edge_pending = 1;
             g_backend_shape_edge_family = family;
             g_backend_shape_edge_target = cpu->rip;
-            g_backend_shape_edge_source_generation = block->generation;
-            g_backend_shape_edge_source_host_lo = (uintptr_t)block + block->host_entry_off;
+            void *source_rx = NULL;
+            uint64_t source_generation = UINT64_MAX;
+            int source_resolved = jit_resolve_host_rx_code(block, &source_rx, &source_generation);
+            g_backend_shape_edge_source_generation = source_resolved ? source_generation : UINT64_MAX;
+            g_backend_shape_edge_source_host_lo =
+                source_resolved ? (uintptr_t)source_rx + block->host_entry_off : 0;
             g_backend_shape_edge_source_host_hi =
-                g_backend_shape_edge_source_host_lo + block->host_len;
+                source_resolved ? g_backend_shape_edge_source_host_lo + block->host_len : 0;
             g_backend_shape_edge_same_page = same_page;
         }
         g_backend_shape_open = 0;
