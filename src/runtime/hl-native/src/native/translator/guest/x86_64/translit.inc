@@ -843,23 +843,75 @@ static void translit_emit_jcc_dispatcher(hl_x64_asm *a, uint64_t target) {
     translit_emit_return(a, R_BRANCH);
 }
 
-static void translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitched_jmp,
-                                unsigned stitched_cond_fall, unsigned source_page_delta) {
+enum {
+    TL_SHAPE_KIND_SHIFT = 0,
+    TL_SHAPE_COND_FALL_SHIFT = 4,
+    TL_SHAPE_JMP_SHIFT = 8,
+    TL_SHAPE_SOURCE_PAGE_SHIFT = 12,
+    TL_SHAPE_WOULD_FAMILY_SHIFT = 20,
+    TL_SHAPE_WOULD_DISPOSITION_SHIFT = 22,
+    TL_SHAPE_KIND_MASK = 0xf,
+    TL_SHAPE_STITCH_MASK = 0xf,
+    TL_SHAPE_SOURCE_PAGE_MASK = 0xff,
+    TL_SHAPE_WOULD_FAMILY_MASK = 0x3,
+    TL_SHAPE_WOULD_DISPOSITION_MASK = 0x7,
+};
+
+_Static_assert(TL_STITCH_MAX_JMPS <= TL_SHAPE_STITCH_MASK,
+               "hook marker must represent every admitted stitch");
+#if defined(HL_NATIVE_TEST_HOOKS)
+_Static_assert(HL_BACKEND_SHAPE_T_COUNT <= TL_SHAPE_KIND_MASK + 1,
+               "hook marker must represent every translated terminator");
+_Static_assert(HL_BACKEND_WOULD_LINK_FAMILY_COUNT <= TL_SHAPE_WOULD_FAMILY_MASK,
+               "hook marker reserves its final family value for no would-link terminal");
+_Static_assert(HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT <= TL_SHAPE_WOULD_DISPOSITION_MASK + 1,
+               "hook marker must represent every would-link disposition");
+#endif
+
+static uint8_t *translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitched_jmp,
+                                    unsigned stitched_cond_fall, unsigned source_page_delta) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     /* pc is monotonic: sequential decode can advance at most one page per instruction, while admitted
        JMP stitching stays forward on its current page. TL_MAX_INSNS therefore bounds this immutable
-       source-page delta to the marker's high byte. run_block combines it with block->gpc's page. */
-    uint32_t packed = (kind & 0xffu) | (stitched_cond_fall & 0xffu) << 8 | (stitched_jmp & 0xffu) << 16 |
-                      (source_page_delta & 0xffu) << 24;
+       source-page delta to the marker's byte. The remaining high bits carry the emitted terminal owner's
+       immutable publication classification, so a linked JCC ingress cannot attribute the target's exit to
+       the dispatcher-entry descriptor. run_block combines the page delta with block->gpc's page; admitted
+       JCC links require both descriptors on that same page. */
+    uint32_t packed = (kind & TL_SHAPE_KIND_MASK) << TL_SHAPE_KIND_SHIFT |
+                      (stitched_cond_fall & TL_SHAPE_STITCH_MASK) << TL_SHAPE_COND_FALL_SHIFT |
+                      (stitched_jmp & TL_SHAPE_STITCH_MASK) << TL_SHAPE_JMP_SHIFT |
+                      (source_page_delta & TL_SHAPE_SOURCE_PAGE_MASK) << TL_SHAPE_SOURCE_PAGE_SHIFT |
+                      (HL_BACKEND_WOULD_LINK_FAMILY_COUNT & TL_SHAPE_WOULD_FAMILY_MASK)
+                          << TL_SHAPE_WOULD_FAMILY_SHIFT;
     hl_x64_store_gs_imm32(a, (int32_t)packed, OFF_BACKEND_SHAPE);
+    return a->overflow ? NULL : a->cursor - sizeof(uint32_t);
 #else
     (void)a;
     (void)kind;
     (void)stitched_jmp;
     (void)stitched_cond_fall;
     (void)source_page_delta;
+    return NULL;
 #endif
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void translit_shape_would_link_patch(uint8_t *marker, unsigned family, unsigned disposition) {
+    if (marker == NULL || family >= HL_BACKEND_WOULD_LINK_FAMILY_COUNT ||
+        disposition >= HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT)
+        return;
+    uint32_t packed = (uint32_t)marker[0] | (uint32_t)marker[1] << 8 | (uint32_t)marker[2] << 16 |
+                      (uint32_t)marker[3] << 24;
+    packed &= ~((uint32_t)TL_SHAPE_WOULD_FAMILY_MASK << TL_SHAPE_WOULD_FAMILY_SHIFT |
+                (uint32_t)TL_SHAPE_WOULD_DISPOSITION_MASK << TL_SHAPE_WOULD_DISPOSITION_SHIFT);
+    packed |= (family & TL_SHAPE_WOULD_FAMILY_MASK) << TL_SHAPE_WOULD_FAMILY_SHIFT |
+              (disposition & TL_SHAPE_WOULD_DISPOSITION_MASK) << TL_SHAPE_WOULD_DISPOSITION_SHIFT;
+    marker[0] = (uint8_t)packed;
+    marker[1] = (uint8_t)(packed >> 8);
+    marker[2] = (uint8_t)(packed >> 16);
+    marker[3] = (uint8_t)(packed >> 24);
+}
+#endif
 
 // ---- the one operand whose meaning depends on where the bytes live
 //
@@ -1884,12 +1936,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             translit_would_link_classify(source_block, source_start, source_end, source, target, scenario == 65);
         int ok;
         if (scenario == 66) {
-            source_block->profile_would_link_disposition = disposition;
+            uint8_t publication_disposition = disposition;
             map_put(target, UINT64_C(0x1000), UINT64_C(0x2000), target_block, target_block);
             uint8_t after_mapping =
                 translit_would_link_classify(source_block, source_start, source_end, source, target, 0);
             ok = disposition == HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED &&
-                 source_block->profile_would_link_disposition == HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED &&
+                 publication_disposition == HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED &&
                  after_mapping == HL_BACKEND_WOULD_LINK_ELIGIBLE;
         } else {
             static const uint8_t expected[] = {
@@ -1905,6 +1957,51 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         g_cp = saved_cp;
         g_cache_gen = saved_generation;
         return ok ? 0 : 73;
+    }
+    if (scenario == 67) {
+        uint8_t shape[32] = {0};
+        hl_x64_asm shape_output = {shape, shape + sizeof shape, 0};
+        uint8_t *marker = translit_shape_exit(&shape_output, HL_BACKEND_SHAPE_T_DIRECT_JUMP, 2, 3, 4);
+        translit_shape_would_link_patch(marker, HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
+                                        HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED);
+        uint32_t packed = marker == NULL ? 0 : (uint32_t)marker[0] | (uint32_t)marker[1] << 8 |
+                                                   (uint32_t)marker[2] << 16 | (uint32_t)marker[3] << 24;
+        int ok = !shape_output.overflow &&
+                 ((packed >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK) ==
+                     HL_BACKEND_SHAPE_T_DIRECT_JUMP &&
+                 ((packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK) == 2 &&
+                 ((packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK) == 3 &&
+                 ((packed >> TL_SHAPE_SOURCE_PAGE_SHIFT) & TL_SHAPE_SOURCE_PAGE_MASK) == 4 &&
+                 ((packed >> TL_SHAPE_WOULD_FAMILY_SHIFT) & TL_SHAPE_WOULD_FAMILY_MASK) ==
+                     HL_BACKEND_WOULD_LINK_DIRECT_JUMP &&
+                 ((packed >> TL_SHAPE_WOULD_DISPOSITION_SHIFT) & TL_SHAPE_WOULD_DISPOSITION_MASK) ==
+                     HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED;
+        return ok ? 0 : 74;
+    }
+    if (scenario == 68) {
+        uint8_t shapes[64] = {0};
+        hl_x64_asm shape_output = {shapes, shapes + sizeof shapes, 0};
+        uint8_t *source_marker =
+            translit_shape_exit(&shape_output, HL_BACKEND_SHAPE_T_DIRECT_JUMP, 0, 0, 0);
+        uint8_t *target_marker =
+            translit_shape_exit(&shape_output, HL_BACKEND_SHAPE_T_DIRECT_CALL, 0, 0, 0);
+        translit_shape_would_link_patch(source_marker, HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
+                                        HL_BACKEND_WOULD_LINK_ELIGIBLE);
+        translit_shape_would_link_patch(target_marker, HL_BACKEND_WOULD_LINK_DIRECT_CALL,
+                                        HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED);
+        /* A linked ingress leaves the target terminal's emitted store as cpu->backend_shape. */
+        uint32_t executed = target_marker == NULL ? 0 : (uint32_t)target_marker[0] |
+                                                        (uint32_t)target_marker[1] << 8 |
+                                                        (uint32_t)target_marker[2] << 16 |
+                                                        (uint32_t)target_marker[3] << 24;
+        int ok = !shape_output.overflow &&
+                 ((executed >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK) ==
+                     HL_BACKEND_SHAPE_T_DIRECT_CALL &&
+                 ((executed >> TL_SHAPE_WOULD_FAMILY_SHIFT) & TL_SHAPE_WOULD_FAMILY_MASK) ==
+                     HL_BACKEND_WOULD_LINK_DIRECT_CALL &&
+                 ((executed >> TL_SHAPE_WOULD_DISPOSITION_SHIFT) & TL_SHAPE_WOULD_DISPOSITION_MASK) ==
+                     HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED;
+        return ok ? 0 : 75;
     }
     return 6;
 }
@@ -2018,6 +2115,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int sse2_movd_seen = 0;
     unsigned would_link_family = HL_BACKEND_WOULD_LINK_FAMILY_COUNT;
     uint64_t would_link_source = 0, would_link_target = 0;
+    uint8_t *would_link_marker = NULL;
 #endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
     uint32_t sse2_owner_count = 0;
@@ -2259,8 +2357,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_emit_exit_const(a, next, R_SYSCALL);
             break;
         case TL_JMP:
+#if defined(HL_NATIVE_TEST_HOOKS)
+            would_link_marker =
+                translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
+                                    (unsigned)jcc_fall_stitched, source_page_delta);
+#else
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
+#endif
             translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
 #if defined(HL_NATIVE_TEST_HOOKS)
             would_link_family = HL_BACKEND_WOULD_LINK_DIRECT_JUMP;
@@ -2323,10 +2427,19 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
                 hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
+#if defined(HL_NATIVE_TEST_HOOKS)
+            uint8_t *call_marker =
+                translit_shape_exit(a,
+                                    kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                                    : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+                                    (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
+            if (kind == TL_CALL) would_link_marker = call_marker;
+#else
             translit_shape_exit(a,
                                 kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
                                                 : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
                                 (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
+#endif
             if (kind == TL_CALL)
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             else
@@ -2406,8 +2519,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
     if (!terminated) {
         uint8_t *tail = a->cursor;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        would_link_marker =
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
+                                (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
+#else
         translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
                             (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
+#endif
         translit_emit_exit_const(a, pc, R_BRANCH);
 #if defined(HL_NATIVE_TEST_HOOKS)
         would_link_family = HL_BACKEND_WOULD_LINK_FALLTHROUGH;
@@ -2444,9 +2563,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
     (void)__atomic_fetch_add(&translit_jcc_link_admitted, jcc_link_admitted, __ATOMIC_RELAXED);
     if (would_link_family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT) {
-        block->profile_would_link_family = (uint8_t)would_link_family;
-        block->profile_would_link_disposition =
+        unsigned disposition =
             translit_would_link_classify(block, start, a->cursor, would_link_source, would_link_target, 0);
+        translit_shape_would_link_patch(would_link_marker, would_link_family, disposition);
     }
     if (sse2_run) {
         (void)__atomic_fetch_add(&translit_sse2_runs_admitted, 1, __ATOMIC_RELAXED);

@@ -518,14 +518,6 @@ static unsigned interp_backend_shape_edge_family(unsigned terminator) {
     }
 }
 
-static unsigned interp_backend_would_link_family(unsigned terminator) {
-    switch (terminator) {
-    case HL_BACKEND_SHAPE_T_FALLTHROUGH: return HL_BACKEND_WOULD_LINK_FALLTHROUGH;
-    case HL_BACKEND_SHAPE_T_DIRECT_JUMP: return HL_BACKEND_WOULD_LINK_DIRECT_JUMP;
-    case HL_BACKEND_SHAPE_T_DIRECT_CALL: return HL_BACKEND_WOULD_LINK_DIRECT_CALL;
-    default: return HL_BACKEND_WOULD_LINK_FAMILY_COUNT;
-    }
-}
 #endif
 
 // Every interpreted guest control transfer ends the block. Transliterated taken JCCs may cross one
@@ -595,8 +587,9 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
 #if defined(HL_NATIVE_TEST_HOOKS)
         if (g_backend_shape_open == 1) {
             unsigned packed = cpu->backend_shape;
-            hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_FAULT, (packed >> 16) & 0xffu,
-                                            (packed >> 8) & 0xffu);
+            hl_backend_tree_translated_exit(HL_BACKEND_SHAPE_T_FAULT,
+                                            (packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK,
+                                            (packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK);
         } else if (g_backend_shape_open == 2) {
             hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_FAULT, 0);
         }
@@ -616,26 +609,33 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
     int translated = block->host_entry_off != 0 && image_ok && translit_bind_cpu(cpu);
     if (translated) {
 #if defined(HL_NATIVE_TEST_HOOKS)
-        cpu->backend_shape = HL_BACKEND_SHAPE_T_OTHER;
+        cpu->backend_shape = HL_BACKEND_SHAPE_T_OTHER |
+                             HL_BACKEND_WOULD_LINK_FAMILY_COUNT << TL_SHAPE_WOULD_FAMILY_SHIFT;
         g_backend_shape_open = 1;
 #endif
         hl_backend_tree_run_begin(1, block->profile_insns);
         translit_run(cpu, block);
 #if defined(HL_NATIVE_TEST_HOOKS)
         unsigned packed = cpu->backend_shape;
-        unsigned terminator = packed & 0xffu;
+        unsigned terminator = (packed >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK;
         unsigned exit_kind = cpu->irq != 0 ? HL_BACKEND_SHAPE_T_IRQ : terminator;
-        hl_backend_tree_translated_exit(exit_kind, (packed >> 16) & 0xffu, (packed >> 8) & 0xffu);
-        unsigned would_link_family = interp_backend_would_link_family(terminator);
-        if (cpu->irq == 0 && would_link_family == block->profile_would_link_family)
-            hl_backend_tree_would_link(would_link_family, block->profile_would_link_disposition);
+        hl_backend_tree_translated_exit(exit_kind, (packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK,
+                                        (packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK);
+        unsigned would_link_family =
+            (packed >> TL_SHAPE_WOULD_FAMILY_SHIFT) & TL_SHAPE_WOULD_FAMILY_MASK;
+        unsigned would_link_disposition =
+            (packed >> TL_SHAPE_WOULD_DISPOSITION_SHIFT) & TL_SHAPE_WOULD_DISPOSITION_MASK;
+        if (cpu->irq == 0 && would_link_family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT)
+            hl_backend_tree_would_link(would_link_family, would_link_disposition);
         unsigned family = interp_backend_shape_edge_family(terminator);
         if (family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) {
             if (g_backend_shape_edge_pending)
                 hl_backend_tree_direct_edge_resolution(g_backend_shape_edge_family,
                                                        HL_BACKEND_SHAPE_EDGE_INTERRUPTED, 0, 0, 0, 0);
             uint64_t source_page = (block->gpc & ~UINT64_C(0xfff)) +
-                                   ((uint64_t)((packed >> 24) & 0xffu) << 12);
+                                   ((uint64_t)((packed >> TL_SHAPE_SOURCE_PAGE_SHIFT) &
+                                               TL_SHAPE_SOURCE_PAGE_MASK)
+                                    << 12);
             int same_page = (source_page >> 12) == (cpu->rip >> 12);
             hl_backend_tree_direct_edge(family, same_page);
             g_backend_shape_edge_pending = 1;

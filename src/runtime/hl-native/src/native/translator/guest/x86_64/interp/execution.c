@@ -388,8 +388,6 @@ struct interp_block {
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint8_t profile_jcc_fall_stitches;
     uint8_t profile_fallback_kind;
-    uint8_t profile_would_link_family;
-    uint8_t profile_would_link_disposition;
     uint16_t profile_insns;
     uint64_t profile_fallback_form;
 #endif
@@ -418,8 +416,6 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->profile_insns = 0;
     block->profile_jcc_fall_stitches = 0;
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;
-    block->profile_would_link_family = HL_BACKEND_WOULD_LINK_FAMILY_COUNT;
-    block->profile_would_link_disposition = HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED;
     block->profile_fallback_form = 0;
 #endif
     (void)translit_build(context, block, gpc);

@@ -119,7 +119,10 @@ struct Backend {
     reason_total: u64,
     shape_stitch_jmp: u64,
     shape_stitch_cond_fall: u64,
+    shape_fallthrough: u64,
     shape_cond_taken: u64,
+    shape_direct_jump: u64,
+    shape_direct_call: u64,
     shape_jcc_taken_eligible: u64,
     shape_jcc_taken_chained: u64,
     shape_jcc_taken_dispatcher: u64,
@@ -127,6 +130,12 @@ struct Backend {
     shape_other: u64,
     would_link_candidates: u64,
     would_link_refusals: u64,
+    would_fall_candidate: u64,
+    would_jmp_candidate: u64,
+    would_jmp_target_unmapped: u64,
+    would_jmp_eligible: u64,
+    would_call_candidate: u64,
+    would_call_target_unmapped: u64,
     would_link_line: String,
     unsupported_line: String,
     tree_line: String,
@@ -234,6 +243,21 @@ fn backend(stderr: &[u8]) -> Backend {
             "{would_link}"
         );
     }
+    assert_eq!(
+        would_link_counter("fall_candidate="),
+        shape_counter("t_fallthrough="),
+        "executed fallthrough terminals must reconcile exactly: {would_link}\n{shape}"
+    );
+    assert_eq!(
+        would_link_counter("jmp_candidate="),
+        shape_counter("t_direct_jump="),
+        "executed direct-JMP terminals must reconcile exactly: {would_link}\n{shape}"
+    );
+    assert_eq!(
+        would_link_counter("call_candidate="),
+        shape_counter("t_direct_call="),
+        "executed direct-CALL terminals must reconcile exactly: {would_link}\n{shape}"
+    );
     let translated_exit_total = [
         "t_fallthrough=",
         "t_cond_taken=",
@@ -368,7 +392,10 @@ fn backend(stderr: &[u8]) -> Backend {
         reason_total,
         shape_stitch_jmp: shape_counter("stitch_jmp="),
         shape_stitch_cond_fall: shape_counter("stitch_cond_fall="),
+        shape_fallthrough: shape_counter("t_fallthrough="),
         shape_cond_taken: shape_counter("t_cond_taken="),
+        shape_direct_jump: shape_counter("t_direct_jump="),
+        shape_direct_call: shape_counter("t_direct_call="),
         shape_jcc_taken_eligible: shape_counter("jt_eligible="),
         shape_jcc_taken_chained: shape_counter("e_jt_chained="),
         shape_jcc_taken_dispatcher: shape_counter("e_jt_dispatcher="),
@@ -384,6 +411,12 @@ fn backend(stderr: &[u8]) -> Backend {
                 would_link_counter(&format!("{family}_candidate=")) - would_link_counter(&format!("{family}_eligible="))
             })
             .sum(),
+        would_fall_candidate: would_link_counter("fall_candidate="),
+        would_jmp_candidate: would_link_counter("jmp_candidate="),
+        would_jmp_target_unmapped: would_link_counter("jmp_target_unmapped="),
+        would_jmp_eligible: would_link_counter("jmp_eligible="),
+        would_call_candidate: would_link_counter("call_candidate="),
+        would_call_target_unmapped: would_link_counter("call_target_unmapped="),
         would_link_line: would_link.to_owned(),
         unsupported_line: unsupported.to_owned(),
         tree_line: tree.to_owned(),
@@ -1433,6 +1466,34 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         "{}\n{}",
         selected_backend.line, selected_backend.shape_line
     );
+    assert_eq!(
+        selected_backend.would_jmp_target_unmapped, disabled_backend.would_jmp_target_unmapped,
+        "same-family linked ingress must retain the executed target JMP's publication disposition:\n{}\n{}",
+        selected_backend.would_link_line, disabled_backend.would_link_line
+    );
+    assert!(
+        selected_backend.would_jmp_target_unmapped > 1000,
+        "the warmed target JMP must execute after its cold-target publication: {}",
+        selected_backend.would_link_line
+    );
+    assert_eq!(
+        selected_backend.would_jmp_eligible, disabled_backend.would_jmp_eligible,
+        "linked ingress must not credit the unexecuted source JMP classification:\n{}\n{}",
+        selected_backend.would_link_line, disabled_backend.would_link_line
+    );
+    assert_eq!(
+        selected_backend.would_call_target_unmapped, disabled_backend.would_call_target_unmapped,
+        "differing-family linked ingress must count the executed target CALL:\n{}\n{}",
+        selected_backend.would_link_line, disabled_backend.would_link_line
+    );
+    assert!(
+        selected_backend.would_call_target_unmapped > 1000,
+        "the warmed target CALL must execute after its cold-target publication: {}",
+        selected_backend.would_link_line
+    );
+    assert_eq!(selected_backend.would_fall_candidate, selected_backend.shape_fallthrough);
+    assert_eq!(selected_backend.would_jmp_candidate, selected_backend.shape_direct_jump);
+    assert_eq!(selected_backend.would_call_candidate, selected_backend.shape_direct_call);
     assert!(
         selected_backend.shape_jcc_taken_dispatcher > 0,
         "{}",
