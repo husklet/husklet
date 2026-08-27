@@ -17,6 +17,8 @@
 #include <stddef.h>
 
 #define CACHE_SZ (64u << 20)
+_Static_assert(CACHE_SZ <= INT32_MAX,
+               "every source and target in one immutable cache generation must be rel32-reachable");
 /* A stitched AArch64 region may contain 4096 guest instructions.  When a
    file-backed BUS ledger is active, one memory instruction expands into a
    validated guard plus the original operation.  Reserve enough space for the

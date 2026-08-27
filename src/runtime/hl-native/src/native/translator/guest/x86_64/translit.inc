@@ -47,6 +47,8 @@ _Static_assert(__builtin_offsetof(struct cpu, r) == 0, "translit bakes r[] at of
 // every other block and the dispatcher flushes wholesale when it fills.
 #define TL_MAX_INSNS 192
 #define TL_MAX_BYTES 3072
+_Static_assert(TL_MAX_INSNS < 256,
+               "hook marker's source-page delta must represent every monotonic block instruction");
 #ifndef TL_STITCH_MAX_JMPS
 #define TL_STITCH_MAX_JMPS 8
 #endif
@@ -709,15 +711,20 @@ static void translit_emit_exit_preset(hl_x64_asm *a, uint64_t reason) {
 }
 
 static void translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitched_jmp,
-                                unsigned stitched_cond_fall) {
+                                unsigned stitched_cond_fall, unsigned source_page_delta) {
 #if defined(HL_NATIVE_TEST_HOOKS)
-    uint32_t packed = (kind & 0xffu) | (stitched_cond_fall & 0xffu) << 8 | (stitched_jmp & 0xffu) << 16;
+    /* pc is monotonic: sequential decode can advance at most one page per instruction, while admitted
+       JMP stitching stays forward on its current page. TL_MAX_INSNS therefore bounds this immutable
+       source-page delta to the marker's high byte. run_block combines it with block->gpc's page. */
+    uint32_t packed = (kind & 0xffu) | (stitched_cond_fall & 0xffu) << 8 | (stitched_jmp & 0xffu) << 16 |
+                      (source_page_delta & 0xffu) << 24;
     hl_x64_store_gs_imm32(a, (int32_t)packed, OFF_BACKEND_SHAPE);
 #else
     (void)a;
     (void)kind;
     (void)stitched_jmp;
     (void)stitched_cond_fall;
+    (void)source_page_delta;
 #endif
 }
 
@@ -1731,6 +1738,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
 
         uint64_t next = pc + (uint64_t)insn.len;
+        unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
         uint8_t *instruction_start = a->cursor;
         int preserve_register = -1;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
@@ -1876,11 +1884,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 } else {
                     uint8_t *fall = hl_x64_jcc_rel32(a, translit_condition(&insn) ^ 1);
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
-                                        (unsigned)jcc_fall_stitched);
+                                        (unsigned)jcc_fall_stitched, source_page_delta);
                     translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
                     hl_x64_patch_rel32(a, fall, a->cursor);
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)direct_jmp_stitched,
-                                        (unsigned)(jcc_fall_stitched + 1));
+                                        (unsigned)(jcc_fall_stitched + 1), source_page_delta);
                     if (a->overflow) {
                         a->cursor = instruction_start;
                         break;
@@ -1910,7 +1918,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode_context(context, target, &successor) > 0 &&
                     successor.len > 0) {
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)(direct_jmp_stitched + 1),
-                                        (unsigned)jcc_fall_stitched);
+                                        (unsigned)jcc_fall_stitched, source_page_delta);
                     if (a->overflow) {
                         a->cursor = instruction_start;
                         break;
@@ -1932,22 +1940,22 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         case TL_SYSCALL:
             // The frontend convention is that rip is already past the 0F 05 when the block exits.
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_SYSCALL, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next, R_SYSCALL);
             break;
         case TL_JMP:
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             break;
         case TL_JCC: {
             uint8_t *taken = hl_x64_jcc_rel32(a, translit_condition(&insn));
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_NOT_TAKEN, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next, R_BRANCH);
             hl_x64_patch_rel32(a, taken, a->cursor);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             break;
         }
@@ -1990,7 +1998,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a,
                                 kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
                                                 : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
-                                (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched);
+                                (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
             if (kind == TL_CALL)
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             else
@@ -2000,7 +2008,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         case TL_JMP_REG:
             hl_x64_store_gs(a, insn.rm_reg, OFF_RIP);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
         case TL_JMP_RIP: {
@@ -2016,7 +2024,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
             hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
         }
@@ -2030,7 +2038,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_load_gs(a, HL_X64_RAX, TL_MM_ENTRY);
             hl_x64_lea_rsp(a, insn.op == 0xC2 ? (int32_t)(8 + (uint16_t)insn.imm) : 8);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
-                                (unsigned)jcc_fall_stitched);
+                                (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
         }
@@ -2064,7 +2072,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     if (!terminated) {
         uint8_t *tail = a->cursor;
         translit_shape_exit(a, HL_BACKEND_SHAPE_T_FALLTHROUGH, (unsigned)direct_jmp_stitched,
-                            (unsigned)jcc_fall_stitched);
+                            (unsigned)jcc_fall_stitched, (unsigned)((pc >> 12) - (gpc >> 12)));
         translit_emit_exit_const(a, pc, R_BRANCH);
         if (a->overflow) {
 #if defined(HL_NATIVE_TEST_HOOKS)

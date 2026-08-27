@@ -132,7 +132,12 @@ static __thread unsigned g_backend_shape_open;
 static __thread unsigned g_backend_shape_interp_stop;
 static __thread uint64_t g_backend_shape_interp_stop_form;
 static __thread int g_backend_shape_edge_pending;
+static __thread unsigned g_backend_shape_edge_family;
 static __thread uint64_t g_backend_shape_edge_target;
+static __thread uint64_t g_backend_shape_edge_source_generation;
+static __thread uintptr_t g_backend_shape_edge_source_host_lo;
+static __thread uintptr_t g_backend_shape_edge_source_host_hi;
+static __thread int g_backend_shape_edge_same_page;
 
 static void interp_backend_shape_dispatch_enter(struct cpu *cpu) {
     cpu->ibtc_base = 0;
@@ -140,19 +145,6 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu) {
     g_backend_shape_edge_pending = 0;
 }
 
-static void *interp_backend_shape_map_host(void *opaque, uint64_t gpc) {
-    hl_map_host_cache_entry *cache = opaque;
-    void *code = map_host_cached(cache, gpc);
-    if (g_backend_shape_edge_pending) {
-        unsigned resolution = gpc != g_backend_shape_edge_target
-                                  ? HL_BACKEND_SHAPE_EDGE_INTERRUPTED
-                                  : code != NULL ? HL_BACKEND_SHAPE_EDGE_RESOLVED
-                                                 : HL_BACKEND_SHAPE_EDGE_UNRESOLVED;
-        hl_backend_tree_direct_edge_resolution(resolution);
-        g_backend_shape_edge_pending = 0;
-    }
-    return code;
-}
 #endif
 
 // ---- The past-EOF SIGBUS ledger. mem.c re-maps the past-EOF tail of a MAP_PRIVATE file mapping as
@@ -432,6 +424,51 @@ static void interp_store_bytes(uint64_t guest_address, const void *source, unsig
 // LINK address; instruction fetch projects it onto storage after RET. Must stay byte-for-byte translate.c's.
 #include "interp/execution.c"
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int interp_backend_shape_rel32_reachable(uintptr_t source_lo, uintptr_t source_hi, uintptr_t target) {
+    if (source_hi < source_lo) return 0;
+    uint64_t from_lo = source_lo > target ? source_lo - target : target - source_lo;
+    uint64_t from_hi = source_hi > target ? source_hi - target : target - source_hi;
+    /* Requiring both ends of the immutable emitted span to reach the target is conservative for every
+       possible branch site within it.  Same-generation spans are guaranteed by CACHE_SZ's static bound;
+       retained/current arena pairs are measured rather than assumed. */
+    return from_lo <= INT32_MAX && from_hi <= INT32_MAX;
+}
+
+static void *interp_backend_shape_map_host(void *opaque, uint64_t gpc) {
+    hl_map_host_cache_entry *cache = opaque;
+    void *code = map_host_cached(cache, gpc);
+    if (!g_backend_shape_edge_pending) return code;
+    unsigned family = g_backend_shape_edge_family;
+    if (gpc != g_backend_shape_edge_target) {
+        hl_backend_tree_direct_edge_resolution(family, HL_BACKEND_SHAPE_EDGE_INTERRUPTED, 0, 0, 0, 0);
+    } else if (code == NULL) {
+        hl_backend_tree_direct_edge_resolution(family, HL_BACKEND_SHAPE_EDGE_UNMAPPED, 0, 0, 0, 0);
+    } else {
+        struct interp_block *target_block = code;
+        void *target_rx = NULL;
+        uint64_t target_generation = UINT64_MAX;
+        int target_resolved = jit_resolve_rw_code(code, &target_rx, &target_generation);
+        int target_translated = target_resolved && target_block->host_entry_off != 0;
+        int current_generation = target_translated &&
+                                 g_backend_shape_edge_source_generation == g_cache_gen &&
+                                 target_generation == g_cache_gen && target_block->generation == g_cache_gen;
+        uintptr_t target_entry = target_translated
+                                     ? (uintptr_t)target_rx + target_block->host_entry_off
+                                     : 0;
+        int rel32_reachable = target_translated &&
+                              interp_backend_shape_rel32_reachable(g_backend_shape_edge_source_host_lo,
+                                                                   g_backend_shape_edge_source_host_hi, target_entry);
+        int eligible = family == HL_BACKEND_SHAPE_EDGE_JCC_TAKEN && g_backend_shape_edge_same_page &&
+                       target_translated && current_generation && rel32_reachable;
+        hl_backend_tree_direct_edge_resolution(family, HL_BACKEND_SHAPE_EDGE_MAPPED, target_translated,
+                                               current_generation, rel32_reachable, eligible);
+    }
+    g_backend_shape_edge_pending = 0;
+    return code;
+}
+#endif
+
 static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     // VEX/EVEX -> avx.c, which advances rip itself, so rip must name THIS instruction on the way out.
     if (insn->vex) {
@@ -458,6 +495,17 @@ static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct in
     case TL_CALL_RIP: return HL_BACKEND_SHAPE_S_INDIRECT_CALL;
     case TL_SYSCALL: return HL_BACKEND_SHAPE_S_SYSCALL;
     default: return cpu->reason == R_BRANCH ? HL_BACKEND_SHAPE_S_OTHER : HL_BACKEND_SHAPE_S_SERVICE;
+    }
+}
+
+static unsigned interp_backend_shape_edge_family(unsigned terminator) {
+    switch (terminator) {
+    case HL_BACKEND_SHAPE_T_FALLTHROUGH: return HL_BACKEND_SHAPE_EDGE_FALLTHROUGH;
+    case HL_BACKEND_SHAPE_T_COND_TAKEN: return HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
+    case HL_BACKEND_SHAPE_T_COND_NOT_TAKEN: return HL_BACKEND_SHAPE_EDGE_JCC_NOT_TAKEN;
+    case HL_BACKEND_SHAPE_T_DIRECT_JUMP: return HL_BACKEND_SHAPE_EDGE_DIRECT_JUMP;
+    case HL_BACKEND_SHAPE_T_DIRECT_CALL: return HL_BACKEND_SHAPE_EDGE_DIRECT_CALL;
+    default: return HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT;
     }
 }
 #endif
@@ -560,14 +608,23 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         unsigned terminator = packed & 0xffu;
         unsigned exit_kind = cpu->irq != 0 ? HL_BACKEND_SHAPE_T_IRQ : terminator;
         hl_backend_tree_translated_exit(exit_kind, (packed >> 16) & 0xffu, (packed >> 8) & 0xffu);
-        if (terminator == HL_BACKEND_SHAPE_T_FALLTHROUGH || terminator == HL_BACKEND_SHAPE_T_COND_TAKEN ||
-            terminator == HL_BACKEND_SHAPE_T_COND_NOT_TAKEN || terminator == HL_BACKEND_SHAPE_T_DIRECT_JUMP ||
-            terminator == HL_BACKEND_SHAPE_T_DIRECT_CALL) {
+        unsigned family = interp_backend_shape_edge_family(terminator);
+        if (family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) {
             if (g_backend_shape_edge_pending)
-                hl_backend_tree_direct_edge_resolution(HL_BACKEND_SHAPE_EDGE_INTERRUPTED);
-            hl_backend_tree_direct_edge(1);
+                hl_backend_tree_direct_edge_resolution(g_backend_shape_edge_family,
+                                                       HL_BACKEND_SHAPE_EDGE_INTERRUPTED, 0, 0, 0, 0);
+            uint64_t source_page = (block->gpc & ~UINT64_C(0xfff)) +
+                                   ((uint64_t)((packed >> 24) & 0xffu) << 12);
+            int same_page = (source_page >> 12) == (cpu->rip >> 12);
+            hl_backend_tree_direct_edge(family, same_page);
             g_backend_shape_edge_pending = 1;
+            g_backend_shape_edge_family = family;
             g_backend_shape_edge_target = cpu->rip;
+            g_backend_shape_edge_source_generation = block->generation;
+            g_backend_shape_edge_source_host_lo = (uintptr_t)block + block->host_entry_off;
+            g_backend_shape_edge_source_host_hi =
+                g_backend_shape_edge_source_host_lo + block->host_len;
+            g_backend_shape_edge_same_page = same_page;
         }
         g_backend_shape_open = 0;
 #endif

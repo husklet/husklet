@@ -116,6 +116,7 @@ struct Backend {
     shape_stitch_jmp: u64,
     shape_stitch_cond_fall: u64,
     shape_cond_taken: u64,
+    shape_jcc_taken_eligible: u64,
     shape_fault: u64,
     shape_other: u64,
     unsupported_line: String,
@@ -211,6 +212,46 @@ fn backend(stderr: &[u8]) -> Backend {
         tree_counter("translated_entries=") + shape_counter("stitch_jmp=") + shape_counter("stitch_cond_fall="),
         "{shape}"
     );
+    for family in ["fall", "jt", "jn", "jmp", "call"] {
+        let total = shape_counter(&format!("e_{family}_total="));
+        assert_eq!(
+            shape_counter(&format!("e_{family}_mapped="))
+                + shape_counter(&format!("e_{family}_unmapped="))
+                + shape_counter(&format!("e_{family}_interrupted=")),
+            total,
+            "{shape}"
+        );
+        assert_eq!(
+            shape_counter(&format!("e_{family}_chained=")) + shape_counter(&format!("e_{family}_dispatcher=")),
+            total,
+            "{shape}"
+        );
+    }
+    assert_eq!(
+        shape_counter("jt_same_page=") + shape_counter("jt_cross_page="),
+        shape_counter("e_jt_total="),
+        "{shape}"
+    );
+    assert_eq!(
+        shape_counter("jt_target_translated=") + shape_counter("jt_target_interpreted="),
+        shape_counter("e_jt_mapped="),
+        "{shape}"
+    );
+    assert_eq!(
+        shape_counter("jt_generation_current=") + shape_counter("jt_generation_retired="),
+        shape_counter("jt_target_translated="),
+        "{shape}"
+    );
+    assert_eq!(
+        shape_counter("jt_rel32=") + shape_counter("jt_rel32_unreachable="),
+        shape_counter("jt_target_translated="),
+        "{shape}"
+    );
+    assert_eq!(
+        shape_counter("jt_eligible=") + shape_counter("jt_ineligible=") + shape_counter("e_jt_interrupted="),
+        shape_counter("e_jt_total="),
+        "{shape}"
+    );
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
@@ -273,6 +314,7 @@ fn backend(stderr: &[u8]) -> Backend {
         shape_stitch_jmp: shape_counter("stitch_jmp="),
         shape_stitch_cond_fall: shape_counter("stitch_cond_fall="),
         shape_cond_taken: shape_counter("t_cond_taken="),
+        shape_jcc_taken_eligible: shape_counter("jt_eligible="),
         shape_fault: shape_counter("t_fault="),
         shape_other: shape_counter("t_other="),
         unsupported_line: unsupported.to_owned(),
@@ -1234,6 +1276,11 @@ fn a_same_page_conditional_fallthrough_stays_in_the_descriptor() {
     assert!(selected_backend.jcc_fall_executed > 0, "{}", selected_backend.line);
     assert!(
         selected_backend.shape_stitch_cond_fall > 0 && selected_backend.shape_cond_taken > 0,
+        "{}",
+        selected_backend.shape_line
+    );
+    assert!(
+        selected_backend.shape_jcc_taken_eligible > 0,
         "{}",
         selected_backend.shape_line
     );
