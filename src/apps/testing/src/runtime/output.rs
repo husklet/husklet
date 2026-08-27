@@ -334,9 +334,16 @@ fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
     if translated_exits != Some(fields["translated_entries"]) {
         return Err("backend-shape translated exits do not reconcile with entries".into());
     }
-    let transfers = fields["translated_entries"]
-        .checked_add(fields["stitch_jmp"])
-        .and_then(|value| value.checked_add(fields["stitch_cond_fall"]));
+    let transfers = sum(&[
+        "translated_entries",
+        "stitch_jmp",
+        "stitch_cond_fall",
+        "e_fall_chained",
+        "e_jt_chained",
+        "e_jn_chained",
+        "e_jmp_chained",
+        "e_call_chained",
+    ]);
     if transfers != Some(fields["translated_transfers"]) {
         return Err("backend-shape translated transfers do not reconcile".into());
     }
@@ -540,6 +547,36 @@ mod tests {
         assert!(
             digest.contains("crossings=5 translated_entries=2 interpreted_entries=3"),
             "{digest}"
+        );
+    }
+
+    #[test]
+    fn translated_transfers_include_every_chained_edge_family() {
+        let shape = SHAPE
+            .replace(" translated_transfers=5", " translated_transfers=10")
+            .replace(" e_fall_total=1 e_fall_mapped=1", " e_fall_total=2 e_fall_mapped=2")
+            .replace(" e_fall_chained=0", " e_fall_chained=1")
+            .replace(" e_jt_total=1 e_jt_mapped=1", " e_jt_total=2 e_jt_mapped=2")
+            .replace(" e_jt_chained=0", " e_jt_chained=1")
+            .replace(" jt_same_page=1", " jt_same_page=2")
+            .replace(" jt_target_translated=1", " jt_target_translated=2")
+            .replace(" jt_generation_current=1", " jt_generation_current=2")
+            .replace(" jt_rel32=1", " jt_rel32=2")
+            .replace(" jt_eligible=1", " jt_eligible=2")
+            .replace(" e_jn_total=0 e_jn_mapped=0", " e_jn_total=1 e_jn_mapped=1")
+            .replace(" e_jn_chained=0", " e_jn_chained=1")
+            .replace(" e_jmp_total=0 e_jmp_mapped=0", " e_jmp_total=1 e_jmp_mapped=1")
+            .replace(" e_jmp_chained=0", " e_jmp_chained=1")
+            .replace(" e_call_total=0 e_call_mapped=0", " e_call_total=1 e_call_mapped=1")
+            .replace(" e_call_chained=0", " e_call_chained=1");
+        validate_backend_tree(format!("{TREE}{shape}").as_bytes(), true).unwrap();
+
+        let omitted = shape.replace(" translated_transfers=10", " translated_transfers=9");
+        assert!(
+            validate_backend_tree(format!("{TREE}{omitted}").as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("translated transfers")
         );
     }
 
