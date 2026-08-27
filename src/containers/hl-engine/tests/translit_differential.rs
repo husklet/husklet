@@ -473,7 +473,9 @@ fn next_sse_family_matches_native_for_unaligned_high_rip_alias_flags_and_prefixe
     let executable = fixture(work.path(), "sse_next_family");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
     let (selected, selected_status, selected_backend) = run(&executable, "1");
-    let native = std::process::Command::new(&executable).output().expect("native next SSE family fixture");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native next SSE family fixture");
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
     assert_eq!(native.status.code(), Some(selected_status));
