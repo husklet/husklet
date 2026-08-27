@@ -75,6 +75,29 @@ static inline void hl_x64_store_gs_imm32(hl_x64_asm *a, int32_t value, int32_t d
     hl_x64_u32(a, (uint32_t)value);
 }
 
+// cmpq $imm8, %gs:disp32. Used only after the guest register file and flags have been spilled, so the
+// condition-code clobber is private to an emitted boundary stub.
+static inline void hl_x64_cmp_gs_imm8(hl_x64_asm *a, int32_t disp, uint8_t value) {
+    hl_x64_u8(a, 0x65);
+    hl_x64_u8(a, 0x48);
+    hl_x64_u8(a, 0x83);
+    hl_x64_u8(a, 0x3C); // mod=00 /7 rm=100 (SIB)
+    hl_x64_u8(a, 0x25); // no base/index, disp32
+    hl_x64_u32(a, (uint32_t)disp);
+    hl_x64_u8(a, value);
+}
+
+// incq %gs:disp32. Hook-only dynamic counters use per-CPU storage so emitted code bakes no process-global
+// address and remains position independent.
+static inline void hl_x64_inc_gs(hl_x64_asm *a, int32_t disp) {
+    hl_x64_u8(a, 0x65);
+    hl_x64_u8(a, 0x48);
+    hl_x64_u8(a, 0xFF);
+    hl_x64_u8(a, 0x04); // mod=00 /0 rm=100 (SIB)
+    hl_x64_u8(a, 0x25); // no base/index, disp32
+    hl_x64_u32(a, (uint32_t)disp);
+}
+
 // movabs $imm64, %reg
 static inline void hl_x64_mov_imm64(hl_x64_asm *a, int reg, uint64_t value) {
     hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 1 : 0)));
@@ -130,6 +153,18 @@ static inline void hl_x64_pushfq(hl_x64_asm *a) {
     hl_x64_u8(a, 0x9C);
 }
 
+static inline void hl_x64_push_gs(hl_x64_asm *a, int32_t disp) {
+    hl_x64_u8(a, 0x65);
+    hl_x64_u8(a, 0xFF);
+    hl_x64_u8(a, 0x34); // mod=00 /6 rm=100 (SIB)
+    hl_x64_u8(a, 0x25); // no base/index, disp32
+    hl_x64_u32(a, (uint32_t)disp);
+}
+
+static inline void hl_x64_popfq(hl_x64_asm *a) {
+    hl_x64_u8(a, 0x9D);
+}
+
 // cld -- the host ABI requires DF clear at every C boundary, and a guest `std` leaves it set.
 static inline void hl_x64_cld(hl_x64_asm *a) {
     hl_x64_u8(a, 0xFC);
@@ -142,6 +177,19 @@ static inline void hl_x64_pop(hl_x64_asm *a, int reg) {
 
 static inline void hl_x64_ret(hl_x64_asm *a) {
     hl_x64_u8(a, 0xC3);
+}
+
+// jmp rel32. `target` and the emitted slot must name the same alias of one arena; callers linking JIT
+// blocks use RW for both, whose displacement is identical to the RX alias executed by the CPU.
+static inline void hl_x64_jmp_rel32(hl_x64_asm *a, const uint8_t *target) {
+    hl_x64_u8(a, 0xE9);
+    uint8_t *slot = a->cursor;
+    int64_t delta = target - (slot + 4);
+    if (delta < INT32_MIN || delta > INT32_MAX) {
+        a->overflow = 1;
+        return;
+    }
+    hl_x64_u32(a, (uint32_t)(int32_t)delta);
 }
 
 // jcc rel32 -- the displacement is patched once the target offset is known.

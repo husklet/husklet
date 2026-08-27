@@ -519,8 +519,8 @@ static unsigned interp_backend_shape_edge_family(unsigned terminator) {
 }
 #endif
 
-// Every guest control transfer ends the block, keeping run_guest's per-iteration work (signal poll,
-// safepoints) at block granularity.
+// Every interpreted guest control transfer ends the block. Transliterated taken JCCs may cross one
+// already-published same-page edge after doing their own spill/IRQ poll; every other transfer returns here.
 static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     g_dispatch_census_interp_steps = 0;
@@ -613,6 +613,10 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         hl_backend_tree_run_begin(1, block->profile_insns);
         translit_run(cpu, block);
 #if defined(HL_NATIVE_TEST_HOOKS)
+        struct interp_block *shape_block = (struct interp_block *)(uintptr_t)cpu->backend_shape_block;
+        if (shape_block == NULL || shape_block->magic != INTERP_BLOCK_MAGIC ||
+            shape_block->generation != block->generation)
+            shape_block = block;
         unsigned packed = cpu->backend_shape;
         unsigned terminator = packed & 0xffu;
         unsigned exit_kind = cpu->irq != 0 ? HL_BACKEND_SHAPE_T_IRQ : terminator;
@@ -622,7 +626,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
             if (g_backend_shape_edge_pending)
                 hl_backend_tree_direct_edge_resolution(g_backend_shape_edge_family,
                                                        HL_BACKEND_SHAPE_EDGE_INTERRUPTED, 0, 0, 0, 0);
-            uint64_t source_page = (block->gpc & ~UINT64_C(0xfff)) +
+            uint64_t source_page = (cpu->backend_shape_gpc & ~UINT64_C(0xfff)) +
                                    ((uint64_t)((packed >> 24) & 0xffu) << 12);
             int same_page = (source_page >> 12) == (cpu->rip >> 12);
             hl_backend_tree_direct_edge(family, same_page);
@@ -631,13 +635,13 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
             g_backend_shape_edge_target = cpu->rip;
             void *source_rx = NULL;
             uint64_t source_generation = UINT64_MAX;
-            int source_resolved = jit_resolve_host_rx_code(block, &source_rx, &source_generation);
+            int source_resolved = jit_resolve_host_rx_code(shape_block, &source_rx, &source_generation);
             g_backend_shape_edge_source_resolved = source_resolved;
             g_backend_shape_edge_source_generation = source_resolved ? source_generation : UINT64_MAX;
             g_backend_shape_edge_source_host_lo =
-                source_resolved ? (uintptr_t)source_rx + block->host_entry_off : 0;
+                source_resolved ? (uintptr_t)source_rx + shape_block->host_entry_off : 0;
             g_backend_shape_edge_source_host_hi =
-                source_resolved ? g_backend_shape_edge_source_host_lo + block->host_len : 0;
+                source_resolved ? g_backend_shape_edge_source_host_lo + shape_block->host_len : 0;
             g_backend_shape_edge_same_page = same_page;
         }
         g_backend_shape_open = 0;

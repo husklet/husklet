@@ -378,7 +378,11 @@ struct interp_block {
     uint64_t magic;
     uint64_t gpc;
     uint64_t generation; // diagnostic
-    uint64_t guest_end;  // one past the last transliterated guest byte (== gpc + 1 when interpreted)
+    // Conservative source dependency hull. Ordinarily this is the byte range copied into host code. A
+    // same-page immutable link expands it to the whole linked page, so invalidating any byte that could
+    // stale the target also removes every source descriptor that can bypass the translation map to it.
+    uint64_t guest_start;
+    uint64_t guest_end;
     uint32_t host_entry_off;
     uint32_t host_len;
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -404,6 +408,7 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->magic = INTERP_BLOCK_MAGIC;
     block->gpc = gpc;
     block->generation = g_cache_gen;
+    block->guest_start = gpc;
     block->guest_end = gpc + 1;
     block->host_entry_off = 0;
     block->host_len = 0;
@@ -417,7 +422,7 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.
-    map_put(gpc, gpc, block->guest_end, block, block);
+    map_put(gpc, block->guest_start, block->guest_end, block, block);
     return block;
 }
 

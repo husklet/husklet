@@ -197,6 +197,12 @@ struct cpu {
     /* Hook-only per-entry handoff written by same-ISA emitted exits and consumed immediately by run_block.
        Production layout and checkpoint ABI remain byte-for-byte unchanged. */
     uint32_t backend_shape;
+    uint32_t backend_shape_padding;
+    uint64_t backend_shape_gpc;
+    uint64_t backend_shape_block;
+    uint64_t translit_jcc_link_taken;
+    uint64_t translit_jcc_link_irq_fallback;
+    uint64_t translit_jcc_link_dispatcher;
 #endif
     /* The emitted guard reads this array; the soft_* scalars above stay the
        most-recently-installed entry and remain the direct-store span cache.
@@ -257,6 +263,13 @@ _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offs
 #define OFF_MM 656
 // async-poll flag offset (non-baked -> real offset, computed after the struct).
 #define OFF_IRQ __builtin_offsetof(struct cpu, irq)
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define OFF_BACKEND_SHAPE_GPC __builtin_offsetof(struct cpu, backend_shape_gpc)
+#define OFF_BACKEND_SHAPE_BLOCK __builtin_offsetof(struct cpu, backend_shape_block)
+#define OFF_TRANSLIT_JCC_LINK_TAKEN __builtin_offsetof(struct cpu, translit_jcc_link_taken)
+#define OFF_TRANSLIT_JCC_LINK_IRQ_FALLBACK __builtin_offsetof(struct cpu, translit_jcc_link_irq_fallback)
+#define OFF_TRANSLIT_JCC_LINK_DISPATCHER __builtin_offsetof(struct cpu, translit_jcc_link_dispatcher)
+#endif
 // Offset safety (C3): the baked numeric OFF_* above are duplicated into emitted machine code AND the
 // run_block/block_return asm. A struct edit that shifts any of them must fail the BUILD, not corrupt a
 // guest at runtime -- so assert each baked offset against the real field. (See REFACTOR.md "Offset safety".)

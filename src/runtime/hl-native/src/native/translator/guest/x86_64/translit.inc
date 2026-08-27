@@ -155,6 +155,10 @@ static uint64_t translit_jcc_fall_successor_page_refused;
 static uint64_t translit_jcc_fall_decode_refused;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_jcc_fall_executed;
+static uint64_t translit_jcc_link_admitted;
+static uint64_t translit_jcc_link_taken;
+static uint64_t translit_jcc_link_irq_fallback;
+static uint64_t translit_jcc_link_dispatcher;
 #endif
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
@@ -708,6 +712,83 @@ static void translit_emit_exit_const(hl_x64_asm *a, uint64_t rip, uint64_t reaso
 static void translit_emit_exit_preset(hl_x64_asm *a, uint64_t reason) {
     translit_emit_spill(a);
     translit_emit_return(a, reason);
+}
+
+// Reload the canonical image produced by translit_emit_spill without creating a second host frame. The
+// ordering is the entry trampoline's ordering: flags before GPRs and guest RSP last. Every instruction
+// stays in the JIT arena, so a fault after the final jump is attributed by the target block's ordinary
+// provenance map; there is no out-of-cache trampoline window.
+static void translit_emit_reload(hl_x64_asm *a) {
+    hl_x64_push_gs(a, TL_MM_FLAGS);
+    hl_x64_popfq(a);
+    static const int order[15] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    for (int i = 0; i < 15; i++)
+        hl_x64_load_gs(a, order[i], (int32_t)(order[i] * 8));
+    hl_x64_load_gs(a, HL_X64_RSP, 4 * 8);
+}
+
+// Select only a target whose code was already mapped and published in the current immutable arena. The
+// target's entire source hull must fit on the JCC's page: the source descriptor will own that whole page,
+// so any SMC/invalidation that can stale the bypassed target also removes the source link.
+static struct interp_block *translit_jcc_link_target(uint64_t source, uint64_t target) {
+    uint64_t page = source & ~UINT64_C(0xfff);
+    if (page > UINT64_MAX - UINT64_C(0x1000) || (target & ~UINT64_C(0xfff)) != page) return NULL;
+    struct interp_block *target_block = (struct interp_block *)map_host(target);
+    if (target_block == NULL || target_block->magic != INTERP_BLOCK_MAGIC ||
+        target_block->generation != g_cache_gen || target_block->host_entry_off == 0 ||
+        target_block->host_len == 0 || target_block->guest_start < page ||
+        target_block->guest_end > page + UINT64_C(0x1000))
+        return NULL;
+    uintptr_t block_address = (uintptr_t)target_block;
+    uintptr_t entry_address = block_address + target_block->host_entry_off;
+    if (block_address < (uintptr_t)g_cache || entry_address < block_address || entry_address < (uintptr_t)g_cache ||
+        entry_address > (uintptr_t)g_cp || target_block->host_len > (uintptr_t)g_cp - entry_address)
+        return NULL;
+    return target_block;
+}
+
+static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *hi) {
+    uint64_t page = source & ~UINT64_C(0xfff);
+    if (page < *lo) *lo = page;
+    if (page <= UINT64_MAX - UINT64_C(0x1000) && page + UINT64_C(0x1000) > *hi)
+        *hi = page + UINT64_C(0x1000);
+}
+
+// The guest JCC has committed before this stub. Spill first (including RCX and the exact flags), then
+// poll the async/STW/checkpoint kick without touching guest-visible state. A pending kick writes RIP and
+// returns through the ordinary dispatcher boundary. The clear path reloads the exact image and jumps to
+// an already-published block; cpu->rip is deliberately NOT changed on that path, so a signal/fault uses
+// the target code's instruction provenance rather than a premature architectural store.
+static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_block, uint64_t target) {
+    translit_emit_spill(a);
+    hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
+    uint8_t *irq = hl_x64_jcc_rel32(a, 5); // JNE: dispatcher fallback
+#if defined(HL_NATIVE_TEST_HOOKS)
+    hl_x64_inc_gs(a, OFF_TRANSLIT_JCC_LINK_TAKEN);
+    hl_x64_mov_imm64(a, HL_X64_RAX, target_block->gpc);
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_BACKEND_SHAPE_GPC);
+    hl_x64_mov_imm64(a, HL_X64_RAX, (uint64_t)(uintptr_t)target_block);
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_BACKEND_SHAPE_BLOCK);
+#endif
+    translit_emit_reload(a);
+    hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
+    hl_x64_patch_rel32(a, irq, a->cursor);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    hl_x64_inc_gs(a, OFF_TRANSLIT_JCC_LINK_IRQ_FALLBACK);
+#endif
+    hl_x64_mov_imm64(a, HL_X64_RAX, target);
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
+    translit_emit_return(a, R_BRANCH);
+}
+
+static void translit_emit_jcc_dispatcher(hl_x64_asm *a, uint64_t target) {
+    translit_emit_spill(a);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    hl_x64_inc_gs(a, OFF_TRANSLIT_JCC_LINK_DISPATCHER);
+#endif
+    hl_x64_mov_imm64(a, HL_X64_RAX, target);
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
+    translit_emit_return(a, R_BRANCH);
 }
 
 static void translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitched_jmp,
@@ -1646,6 +1727,33 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                                             UINT64_C(0x1200))
                    ? 0
                    : 66;
+    if (scenario == 53) {
+        uint64_t source_lo = UINT64_C(0x1800), source_hi = UINT64_C(0x1900);
+        translit_jcc_link_own_page(UINT64_C(0x1abc), &source_lo, &source_hi);
+        return source_lo == UINT64_C(0x1000) && source_hi == UINT64_C(0x2000) ? 0 : 67;
+    }
+    if (scenario == 54) {
+        hl_x64_cmp_gs_imm8(&output, INT32_C(0x12345678), 0);
+        const uint8_t expected[] = {0x65, 0x48, 0x83, 0x3c, 0x25, 0x78, 0x56, 0x34, 0x12, 0x00};
+        return output.cursor - bytes == (ptrdiff_t)sizeof expected && memcmp(bytes, expected, sizeof expected) == 0
+                   ? 0
+                   : 68;
+    }
+    if (scenario == 55) {
+        uint8_t reload[192] = {0};
+        hl_x64_asm reload_output = {reload, reload + sizeof reload, 0};
+        translit_emit_reload(&reload_output);
+        // push %gs:flags; popfq; load RAX then RCX; load guest RSP last.
+        const uint8_t prefix[] = {0x65, 0xff, 0x34, 0x25, 0x90, 0x02, 0x00, 0x00, 0x9d,
+                                  0x65, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00,
+                                  0x65, 0x48, 0x8b, 0x0c, 0x25, 0x08, 0x00, 0x00, 0x00};
+        const uint8_t suffix[] = {0x65, 0x48, 0x8b, 0x24, 0x25, 0x20, 0x00, 0x00, 0x00};
+        size_t length = (size_t)(reload_output.cursor - reload);
+        return !reload_output.overflow && length == 153 && memcmp(reload, prefix, sizeof prefix) == 0 &&
+                       memcmp(reload + length - sizeof suffix, suffix, sizeof suffix) == 0
+                   ? 0
+                   : 69;
+    }
     return 6;
 }
 #endif
@@ -1763,6 +1871,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint32_t fs_owner_count = 0;
     int jcc_fall_stitched = 0;
     int direct_jmp_stitched = 0;
+    unsigned jcc_link_admitted = 0;
+    uint64_t linked_page_lo = UINT64_MAX, linked_page_hi = 0;
     uint8_t bytes[16];
 
     while (count < TL_MAX_INSNS && !a->overflow) {
@@ -1925,10 +2035,18 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 } else if (successor_status == TL_SUCCESSOR_PAGE_REFUSED) {
                     (void)__atomic_fetch_add(&translit_jcc_fall_successor_page_refused, 1, __ATOMIC_RELAXED);
                 } else {
+                    uint64_t target = next + (uint64_t)insn.imm;
+                    struct interp_block *target_block = translit_jcc_link_target(pc, target);
                     uint8_t *fall = hl_x64_jcc_rel32(a, translit_condition(&insn) ^ 1);
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                         (unsigned)jcc_fall_stitched, source_page_delta);
-                    translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
+                    if (target_block != NULL) {
+                        translit_emit_jcc_link(a, target_block, target);
+                        translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
+                        jcc_link_admitted++;
+                    } else {
+                        translit_emit_jcc_dispatcher(a, target);
+                    }
                     hl_x64_patch_rel32(a, fall, a->cursor);
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)direct_jmp_stitched,
                                         (unsigned)(jcc_fall_stitched + 1), source_page_delta);
@@ -1992,6 +2110,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
             break;
         case TL_JCC: {
+            uint64_t target = next + (uint64_t)insn.imm;
+            struct interp_block *target_block = translit_jcc_link_target(pc, target);
             uint8_t *taken = hl_x64_jcc_rel32(a, translit_condition(&insn));
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_NOT_TAKEN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
@@ -1999,7 +2119,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_patch_rel32(a, taken, a->cursor);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
-            translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
+            if (target_block != NULL) {
+                translit_emit_jcc_link(a, target_block, target);
+                translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
+                jcc_link_admitted++;
+            } else {
+                translit_emit_jcc_dispatcher(a, target);
+            }
             break;
         }
         case TL_CALL:
@@ -2145,6 +2271,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
 #if defined(HL_NATIVE_TEST_HOOKS)
     (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
+    (void)__atomic_fetch_add(&translit_jcc_link_admitted, jcc_link_admitted, __ATOMIC_RELAXED);
     if (sse2_run) {
         (void)__atomic_fetch_add(&translit_sse2_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_instructions_admitted, (uint64_t)count, __ATOMIC_RELAXED);
@@ -2174,10 +2301,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             first_insn.disp == -INT64_C(0x2340))
             (void)__atomic_fetch_add(&translit_fs_fixture_admitted, 1, __ATOMIC_RELAXED);
     }
+#else
+    (void)jcc_link_admitted;
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
     block->host_len = (uint32_t)(a->cursor - start);
-    block->guest_end = pc;
+    block->guest_start = linked_page_lo < gpc ? linked_page_lo : gpc;
+    block->guest_end = linked_page_hi > pc ? linked_page_hi : pc;
 #if defined(HL_NATIVE_TEST_HOOKS)
     translit_perf_map_publish(block, start, block->host_len, (uint32_t)count);
 #endif
@@ -2198,10 +2328,23 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 static void translit_run(struct cpu *cpu, struct interp_block *block) {
     (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
     if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_entries, 1, __ATOMIC_RELAXED);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    cpu->backend_shape_gpc = block->gpc;
+    cpu->backend_shape_block = (uint64_t)(uintptr_t)block;
+    cpu->translit_jcc_link_taken = 0;
+    cpu->translit_jcc_link_irq_fallback = 0;
+    cpu->translit_jcc_link_dispatcher = 0;
+#endif
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);
 #if defined(HL_NATIVE_TEST_HOOKS)
+    (void)__atomic_fetch_add(&translit_jcc_link_taken, cpu->translit_jcc_link_taken, __ATOMIC_RELAXED);
+    (void)__atomic_fetch_add(&translit_jcc_link_irq_fallback, cpu->translit_jcc_link_irq_fallback,
+                             __ATOMIC_RELAXED);
+    (void)__atomic_fetch_add(&translit_jcc_link_dispatcher, cpu->translit_jcc_link_dispatcher,
+                             __ATOMIC_RELAXED);
+    hl_backend_tree_jcc_links(cpu->translit_jcc_link_taken);
     if (block->profile_jcc_fall_stitches != 0)
         (void)__atomic_fetch_add(&translit_jcc_fall_executed, block->profile_jcc_fall_stitches, __ATOMIC_RELAXED);
 #endif
@@ -2299,8 +2442,13 @@ static int translit_report(char *out, size_t size) {
     uint64_t jcc_fall_decode_refused = __atomic_load_n(&translit_jcc_fall_decode_refused, __ATOMIC_RELAXED);
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t jcc_fall_executed = __atomic_load_n(&translit_jcc_fall_executed, __ATOMIC_RELAXED);
+    uint64_t jcc_link_admitted = __atomic_load_n(&translit_jcc_link_admitted, __ATOMIC_RELAXED);
+    uint64_t jcc_link_taken = __atomic_load_n(&translit_jcc_link_taken, __ATOMIC_RELAXED);
+    uint64_t jcc_link_irq_fallback = __atomic_load_n(&translit_jcc_link_irq_fallback, __ATOMIC_RELAXED);
+    uint64_t jcc_link_dispatcher = __atomic_load_n(&translit_jcc_link_dispatcher, __ATOMIC_RELAXED);
 #else
     uint64_t jcc_fall_executed = 0;
+    uint64_t jcc_link_admitted = 0, jcc_link_taken = 0, jcc_link_irq_fallback = 0, jcc_link_dispatcher = 0;
 #endif
     uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
     uint64_t provenance_fallback = __atomic_load_n(&translit_provenance_fallback, __ATOMIC_RELAXED);
@@ -2387,6 +2535,7 @@ static int translit_report(char *out, size_t size) {
         displaced_refusal_rsp = displaced_refusal_opcode_other = UINT64_MAX;
         jcc_fall_candidates = jcc_fall_admitted = jcc_fall_page_refused = UINT64_MAX;
         jcc_fall_successor_page_refused = jcc_fall_decode_refused = jcc_fall_executed = UINT64_MAX;
+        jcc_link_admitted = jcc_link_taken = jcc_link_irq_fallback = jcc_link_dispatcher = UINT64_MAX;
     }
 #endif
     if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
@@ -2400,7 +2549,9 @@ static int translit_report(char *out, size_t size) {
                         " refusal_rsp=%llu refusal_opcode=%llu stitch_candidates=%llu stitch_admitted=%llu"
                         " rip_indirect_lowered=%llu jcc_fall_candidates=%llu jcc_fall_admitted=%llu"
                         " jcc_fall_page_refused=%llu jcc_fall_successor_page_refused=%llu"
-                        " jcc_fall_decode_refused=%llu jcc_fall_executed=%llu\n",
+                        " jcc_fall_decode_refused=%llu jcc_fall_executed=%llu"
+                        " jcc_link_admitted=%llu jcc_link_taken=%llu jcc_link_irq_fallback=%llu"
+                        " jcc_link_dispatcher=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -2417,7 +2568,9 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                         (unsigned long long)jcc_fall_page_refused,
                         (unsigned long long)jcc_fall_successor_page_refused,
-                        (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed);
+                        (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed,
+                        (unsigned long long)jcc_link_admitted, (unsigned long long)jcc_link_taken,
+                        (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
@@ -2441,7 +2594,8 @@ static int translit_report(char *out, size_t size) {
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
-                    " jcc_fall_executed=%llu\n",
+                    " jcc_fall_executed=%llu jcc_link_admitted=%llu jcc_link_taken=%llu"
+                    " jcc_link_irq_fallback=%llu jcc_link_dispatcher=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
@@ -2462,7 +2616,9 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                     (unsigned long long)jcc_fall_page_refused,
                     (unsigned long long)jcc_fall_successor_page_refused,
-                    (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed);
+                    (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed,
+                    (unsigned long long)jcc_link_admitted, (unsigned long long)jcc_link_taken,
+                    (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.

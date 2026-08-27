@@ -417,12 +417,30 @@ static inline void hl_backend_tree_direct_edge(unsigned family, int same_page) {
     struct hl_backend_tree_slot *slot = g_backend_tree_self;
     if (slot == NULL || family >= HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT) return;
     atomic_fetch_add_explicit(&slot->direct_edge[family], 1, memory_order_relaxed);
-    /* This same-ISA backend emits no external inter-block address.  Every direct family returns through
-       the dispatcher; the following ordinary locked map lookup supplies its per-family map disposition. */
+    /* This call records a dispatcher-returning edge. Immutable linked JCCs use
+       hl_backend_tree_jcc_links instead; the later locked lookup supplies this edge's map disposition. */
     atomic_fetch_add_explicit(&slot->direct_edge_dispatcher[family], 1, memory_order_relaxed);
     if (family == HL_BACKEND_SHAPE_EDGE_JCC_TAKEN)
         atomic_fetch_add_explicit(same_page ? &slot->jcc_taken_same_page : &slot->jcc_taken_cross_page, 1,
                                   memory_order_relaxed);
+}
+
+// Same-ISA x86 records immutable, already-published same-page JCC links in batches when the eventual
+// dispatcher return closes the run. Each link was resolved under the map lock at source publication, so
+// all disposition columns are facts rather than a later lookup's inference.
+static inline void hl_backend_tree_jcc_links(uint64_t count) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL || count == 0) return;
+    unsigned family = HL_BACKEND_SHAPE_EDGE_JCC_TAKEN;
+    atomic_fetch_add_explicit(&slot->direct_edge[family], count, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->direct_edge_chained[family], count, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->direct_edge_resolution[family][HL_BACKEND_SHAPE_EDGE_MAPPED], count,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->jcc_taken_same_page, count, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->jcc_taken_target_translated, count, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->jcc_taken_generation_current, count, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->jcc_taken_rel32, count, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->jcc_taken_eligible, count, memory_order_relaxed);
 }
 
 static inline void hl_backend_tree_direct_edge_resolution(unsigned family, unsigned resolution,
@@ -714,6 +732,8 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
     hl_backend_tree_summary_in(shared, &summary);
     uint64_t translated_transfers = summary.translated_entries + summary.translated_stitch_jmp +
                                     summary.translated_stitch_cond_fall;
+    for (unsigned family = 0; family < HL_BACKEND_SHAPE_EDGE_FAMILY_COUNT; family++)
+        translated_transfers += summary.direct_edge_chained[family];
     return snprintf(
         record, capacity,
         "[diag] backend-shape version=1 translated_entries=%llu translated_transfers=%llu "

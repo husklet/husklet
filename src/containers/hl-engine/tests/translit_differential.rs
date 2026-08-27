@@ -65,6 +65,10 @@ struct Backend {
     jcc_fall_page_refused: u64,
     jcc_fall_successor_page_refused: u64,
     jcc_fall_executed: u64,
+    jcc_link_admitted: u64,
+    jcc_link_taken: u64,
+    jcc_link_irq_fallback: u64,
+    jcc_link_dispatcher: u64,
     operand_declined: u64,
     sse2_memory_declined: u64,
     riprel_lowered: u64,
@@ -117,6 +121,8 @@ struct Backend {
     shape_stitch_cond_fall: u64,
     shape_cond_taken: u64,
     shape_jcc_taken_eligible: u64,
+    shape_jcc_taken_chained: u64,
+    shape_jcc_taken_dispatcher: u64,
     shape_fault: u64,
     shape_other: u64,
     unsupported_line: String,
@@ -209,7 +215,13 @@ fn backend(stderr: &[u8]) -> Backend {
     assert_eq!(translated_exit_total, tree_counter("translated_entries="), "{shape}");
     assert_eq!(
         shape_counter("translated_transfers="),
-        tree_counter("translated_entries=") + shape_counter("stitch_jmp=") + shape_counter("stitch_cond_fall="),
+        tree_counter("translated_entries=")
+            + shape_counter("stitch_jmp=")
+            + shape_counter("stitch_cond_fall=")
+            + ["fall", "jt", "jn", "jmp", "call"]
+                .into_iter()
+                .map(|family| shape_counter(&format!("e_{family}_chained=")))
+                .sum::<u64>(),
         "{shape}"
     );
     for family in ["fall", "jt", "jn", "jmp", "call"] {
@@ -263,6 +275,10 @@ fn backend(stderr: &[u8]) -> Backend {
         jcc_fall_page_refused: counter("jcc_fall_page_refused="),
         jcc_fall_successor_page_refused: counter("jcc_fall_successor_page_refused="),
         jcc_fall_executed: counter("jcc_fall_executed="),
+        jcc_link_admitted: counter("jcc_link_admitted="),
+        jcc_link_taken: counter("jcc_link_taken="),
+        jcc_link_irq_fallback: counter("jcc_link_irq_fallback="),
+        jcc_link_dispatcher: counter("jcc_link_dispatcher="),
         operand_declined: counter("operand_declined="),
         sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
@@ -315,6 +331,8 @@ fn backend(stderr: &[u8]) -> Backend {
         shape_stitch_cond_fall: shape_counter("stitch_cond_fall="),
         shape_cond_taken: shape_counter("t_cond_taken="),
         shape_jcc_taken_eligible: shape_counter("jt_eligible="),
+        shape_jcc_taken_chained: shape_counter("e_jt_chained="),
+        shape_jcc_taken_dispatcher: shape_counter("e_jt_dispatcher="),
         shape_fault: shape_counter("t_fault="),
         shape_other: shape_counter("t_other="),
         unsupported_line: unsupported.to_owned(),
@@ -1288,6 +1306,36 @@ fn a_same_page_conditional_fallthrough_stays_in_the_descriptor() {
         selected_backend.jcc_fall_admitted <= selected_backend.jcc_fall_candidates,
         "{}",
         selected_backend.line
+    );
+}
+
+/// An already-published target links immutably; an otherwise-identical cold target keeps the dispatcher
+/// exit. The interval timer makes an async kick race the linked path, while the fourth argument proves
+/// RCX survives spill/poll/reload. Backend-shape must account every successful link as a chained JCC.
+#[test]
+fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jcc_link");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert!(String::from_utf8_lossy(&selected).contains("signals=1"));
+    assert!(selected_backend.jcc_link_admitted > 0, "{}", selected_backend.line);
+    assert!(selected_backend.jcc_link_taken > 0, "{}", selected_backend.line);
+    assert!(selected_backend.jcc_link_irq_fallback > 0, "{}", selected_backend.line);
+    assert!(selected_backend.jcc_link_dispatcher > 0, "{}", selected_backend.line);
+    assert_eq!(
+        selected_backend.shape_jcc_taken_chained,
+        selected_backend.jcc_link_taken,
+        "{}\n{}",
+        selected_backend.line,
+        selected_backend.shape_line
+    );
+    assert!(
+        selected_backend.shape_jcc_taken_dispatcher > 0,
+        "{}",
+        selected_backend.shape_line
     );
 }
 
