@@ -2018,32 +2018,69 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         family.rip_rel = 0;
         family.reg = 2; // memory-indirect CALL is not Jmem
         interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        family.reg = 4;
+        family.is_mem = 0; // register-indirect JMP is translated, not Jmem
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        family.is_mem = 1;
+        family_cpu.reason = R_DIV; // an uncommitted/other exit is not a completed Jmem
+        interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_jmem != 1) return 78;
 
         family = (struct insn){.len = 2, .op = 0xF7, .has_modrm = 1, .reg = 6, .opsize = 4};
         interp_backend_family_completed(&family_cpu, &family, 0 /* STEP_NEXT */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_INLINE] != 1 ||
+            summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] != 0 ||
+            summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_DE] != 0 ||
+            summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_INLINE] != 0)
+            return 79;
         family.opsize = 8;
         family_cpu.reason = R_DIV;
         family_cpu.divop = 7;
         interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] != 1 ||
+            summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_UNSIGNED] != 0)
+            return 80;
         hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_UNSIGNED);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_UNSIGNED] != 1) return 81;
         family.op = 0xF6;
         family.opsize = 1;
         family_cpu.divop = 0;
         interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div[HL_BACKEND_FAMILY_DIV_UNSIGNED][HL_BACKEND_FAMILY_DIV_DE] != 1 ||
+            summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] != 0)
+            return 82;
 
         family.op = 0xF7;
         family.opsize = 4;
         family.reg = 7;
         interp_backend_family_completed(&family_cpu, &family, 0 /* STEP_NEXT */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_INLINE] != 1 ||
+            summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] != 0 ||
+            summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] != 0)
+            return 83;
         family.opsize = 8;
         family_cpu.reason = R_IDIV;
         family_cpu.divop = 7;
         interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] != 1 ||
+            summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED] != 0)
+            return 84;
         hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_SIGNED);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED] != 1) return 85;
         family.op = 0xF6;
         family.opsize = 1;
         family_cpu.divop = 0;
         interp_backend_family_completed(&family_cpu, &family, 1 /* STEP_END */);
+        hl_backend_tree_summary(&summary);
+        if (summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] != 1) return 86;
 
         hl_backend_tree_summary(&summary);
         int ok = summary.family_jmem == 1 &&
@@ -2055,7 +2092,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                  summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64] == 1 &&
                  summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED] == 1 &&
                  summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE] == 1;
-        return ok ? 0 : 78;
+        return ok ? 0 : 87;
     }
     return 6;
 }

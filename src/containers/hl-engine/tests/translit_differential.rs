@@ -544,13 +544,13 @@ fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
     assert_eq!(native.status.code(), Some(0));
     assert_eq!(selected, interpreted);
     assert_eq!(selected, native.stdout);
-    assert!(report.family_jmem >= 1, "{}", report.shape_line);
-    assert!(report.family_div_inline >= 1, "{}", report.shape_line);
+    assert_eq!(report.family_jmem, 1, "{}", report.shape_line);
+    assert_eq!(report.family_div_inline, 1, "{}", report.shape_line);
     assert!(report.family_div_service64 >= 1, "{}", report.shape_line);
-    assert!(report.family_div_de >= 1, "{}", report.shape_line);
-    assert!(report.family_idiv_inline >= 1, "{}", report.shape_line);
+    assert_eq!(report.family_div_de, 1, "{}", report.shape_line);
+    assert_eq!(report.family_idiv_inline, 1, "{}", report.shape_line);
     assert!(report.family_idiv_service64 >= 1, "{}", report.shape_line);
-    assert!(report.family_idiv_de >= 1, "{}", report.shape_line);
+    assert_eq!(report.family_idiv_de, 1, "{}", report.shape_line);
     assert_eq!(
         report.family_div_service64_completed, report.family_div_service64,
         "{}",

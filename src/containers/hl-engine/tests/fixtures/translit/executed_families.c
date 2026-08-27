@@ -7,10 +7,17 @@
 
 static sigjmp_buf divide_fault;
 static volatile sig_atomic_t divide_faults;
+static volatile sig_atomic_t memory_faults;
 
 static void divide_handler(int signal) {
     (void)signal;
     ++divide_faults;
+    siglongjmp(divide_fault, 1);
+}
+
+static void memory_handler(int signal) {
+    (void)signal;
+    ++memory_faults;
     siglongjmp(divide_fault, 1);
 }
 
@@ -24,6 +31,11 @@ __attribute__((used)) static void *jump_slot = jump_target;
 // a different translated family; this exact register-derived memory form is the Jmem census target.
 __attribute__((naked, noinline)) static uint64_t jump_memory(void) {
     __asm__ volatile("leaq jump_slot(%rip), %r11\n\t"
+                     "jmp *(%r11)");
+}
+
+__attribute__((naked, noinline)) static uint64_t jump_memory_fault(void) {
+    __asm__ volatile("movq $8, %r11\n\t"
                      "jmp *(%r11)");
 }
 
@@ -91,6 +103,16 @@ __attribute__((noinline)) static void signed_de(void) {
                      : "rax", "rcx", "rdx", "cc");
 }
 
+__attribute__((noinline)) static void divide_memory_fault(void) {
+    __asm__ volatile("xorl %%edx, %%edx\n\t"
+                     "movl $1, %%eax\n\t"
+                     "movq $8, %%rcx\n\t"
+                     "divl (%%rcx)"
+                     :
+                     :
+                     : "rax", "rcx", "rdx", "cc");
+}
+
 int main(void) {
     struct sigaction action;
     memset(&action, 0, sizeof action);
@@ -98,9 +120,13 @@ int main(void) {
     sigaction(SIGFPE, &action, NULL);
     if (sigsetjmp(divide_fault, 1) == 0) unsigned_de();
     if (sigsetjmp(divide_fault, 1) == 0) signed_de();
-    printf("j=%llx u32=%llu u64=%llu i32=%lld i64=%lld de=%d\n",
+    action.sa_handler = memory_handler;
+    sigaction(SIGSEGV, &action, NULL);
+    if (sigsetjmp(divide_fault, 1) == 0) jump_memory_fault();
+    if (sigsetjmp(divide_fault, 1) == 0) divide_memory_fault();
+    printf("j=%llx u32=%llu u64=%llu i32=%lld i64=%lld de=%d memfault=%d\n",
            (unsigned long long)jump_memory(), (unsigned long long)unsigned32(),
            (unsigned long long)unsigned64(), (long long)signed32(), (long long)signed64(),
-           (int)divide_faults);
-    return divide_faults == 2 ? 0 : 1;
+           (int)divide_faults, (int)memory_faults);
+    return divide_faults == 2 && memory_faults == 2 ? 0 : 1;
 }
