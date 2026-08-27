@@ -53,6 +53,32 @@ static int helper(int cycle) {
     return cycle + 10;
 }
 
+#if defined(__x86_64__)
+extern long checkpoint_link_target(long, long, long, long);
+extern long checkpoint_link_source(long, long, long, long);
+__asm__(".pushsection .text.checkpoint_jcc_link,\"ax\",@progbits\n"
+        ".balign 4096\n"
+        ".global checkpoint_link_target\n.type checkpoint_link_target,@function\n"
+        "checkpoint_link_target:\n lea 7(%rsi,%rcx),%rax\n ret\n"
+        ".size checkpoint_link_target,.-checkpoint_link_target\n"
+        ".balign 16\n"
+        ".global checkpoint_link_source\n.type checkpoint_link_source,@function\n"
+        "checkpoint_link_source:\n test %rdi,%rdi\n jnz checkpoint_link_target\n"
+        "lea 3(%rsi,%rcx),%rax\n ret\n"
+        ".size checkpoint_link_source,.-checkpoint_link_source\n"
+        ".popsection\n");
+
+static long checkpoint_link_check(int phase) {
+    volatile long warm = checkpoint_link_target(0, 31 + phase, 0, 4);
+    long linked = checkpoint_link_source(1, 31 + phase, 0, 4);
+    return warm == linked ? linked : -1;
+}
+#else
+static long checkpoint_link_check(int phase) {
+    return 42 + phase;
+}
+#endif
+
 static int profile_resources(const char *directory) {
     char scale_path[1024], data_path[1024];
     if (snprintf(scale_path, sizeof scale_path, "%s/profile-scale", directory) >= (int)sizeof scale_path ||
@@ -115,6 +141,9 @@ int main(int argc, char **argv) {
         return status;
     }
     close(transport[1]);
+    long initial_link = checkpoint_link_check(0);
+    if (initial_link != 42) return 16;
+    dprintf(STDOUT_FILENO, "JCC-LINK phase=0 value=%ld\n", initial_link);
     dprintf(STDOUT_FILENO, "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader,
             (long)sleeper, (long)worker, (long)group, (long)session, (long)foreground);
 
@@ -134,6 +163,10 @@ int main(int argc, char **argv) {
         char marker[32];
         snprintf(marker, sizeof marker, "cycle%d", next_cycle);
         if (progress < previous + 5 || exists(directory, marker) != 1) continue;
+
+        long restored_link = checkpoint_link_check(next_cycle);
+        if (restored_link != 42 + next_cycle) return 17;
+        dprintf(STDOUT_FILENO, "JCC-LINK phase=%d value=%ld\n", next_cycle, restored_link);
 
         pid_t child = fork();
         if (child < 0) return 9;

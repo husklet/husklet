@@ -783,8 +783,13 @@ fn daily_dev_phase_plan(
     directory: &Path,
     restore: bool,
     capture: bool,
+    translit: bool,
 ) -> RuntimePlan {
     let mut plan = daily_dev_plan(executable, directory, restore, capture);
+    if translit {
+        plan.options.set("HL_TRANSLIT", "1", true).unwrap();
+        plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    }
     if std::env::var_os("HL_CHECKPOINT_PROFILE_SCALE").is_some() {
         plan.options.set("HL_CHECKPOINT_FD_SCAN_PROFILE", "1", true).unwrap();
     }
@@ -2593,8 +2598,9 @@ impl PhaseTimings {
     }
 }
 
-fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Duration) {
+fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Duration, translit: bool) {
     let timings = PhaseTimings::new(isa, fixture_compile);
+    let diagnostics = Arc::new(CapturedOutput::default());
     eprintln!(
         "checkpoint_phase_timing\tisa={}\tphase=fixture_compile\tduration_us={}",
         match isa {
@@ -2612,8 +2618,8 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let capture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_phase_plan(isa, executable, directory.path(), false, true),
-            streams(true),
+            daily_dev_phase_plan(isa, executable, directory.path(), false, true, translit),
+            streams(true).with_output(diagnostics.clone()),
             first.clone(),
             first.clone(),
         )
@@ -2639,8 +2645,8 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let recapture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_phase_plan(isa, executable, directory.path(), true, true),
-            streams(true),
+            daily_dev_phase_plan(isa, executable, directory.path(), true, true, translit),
+            streams(true).with_output(diagnostics.clone()),
             second.clone(),
             first,
         )
@@ -2663,8 +2669,8 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let restore = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_phase_plan(isa, executable, directory.path(), true, false),
-            streams(true),
+            daily_dev_phase_plan(isa, executable, directory.path(), true, false, translit),
+            streams(true).with_output(diagnostics.clone()),
             second.clone(),
             second,
         )
@@ -2681,6 +2687,26 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     timings.observe("final_shutdown_reap", final_shutdown);
 
     let output = std::fs::read_to_string(&output_path).unwrap();
+    assert_eq!(output.matches("JCC-LINK phase=0 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("JCC-LINK phase=1 value=43").count(), 1, "{output}");
+    assert_eq!(output.matches("JCC-LINK phase=2 value=44").count(), 1, "{output}");
+    if translit {
+        let diagnostic_text = diagnostics.text();
+        let admissions = diagnostic_text
+            .lines()
+            .filter(|line| line.starts_with("[prof] translit:"))
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .find_map(|field| field.strip_prefix("jcc_link_admitted="))
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
+            .filter(|admitted| *admitted > 0)
+            .count();
+        assert!(
+            admissions >= 3,
+            "each capture/restore process must re-admit a JCC link:\n{diagnostic_text}"
+        );
+    }
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");
     assert_eq!(output.matches("SLEEP-READY ").count(), 1, "{output}");
     assert_eq!(output.matches("CYCLE 1 ").count(), 1, "{output}");
@@ -3642,7 +3668,7 @@ fn daily_development_workload_survives_two_checkpoint_cycles(isa: GuestIsa) {
     let fixture_compile = started.elapsed();
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
-    daily_dev_round_trip(isa, &executable, fixture_compile);
+    daily_dev_round_trip(isa, &executable, fixture_compile, false);
 }
 
 #[test]
@@ -3653,6 +3679,18 @@ fn aarch64_daily_development_workload_survives_two_checkpoint_cycles() {
 #[test]
 fn amd64_daily_development_workload_survives_two_checkpoint_cycles() {
     daily_development_workload_survives_two_checkpoint_cycles(GuestIsa::X86_64);
+}
+
+#[test]
+fn amd64_transliterated_jcc_links_are_rebuilt_across_two_checkpoint_cycles() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let executable = daily_dev_fixture(GuestIsa::X86_64, fixtures.path());
+    let fixture_compile = started.elapsed();
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    daily_dev_round_trip(GuestIsa::X86_64, &executable, fixture_compile, true);
 }
 
 #[test]
@@ -3684,8 +3722,8 @@ fn checkpoint_phase_ledger_probe() {
     let x86_fixture_compile = x86_started.elapsed();
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
-    daily_dev_round_trip(GuestIsa::Aarch64, &executable, fixture_compile);
-    daily_dev_round_trip(GuestIsa::X86_64, &x86_executable, x86_fixture_compile);
+    daily_dev_round_trip(GuestIsa::Aarch64, &executable, fixture_compile, false);
+    daily_dev_round_trip(GuestIsa::X86_64, &x86_executable, x86_fixture_compile, false);
     let ledger = std::env::var_os("HL_CHECKPOINT_PHASE_LEDGER_PATH").expect("phase ledger path");
     let ledger = std::fs::read_to_string(ledger).unwrap();
     assert!(
