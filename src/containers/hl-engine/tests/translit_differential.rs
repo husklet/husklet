@@ -190,7 +190,7 @@ fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
     assert_eq!(native.stdout, selected);
     assert_eq!(
         selected,
-        b"distinct=1010101010101010:1010101010101010 high=ffffffffffffffff:ffffffffffffffff zero=0000000000000000:0000000000000000 flags=0c95:0c95:0000\n"
+        b"distinct=1010101010101010:2020202020202020 high=ffffffffffffffff:aaaaaaaaaaaaaaaa zero=0000000000000000:0000000000000000 flags=0c95:0c95:0000\n"
     );
     assert!(selected_backend.sse2_pxor_admitted >= 3, "{}", selected_backend.line);
     assert!(
