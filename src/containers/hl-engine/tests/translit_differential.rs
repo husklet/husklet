@@ -125,6 +125,8 @@ struct Backend {
     shape_jcc_taken_dispatcher: u64,
     shape_fault: u64,
     shape_other: u64,
+    would_link_candidates: u64,
+    would_link_line: String,
     unsupported_line: String,
     tree_line: String,
     shape_line: String,
@@ -367,6 +369,11 @@ fn backend(stderr: &[u8]) -> Backend {
         shape_jcc_taken_dispatcher: shape_counter("e_jt_dispatcher="),
         shape_fault: shape_counter("t_fault="),
         shape_other: shape_counter("t_other="),
+        would_link_candidates: ["fall", "jmp", "call"]
+            .into_iter()
+            .map(|family| would_link_counter(&format!("{family}_candidate=")))
+            .sum(),
+        would_link_line: would_link.to_owned(),
         unsupported_line: unsupported.to_owned(),
         tree_line: tree.to_owned(),
         shape_line: shape.to_owned(),
@@ -395,6 +402,11 @@ fn unsupported_census_records_successful_interpreter_steps() {
         selected_report.tree_line,
     );
     assert!(selected_report.translated_steps >= selected_report.translated_entries);
+    assert!(
+        selected_report.would_link_candidates > 0,
+        "{}",
+        selected_report.would_link_line
+    );
     assert!(report.interpreted_steps >= report.interpreted_entries);
     assert_eq!(
         report.unsupported_total,
