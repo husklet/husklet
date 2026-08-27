@@ -92,6 +92,7 @@ struct Backend {
     sse2_movd_admitted: u64,
     sse2_movd_runs_admitted: u64,
     sse2_movhlps_admitted: u64,
+    fs_mem_admitted: u64,
     translations: u64,
     unsupported_total: u64,
     unsupported_keyed: u64,
@@ -176,6 +177,7 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_movd_admitted: counter("sse2_movd_admitted="),
         sse2_movd_runs_admitted: counter("sse2_movd_runs_admitted="),
         sse2_movhlps_admitted: counter("sse2_movhlps_admitted="),
+        fs_mem_admitted: counter("fs_mem_admitted="),
         translations,
         unsupported_total: unsupported_counter("total="),
         unsupported_keyed: unsupported_counter("keyed="),
@@ -234,6 +236,44 @@ fn register_movhlps_matches_native_for_distinct_high_alias_and_flags() {
 alias=10ffeeddccbbaa99:10ffeeddccbbaa99 flags=0c95:0c95:0000\n"
     );
     assert_eq!(selected_backend.sse2_movhlps_admitted, 3, "{}", selected_backend.line);
+}
+
+#[test]
+fn fs_disp32_mov_and_sub_match_interpreter_and_native() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "fs_tls");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native FS fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"fs rc=0 mov=0123456789abcdef high=f0e1d2c3b4a59687 sub=edcba987654320ff flags=0094 threads=1\n"
+    );
+    assert!(selected_backend.fs_mem_admitted >= 3, "{}", selected_backend.line);
+    assert!(selected_backend.entries >= 3, "{}", selected_backend.line);
+}
+
+#[test]
+fn fs_disp32_fault_restarts_at_guest_source_with_old_destination() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "fs_tls_fault");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false);
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native FS fault fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"fs-fault delivered=1 rip=1 old=1 result=8877665544332211\n");
+    assert!(selected_backend.fs_mem_admitted > 0, "{}", selected_backend.line);
+    assert!(selected_backend.provenance_fallback > 0, "{}", selected_backend.line);
+    assert!(selected_backend.body_owner_recovered > 0, "{}", selected_backend.line);
 }
 
 #[test]
