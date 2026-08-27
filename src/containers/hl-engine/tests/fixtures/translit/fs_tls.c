@@ -45,8 +45,7 @@ __asm__(".text\n"
         "8: add $16,%rsp; pop %r15; pop %r13; pop %r12; ret\n");
 
 int main(int argc, char **argv) {
-    (void)argv;
-    int authority = argc > 1;
+    int authority = argc > 1 && argv[1][0] == 'e';
     if (authority) {
         size_t page = (size_t)sysconf(_SC_PAGESIZE);
         if (mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED)

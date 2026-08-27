@@ -1501,7 +1501,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int fs_run = first_kind == TL_FS_MEM;
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
     // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
-    if (fs_run && (g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active()))
+    int fs_authority = g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active();
+#if defined(HL_NATIVE_TEST_HOOKS)
+    fs_authority = fs_authority || hl_option_get("HL_TRANSLIT_FS_AUTHORITY_TEST") != NULL;
+#endif
+    if (fs_run && fs_authority)
         return NULL;
     uint32_t owner_token;
 #if defined(HL_NATIVE_TEST_HOOKS)

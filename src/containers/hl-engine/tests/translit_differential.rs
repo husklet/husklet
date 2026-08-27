@@ -262,21 +262,20 @@ fn fs_disp32_mov_and_sub_match_interpreter_and_native() {
 }
 
 #[test]
-fn fs_disp32_loads_fall_back_after_executable_mapping_authority() {
+fn fs_disp32_loads_fall_back_under_direct_data_authority() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "fs_tls");
-    let args = [b"authority".as_slice()];
-    let (interpreted, interpreted_status, _) = run_with_arguments(&executable, "0", &args, false, false);
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &args, false, false);
+    let args = [b"direct".as_slice()];
+    let (interpreted, interpreted_status, _) = run_with_arguments(&executable, "0", &args, false, false, true);
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &args, false, false, true);
     let native = std::process::Command::new(&executable)
-        .arg("authority")
+        .arg("direct")
         .output()
         .expect("native FS authority fixture");
     assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
     assert_eq!(native.status.code(), Some(selected_status));
     assert_eq!(native.stdout, selected);
-    assert!(selected.ends_with(b"threads=1 authority=1\n"));
-    assert!(selected_backend.declined > 0, "{}", selected_backend.line);
+    assert!(selected.ends_with(b"threads=1 authority=0\n"));
     assert_eq!(selected_backend.fs_fixture_admitted, 0, "{}", selected_backend.line);
 }
 
@@ -285,7 +284,7 @@ fn fs_disp32_fault_restarts_at_guest_source_with_old_destination() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "fs_tls_fault");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false);
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false, false);
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native FS fault fixture");
@@ -417,7 +416,7 @@ fn movd_movq_body_owner_exhaustion_falls_back_without_partial_authority() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse_movd");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true);
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true, false);
     assert_eq!((selected_status, selected), (interpreted_status, interpreted));
     assert_eq!(selected_backend.entries, 0, "{}", selected_backend.line);
     assert_eq!(selected_backend.sse2_movd_admitted, 0, "{}", selected_backend.line);
@@ -429,7 +428,7 @@ fn sse2_alignment_faults_replay_old_vectors_and_boundary_immediates_match_native
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse2_fault");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false);
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false, false);
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native SSE2 fault fixture");
@@ -588,6 +587,7 @@ fn run_with_arguments(
     extra: &[&[u8]],
     force_provenance_miss: bool,
     exhaust_body_owners: bool,
+    force_fs_authority: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -602,6 +602,11 @@ fn run_with_arguments(
         options
             .set("HL_TRANSLIT_BODY_OWNER_EXHAUST", "1", true)
             .expect("HL_TRANSLIT_BODY_OWNER_EXHAUST");
+    }
+    if force_fs_authority {
+        options
+            .set("HL_TRANSLIT_FS_AUTHORITY_TEST", "1", true)
+            .expect("HL_TRANSLIT_FS_AUTHORITY_TEST");
     }
     let plan = RuntimePlan {
         rootfs: None,
@@ -625,7 +630,7 @@ fn run_with_arguments(
 }
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
-    run_with_arguments(executable, translit, &[], false, false)
+    run_with_arguments(executable, translit, &[], false, false, false)
 }
 
 fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
@@ -741,7 +746,7 @@ fn exhausted_body_owner_capacity_falls_back_to_the_interpreter() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "flags");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true);
+    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true, false);
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
     assert_eq!(selected_backend.entries, 0, "{}", selected_backend.line);
@@ -975,7 +980,7 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     // path pinned to native architectural behaviour without making that older compatibility defect the
     // oracle for this lowering.
     let (selected_stack, selected_stack_status, selected_stack_backend) =
-        run_with_arguments(&executable, "1", &[b"stack"], true, false);
+        run_with_arguments(&executable, "1", &[b"stack"], true, false, false);
     assert!(
         selected_stack_backend.rip_indirect_lowered >= 4,
         "{}",

@@ -136,6 +136,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_FS_AUTHORITY_TEST",
+        "test-only force same-ISA FS direct-data authority refusal",
+        Flag
+    ),
+    internal!(
         "HL_TRANSLIT_PROFILE_WIDE_TEST",
         "test-only render every same-ISA profile counter at UINT64 width",
         Flag
