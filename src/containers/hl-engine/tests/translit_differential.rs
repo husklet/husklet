@@ -1369,11 +1369,9 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         selected_backend.line
     );
     assert_eq!(
-        selected_backend.shape_jcc_taken_chained,
-        selected_backend.jcc_link_taken,
+        selected_backend.shape_jcc_taken_chained, selected_backend.jcc_link_taken,
         "{}\n{}",
-        selected_backend.line,
-        selected_backend.shape_line
+        selected_backend.line, selected_backend.shape_line
     );
     assert!(
         selected_backend.shape_jcc_taken_dispatcher > 0,
