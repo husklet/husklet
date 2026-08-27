@@ -96,3 +96,47 @@ fn executed_family_counts_aggregate_across_forks_and_ignore_top8_saturation() {
             .unwrap_or_else(|status| panic!("ISA {isa} executed-family aggregation scenario failed: {status}"));
     }
 }
+
+#[test]
+fn executed_family_hooks_follow_interpreter_and_dispatcher_commit_boundaries() {
+    let interpreter = include_str!("../src/native/translator/guest/x86_64/interp.c");
+    let execute = interpreter
+        .split_once("static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n// run_block"))
+        .map(|(body, _)| body)
+        .expect("interp_execute body");
+    assert!(
+        execute.find("int step = interp_step(cpu, &insn").unwrap()
+            < execute
+                .find("interp_backend_family_completed(cpu, &insn, step)")
+                .unwrap(),
+        "family attribution must occur only after a faulting step returns"
+    );
+
+    let dispatcher = include_str!("../src/native/translator/guest/x86_64/interp_dispatch.h");
+    for (reason, next_reason, kind) in [
+        ("if ((c)->reason == R_DIV)", "if ((c)->reason == R_IDIV)", "UNSIGNED"),
+        ("if ((c)->reason == R_IDIV)", "if ((c)->reason == R_TRAP)", "SIGNED"),
+    ] {
+        let arm = dispatcher
+            .split_once(reason)
+            .and_then(|(_, tail)| tail.split_once(next_reason))
+            .map(|(body, _)| body)
+            .expect("divide dispatcher arm");
+        let rax = arm.find("(c)->r[RAX] =").unwrap();
+        let rdx = arm.find("(c)->r[RDX] =").unwrap();
+        let completed = arm
+            .find(&format!(
+                "hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_{kind})"
+            ))
+            .unwrap();
+        assert!(
+            rax < completed && rdx < completed,
+            "{reason} completion precedes register commit"
+        );
+        assert!(
+            completed < arm.rfind("continue").unwrap(),
+            "{reason} completion follows dispatch"
+        );
+    }
+}
