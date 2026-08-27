@@ -171,6 +171,15 @@ static uint64_t translit_sse2_store_movdqu;
 static uint64_t translit_sse2_store_family_runs;
 static uint64_t translit_sse2_pxor_admitted;
 static uint64_t translit_sse2_pxor_runs_admitted;
+static uint64_t translit_sse2_punpcklqdq_admitted;
+static uint64_t translit_sse2_punpcklqdq_runs_admitted;
+#define TRANSLIT_PUNPCKLQDQ_PROFILE                                                                    \
+    " sse2_punpcklqdq_admitted=%llu sse2_punpcklqdq_runs_admitted=%llu"
+#define TRANSLIT_PUNPCKLQDQ_ARGUMENTS                                                                  \
+    , (unsigned long long)sse2_punpcklqdq_admitted, (unsigned long long)sse2_punpcklqdq_runs_admitted
+#else
+#define TRANSLIT_PUNPCKLQDQ_PROFILE ""
+#define TRANSLIT_PUNPCKLQDQ_ARGUMENTS
 #endif
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
@@ -1116,9 +1125,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t sse2_store_count = 0;
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
     uint64_t sse2_pxor_count = 0;
+    uint64_t sse2_punpcklqdq_count = 0;
     int sse2_next_family_seen = 0;
     int sse2_store_family_seen = 0;
     int sse2_pxor_seen = 0;
+    int sse2_punpcklqdq_seen = 0;
 #endif
     jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
     uint32_t sse2_owner_count = 0;
@@ -1224,11 +1235,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             sse2_store_movaps += (uint64_t)(sse2_store && insn.op == 0x29);
             sse2_store_movdqu += (uint64_t)(sse2_store && insn.op == 0x7F);
             sse2_pxor_count += (uint64_t)(insn.op == 0xEF);
+            sse2_punpcklqdq_count += (uint64_t)(insn.op == 0x6C);
             if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
                 sse2_next_family_seen = 1;
             if ((sse2_signature & UINT64_C(0xFFFFFFFF)) == UINT64_C(0x6F11297F))
                 sse2_store_family_seen = 1;
             if (insn.op == 0xEF) sse2_pxor_seen = 1;
+            if (insn.op == 0x6C) sse2_punpcklqdq_seen = 1;
 #endif
             continue;
         }
@@ -1435,6 +1448,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             (void)__atomic_fetch_add(&translit_sse2_store_family_runs, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_pxor_admitted, sse2_pxor_count, __ATOMIC_RELAXED);
         if (sse2_pxor_seen) (void)__atomic_fetch_add(&translit_sse2_pxor_runs_admitted, 1, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_admitted, sse2_punpcklqdq_count, __ATOMIC_RELAXED);
+        if (sse2_punpcklqdq_seen)
+            (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_runs_admitted, 1, __ATOMIC_RELAXED);
     }
 #endif
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
@@ -1502,6 +1518,10 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_store_family_runs = __atomic_load_n(&translit_sse2_store_family_runs, __ATOMIC_RELAXED);
     uint64_t sse2_pxor_admitted = __atomic_load_n(&translit_sse2_pxor_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_pxor_runs_admitted = __atomic_load_n(&translit_sse2_pxor_runs_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_punpcklqdq_admitted =
+        __atomic_load_n(&translit_sse2_punpcklqdq_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_punpcklqdq_runs_admitted =
+        __atomic_load_n(&translit_sse2_punpcklqdq_runs_admitted, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
@@ -1586,6 +1606,7 @@ static int translit_report(char *out, size_t size) {
                     " sse2_store_movups=%llu sse2_store_movaps=%llu sse2_store_movdqu=%llu"
                     " sse2_store_family_runs=%llu"
                     " sse2_pxor_admitted=%llu sse2_pxor_runs_admitted=%llu"
+                    TRANSLIT_PUNPCKLQDQ_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -1601,7 +1622,8 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)sse2_store_movups, (unsigned long long)sse2_store_movaps,
                     (unsigned long long)sse2_store_movdqu,
                     (unsigned long long)sse2_store_family_runs,
-                    (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted,
+                    (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted
+                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,

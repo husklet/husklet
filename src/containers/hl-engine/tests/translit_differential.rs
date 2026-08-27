@@ -87,6 +87,8 @@ struct Backend {
     sse2_store_family_runs: u64,
     sse2_pxor_admitted: u64,
     sse2_pxor_runs_admitted: u64,
+    sse2_punpcklqdq_admitted: u64,
+    sse2_punpcklqdq_runs_admitted: u64,
     translations: u64,
 }
 
@@ -148,6 +150,8 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_store_family_runs: counter("sse2_store_family_runs="),
         sse2_pxor_admitted: counter("sse2_pxor_admitted="),
         sse2_pxor_runs_admitted: counter("sse2_pxor_runs_admitted="),
+        sse2_punpcklqdq_admitted: counter("sse2_punpcklqdq_admitted="),
+        sse2_punpcklqdq_runs_admitted: counter("sse2_punpcklqdq_runs_admitted="),
         translations,
         line,
     }
@@ -208,7 +212,7 @@ fn register_punpcklqdq_matches_native_for_distinct_high_alias_and_flags() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse_punpcklqdq");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, _selected_backend) = run(&executable, "1");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native PUNPCKLQDQ fixture");
@@ -218,6 +222,16 @@ fn register_punpcklqdq_matches_native_for_distinct_high_alias_and_flags() {
     assert_eq!(
         selected,
         b"distinct=8877665544332211:0123456789abcdef high=0706050403020100:f8f9fafbfcfdfeff alias=8877665544332211:8877665544332211 flags=0c95:0c95:0000\n"
+    );
+    assert!(
+        selected_backend.sse2_punpcklqdq_admitted >= 3,
+        "{}",
+        selected_backend.line
+    );
+    assert!(
+        selected_backend.sse2_punpcklqdq_runs_admitted > 0,
+        "{}",
+        selected_backend.line
     );
     let image = std::fs::read(executable).unwrap();
     assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0x6c, 0xc1]));
