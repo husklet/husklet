@@ -1,12 +1,16 @@
 #define _GNU_SOURCE
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 extern long linked_target(long, long, long, long);
 extern long linked_source(long, long, long, long);
 extern long cold_source(long, long, long, long);
+extern unsigned char linked_target_disp[];
 
 // Two public entry points on one page. main enters linked_target first, making its descriptor and emitted
 // body live before linked_source is translated. linked_source's taken JCC can therefore embed one
@@ -15,7 +19,8 @@ extern long cold_source(long, long, long, long);
 __asm__(".pushsection .text.jcc_link,\"ax\",@progbits\n"
         ".balign 4096\n"
         ".global linked_target\n.type linked_target,@function\n"
-        "linked_target:\n lea 7(%rsi,%rcx),%rax\n ret\n"
+        "linked_target:\n .byte 0x48,0x8d,0x44,0x0e\n"
+        ".global linked_target_disp\nlinked_target_disp:\n .byte 7\n ret\n"
         ".size linked_target,.-linked_target\n"
         ".balign 16\n"
         ".global linked_source\n.type linked_source,@function\n"
@@ -56,6 +61,16 @@ int main(void) {
     }
     memset(&timer, 0, sizeof timer);
     setitimer(ITIMER_REAL, &timer, NULL);
-    printf("warm=%ld cold=%ld taken=%ld fall=%ld signals=%d\n", warm, cold, taken, fall, caught != 0);
-    return warm != 42 || cold != 46 || caught == 0;
+
+    // Rewrite the target's disp8 after the source has taken its immutable link. Owning the target's
+    // whole page must retire the source ingress too; otherwise the next call reaches the stale emitted
+    // target and returns 42 instead of 44.
+    uintptr_t page = (uintptr_t)linked_target & ~(uintptr_t)(getpagesize() - 1);
+    if (mprotect((void *)page, getpagesize(), PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return 2;
+    linked_target_disp[0] = 9;
+    __builtin___clear_cache((char *)linked_target, (char *)linked_target + 16);
+    long mutated = linked_source(1, 31, 0, 4);
+    printf("warm=%ld cold=%ld taken=%ld fall=%ld mutated=%ld signals=%d\n", warm, cold, taken, fall, mutated,
+           caught != 0);
+    return warm != 42 || cold != 46 || mutated != 44 || caught == 0;
 }
