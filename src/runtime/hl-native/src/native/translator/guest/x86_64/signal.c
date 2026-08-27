@@ -66,7 +66,10 @@ void hl_x86_signal_build(struct cpu *c, int sig, const hl_x86_signal_state *stat
     for (size_t i = 0; i < 16; i++)
         *(uint64_t *)(mc + i * 8) = c->r[GREG2R[i]]; // gregs[0..15]
     *(uint64_t *)(mc + 16 * 8) = c->rip;             // gregs[16] = RIP
-    *(uint64_t *)(mc + 17 * 8) = hl_x86_signal_nzcv_to_eflags(c->nzcv) | ((c->df & 1) << 10);
+    uint64_t eflags = hl_x86_signal_nzcv_to_eflags(c->nzcv) | ((c->df & 1) << 10);
+    if (!__builtin_parity((unsigned)(c->pf & 0xff))) eflags |= UINT64_C(1) << 2;
+    eflags |= ((c->af >> 4) & 1) << 4;
+    *(uint64_t *)(mc + 17 * 8) = eflags;
     *(uint64_t *)(uc + 296) = c->sigmask;  // uc_sigmask (restored on sigreturn)
     memcpy((void *)xs, c->v, sizeof c->v); // preserve guest xmm across the handler
     // Preserve the EXTENDED vector + x87 state too: the xmm area above holds only the low 128 bits, so a
@@ -116,8 +119,13 @@ void hl_x86_signal_restore(struct cpu *c) {
     for (size_t i = 0; i < 16; i++)
         c->r[GREG2R[i]] = *(uint64_t *)(mc + i * 8);
     c->rip = *(uint64_t *)(mc + 16 * 8);
-    c->nzcv = hl_x86_signal_eflags_to_nzcv(*(uint64_t *)(mc + 17 * 8));
-    c->df = (*(uint64_t *)(mc + 17 * 8) >> 10) & 1; // restore DF a handler may have changed
+    uint64_t eflags = *(uint64_t *)(mc + 17 * 8);
+    c->nzcv = hl_x86_signal_eflags_to_nzcv(eflags);
+    c->df = (eflags >> 10) & 1; // restore DF a handler may have changed
+    // PF and AF are side lanes outside NZCV.  Restore the frame's values rather than leaking the flags
+    // produced by the handler itself into the interrupted code.
+    c->pf = ((eflags >> 2) & 1) ^ 1u; // canonical source byte: even 0 means PF=1, odd 1 means PF=0
+    c->af = eflags & (UINT64_C(1) << 4);
     c->sigmask = *(uint64_t *)(uc + 296);
     memcpy(c->v, (void *)xs, sizeof c->v);
     // Restore the extended vector + x87 state saved by build_signal_frame (see there), so the interrupted
