@@ -48,6 +48,15 @@ pub fn artifact_load_error() -> Option<&'static LoadError> {
     loader::path().err()
 }
 
+/// Selects one exact native engine artifact before the first engine construction.
+///
+/// This is a typed developer-runner boundary, not an ambient library search. The
+/// loader still verifies the selected artifact's ABI and build fingerprint.
+#[doc(hidden)]
+pub fn select_artifact(path: &std::path::Path) -> Result<(), String> {
+    loader::select(path)
+}
+
 /// Returns the exact dynamic export contract for the Cargo-selected native library.
 #[doc(hidden)]
 #[must_use]
