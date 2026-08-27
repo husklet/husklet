@@ -2710,19 +2710,18 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             restore_terminal.text(),
         ]
         .concat();
-        let admissions = diagnostic_text
+        let chained = diagnostic_text
             .lines()
-            .filter(|line| line.starts_with("[prof] translit:"))
+            .filter(|line| line.starts_with("[diag] backend-shape "))
             .filter_map(|line| {
                 line.split_whitespace()
-                    .find_map(|field| field.strip_prefix("jcc_link_admitted="))
+                    .find_map(|field| field.strip_prefix("e_jt_chained="))
                     .and_then(|value| value.parse::<u64>().ok())
             })
-            .filter(|admitted| *admitted > 0)
-            .count();
+            .collect::<Vec<_>>();
         assert!(
-            admissions >= 3,
-            "each capture/restore process must re-admit a JCC link:\n{diagnostic_text}"
+            chained.len() == 3 && chained.iter().all(|count| *count > 0),
+            "each capture/restore process must execute a newly chained JCC: {chained:?}\n{diagnostic_text}"
         );
     }
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");
