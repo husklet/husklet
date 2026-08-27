@@ -135,6 +135,7 @@ static __thread int g_backend_shape_edge_pending;
 static __thread unsigned g_backend_shape_edge_family;
 static __thread uint64_t g_backend_shape_edge_target;
 static __thread uint64_t g_backend_shape_edge_source_generation;
+static __thread int g_backend_shape_edge_source_resolved;
 static __thread uintptr_t g_backend_shape_edge_source_host_lo;
 static __thread uintptr_t g_backend_shape_edge_source_host_hi;
 static __thread int g_backend_shape_edge_same_page;
@@ -143,6 +144,7 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu) {
     cpu->ibtc_base = 0;
     g_backend_shape_open = 0;
     g_backend_shape_edge_pending = 0;
+    g_backend_shape_edge_source_resolved = 0;
 }
 
 #endif
@@ -422,10 +424,16 @@ static void interp_store_bytes(uint64_t guest_address, const void *source, unsig
 
 // The address CALL pushes is guest-visible: DWARF FDE lookup, dladdr and unwinding need a biased ET_EXEC's
 // LINK address; instruction fetch projects it onto storage after RET. Must stay byte-for-byte translate.c's.
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int interp_backend_shape_rel32_reachable(int source_resolved, uintptr_t source_lo,
+                                                uintptr_t source_hi, uintptr_t target);
+#endif
 #include "interp/execution.c"
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-static int interp_backend_shape_rel32_reachable(uintptr_t source_lo, uintptr_t source_hi, uintptr_t target) {
+static int interp_backend_shape_rel32_reachable(int source_resolved, uintptr_t source_lo,
+                                                uintptr_t source_hi, uintptr_t target) {
+    if (!source_resolved) return 0;
     if (source_hi < source_lo) return 0;
     uint64_t from_lo = source_lo > target ? source_lo - target : target - source_lo;
     uint64_t from_hi = source_hi > target ? source_hi - target : target - source_hi;
@@ -450,14 +458,15 @@ static void *interp_backend_shape_map_host(void *opaque, uint64_t gpc) {
         uint64_t target_generation = UINT64_MAX;
         int target_resolved = jit_resolve_rw_code(code, &target_rx, &target_generation);
         int target_translated = target_resolved && target_block->host_entry_off != 0;
-        int current_generation = target_translated &&
+        int current_generation = target_translated && g_backend_shape_edge_source_resolved &&
                                  g_backend_shape_edge_source_generation == g_cache_gen &&
                                  target_generation == g_cache_gen && target_block->generation == g_cache_gen;
         uintptr_t target_entry = target_translated
                                      ? (uintptr_t)target_rx + target_block->host_entry_off
                                      : 0;
         int rel32_reachable = target_translated &&
-                              interp_backend_shape_rel32_reachable(g_backend_shape_edge_source_host_lo,
+                              interp_backend_shape_rel32_reachable(g_backend_shape_edge_source_resolved,
+                                                                   g_backend_shape_edge_source_host_lo,
                                                                    g_backend_shape_edge_source_host_hi, target_entry);
         int eligible = family == HL_BACKEND_SHAPE_EDGE_JCC_TAKEN && g_backend_shape_edge_same_page &&
                        target_translated && current_generation && rel32_reachable;
@@ -623,6 +632,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
             void *source_rx = NULL;
             uint64_t source_generation = UINT64_MAX;
             int source_resolved = jit_resolve_host_rx_code(block, &source_rx, &source_generation);
+            g_backend_shape_edge_source_resolved = source_resolved;
             g_backend_shape_edge_source_generation = source_resolved ? source_generation : UINT64_MAX;
             g_backend_shape_edge_source_host_lo =
                 source_resolved ? (uintptr_t)source_rx + block->host_entry_off : 0;

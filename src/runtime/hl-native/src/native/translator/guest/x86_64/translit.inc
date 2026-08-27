@@ -1640,6 +1640,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         g_retired[0] = saved_retired;
         return ok ? 0 : 65;
     }
+    if (scenario == 52)
+        return !interp_backend_shape_rel32_reachable(0, 0, 0, UINT64_C(0x1000)) &&
+                       interp_backend_shape_rel32_reachable(1, UINT64_C(0x1000), UINT64_C(0x1100),
+                                                            UINT64_C(0x1200))
+                   ? 0
+                   : 66;
     return 6;
 }
 #endif
