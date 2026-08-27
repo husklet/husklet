@@ -80,6 +80,11 @@ struct Backend {
     sse2_instructions_admitted: u64,
     sse2_target_runs: u64,
     sse2_next_family_runs: u64,
+    sse2_store_instructions: u64,
+    sse2_store_movups: u64,
+    sse2_store_movaps: u64,
+    sse2_store_movdqu: u64,
+    sse2_store_family_runs: u64,
     translations: u64,
 }
 
@@ -134,6 +139,11 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_instructions_admitted: counter("sse2_instructions_admitted="),
         sse2_target_runs: counter("sse2_target_runs="),
         sse2_next_family_runs: counter("sse2_next_family_runs="),
+        sse2_store_instructions: counter("sse2_store_instructions="),
+        sse2_store_movups: counter("sse2_store_movups="),
+        sse2_store_movaps: counter("sse2_store_movaps="),
+        sse2_store_movdqu: counter("sse2_store_movdqu="),
+        sse2_store_family_runs: counter("sse2_store_family_runs="),
         translations,
         line,
     }
@@ -481,6 +491,11 @@ fn next_sse_family_matches_native_for_unaligned_high_rip_alias_flags_and_prefixe
     assert_eq!(native.status.code(), Some(selected_status));
     assert_eq!(native.stdout, selected);
     assert!(selected_backend.sse2_next_family_runs > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.sse2_store_instructions >= 3,
+        "{}",
+        selected_backend.line
+    );
 }
 
 #[test]
@@ -495,6 +510,71 @@ fn next_sse_family_fixture_contains_the_exact_dynamic_chain_and_extended_forms()
     assert!(contains(&[0xf3, 0x45, 0x0f, 0x6f, 0x40, 0x03]));
     assert!(contains(&[0xf3, 0x44, 0x0f, 0x6f, 0x0d]));
     assert!(contains(&[0x66, 0x45, 0x0f, 0xdf, 0xc1]));
+    assert!(contains(&[0xf3, 0x0f, 0x7f]));
+}
+
+#[test]
+fn sse_stores_match_native_with_unaligned_high_registers_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_store");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native SSE store fixture");
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert!(
+        selected_backend.sse2_store_movups > 0
+            && selected_backend.sse2_store_movaps > 0
+            && selected_backend.sse2_store_movdqu > 0,
+        "store counters ups={} aps={} dqu={} displaced_memory_declined={} line={}",
+        selected_backend.sse2_store_movups,
+        selected_backend.sse2_store_movaps,
+        selected_backend.sse2_store_movdqu,
+        selected_backend.sse2_memory_declined,
+        selected_backend.line
+    );
+    assert!(selected_backend.sse2_store_family_runs > 0, "{}", selected_backend.line);
+    let image = std::fs::read(executable).unwrap();
+    for opcode in [&[0x44, 0x0f, 0x11][..], &[0x44, 0x0f, 0x29], &[0xf3, 0x44, 0x0f, 0x7f]] {
+        assert!(image.windows(opcode.len()).any(|window| window == opcode));
+    }
+}
+
+#[test]
+fn aligned_store_fault_reports_the_guest_instruction_and_does_not_write() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_store_fault");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native aligned-store fault fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"faults=1 unchanged=1\n");
+    assert!(selected_backend.sse2_store_movaps > 0, "{}", selected_backend.line);
+}
+
+#[test]
+fn executable_store_authority_keeps_the_store_in_the_interpreter() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_store_authority");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native store-authority fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"authority=16\n");
+    assert!(selected_backend.declined > 0, "{}", selected_backend.line);
+    assert_eq!(selected_backend.sse2_store_instructions, 0, "{}", selected_backend.line);
 }
 
 /// A direct forward edge stays in one emitted descriptor. The corrupt bytes in the skipped gap make

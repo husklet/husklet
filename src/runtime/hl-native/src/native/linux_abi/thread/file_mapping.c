@@ -347,6 +347,12 @@ static int filemap_emulated_shared_active(void) {
     return atomic_load_explicit(&g_filemap_emulated_shared, memory_order_acquire);
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void filemap_test_set_emulated_shared(int active) {
+    atomic_store_explicit(&g_filemap_emulated_shared, active, memory_order_release);
+}
+#endif
+
 static ssize_t filemap_pread(int fd, void *buffer, size_t length, off_t offset) {
     ssize_t result;
     do
