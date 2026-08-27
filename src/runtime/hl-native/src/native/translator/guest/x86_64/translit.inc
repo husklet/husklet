@@ -1568,6 +1568,7 @@ static int translit_report(char *out, size_t size) {
         sse2_runs_admitted = sse2_instructions_admitted = sse2_target_runs = sse2_next_family_runs = UINT64_MAX;
         sse2_store_instructions = sse2_store_movups = sse2_store_movaps = sse2_store_movdqu = UINT64_MAX;
         sse2_store_family_runs = sse2_pxor_admitted = sse2_pxor_runs_admitted = UINT64_MAX;
+        sse2_punpcklqdq_admitted = sse2_punpcklqdq_runs_admitted = UINT64_MAX;
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
