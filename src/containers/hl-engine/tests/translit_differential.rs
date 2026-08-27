@@ -204,6 +204,10 @@ fn backend(stderr: &[u8]) -> Backend {
         .collect::<Vec<_>>();
     assert_eq!(would_links.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
     let would_link = would_links[0];
+    assert!(
+        would_link.split_whitespace().any(|field| field == "version=1"),
+        "{would_link}"
+    );
     let would_link_counter = |name: &str| {
         would_link
             .split_whitespace()
@@ -377,8 +381,7 @@ fn backend(stderr: &[u8]) -> Backend {
         would_link_refusals: ["fall", "jmp", "call"]
             .into_iter()
             .map(|family| {
-                would_link_counter(&format!("{family}_candidate="))
-                    - would_link_counter(&format!("{family}_eligible="))
+                would_link_counter(&format!("{family}_candidate=")) - would_link_counter(&format!("{family}_eligible="))
             })
             .sum(),
         would_link_line: would_link.to_owned(),
