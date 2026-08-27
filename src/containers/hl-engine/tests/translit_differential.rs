@@ -204,6 +204,27 @@ fn register_pxor_matches_native_for_distinct_high_alias_and_flags() {
 }
 
 #[test]
+fn register_punpcklqdq_matches_native_for_distinct_high_alias_and_flags() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "sse_punpcklqdq");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, _selected_backend) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native PUNPCKLQDQ fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"distinct=8877665544332211:0123456789abcdef high=0706050403020100:f8f9fafbfcfdfeff alias=8877665544332211:8877665544332211 flags=0c95:0c95:0000\n"
+    );
+    let image = std::fs::read(executable).unwrap();
+    assert!(image.windows(4).any(|bytes| bytes == [0x66, 0x0f, 0x6c, 0xc1]));
+    assert!(image.windows(5).any(|bytes| bytes == [0x66, 0x45, 0x0f, 0x6c, 0xc1]));
+}
+
+#[test]
 fn sse2_alignment_faults_replay_old_vectors_and_boundary_immediates_match_native() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse2_fault");
