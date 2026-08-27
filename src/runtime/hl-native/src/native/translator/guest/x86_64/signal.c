@@ -66,7 +66,8 @@ void hl_x86_signal_build(struct cpu *c, int sig, const hl_x86_signal_state *stat
     for (size_t i = 0; i < 16; i++)
         *(uint64_t *)(mc + i * 8) = c->r[GREG2R[i]]; // gregs[0..15]
     *(uint64_t *)(mc + 16 * 8) = c->rip;             // gregs[16] = RIP
-    uint64_t eflags = hl_x86_signal_nzcv_to_eflags(c->nzcv) | ((c->df & 1) << 10);
+    uint64_t eflags = hl_x86_signal_nzcv_to_eflags(c->nzcv) | (UINT64_C(1) << 9) | ((c->df & 1) << 10) |
+                      ((c->idflag & 1) << 21);
     if (!__builtin_parity((unsigned)(c->pf & 0xff))) eflags |= UINT64_C(1) << 2;
     eflags |= ((c->af >> 4) & 1) << 4;
     *(uint64_t *)(mc + 17 * 8) = eflags;
