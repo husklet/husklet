@@ -1223,14 +1223,19 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     run_with_arguments(executable, translit, &[], false, false, false, false)
 }
 
-fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
+fn run_with_jcc_controls(executable: &Path, disable_link: bool) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).expect("HL_TRANSLIT");
     options.set("HL_C_DIAGNOSTICS", "1", true).expect("HL_C_DIAGNOSTICS");
     options
-        .set("HL_TRANSLIT_JCC_LINK_DISABLE", "1", true)
-        .expect("HL_TRANSLIT_JCC_LINK_DISABLE");
+        .set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", true)
+        .expect("HL_TRANSLIT_JCC_IBTC_DISABLE");
+    if disable_link {
+        options
+            .set("HL_TRANSLIT_JCC_LINK_DISABLE", "1", true)
+            .expect("HL_TRANSLIT_JCC_LINK_DISABLE");
+    }
     let plan = RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
@@ -1248,6 +1253,14 @@ fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
     let out = captured.out.lock().unwrap().clone();
     let report = backend(&captured.err.lock().unwrap());
     (out, exit.guest_status, report)
+}
+
+fn run_with_jcc_ibtc_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
+    run_with_jcc_controls(executable, false)
+}
+
+fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
+    run_with_jcc_controls(executable, true)
 }
 
 fn run_with_perf_map(executable: &Path, directory: &Path) -> (Vec<u8>, i32, Backend) {
@@ -1743,7 +1756,7 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "jcc_link");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    let (selected, selected_status, selected_backend) = run_with_jcc_ibtc_disabled(&executable);
     let (disabled, disabled_status, disabled_backend) = run_with_jcc_link_disabled(&executable);
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
@@ -1761,11 +1774,13 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
     assert!(selected_backend.jcc_link_dispatcher > 0, "{}", selected_backend.line);
     assert_eq!(disabled_backend.jcc_link_admitted, 0, "{}", disabled_backend.line);
     assert_eq!(disabled_backend.jcc_link_taken, 0, "{}", disabled_backend.line);
-    assert!(
-        disabled_backend.jcc_link_dispatcher > selected_backend.jcc_link_dispatcher,
+    // IBTC OFF suppresses publication, not its byte-identical source scaffold,
+    // so this counter now names only unrelated ordinary-dispatcher sources.
+    // Those must stay stable while the direct-link fields above carry the AB proof.
+    assert_eq!(
+        disabled_backend.jcc_link_dispatcher, selected_backend.jcc_link_dispatcher,
         "{}\n{}",
-        disabled_backend.line,
-        selected_backend.line
+        disabled_backend.line, selected_backend.line
     );
     assert_eq!(
         selected_backend.shape_jcc_taken_chained, selected_backend.jcc_link_taken,
