@@ -54,7 +54,6 @@ typedef struct {
     uint64_t authority_logical_generation;
     uint64_t authority_direct_generation;
     uint64_t authority_epoch;
-    uint64_t authorized_hits;
     uint8_t authority_state;
     uint8_t count_authorized_hits;
 } hl_x86_hot_context;

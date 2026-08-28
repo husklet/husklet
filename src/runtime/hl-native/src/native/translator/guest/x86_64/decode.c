@@ -22,7 +22,7 @@ _Static_assert(offsetof(decode_memo_entry, authority_epoch) == 208, "decode memo
 _Static_assert(offsetof(hl_x86_hot_context, memo) == 0, "decode memo must lead its context");
 _Static_assert(sizeof(((hl_x86_hot_context *)0)->memo) == 216 * DECODE_MEMO_SLOTS,
                "decode memo table footprint changed");
-_Static_assert(sizeof(hl_x86_hot_context) == 221328, "decode hot context footprint changed");
+_Static_assert(sizeof(hl_x86_hot_context) == 221320, "decode hot context footprint changed");
 
 static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 
@@ -390,7 +390,8 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
     if (memo->length != 0 && memo->pc == pc && before.state == 1 &&
         memo->authority_epoch == context->authority_epoch) {
         *I = memo->instruction;
-        if (context->count_authorized_hits) ++context->authorized_hits;
+        if (context->count_authorized_hits)
+            atomic_fetch_add_explicit(&g_decode_authorized_hits, 1, memory_order_relaxed);
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_hits;
 #endif
@@ -483,8 +484,6 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
 
 void hl_x86_hot_context_destroy(hl_x86_hot_context *context) {
     if (context == NULL) return;
-    if (context->count_authorized_hits)
-        atomic_fetch_add_explicit(&g_decode_authorized_hits, context->authorized_hits, memory_order_relaxed);
 #if defined(HL_NATIVE_TEST_HOOKS)
     atomic_fetch_sub_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
 #endif
