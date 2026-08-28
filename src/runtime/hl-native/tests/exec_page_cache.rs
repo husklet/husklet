@@ -74,6 +74,7 @@ fn x86_stable_decode_authority_skips_fetch_but_every_invalidation_revalidates() 
         let result = exec_page_cache_test(2, scenario);
         assert!(result.is_ok(), "scenario={scenario}: {result:?}");
     }
+    assert!(exec_page_cache_test(2, 35).is_ok());
 }
 
 #[cfg(unix)]

@@ -626,6 +626,7 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         fixture.bytes[1] = 0x90;
     }
     if (scenario == 32) fixture.generation_to_bump = &direct;
+    if (scenario == 35) fixture.generation_to_bump = &logical;
     hl_x86_hot_context *context = hl_x86_hot_context_create(decode_context_fixture_fetch, &fixture, &unstable);
     if (context == NULL) return -70;
     context->logical_generation_source = &logical;
@@ -675,6 +676,14 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         if (result == 0 && (fixture.fetches != 2 || context->memo[slot].authority_epoch != 0)) result = -79;
         }
         break;
+    case 35: { /* Logical publication racing either fetch path cannot authorize its bytes. */
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        if (result == 0 && context->memo[slot].authority_epoch != 0) result = -84;
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -85;
+        fixture.generation_to_bump = NULL;
+        if (result == 0 && (fixture.fetches != 2 || context->memo[slot].authority_epoch != 0)) result = -86;
+        break;
+    }
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */
         context->authority_epoch = UINT64_MAX;
         atomic_fetch_add_explicit(&logical, 2, memory_order_release);
