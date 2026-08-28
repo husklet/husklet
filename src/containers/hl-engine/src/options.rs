@@ -155,6 +155,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only disable already-published same-page JCC links",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_JCC_IBTC_DISABLE",
+        "disable unresolved constant-JCC late linking through the same-ISA IBTC",
+        Flag
+    ),
     internal!(
         "HL_TRANSLIT_PROFILE_WIDE_TEST",
         "test-only render every same-ISA profile counter at UINT64 width",

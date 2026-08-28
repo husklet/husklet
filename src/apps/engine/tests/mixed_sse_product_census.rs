@@ -3,12 +3,20 @@
 use std::{collections::BTreeMap, path::Path, process::Command};
 
 const PREFIX: &str = "[diag] backend-shape ";
-const FIELDS: [&str; 5] = [
+const FIELDS: [&str; 13] = [
     "version",
     "available",
     "mixed_sse_executed",
     "mixed_sse_executed_transitions",
     "mixed_sse_disabled_boundaries",
+    "jcc_ibtc_enabled",
+    "jcc_ibtc_emitted",
+    "jcc_ibtc_hits",
+    "jcc_ibtc_misses",
+    "jcc_ibtc_irq",
+    "jcc_ibtc_fills",
+    "jcc_ibtc_suppressed",
+    "jcc_ibtc_invalid_refusals",
 ];
 
 fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
@@ -42,7 +50,7 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
             return Err(format!("production mixed-SSE census omits field {name:?}"));
         }
     }
-    if fields["version"] != 2 || fields["available"] != 1 {
+    if fields["version"] != 3 || fields["available"] != 1 {
         return Err("production mixed-SSE census is unavailable or has the wrong version".into());
     }
     if fields["mixed_sse_executed_transitions"] < fields["mixed_sse_executed"]
@@ -51,7 +59,83 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
     {
         return Err("production mixed-SSE census does not reconcile".into());
     }
+    let dispositions = fields["jcc_ibtc_fills"]
+        .checked_add(fields["jcc_ibtc_suppressed"])
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_invalid_refusals"]));
+    if dispositions != Some(fields["jcc_ibtc_misses"]) {
+        return Err("production JCC IBTC miss dispositions do not reconcile".into());
+    }
+    if fields["jcc_ibtc_enabled"] > 1
+        || (fields["jcc_ibtc_enabled"] == 0 && (fields["jcc_ibtc_hits"] != 0 || fields["jcc_ibtc_fills"] != 0))
+        || (fields["jcc_ibtc_enabled"] == 1 && fields["jcc_ibtc_suppressed"] != 0)
+    {
+        return Err("production JCC IBTC polarity is inconsistent".into());
+    }
+    let dynamic = fields["jcc_ibtc_hits"]
+        .checked_add(fields["jcc_ibtc_misses"])
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_irq"]));
+    if dynamic.is_none() || (dynamic != Some(0) && fields["jcc_ibtc_emitted"] == 0) {
+        return Err("production JCC IBTC execution has no emitted site".into());
+    }
     Ok(fields)
+}
+
+fn put16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn build_jcc_ibtc_fixture(root: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut bytes = vec![0; 4096];
+    bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    put16(&mut bytes, 16, 2);
+    put16(&mut bytes, 18, 0x3e);
+    put32(&mut bytes, 20, 1);
+    put64(&mut bytes, 24, 0x40_0100);
+    put64(&mut bytes, 32, 64);
+    put16(&mut bytes, 52, 64);
+    put16(&mut bytes, 54, 56);
+    put16(&mut bytes, 56, 1);
+    put32(&mut bytes, 64, 1);
+    put32(&mut bytes, 68, 5);
+    put64(&mut bytes, 80, 0x40_0000);
+    put64(&mut bytes, 88, 0x40_0000);
+    put64(&mut bytes, 96, 4096);
+    put64(&mut bytes, 104, 4096);
+    put64(&mut bytes, 112, 4096);
+    bytes[0x100..0x106].copy_from_slice(&[0x31, 0xc0, 0x74, 0x0c, 0x0f, 0x0b]);
+    bytes[0x110..0x120].copy_from_slice(&[
+        0xff, 0xc1, 0x83, 0xf9, 0x02, 0x7c, 0xe9, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
+    ]);
+    let destination = root.join("bin/jcc-ibtc");
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    std::fs::write(&destination, bytes).unwrap();
+    std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn run_jcc_ibtc(root: &Path, mode: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .args([
+            "--diagnostics",
+            "--translit",
+            &format!("--translit-jcc-ibtc={mode}"),
+            "--rootfs",
+            root.to_str().unwrap(),
+            "bin/jcc-ibtc",
+        ])
+        // A typed launch option store must shadow, not import, this contradictory ambient value.
+        .env("HL_TRANSLIT_JCC_IBTC_DISABLE", "1")
+        .output()
+        .expect("run production no-hooks JCC IBTC worker")
 }
 
 fn build_fixture(root: &Path) {
@@ -131,12 +215,42 @@ fn nohooks_product_aggregates_child_only_mixed_execution_after_reap() {
     let disabled_stderr = String::from_utf8(disabled.stderr).unwrap();
     let enabled = census(&enabled_stderr).unwrap_or_else(|error| panic!("{error}:\n{enabled_stderr}"));
     let disabled = census(&disabled_stderr).unwrap_or_else(|error| panic!("{error}:\n{disabled_stderr}"));
+    assert_eq!(enabled["jcc_ibtc_enabled"], 1);
+    assert_eq!(disabled["jcc_ibtc_enabled"], 1);
     assert!(enabled["mixed_sse_executed"] > 0, "{enabled:?}");
     assert!(enabled["mixed_sse_executed_transitions"] >= enabled["mixed_sse_executed"]);
     assert_eq!(enabled["mixed_sse_disabled_boundaries"], 0);
     assert_eq!(disabled["mixed_sse_executed"], 0);
     assert_eq!(disabled["mixed_sse_executed_transitions"], 0);
     assert!(disabled["mixed_sse_disabled_boundaries"] > 0, "{disabled:?}");
+}
+
+#[test]
+fn real_worker_cli_typed_jcc_ibtc_on_and_off_reach_product_v3() {
+    let root = tempfile::tempdir().unwrap();
+    build_jcc_ibtc_fixture(root.path());
+    let on = run_jcc_ibtc(root.path(), "on");
+    let off = run_jcc_ibtc(root.path(), "off");
+    assert!(on.status.success(), "{}", String::from_utf8_lossy(&on.stderr));
+    assert!(off.status.success(), "{}", String::from_utf8_lossy(&off.stderr));
+    assert_eq!(on.stdout, off.stdout);
+
+    let on_stderr = String::from_utf8(on.stderr).unwrap();
+    let off_stderr = String::from_utf8(off.stderr).unwrap();
+    let on = census(&on_stderr).unwrap_or_else(|error| panic!("{error}:\n{on_stderr}"));
+    let off = census(&off_stderr).unwrap_or_else(|error| panic!("{error}:\n{off_stderr}"));
+    assert_eq!(on["jcc_ibtc_enabled"], 1, "{on:?}");
+    assert_eq!(on["jcc_ibtc_emitted"], 1, "{on:?}");
+    assert_eq!(on["jcc_ibtc_hits"], 1, "{on:?}");
+    assert_eq!(on["jcc_ibtc_misses"], 1, "{on:?}");
+    assert_eq!(on["jcc_ibtc_fills"], 1, "{on:?}");
+    assert_eq!(on["jcc_ibtc_suppressed"], 0, "{on:?}");
+    assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
+    assert_eq!(off["jcc_ibtc_emitted"], 1, "{off:?}");
+    assert_eq!(off["jcc_ibtc_hits"], 0, "{off:?}");
+    assert_eq!(off["jcc_ibtc_misses"], 2, "{off:?}");
+    assert_eq!(off["jcc_ibtc_fills"], 0, "{off:?}");
+    assert_eq!(off["jcc_ibtc_suppressed"], 2, "{off:?}");
 }
 
 #[test]
@@ -155,8 +269,10 @@ fn nohooks_parent_barrier_settles_a_child_that_outlives_a_fatal_root() {
 
 #[test]
 fn product_census_parser_rejects_cardinality_and_coordinated_token_changes() {
-    let valid = "[diag] backend-shape version=2 available=1 mixed_sse_executed=3 \
-                 mixed_sse_executed_transitions=7 mixed_sse_disabled_boundaries=0\n";
+    let valid = "[diag] backend-shape version=3 available=1 mixed_sse_executed=3 \
+                 mixed_sse_executed_transitions=7 mixed_sse_disabled_boundaries=0 \
+                 jcc_ibtc_enabled=1 jcc_ibtc_emitted=1 jcc_ibtc_hits=1 jcc_ibtc_misses=1 \
+                 jcc_ibtc_irq=0 jcc_ibtc_fills=1 jcc_ibtc_suppressed=0 jcc_ibtc_invalid_refusals=0\n";
     census(valid).unwrap();
     let invalid = [
         String::new(),
@@ -166,6 +282,8 @@ fn product_census_parser_rejects_cardinality_and_coordinated_token_changes() {
         valid.replace("mixed_sse_executed=3", "mixed_sse_executed=3 mixed_sse_executed=4"),
         valid.replace("available=1", "available=1 extra=0"),
         valid.replace("available=1", "available=0"),
+        valid.replace("jcc_ibtc_fills=1", "jcc_ibtc_fills=0"),
+        valid.replace("jcc_ibtc_suppressed=0", "jcc_ibtc_suppressed=1"),
     ];
     for invalid in invalid {
         assert!(census(&invalid).is_err(), "accepted invalid census: {invalid}");

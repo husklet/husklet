@@ -55,6 +55,7 @@ fn help_and_version_are_answered_on_standard_output() {
     let text = stdout(&help);
     assert!(text.contains("Usage: hl-x86_64"), "{text}");
     assert!(text.contains("--rootfs"), "{text}");
+    assert!(text.contains("--translit-jcc-ibtc <on|off>"), "{text}");
     assert_eq!(help.status.code(), Some(0));
 
     let version = worker(&["--version"]);
