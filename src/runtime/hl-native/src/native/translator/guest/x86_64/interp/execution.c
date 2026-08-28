@@ -401,6 +401,11 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     uint64_t source_page = gpc & ~UINT64_C(0xfff);
     filemap_refresh_emulated(source_page, source_page + UINT64_C(0x1000));
     HL_LOGF(&g_jit_log, HL_LOG_TAG_TRANSLATE, "isa=x86_64 interp guest_pc=%#llx", (unsigned long long)gpc);
+    // The compact unresolved-JCC path is optional. If its generation-owned
+    // shared stub cannot be established, translit_build keeps using the
+    // ordinary dispatcher path; this function must still return its unique
+    // interpreter descriptor.
+    if (translit_enabled()) (void)translit_jcc_ibtc_stub_init();
     while ((uintptr_t)g_cp & 15)
         g_cp++;
     struct interp_block *block = (struct interp_block *)g_cp;

@@ -52,6 +52,7 @@ _Static_assert(TL_MAX_INSNS < 256,
 #ifndef TL_STITCH_MAX_JMPS
 #define TL_STITCH_MAX_JMPS 8
 #endif
+#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 1)
 
 // ---- the host<->guest boundary
 //
@@ -260,6 +261,7 @@ static int translit_test_fall_marker_seen;
 static int translit_fall_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
+static int translit_jcc_ibtc_signal_stage_test(void);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
 static uint64_t translit_fs_fixture_admitted;
@@ -771,6 +773,24 @@ static void translit_emit_spill(hl_x64_asm *a) {
     hl_x64_cld(a); // a guest `std` must not leak DF into host C code
 }
 
+// Shared constant-JCC IBTC entry has already saved guest RAX in cpu->r[0] and
+// uses live RAX only to hand over the constant target.  Spill every remaining
+// architectural register without overwriting that canonical saved value.
+static void translit_emit_spill_after_rax(hl_x64_asm *a, uint8_t **rsp_canonical,
+                                          uint8_t **flags_canonical) {
+    static const int order[14] = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    for (int i = 0; i < 14; i++)
+        hl_x64_store_gs(a, order[i], (int32_t)(order[i] * 8));
+    hl_x64_store_gs(a, HL_X64_RSP, 4 * 8);
+    hl_x64_load_gs(a, HL_X64_RSP, OFF_HSP);
+    *rsp_canonical = a->cursor;
+    hl_x64_pushfq(a);
+    hl_x64_pop(a, HL_X64_RAX);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    *flags_canonical = a->cursor;
+    hl_x64_cld(a);
+}
+
 static void translit_emit_return(hl_x64_asm *a, uint64_t reason) {
     hl_x64_store_gs_imm32(a, (int32_t)reason, OFF_RSN);
     hl_x64_pop(a, 15);
@@ -927,53 +947,150 @@ static void translit_emit_jcc_dispatcher(hl_x64_asm *a, uint64_t target) {
 
 enum { TL_JCC_IBTC_MISS = 1 };
 
+#define TL_JCC_IBTC_STUB_MAGIC UINT64_C(0x4a43434942544331) // "JCCIBTC1"
+typedef struct {
+    uint64_t magic;
+    uint32_t entry_off;
+    uint32_t rsp_canonical_off;
+    uint32_t flags_canonical_off;
+    uint32_t end_off;
+} translit_jcc_ibtc_stub_header;
+
+static uint8_t *translit_jcc_ibtc_stub_entry;
+static uint8_t *translit_jcc_ibtc_stub_rsp_canonical;
+static uint8_t *translit_jcc_ibtc_stub_flags_canonical;
+static uint8_t *translit_jcc_ibtc_stub_end;
+
+typedef struct {
+    uint8_t *save_end;
+    uint8_t *target_end;
+    uint8_t *rip_end;
+    uint8_t *end;
+} translit_jcc_ibtc_site_ranges;
+
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
-    return (source >> 12) == (target >> 12);
+    return translit_jcc_ibtc_stub_entry != NULL && (source >> 12) == (target >> 12);
 }
 
-// Immutable unresolved taken-JCC path. MOVDQA consumes {target,body} as one pair and the key comparison
-// turns aliases into ordinary misses. The typed OFF option suppresses only dispatcher publication, so ON
-// and OFF execute byte-identical probes and keep the same arena/branch layout.
-static void translit_emit_jcc_ibtc(hl_x64_asm *a, uint64_t target) {
-    translit_emit_spill(a);
-    hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
-    uint8_t *irq = hl_x64_jcc_rel32(a, 5); // JNE
-    hl_x64_load_gs(a, HL_X64_RAX, OFF_IBTC);
-    hl_x64_load_xmm_aligned_disp32(a, 0, HL_X64_RAX, (int32_t)(ibtc_index(target) * sizeof(ibtc_ent)));
-    hl_x64_movq_xmm_to_reg(a, HL_X64_RCX, 0);
-    hl_x64_mov_imm64(a, HL_X64_RAX, target);
-    hl_x64_cmp_reg(a, HL_X64_RCX, HL_X64_RAX);
-    uint8_t *miss_key = hl_x64_jcc_rel32(a, 5); // JNE
-    hl_x64_psrldq(a, 0, 8);
-    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 0);
-    hl_x64_test_reg(a, HL_X64_RAX);
-    uint8_t *miss_body = hl_x64_jcc_rel32(a, 4); // JE
-    // Stash the resolved entry before hook counters borrow RAX for their absolute addresses.
-    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+// One generation-owned shared probe.  Every source hands it a target in RAX
+// after saving guest RAX and publishing the already-committed architectural
+// target in cpu->rip.  Keeping the large spill/probe/reload sequence out of each
+// descriptor is load-bearing: eight legal stitched JCCs must fit inside the
+// unchanged 3072-byte block budget.
+static int translit_jcc_ibtc_stub_init(void) {
+    translit_jcc_ibtc_stub_header *header = (translit_jcc_ibtc_stub_header *)g_cache;
+    if (g_cp != g_cache && header->magic == TL_JCC_IBTC_STUB_MAGIC &&
+        header->entry_off >= sizeof *header && header->entry_off < header->rsp_canonical_off &&
+        header->rsp_canonical_off < header->flags_canonical_off &&
+        header->flags_canonical_off < header->end_off && header->end_off <= CACHE_EMIT_HEADROOM) {
+        translit_jcc_ibtc_stub_entry = g_cache + header->entry_off;
+        translit_jcc_ibtc_stub_rsp_canonical = g_cache + header->rsp_canonical_off;
+        translit_jcc_ibtc_stub_flags_canonical = g_cache + header->flags_canonical_off;
+        translit_jcc_ibtc_stub_end = g_cache + header->end_off;
+        return 1;
+    }
+    if (g_cp != g_cache) return 0;
+
+    // A failed first attempt must never leave a stale pointer from the previous
+    // generation eligible at a new source. The same-ISA backend's pcache_load
+    // is a categorical MISS, so these bytes are never restored without their
+    // generation-owned provenance. The offset-only header nevertheless makes
+    // fork-preserve rebinding independent of process-local pointers.
+    translit_jcc_ibtc_stub_entry = NULL;
+    translit_jcc_ibtc_stub_rsp_canonical = NULL;
+    translit_jcc_ibtc_stub_flags_canonical = NULL;
+    translit_jcc_ibtc_stub_end = NULL;
+
+    uint32_t owner_token;
+    if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) return 0;
+    uint8_t *entry = g_cache + ((sizeof *header + 15u) & ~15u);
+    hl_x64_asm a = {entry, g_cache + CACHE_EMIT_HEADROOM, 0};
+    uint8_t *rsp_canonical = NULL, *flags_canonical = NULL;
+    translit_emit_spill_after_rax(&a, &rsp_canonical, &flags_canonical);
+    hl_x64_cmp_gs_imm8(&a, OFF_IRQ, 0);
+    uint8_t *irq = hl_x64_jcc_rel32(&a, 5);
+    hl_x64_load_gs(&a, HL_X64_RAX, OFF_IBTC);
+    // RAX no longer carries the target; the source published it in cpu->rip.
+    // Hashing remains the established direct-map formula, so load the exact
+    // slot selected by the target constant at each source.  A shared stub cannot
+    // bake that displacement: compute it from target in RCX.
+    hl_x64_load_gs(&a, HL_X64_RCX, OFF_RIP);
+    hl_x64_mov_reg(&a, HL_X64_RDX, HL_X64_RCX);
+    hl_x64_shr_imm8(&a, HL_X64_RDX, 2);
+    hl_x64_and_imm32(&a, HL_X64_RDX, IBTC_N - 1);
+    hl_x64_shl_imm8(&a, HL_X64_RDX, 4);
+    hl_x64_add_reg(&a, HL_X64_RAX, HL_X64_RDX);
+    hl_x64_load_xmm_aligned_disp32(&a, 0, HL_X64_RAX, 0);
+    hl_x64_movq_xmm_to_reg(&a, HL_X64_RDX, 0);
+    hl_x64_cmp_reg(&a, HL_X64_RDX, HL_X64_RCX);
+    uint8_t *miss_key = hl_x64_jcc_rel32(&a, 5);
+    hl_x64_psrldq(&a, 0, 8);
+    hl_x64_movq_xmm_to_reg(&a, HL_X64_RAX, 0);
+    hl_x64_test_reg(&a, HL_X64_RAX);
+    uint8_t *miss_body = hl_x64_jcc_rel32(&a, 4);
+    hl_x64_store_gs(&a, HL_X64_RAX, TL_MM_ENTRY);
     uintptr_t hit_counter = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_HIT);
-    if (hit_counter != 0) hl_x64_atomic_inc_abs(a, hit_counter);
+    if (hit_counter != 0) hl_x64_atomic_inc_abs(&a, hit_counter);
 #if defined(HL_NATIVE_TEST_HOOKS)
     uintptr_t shape_counter = hl_backend_tree_jcc_link_counter_address();
-    if (shape_counter != 0) hl_x64_atomic_inc_abs(a, shape_counter);
+    if (shape_counter != 0) hl_x64_atomic_inc_abs(&a, shape_counter);
 #endif
-    translit_emit_reload(a);
-    hl_x64_jmp_gs_indirect(a, TL_MM_ENTRY);
+    translit_emit_reload(&a);
+    hl_x64_jmp_gs_indirect(&a, TL_MM_ENTRY);
 
-    hl_x64_patch_rel32(a, miss_key, a->cursor);
-    hl_x64_patch_rel32(a, miss_body, a->cursor);
+    hl_x64_patch_rel32(&a, miss_key, a.cursor);
+    hl_x64_patch_rel32(&a, miss_body, a.cursor);
     uintptr_t miss_counter = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_MISS);
-    if (miss_counter != 0) hl_x64_atomic_inc_abs(a, miss_counter);
-    hl_x64_store_gs_imm32(a, TL_JCC_IBTC_MISS, OFF_JCC_IBTC_MISS);
-    hl_x64_mov_imm64(a, HL_X64_RAX, target);
-    hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
-    translit_emit_return(a, R_BRANCH);
+    if (miss_counter != 0) hl_x64_atomic_inc_abs(&a, miss_counter);
+    hl_x64_store_gs_imm32(&a, TL_JCC_IBTC_MISS, OFF_JCC_IBTC_MISS);
+    translit_emit_return(&a, R_BRANCH); // cpu->rip already names the target
 
-    hl_x64_patch_rel32(a, irq, a->cursor);
+    hl_x64_patch_rel32(&a, irq, a.cursor);
     uintptr_t irq_counter = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_IRQ);
-    if (irq_counter != 0) hl_x64_atomic_inc_abs(a, irq_counter);
+    if (irq_counter != 0) hl_x64_atomic_inc_abs(&a, irq_counter);
+    translit_emit_return(&a, R_BRANCH);
+    if (a.overflow) return 0;
+
+    jit_body_owner_range ranges[3] = {
+        {(uint64_t)(uintptr_t)entry, (uint64_t)(uintptr_t)rsp_canonical,
+         JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX},
+        {(uint64_t)(uintptr_t)rsp_canonical, (uint64_t)(uintptr_t)flags_canonical,
+         JIT_BODY_OWNER_DYNAMIC_RIP, (1u << HL_X64_RAX) | (1u << HL_X64_RSP)},
+        {(uint64_t)(uintptr_t)flags_canonical, (uint64_t)(uintptr_t)a.cursor,
+         JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS, UINT16_MAX},
+    };
+    if (!jit_body_owner_publish_n(g_cache_gen, owner_token, ranges, 3)) return 0;
+    for (unsigned i = 0; i < 3; i++)
+        jit_instruction_map_put_preserve(ranges[i].lo, ranges[i].hi, ranges[i].guest,
+                                         ranges[i].preserve_registers);
+    *header = (translit_jcc_ibtc_stub_header){
+        TL_JCC_IBTC_STUB_MAGIC,
+        (uint32_t)(entry - g_cache),
+        (uint32_t)(rsp_canonical - g_cache),
+        (uint32_t)(flags_canonical - g_cache),
+        (uint32_t)(a.cursor - g_cache),
+    };
+    g_cp = a.cursor;
+    translit_jcc_ibtc_stub_entry = entry;
+    translit_jcc_ibtc_stub_rsp_canonical = rsp_canonical;
+    translit_jcc_ibtc_stub_flags_canonical = flags_canonical;
+    translit_jcc_ibtc_stub_end = a.cursor;
+    return 1;
+}
+
+// Immutable unresolved taken-JCC source handoff.  The typed OFF option still
+// suppresses only publication, so ON and OFF execute byte-identical bytes.
+static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint64_t target) {
+    translit_jcc_ibtc_site_ranges ranges = {0};
+    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.save_end = a->cursor;
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
+    ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
-    translit_emit_return(a, R_BRANCH);
+    ranges.rip_end = a->cursor;
+    hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+    ranges.end = a->cursor;
+    return ranges;
 }
 
 // Runs at the existing post-map dispatcher seam. Under threads the caller still holds g_jit_lock; the
@@ -1032,7 +1149,7 @@ enum {
 
 _Static_assert(TL_MAX_INSNS <= TL_MIXED_PROFILE_TRANSITIONS_MASK,
                "profile marker must represent every mixed transition in one block");
-_Static_assert(TL_MAX_INSNS + 1 == JIT_BODY_OWNER_BLOCK_HEADROOM,
+_Static_assert(TL_MAX_OWNER_RANGES == JIT_BODY_OWNER_BLOCK_HEADROOM,
                "dispatcher owner rotation headroom must cover one worst-case block");
 
 // Production diagnostics need execution proof without growing the stable descriptor. Diagnostic builds
@@ -1190,11 +1307,11 @@ static uint32_t translit_preserve_mask(int reg) {
     return reg < 0 ? 0 : 1u << reg;
 }
 
-static int translit_owner_append(jit_body_owner_range ranges[TL_MAX_INSNS + 1], uint32_t *count,
+static int translit_owner_append(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
                                  const uint8_t *lo, const uint8_t *hi, uint64_t guest,
                                  uint32_t preserve_registers) {
     if (hi <= lo) return 1; // a stitched direct jump can advance guest PC without emitting host bytes
-    if (*count >= TL_MAX_INSNS + 1) return 0;
+    if (*count >= TL_MAX_OWNER_RANGES) return 0;
     ranges[(*count)++] = (jit_body_owner_range){(uint64_t)(uintptr_t)lo, (uint64_t)(uintptr_t)hi,
                                                 guest, preserve_registers};
     return 1;
@@ -1204,7 +1321,7 @@ static int translit_owner_append(jit_body_owner_range ranges[TL_MAX_INSNS + 1], 
 // persistent fallback owner may cover one maximal contiguous zero-preserve span, matching the historical
 // block-granular fallback without consuming one 16-byte sidecar entry per one-byte NOP. The caller clears
 // `pending` at every semantic boundary (SSE commit, scratch interval, stitch side region and terminal).
-static int translit_owner_append_normal(jit_body_owner_range ranges[TL_MAX_INSNS + 1], uint32_t *count,
+static int translit_owner_append_normal(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
                                         int *pending, const uint8_t *lo, const uint8_t *hi,
                                         uint64_t guest) {
     if (hi <= lo) return 1;
@@ -1215,6 +1332,17 @@ static int translit_owner_append_normal(jit_body_owner_range ranges[TL_MAX_INSNS
     if (!translit_owner_append(ranges, count, lo, hi, guest, 0)) return 0;
     *pending = 1;
     return 1;
+}
+
+static int translit_owner_append_ibtc(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
+                                      const uint8_t *instruction_start, const uint8_t *instruction_end,
+                                      const translit_jcc_ibtc_site_ranges *site, uint64_t guest) {
+    return translit_owner_append(ranges, count, instruction_start, site->save_end, guest, 0) &&
+           translit_owner_append(ranges, count, site->save_end, site->rip_end, guest,
+                                 1u << HL_X64_RAX) &&
+           translit_owner_append(ranges, count, site->rip_end, site->end,
+                                 JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
+           translit_owner_append(ranges, count, site->end, instruction_end, guest, 0);
 }
 
 static void translit_instruction_ranges_publish(const jit_body_owner_range *ranges, uint32_t count) {
@@ -2409,7 +2537,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
     }
-    if (scenario >= 89 && scenario <= 97) {
+    if (scenario >= 89 && scenario <= 99) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
@@ -2487,7 +2615,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     // prefix; conservative capacity refusal falls back to the interpreter with no reachable partial body.
     // FS remains one isolated transaction (two recovery spans plus its tail bound); every other body may
     // need one exact range per retired instruction plus the final fall-through tail.
-    uint32_t owner_reservation = fs_run ? 3u : TL_MAX_INSNS + 1u;
+    uint32_t owner_reservation = fs_run ? 3u : TL_MAX_OWNER_RANGES;
     if (!jit_body_owner_reserve_n(g_cache_gen, owner_reservation, &owner_token)) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
@@ -2529,8 +2657,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t would_link_source = 0, would_link_target = 0;
     uint8_t *would_link_marker = NULL;
 #endif
-    jit_body_owner_range owners[TL_MAX_INSNS + 1];
-    jit_body_owner_range instruction_ranges[TL_MAX_INSNS + 1];
+    jit_body_owner_range owners[TL_MAX_OWNER_RANGES];
+    jit_body_owner_range instruction_ranges[TL_MAX_OWNER_RANGES];
     uint32_t owner_count = 0;
     uint32_t instruction_range_count = 0;
     int owner_normal_pending = 0;
@@ -2601,6 +2729,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         uint64_t next = pc + (uint64_t)insn.len;
         unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
         uint8_t *instruction_start = a->cursor;
+        translit_jcc_ibtc_site_ranges ibtc_site = {0};
         int preserve_register = -1;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
 
@@ -2788,7 +2917,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                         jcc_link_admitted++;
                     } else if (translit_jcc_ibtc_candidate(pc, target)) {
-                        translit_emit_jcc_ibtc(a, target);
+                        ibtc_site = translit_emit_jcc_ibtc(a, target);
                         jcc_ibtc_sites++;
                     } else {
                         translit_emit_jcc_dispatcher(a, target);
@@ -2801,9 +2930,19 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         break;
                     }
                     owner_normal_pending = 0;
-                    if (!translit_owner_append(owners, &owner_count, instruction_start, a->cursor, pc, 0) ||
-                        !translit_owner_append(instruction_ranges, &instruction_range_count,
-                                               instruction_start, a->cursor, pc, 0)) {
+                    int owner_exact = ibtc_site.end != NULL
+                                          ? translit_owner_append_ibtc(owners, &owner_count,
+                                                                       instruction_start, a->cursor,
+                                                                       &ibtc_site, pc)
+                                          : translit_owner_append(owners, &owner_count, instruction_start,
+                                                                  a->cursor, pc, 0);
+                    int instruction_exact =
+                        ibtc_site.end != NULL
+                            ? translit_owner_append_ibtc(instruction_ranges, &instruction_range_count,
+                                                         instruction_start, a->cursor, &ibtc_site, pc)
+                            : translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                    instruction_start, a->cursor, pc, 0);
+                    if (!owner_exact || !instruction_exact) {
                         a->overflow = 1;
                         a->cursor = instruction_start;
                         break;
@@ -2904,7 +3043,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                 jcc_link_admitted++;
             } else if (translit_jcc_ibtc_candidate(pc, target)) {
-                translit_emit_jcc_ibtc(a, target);
+                ibtc_site = translit_emit_jcc_ibtc(a, target);
                 jcc_ibtc_sites++;
             } else {
                 translit_emit_jcc_dispatcher(a, target);
@@ -3031,6 +3170,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                        translit_owner_append(instruction_ranges, &instruction_range_count,
                                               preserve_end, a->cursor, pc, 0);
             (void)__atomic_fetch_add(&translit_rip_indirect_lowered, 1, __ATOMIC_RELAXED);
+        } else if (ibtc_site.end != NULL) {
+            owner_ok = translit_owner_append_ibtc(owners, &owner_count, instruction_start,
+                                                  a->cursor, &ibtc_site, pc) &&
+                       translit_owner_append_ibtc(instruction_ranges, &instruction_range_count,
+                                                  instruction_start, a->cursor, &ibtc_site, pc);
         } else {
             owner_ok = translit_owner_append(owners, &owner_count, instruction_start, a->cursor, pc, 0) &&
                        translit_owner_append(instruction_ranges, &instruction_range_count,
@@ -3321,7 +3465,7 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     if (set == NULL) goto done;
     if (scenario == 79) g_prof = 1;
     if (scenario == 80)
-        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - TL_MAX_INSNS, memory_order_relaxed);
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (TL_MAX_OWNER_RANGES - 1), memory_order_relaxed);
     uint64_t admitted_before = __atomic_load_n(&translit_mixed_sse_admitted, __ATOMIC_RELAXED);
     uint64_t transitions_before = __atomic_load_n(&translit_mixed_sse_transitions, __ATOMIC_RELAXED);
     uint64_t stitches_before = __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED);
@@ -3368,15 +3512,15 @@ static int translit_mixed_fixture_test(unsigned scenario) {
                      : 123;
     } else if (scenario == 80) {
         uint64_t guest = 0;
-        uint32_t before = JIT_BODY_OWNER_N - TL_MAX_INSNS;
+        uint32_t before = JIT_BODY_OWNER_N - (TL_MAX_OWNER_RANGES - 1);
         int refused = body == NULL && atomic_load_explicit(&set->count, memory_order_acquire) == before &&
                       !jit_instruction_map_lookup((uint64_t)(uintptr_t)(arena + sizeof *block), &guest, NULL);
         memset(block, 0, sizeof *block);
         g_cp = arena + sizeof *block;
-        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (TL_MAX_INSNS + 1), memory_order_relaxed);
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - TL_MAX_OWNER_RANGES, memory_order_relaxed);
         body = translit_build(context, block, translit_fall_fixture_guest, NULL);
         uint32_t after = atomic_load_explicit(&set->count, memory_order_acquire);
-        result = refused && body != NULL && after == JIT_BODY_OWNER_N - (TL_MAX_INSNS + 1) + 6 ? 0 : 124;
+        result = refused && body != NULL && after == JIT_BODY_OWNER_N - TL_MAX_OWNER_RANGES + 6 ? 0 : 124;
     } else if (scenario == 81) {
         uint64_t guest = 0;
         result = body == NULL && atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
@@ -3438,9 +3582,9 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         result = exact ? 0 : 129;
     } else if (scenario == 86) {
         uint64_t old_generation = g_cache_gen;
-        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - TL_MAX_INSNS, memory_order_relaxed);
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (TL_MAX_OWNER_RANGES - 1), memory_order_relaxed);
         int low = jit_cache_needs_rotation();
-        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (TL_MAX_INSNS + 1), memory_order_relaxed);
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - TL_MAX_OWNER_RANGES, memory_order_relaxed);
         int exact = !jit_cache_needs_rotation();
         jit_body_owner_drop_generation(old_generation);
         g_cache_gen = old_generation - 1;
@@ -3512,6 +3656,7 @@ done:
 }
 
 static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *context, uint64_t guest) {
+    if (!translit_jcc_ibtc_stub_init()) return NULL;
     while ((uintptr_t)g_cp & 15)
         g_cp++;
     struct interp_block *block = (struct interp_block *)g_cp;
@@ -3534,21 +3679,21 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0}, a_off = {off, off + sizeof off, 0};
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
-        translit_emit_jcc_ibtc(&a_on, UINT64_C(0x12345678));
+        translit_jcc_ibtc_stub_entry = on + 1024;
+        translit_jcc_ibtc_site_ranges on_ranges =
+            translit_emit_jcc_ibtc(&a_on, UINT64_C(0x12345678));
         if (hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) != 0) return 132;
-        translit_emit_jcc_ibtc(&a_off, UINT64_C(0x12345678));
+        translit_jcc_ibtc_stub_entry = off + 1024;
+        translit_jcc_ibtc_site_ranges off_ranges =
+            translit_emit_jcc_ibtc(&a_off, UINT64_C(0x12345678));
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
         size_t on_len = (size_t)(a_on.cursor - on), off_len = (size_t)(a_off.cursor - off);
-        static const uint8_t near_indirect[] = {0x65, 0xff, 0x24, 0x25};
-        static const uint8_t pair_load[] = {0x66, 0x0f, 0x6f, 0x80};
-        int near_seen = 0, far_seen = 0, pair_seen = 0;
-        for (size_t i = 0; i + 4 <= on_len; i++) {
-            near_seen |= memcmp(on + i, near_indirect, sizeof near_indirect) == 0;
-            far_seen |= on[i] == 0x65 && on[i + 1] == 0xff && on[i + 2] == 0x2c && on[i + 3] == 0x25;
-            pair_seen |= memcmp(on + i, pair_load, sizeof pair_load) == 0;
-        }
-        return !a_on.overflow && !a_off.overflow && on_len == off_len && memcmp(on, off, on_len) == 0 &&
-                       near_seen && !far_seen && pair_seen
+        return !a_on.overflow && !a_off.overflow && on_len == 33 && off_len == 33 &&
+                       memcmp(on, off, on_len) == 0 && on_ranges.save_end == on + 9 &&
+                       on_ranges.target_end == on + 19 && on_ranges.rip_end == on + 28 &&
+                       on_ranges.end == on + 33 && off_ranges.save_end == off + 9 &&
+                       off_ranges.target_end == off + 19 && off_ranges.rip_end == off + 28 &&
+                       off_ranges.end == off + 33 && on[28] == 0xe9
                    ? 0
                    : 133;
     }
@@ -3560,19 +3705,32 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const size_t target_offset = 0x40;
-    guest_bytes[0] = 0x31; // xor eax,eax -> ZF=1
-    guest_bytes[1] = 0xc0;
-    guest_bytes[2] = 0x74; // je target
-    guest_bytes[3] = (uint8_t)(target_offset - 4);
-    guest_bytes[4] = 0x0f; // deterministic unsupported fall successor
-    guest_bytes[5] = 0x0b;
-    guest_bytes[target_offset + 0] = 0xb8; // mov $42,%eax
-    guest_bytes[target_offset + 1] = 42;
-    guest_bytes[target_offset + 2] = 0;
-    guest_bytes[target_offset + 3] = 0;
-    guest_bytes[target_offset + 4] = 0;
-    guest_bytes[target_offset + 5] = 0x0f;
-    guest_bytes[target_offset + 6] = 0x0b;
+    if (scenario == 98) {
+        // Eight legal taken-side sites followed by enough one-byte ordinary
+        // instructions to hit the architectural instruction cap. The rejected
+        // 412-byte inline probe exceeded TL_MAX_BYTES here; compact sources fit
+        // without changing either cap.
+        for (unsigned i = 0; i < TL_STITCH_MAX_JMPS; i++) {
+            guest_bytes[i * 2] = 0x74;     // je next
+            guest_bytes[i * 2 + 1] = 0x00;
+        }
+        memset(guest_bytes + TL_STITCH_MAX_JMPS * 2, 0x90,
+               TL_MAX_INSNS - TL_STITCH_MAX_JMPS);
+    } else {
+        guest_bytes[0] = 0x31; // xor eax,eax -> ZF=1
+        guest_bytes[1] = 0xc0;
+        guest_bytes[2] = 0x74; // je target
+        guest_bytes[3] = (uint8_t)(target_offset - 4);
+        guest_bytes[4] = 0x0f; // deterministic unsupported fall successor
+        guest_bytes[5] = 0x0b;
+        guest_bytes[target_offset + 0] = 0xb8; // mov $42,%eax
+        guest_bytes[target_offset + 1] = 42;
+        guest_bytes[target_offset + 2] = 0;
+        guest_bytes[target_offset + 3] = 0;
+        guest_bytes[target_offset + 4] = 0;
+        guest_bytes[target_offset + 5] = 0x0f;
+        guest_bytes[target_offset + 6] = 0x0b;
+    }
 
     g_cache = arena;
     g_cp = arena;
@@ -3614,7 +3772,32 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     }
 
     struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+    if (source_block == NULL) {
+        result = 150;
+        goto done_ibtc;
+    }
     if (source_block->host_entry_off == 0) goto done_ibtc;
+    if (scenario == 98) {
+        uint32_t published = 0;
+        jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 0);
+        if (set != NULL) published = atomic_load_explicit(&set->count, memory_order_acquire);
+        int covered = source_block->host_len < TL_MAX_BYTES && published == 37;
+        uint8_t *body = (uint8_t *)source_block + source_block->host_entry_off;
+        for (uint32_t offset = 0; covered && offset < source_block->host_len; offset++) {
+            uint64_t owner = 0;
+            covered = jit_body_owner_lookup((uint64_t)(uintptr_t)(body + offset), &owner);
+        }
+        result = source_block->profile_insns == TL_MAX_INSNS && covered &&
+                         __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) ==
+                             emitted_before + TL_STITCH_MAX_JMPS
+                     ? 0
+                     : 145;
+        goto done_ibtc;
+    }
+    if (scenario == 99) {
+        result = translit_jcc_ibtc_signal_stage_test() ? 0 : 146;
+        goto done_ibtc;
+    }
     struct cpu cpu = {0};
     cpu.rip = source;
     cpu.r[1] = UINT64_C(0x1122334455667788);
@@ -4124,6 +4307,7 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     greg_t *gregs = HL_HOST_UC_GREGS(uc);
     uint32_t preserve_registers = 0;
     uint64_t guest_pc;
+    int flags_from_cpu = 0;
     int exact_pc = jit_instruction_guest_pc_preserve(host_pc, &guest_pc, &preserve_registers);
 #if defined(HL_NATIVE_TEST_HOOKS)
     const char *force_miss = hl_option_get("HL_TRANSLIT_PROVENANCE_FALLBACK");
@@ -4137,14 +4321,65 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         exact_pc = 1;
         (void)__atomic_fetch_add(&translit_body_owner_recovered, 1, __ATOMIC_RELAXED);
     }
+    if (exact_pc && (guest_pc == JIT_BODY_OWNER_DYNAMIC_RIP ||
+                     guest_pc == JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS)) {
+        flags_from_cpu = guest_pc == JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS;
+        guest_pc = cpu->rip;
+    }
     for (int i = 0; i < 16; i++) {
         if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
     }
-    translit_flags_out(cpu, (uint64_t)gregs[HL_HOST_UC_REG_EFL]);
+    translit_flags_out(cpu, flags_from_cpu ? cpu->mmscratch[0]
+                                           : (uint64_t)gregs[HL_HOST_UC_REG_EFL]);
     if (exact_pc) cpu->rip = guest_pc;
     cpu->reason = R_BRANCH;
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// Deterministic signal-context reconstruction at each canonicalization stage of
+// the shared stub. Distinct context/cpu values make every preserve decision and
+// the post-flags cpu source observable; no asynchronous timing is involved.
+static int translit_jcc_ibtc_signal_stage_test(void) {
+    if (translit_jcc_ibtc_stub_entry == NULL || translit_jcc_ibtc_stub_rsp_canonical == NULL ||
+        translit_jcc_ibtc_stub_flags_canonical == NULL)
+        return 0;
+    uint8_t *pc[3] = {translit_jcc_ibtc_stub_entry, translit_jcc_ibtc_stub_rsp_canonical,
+                      translit_jcc_ibtc_stub_flags_canonical};
+    uint32_t preserve[3] = {1u << HL_X64_RAX, (1u << HL_X64_RAX) | (1u << HL_X64_RSP), UINT16_MAX};
+    int saved_selected = translit_selected;
+    translit_selected = 1;
+    int exact = 1;
+    for (unsigned stage = 0; exact && stage < 3; stage++) {
+        struct cpu cpu = {0}, expected_flags_cpu = {0};
+        ucontext_t context;
+        memset(&context, 0, sizeof context);
+        greg_t *gregs = HL_HOST_UC_GREGS(&context);
+        for (unsigned reg = 0; reg < 16; reg++) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        uint64_t context_flags = UINT64_C(0xad7);
+        uint64_t canonical_flags = UINT64_C(0x853);
+        cpu.rip = UINT64_C(0x123456789abcdef0);
+        cpu.mmscratch[0] = canonical_flags;
+        gregs[HL_HOST_UC_REG_EFL] = (greg_t)context_flags;
+        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)pc[stage];
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == UINT64_C(0x123456789abcdef0) &&
+                cpu.reason == R_BRANCH;
+        for (unsigned reg = 0; exact && reg < 16; reg++) {
+            uint64_t expected = preserve[stage] & (1u << reg)
+                                    ? UINT64_C(0xc000000000000000) + reg
+                                    : UINT64_C(0xa000000000000000) + reg;
+            exact = cpu.r[reg] == expected;
+        }
+        translit_flags_out(&expected_flags_cpu, stage == 2 ? canonical_flags : context_flags);
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
+    }
+    translit_selected = saved_selected;
+    return exact;
+}
+#endif
 
 #else // not a Linux x86-64 host: no diagonal exists, so the transliterator is inert.
 

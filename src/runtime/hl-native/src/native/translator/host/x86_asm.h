@@ -117,6 +117,40 @@ static inline void hl_x64_test_reg(hl_x64_asm *a, int reg) {
     hl_x64_u8(a, (uint8_t)(0xC0 | ((reg & 7) << 3) | (reg & 7)));
 }
 
+static inline void hl_x64_mov_reg(hl_x64_asm *a, int destination, int source) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((source >= 8) ? 4 : 0) | ((destination >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x89);
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((source & 7) << 3) | (destination & 7)));
+}
+
+static inline void hl_x64_shift_imm8(hl_x64_asm *a, int reg, int operation, uint8_t count) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0xC1);
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((operation & 7) << 3) | (reg & 7)));
+    hl_x64_u8(a, count);
+}
+
+static inline void hl_x64_shr_imm8(hl_x64_asm *a, int reg, uint8_t count) {
+    hl_x64_shift_imm8(a, reg, 5, count);
+}
+
+static inline void hl_x64_shl_imm8(hl_x64_asm *a, int reg, uint8_t count) {
+    hl_x64_shift_imm8(a, reg, 4, count);
+}
+
+static inline void hl_x64_and_imm32(hl_x64_asm *a, int reg, uint32_t value) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x81);
+    hl_x64_u8(a, (uint8_t)(0xE0 | (reg & 7))); // mod=11 /4
+    hl_x64_u32(a, value);
+}
+
+static inline void hl_x64_add_reg(hl_x64_asm *a, int destination, int source) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((source >= 8) ? 4 : 0) | ((destination >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x01);
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((source & 7) << 3) | (destination & 7)));
+}
+
 // jmpq *%gs:disp32. ModRM /4 is the near transfer; /5 would consume a far pointer and fault.
 static inline void hl_x64_jmp_gs_indirect(hl_x64_asm *a, int32_t disp) {
     hl_x64_u8(a, 0x65);
