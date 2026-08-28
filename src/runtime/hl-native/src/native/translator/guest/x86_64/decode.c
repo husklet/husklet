@@ -708,14 +708,24 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
     }
     case 39: { /* Overlapping writers keep authority unequal until both have completed. */
         size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        _Atomic uint32_t first_payload = 0;
+        _Atomic uint32_t second_payload = 0;
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -95;
         int first_writer = hl_guest_fetch_authority_test_begin(&authority);
         int second_writer = hl_guest_fetch_authority_test_begin(&authority);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -96;
+        atomic_store_explicit(&second_payload, UINT32_C(0x22222222), memory_order_relaxed);
         hl_guest_fetch_authority_test_end(&authority, second_writer);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -97;
+        atomic_store_explicit(&first_payload, UINT32_C(0x11111111), memory_order_relaxed);
         hl_guest_fetch_authority_test_end(&authority, first_writer);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -98;
+        uint64_t settled = atomic_load_explicit(&authority, memory_order_acquire);
+        if (result == 0 &&
+            (!decode_authority_stable(settled) ||
+             atomic_load_explicit(&first_payload, memory_order_relaxed) != UINT32_C(0x11111111) ||
+             atomic_load_explicit(&second_payload, memory_order_relaxed) != UINT32_C(0x22222222)))
+            result = -109;
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -99;
         if (result == 0 && (fixture.fetches != 5 || context->memo[slot].authority_epoch == 0)) result = -100;
         break;

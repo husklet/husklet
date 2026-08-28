@@ -53,8 +53,11 @@ static void authority_end(_Atomic uint64_t *authority, int begun) {
                                 version == (HL_GUEST_FETCH_AUTHORITY_DISABLED - HL_GUEST_FETCH_AUTHORITY_VERSION_ONE)
                             ? state | HL_GUEST_FETCH_AUTHORITY_DISABLED
                             : state + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE - 1;
+        /* The final overlapping writer must acquire the prior writer's release
+           before it publishes active=0, forming one release sequence for every
+           mapping payload covered by this authority state. */
         if (atomic_compare_exchange_weak_explicit(authority, &state, next,
-                                                  memory_order_release, memory_order_relaxed))
+                                                  memory_order_acq_rel, memory_order_relaxed))
             return;
     }
 }
