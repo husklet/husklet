@@ -98,6 +98,14 @@ fn x86_decode_authority_waits_for_every_overlapping_writer() {
 }
 
 #[test]
+fn x86_decode_authority_commit_lease_closes_the_publication_gap() {
+    for scenario in 42..=43 {
+        let result = exec_page_cache_test(2, scenario);
+        assert!(result.is_ok(), "scenario={scenario}: {result:?}");
+    }
+}
+
+#[test]
 fn x86_decode_authority_tracks_each_production_publication_family() {
     assert!(exec_page_cache_test(2, 40).is_ok());
     assert!(exec_page_cache_test(2, 41).is_ok());
@@ -107,6 +115,8 @@ fn x86_decode_authority_tracks_each_production_publication_family() {
 #[test]
 fn x86_decode_authority_revalidates_after_fork() {
     assert!(exec_page_cache_test(2, 34).is_ok());
+    let inherited_lease = exec_page_cache_test(2, 44);
+    assert!(inherited_lease.is_ok(), "scenario=44: {inherited_lease:?}");
 }
 
 #[test]

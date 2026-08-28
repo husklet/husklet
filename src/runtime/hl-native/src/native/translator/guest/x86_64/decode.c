@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 #include <pthread.h>
+#include <sched.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -32,6 +33,9 @@ static _Thread_local uint64_t g_decode_memo_decodes;
 static _Thread_local uint64_t g_decode_memo_hits;
 static _Thread_local uint64_t g_decode_authority_samples;
 static _Thread_local int g_decode_authority_begin_between_loads;
+static _Thread_local unsigned g_decode_transaction_samples;
+static _Thread_local unsigned g_decode_transaction_invalidate_sample;
+static _Thread_local int g_decode_transaction_invalidate_commit;
 static _Atomic int g_hot_context_test_fail_allocation;
 static _Atomic int g_hot_context_test_live;
 #endif
@@ -344,6 +348,17 @@ static decode_authority decode_authority_sample(const hl_x86_hot_context *contex
     ++g_decode_authority_samples;
 #endif
     if (context == NULL || context->authority_source == NULL) return 0;
+    if (context->authority_state == 1) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        ++g_decode_transaction_samples;
+        if (g_decode_transaction_samples == g_decode_transaction_invalidate_sample) {
+            g_decode_transaction_invalidate_sample = 0;
+            int begun = hl_guest_fetch_authority_begin();
+            hl_guest_fetch_authority_end(begun);
+        }
+#endif
+        return context->authority_epoch;
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_decode_authority_begin_between_loads) {
         g_decode_authority_begin_between_loads = 0;
@@ -351,7 +366,8 @@ static decode_authority decode_authority_sample(const hl_x86_hot_context *contex
                                   HL_GUEST_FETCH_AUTHORITY_VERSION_ONE + 1, memory_order_release);
     }
 #endif
-    return atomic_load_explicit(context->authority_source, memory_order_acquire);
+    return atomic_load_explicit(context->authority_source, memory_order_acquire) &
+           ~HL_GUEST_FETCH_AUTHORITY_READER_MASK;
 }
 
 static int decode_authority_equal(decode_authority left, decode_authority right) {
@@ -372,8 +388,12 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
     }
     if (key_matches && decode_authority_stable(before) && memo->authority_epoch == before) {
         *I = memo->instruction;
-        if (context->count_authorized_hits)
-            atomic_fetch_add_explicit(&g_decode_authorized_hits, 1, memory_order_relaxed);
+        if (context->count_authorized_hits) {
+            if (context->authority_state == 1)
+                ++context->authority_logical_generation;
+            else
+                atomic_fetch_add_explicit(&g_decode_authorized_hits, 1, memory_order_relaxed);
+        }
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_hits;
 #endif
@@ -473,6 +493,75 @@ int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn 
     return decode_with(context, pc, I, context->memo, context->fetch_fn, context->fetch_opaque);
 }
 
+int hl_x86_decode_transaction_begin(hl_x86_hot_context *context) {
+    if (context == NULL || context->authority_source == NULL) return 0;
+    decode_authority authority = atomic_load_explicit(context->authority_source, memory_order_acquire) &
+                                 ~HL_GUEST_FETCH_AUTHORITY_READER_MASK;
+    if (!decode_authority_stable(authority)) return 0;
+    context->authority_epoch = authority;
+    context->authority_state = 1;
+    context->authority_logical_generation = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    g_decode_transaction_samples = 0;
+#endif
+    return 1;
+}
+
+int hl_x86_decode_transaction_commit(hl_x86_hot_context *context) {
+    if (context == NULL || context->authority_state != 1) return 1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_decode_transaction_invalidate_commit) {
+        g_decode_transaction_invalidate_commit = 0;
+        int begun = hl_guest_fetch_authority_begin();
+        hl_guest_fetch_authority_end(begun);
+    }
+#endif
+    if (hl_guest_fetch_authority_lease(context->authority_epoch)) {
+        context->authority_state = 3;
+        return 1;
+    }
+    context->authority_state = 2;
+    return 0;
+}
+
+int hl_x86_decode_transaction_rejected(const hl_x86_hot_context *context) {
+    return context != NULL && context->authority_state == 2;
+}
+
+void hl_x86_decode_transaction_abort(hl_x86_hot_context *context) {
+    if (context == NULL) return;
+    uint64_t rejected = context->authority_epoch;
+    if (rejected != 0)
+        for (size_t slot = 0; slot < DECODE_MEMO_SLOTS; ++slot)
+            if (context->memo[slot].authority_epoch == rejected) context->memo[slot].authority_epoch = 0;
+    context->authority_epoch = 0;
+    context->authority_logical_generation = 0;
+    context->authority_state = 0;
+}
+
+void hl_x86_decode_transaction_release(hl_x86_hot_context *context) {
+    if (context == NULL) return;
+    if (context->authority_state == 3) {
+        if (context->count_authorized_hits && context->authority_logical_generation != 0)
+            atomic_fetch_add_explicit(&g_decode_authorized_hits, context->authority_logical_generation,
+                                      memory_order_relaxed);
+        hl_guest_fetch_authority_unlease();
+    }
+    context->authority_epoch = 0;
+    context->authority_logical_generation = 0;
+    context->authority_state = 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_x86_decode_test_transaction_invalidate_on_sample(unsigned sample) {
+    g_decode_transaction_invalidate_sample = sample;
+}
+
+void hl_x86_decode_test_transaction_invalidate_before_commit(void) {
+    g_decode_transaction_invalidate_commit = 1;
+}
+#endif
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 typedef struct {
     uint64_t pc;
@@ -555,6 +644,22 @@ int hl_x86_hot_context_test(void) {
 
 #if !defined(_WIN32)
 typedef struct { uint8_t opcode; int result; } hot_context_thread_fixture;
+
+typedef struct {
+    _Atomic uint64_t *authority;
+    _Atomic int entered;
+    _Atomic int begun;
+    _Atomic int payload;
+} authority_writer_fixture;
+
+static void *authority_writer_worker(void *opaque) {
+    authority_writer_fixture *fixture = opaque;
+    atomic_store_explicit(&fixture->entered, 1, memory_order_release);
+    int begun = hl_guest_fetch_authority_test_begin_observed(fixture->authority, &fixture->begun);
+    atomic_store_explicit(&fixture->payload, 1, memory_order_relaxed);
+    hl_guest_fetch_authority_test_end(fixture->authority, begun);
+    return NULL;
+}
 static void *hot_context_thread_worker(void *opaque) {
     hot_context_thread_fixture *thread = opaque;
     _Atomic uint64_t unstable = 0, logical = 2, direct = 2;
@@ -750,6 +855,38 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 || second.op != 0xc3)) result = -105;
         break;
     }
+    case 42: { /* Registered writer intent drains a commit lease before publishing. */
+        uint64_t token = atomic_load_explicit(&authority, memory_order_acquire);
+        authority_writer_fixture writer = {.authority = &authority};
+        pthread_t thread;
+        if (!hl_guest_fetch_authority_test_lease(&authority, token) ||
+            pthread_create(&thread, NULL, authority_writer_worker, &writer) != 0) {
+            result = -110;
+            break;
+        }
+        while (!atomic_load_explicit(&writer.entered, memory_order_acquire)) sched_yield();
+        while (!atomic_load_explicit(&writer.begun, memory_order_acquire)) sched_yield();
+        uint64_t draining = atomic_load_explicit(&authority, memory_order_acquire);
+        if (atomic_load_explicit(&writer.payload, memory_order_relaxed) != 0 ||
+            (draining & HL_GUEST_FETCH_AUTHORITY_READER_MASK) != HL_GUEST_FETCH_AUTHORITY_READER_ONE ||
+            !(draining & HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK) ||
+            hl_guest_fetch_authority_test_lease(&authority, token))
+            result = -111;
+        hl_guest_fetch_authority_test_unlease(&authority);
+        if (pthread_join(thread, NULL) != 0 || atomic_load_explicit(&writer.payload, memory_order_relaxed) != 1)
+            result = -112;
+        break;
+    }
+    case 43: { /* A completed writer between capture and commit rejects the old token. */
+        uint64_t token = atomic_load_explicit(&authority, memory_order_acquire);
+        int begun = hl_guest_fetch_authority_test_begin(&authority);
+        hl_guest_fetch_authority_test_end(&authority, begun);
+        if (hl_guest_fetch_authority_test_lease(&authority, token)) result = -113;
+        uint64_t current = atomic_load_explicit(&authority, memory_order_acquire);
+        if (result == 0 && !hl_guest_fetch_authority_test_lease(&authority, current)) result = -114;
+        hl_guest_fetch_authority_test_unlease(&authority);
+        break;
+    }
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */
         atomic_store_explicit(&authority,
                               HL_GUEST_FETCH_AUTHORITY_DISABLED - HL_GUEST_FETCH_AUTHORITY_VERSION_ONE,
@@ -776,6 +913,28 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
             if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -82;
         }
         hl_guest_fetch_authority_test_end(&authority, inherited_writer);
+        break;
+    }
+    case 44: { /* A private fork child cannot inherit an undischargeable commit lease. */
+        uint64_t token = atomic_load_explicit(&authority, memory_order_acquire);
+        if (!hl_guest_fetch_authority_test_lease(&authority, token)) {
+            result = -115;
+            break;
+        }
+        pid_t child = fork();
+        if (child < 0) result = -116;
+        else if (child == 0) {
+            hl_guest_fetch_authority_test_after_fork_child(&authority);
+            uint64_t inherited = atomic_load_explicit(&authority, memory_order_acquire);
+            _exit(inherited == HL_GUEST_FETCH_AUTHORITY_DISABLED &&
+                          !hl_guest_fetch_authority_test_lease(&authority, inherited)
+                      ? 0
+                      : 1);
+        } else {
+            int status = 0;
+            if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -117;
+        }
+        hl_guest_fetch_authority_test_unlease(&authority);
         break;
     }
 #endif

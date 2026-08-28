@@ -3,6 +3,10 @@ static int checkpoint_relay_after_fork(void);
 static int checkpoint_relay_start(void);
 
 static void thread_after_fork(void) {
+    /* A vanished parent thread may have held a decoder publication lease or
+       registered writer intent. The private child cannot discharge either, so
+       conservatively disable byte-authorized memo hits in its inherited view. */
+    hl_guest_fetch_authority_after_fork_child();
     pthread_mutex_init(&g_threg_m, NULL); // thread registry (tkill/tgkill lookup, thread_register)
     struct cpu *self = (g_my_threg >= 0) ? g_threg[g_my_threg].c : NULL;
     pthread_mutex_init(&g_process_owner_lock, NULL);

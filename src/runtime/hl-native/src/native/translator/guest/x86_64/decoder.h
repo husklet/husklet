@@ -62,6 +62,11 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
                                               const _Atomic uint64_t *byte_unstable);
 void hl_x86_hot_context_destroy(hl_x86_hot_context *context);
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn);
+int hl_x86_decode_transaction_begin(hl_x86_hot_context *context);
+int hl_x86_decode_transaction_commit(hl_x86_hot_context *context);
+int hl_x86_decode_transaction_rejected(const hl_x86_hot_context *context);
+void hl_x86_decode_transaction_abort(hl_x86_hot_context *context);
+void hl_x86_decode_transaction_release(hl_x86_hot_context *context);
 uint64_t hl_x86_decode_authorized_hits(void);
 void hl_x86_decode_set_diagnostics(int enabled);
 
@@ -75,6 +80,8 @@ int hl_x86_hot_context_thread_test(void);
 int hl_x86_hot_context_allocation_test(void);
 int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches);
 void hl_x86_decode_test_invalidate_direct_registry(void);
+void hl_x86_decode_test_transaction_invalidate_on_sample(unsigned sample);
+void hl_x86_decode_test_transaction_invalidate_before_commit(void);
 #endif
 
 #endif

@@ -393,6 +393,23 @@ struct interp_block {
 #endif
 };
 
+static void *translate_block(hl_x86_hot_context *context, uint64_t gpc);
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic int translit_test_commit_gap;
+static _Atomic int translit_test_gap_registered;
+static _Atomic int translit_test_gap_payload;
+static _Atomic int translit_test_gap_early;
+static pthread_t translit_test_gap_thread;
+
+static void *translit_test_gap_writer(void *unused) {
+    (void)unused;
+    int begun = hl_guest_fetch_authority_test_global_begin_observed(&translit_test_gap_registered);
+    atomic_store_explicit(&translit_test_gap_payload, 1, memory_order_release);
+    hl_guest_fetch_authority_end(begun);
+    return NULL;
+}
+#endif
+
 #include "../translit.inc"
 
 // Must return a distinct non-NULL pointer per guest PC: non-NULL from map_host() suppresses re-translation.
@@ -427,12 +444,40 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->profile_fallback_form = 0;
 #endif
     uint64_t jcc_ibtc_sites = 0;
+    (void)hl_x86_decode_transaction_begin(context);
     (void)translit_build(context, block, gpc, &jcc_ibtc_sites);
+    if (hl_x86_decode_transaction_rejected(context)) {
+        /* Nothing was published: body bytes remain behind g_cp, owner and
+           instruction maps are untouched, and this descriptor executes by
+           re-decoding through the ordinary validated interpreter path. */
+        hl_x86_decode_transaction_abort(context);
+    }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    int gap_test = atomic_exchange_explicit(&translit_test_commit_gap, 0, memory_order_acq_rel);
+    if (gap_test) {
+        atomic_store_explicit(&translit_test_gap_registered, 0, memory_order_relaxed);
+        atomic_store_explicit(&translit_test_gap_payload, 0, memory_order_relaxed);
+        atomic_store_explicit(&translit_test_gap_early, 0, memory_order_relaxed);
+        if (pthread_create(&translit_test_gap_thread, NULL, translit_test_gap_writer, NULL) != 0)
+            atomic_store_explicit(&translit_test_gap_payload, -1, memory_order_release);
+        else
+            while (!atomic_load_explicit(&translit_test_gap_registered, memory_order_acquire)) sched_yield();
+    }
+#endif
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.
     map_put(gpc, block->guest_start, block->guest_end, block, block);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (gap_test && atomic_load_explicit(&translit_test_gap_payload, memory_order_acquire) != 0)
+        atomic_store_explicit(&translit_test_gap_early, 1, memory_order_release);
+#endif
     translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_EMITTED, jcc_ibtc_sites);
+    hl_x86_decode_transaction_release(context);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (gap_test && atomic_load_explicit(&translit_test_gap_payload, memory_order_acquire) != -1)
+        (void)pthread_join(translit_test_gap_thread, NULL);
+#endif
     return block;
 }
 

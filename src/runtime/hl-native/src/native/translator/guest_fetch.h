@@ -24,15 +24,25 @@ typedef struct {
 hl_guest_fetch_context *hl_guest_fetch_context_current(void);
 int hl_guest_fetch_exec_context(hl_guest_fetch_context *, uint64_t, void *, size_t);
 #define HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK UINT64_C(0xffff)
-#define HL_GUEST_FETCH_AUTHORITY_VERSION_ONE UINT64_C(0x10000)
+#define HL_GUEST_FETCH_AUTHORITY_READER_MASK UINT64_C(0xffff0000)
+#define HL_GUEST_FETCH_AUTHORITY_READER_ONE UINT64_C(0x10000)
+#define HL_GUEST_FETCH_AUTHORITY_VERSION_ONE UINT64_C(0x100000000)
 #define HL_GUEST_FETCH_AUTHORITY_DISABLED (UINT64_C(1) << 63)
 const _Atomic uint64_t *hl_guest_fetch_authority_source(void);
 int hl_guest_fetch_authority_begin(void);
 void hl_guest_fetch_authority_end(int begun);
 void hl_guest_fetch_authority_disable(void);
+int hl_guest_fetch_authority_lease(uint64_t authority);
+void hl_guest_fetch_authority_unlease(void);
+void hl_guest_fetch_authority_after_fork_child(void);
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_guest_fetch_authority_test_begin(_Atomic uint64_t *);
+int hl_guest_fetch_authority_test_begin_observed(_Atomic uint64_t *, _Atomic int *);
+int hl_guest_fetch_authority_test_global_begin_observed(_Atomic int *);
 void hl_guest_fetch_authority_test_end(_Atomic uint64_t *, int);
+int hl_guest_fetch_authority_test_lease(_Atomic uint64_t *, uint64_t);
+void hl_guest_fetch_authority_test_unlease(_Atomic uint64_t *);
+void hl_guest_fetch_authority_test_after_fork_child(_Atomic uint64_t *);
 #endif
 typedef int (*hl_guest_fetch_direct_validator)(uint64_t, size_t);
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator);

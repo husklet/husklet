@@ -20,12 +20,14 @@ void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation) {
 
 const _Atomic uint64_t *hl_guest_fetch_authority_source(void) { return &g_decode_authority; }
 
-static int authority_begin(_Atomic uint64_t *authority) {
+static int authority_begin_observed(_Atomic uint64_t *authority, _Atomic int *registered) {
     uint64_t state = atomic_load_explicit(authority, memory_order_relaxed);
     for (;;) {
         if (state & HL_GUEST_FETCH_AUTHORITY_DISABLED) return 0;
-        uint64_t version = state & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED | HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
+        uint64_t version = state & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED | HL_GUEST_FETCH_AUTHORITY_READER_MASK |
+                                     HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
         uint64_t active = state & HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK;
+        uint64_t readers = state & HL_GUEST_FETCH_AUTHORITY_READER_MASK;
         uint64_t next;
         int begun;
         if (active == HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK ||
@@ -33,13 +35,23 @@ static int authority_begin(_Atomic uint64_t *authority) {
             next = state | HL_GUEST_FETCH_AUTHORITY_DISABLED;
             begun = 0;
         } else {
-            next = state + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE + 1;
+            next = readers | (version + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE) | (active + 1);
             begun = 1;
         }
         if (atomic_compare_exchange_weak_explicit(authority, &state, next,
-                                                  memory_order_release, memory_order_relaxed))
+                                                  memory_order_acq_rel, memory_order_relaxed)) {
+            if (begun) {
+                if (registered != NULL) atomic_store_explicit(registered, 1, memory_order_release);
+                while (atomic_load_explicit(authority, memory_order_acquire) &
+                       HL_GUEST_FETCH_AUTHORITY_READER_MASK) {}
+            }
             return begun;
+        }
     }
+}
+
+static int authority_begin(_Atomic uint64_t *authority) {
+    return authority_begin_observed(authority, NULL);
 }
 
 static void authority_end(_Atomic uint64_t *authority, int begun) {
@@ -47,12 +59,14 @@ static void authority_end(_Atomic uint64_t *authority, int begun) {
     uint64_t state = atomic_load_explicit(authority, memory_order_relaxed);
     for (;;) {
         if (state & HL_GUEST_FETCH_AUTHORITY_DISABLED) return;
-        uint64_t version = state & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED | HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
+        uint64_t version = state & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED | HL_GUEST_FETCH_AUTHORITY_READER_MASK |
+                                     HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
         uint64_t active = state & HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK;
+        uint64_t readers = state & HL_GUEST_FETCH_AUTHORITY_READER_MASK;
         uint64_t next = active == 0 ||
                                 version == (HL_GUEST_FETCH_AUTHORITY_DISABLED - HL_GUEST_FETCH_AUTHORITY_VERSION_ONE)
                             ? state | HL_GUEST_FETCH_AUTHORITY_DISABLED
-                            : state + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE - 1;
+                            : readers | (version + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE) | (active - 1);
         /* The final overlapping writer must acquire the prior writer's release
            before it publishes active=0, forming one release sequence for every
            mapping payload covered by this authority state. */
@@ -67,12 +81,65 @@ int hl_guest_fetch_authority_begin(void) { return authority_begin(&g_decode_auth
 void hl_guest_fetch_authority_end(int begun) { authority_end(&g_decode_authority, begun); }
 
 void hl_guest_fetch_authority_disable(void) {
-    atomic_fetch_or_explicit(&g_decode_authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
+    int begun = authority_begin(&g_decode_authority);
+    if (begun)
+        atomic_fetch_or_explicit(&g_decode_authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
+}
+
+static int authority_lease(_Atomic uint64_t *source, uint64_t authority) {
+    uint64_t state = atomic_load_explicit(source, memory_order_acquire);
+    for (;;) {
+        uint64_t token = state & ~HL_GUEST_FETCH_AUTHORITY_READER_MASK;
+        uint64_t readers = state & HL_GUEST_FETCH_AUTHORITY_READER_MASK;
+        if (token != authority || (token & (HL_GUEST_FETCH_AUTHORITY_DISABLED |
+                                            HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK)) ||
+            readers == HL_GUEST_FETCH_AUTHORITY_READER_MASK)
+            return 0;
+        uint64_t next = state + HL_GUEST_FETCH_AUTHORITY_READER_ONE;
+        if (atomic_compare_exchange_weak_explicit(source, &state, next,
+                                                  memory_order_acquire, memory_order_relaxed))
+            return 1;
+    }
+}
+
+static void authority_unlease(_Atomic uint64_t *source) {
+    uint64_t state = atomic_load_explicit(source, memory_order_relaxed);
+    for (;;) {
+        uint64_t readers = state & HL_GUEST_FETCH_AUTHORITY_READER_MASK;
+        if (readers == 0 || (state & HL_GUEST_FETCH_AUTHORITY_DISABLED)) return;
+        uint64_t next = state - HL_GUEST_FETCH_AUTHORITY_READER_ONE;
+        if (atomic_compare_exchange_weak_explicit(source, &state, next,
+                                                  memory_order_acq_rel, memory_order_relaxed))
+            return;
+    }
+}
+
+int hl_guest_fetch_authority_lease(uint64_t authority) {
+    return authority_lease(&g_decode_authority, authority);
+}
+
+void hl_guest_fetch_authority_unlease(void) { authority_unlease(&g_decode_authority); }
+
+void hl_guest_fetch_authority_after_fork_child(void) {
+    atomic_store_explicit(&g_decode_authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_guest_fetch_authority_test_begin(_Atomic uint64_t *authority) { return authority_begin(authority); }
+int hl_guest_fetch_authority_test_begin_observed(_Atomic uint64_t *authority, _Atomic int *registered) {
+    return authority_begin_observed(authority, registered);
+}
+int hl_guest_fetch_authority_test_global_begin_observed(_Atomic int *registered) {
+    return authority_begin_observed(&g_decode_authority, registered);
+}
 void hl_guest_fetch_authority_test_end(_Atomic uint64_t *authority, int begun) { authority_end(authority, begun); }
+int hl_guest_fetch_authority_test_lease(_Atomic uint64_t *authority, uint64_t token) {
+    return authority_lease(authority, token);
+}
+void hl_guest_fetch_authority_test_unlease(_Atomic uint64_t *authority) { authority_unlease(authority); }
+void hl_guest_fetch_authority_test_after_fork_child(_Atomic uint64_t *authority) {
+    atomic_store_explicit(authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
+}
 #endif
 
 /*

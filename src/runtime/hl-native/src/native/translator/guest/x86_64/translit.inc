@@ -2766,7 +2766,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 97;
         if (child == 0)
-            _exit(scenario <= 77 ? translit_fall_fixture_test(scenario)
+            _exit(scenario <= 80 ? translit_fall_fixture_test(scenario)
                                  : translit_mixed_fixture_test(scenario));
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
@@ -2811,6 +2811,86 @@ static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, 
     return TL_SUCCESSOR_OK;
 }
 
+typedef struct {
+    uint64_t declined, stitch_candidates, stitch_admitted;
+    uint64_t jcc_candidates, jcc_admitted, jcc_page_refused, jcc_successor_refused, jcc_decode_refused;
+    uint64_t mixed_encounters, displaced_operand_declined, displaced_sse2_declined;
+    uint64_t displaced_riprel_projected, displaced_riprel_unreachable, displaced_riprel_lowered;
+    uint64_t displaced_scratch_lowered, displaced_lea_lowered, natural_abs32_lowered, natural_lea_lowered;
+    uint64_t rip_indirect_lowered;
+    uint64_t refusal_opcode[512];
+    uint64_t refusal_prefix, refusal_width, refusal_rsp, refusal_opcode_other;
+} translit_attempt_telemetry;
+
+static void translit_attempt_telemetry_save(translit_attempt_telemetry *saved) {
+#define TL_SNAPSHOT(field, source) saved->field = __atomic_load_n(&(source), __ATOMIC_RELAXED)
+    *saved = (translit_attempt_telemetry){
+        0
+    };
+    TL_SNAPSHOT(declined, translit_declined);
+    TL_SNAPSHOT(stitch_candidates, translit_stitch_candidates);
+    TL_SNAPSHOT(stitch_admitted, translit_stitch_admitted);
+    TL_SNAPSHOT(jcc_candidates, translit_jcc_fall_candidates);
+    TL_SNAPSHOT(jcc_admitted, translit_jcc_fall_admitted);
+    TL_SNAPSHOT(jcc_page_refused, translit_jcc_fall_page_refused);
+    TL_SNAPSHOT(jcc_successor_refused, translit_jcc_fall_successor_page_refused);
+    TL_SNAPSHOT(jcc_decode_refused, translit_jcc_fall_decode_refused);
+    TL_SNAPSHOT(mixed_encounters, translit_mixed_sse_encounters);
+    TL_SNAPSHOT(displaced_operand_declined, translit_displaced_operand_declined);
+    TL_SNAPSHOT(displaced_sse2_declined, translit_displaced_sse2_memory_declined);
+    TL_SNAPSHOT(displaced_riprel_projected, translit_displaced_riprel_projected);
+    TL_SNAPSHOT(displaced_riprel_unreachable, translit_displaced_riprel_unreachable);
+    TL_SNAPSHOT(displaced_riprel_lowered, translit_displaced_riprel_lowered);
+    TL_SNAPSHOT(displaced_scratch_lowered, translit_displaced_scratch_lowered);
+    TL_SNAPSHOT(displaced_lea_lowered, translit_displaced_lea_lowered);
+    TL_SNAPSHOT(natural_abs32_lowered, translit_natural_abs32_lowered);
+    TL_SNAPSHOT(natural_lea_lowered, translit_natural_lea_lowered);
+    TL_SNAPSHOT(rip_indirect_lowered, translit_rip_indirect_lowered);
+    TL_SNAPSHOT(refusal_prefix, translit_displaced_refusal_prefix);
+    TL_SNAPSHOT(refusal_width, translit_displaced_refusal_width);
+    TL_SNAPSHOT(refusal_rsp, translit_displaced_refusal_rsp);
+    TL_SNAPSHOT(refusal_opcode_other, translit_displaced_refusal_opcode_other);
+    for (size_t i = 0; i < 512; i++)
+        saved->refusal_opcode[i] = __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED);
+#undef TL_SNAPSHOT
+}
+
+static void translit_attempt_telemetry_restore(const translit_attempt_telemetry *saved) {
+#define TL_ROLLBACK(field, source) do { \
+    uint64_t current = __atomic_load_n(&(source), __ATOMIC_RELAXED); \
+    __atomic_fetch_sub(&(source), current - saved->field, __ATOMIC_RELAXED); \
+} while (0)
+    TL_ROLLBACK(declined, translit_declined);
+    TL_ROLLBACK(stitch_candidates, translit_stitch_candidates);
+    TL_ROLLBACK(stitch_admitted, translit_stitch_admitted);
+    TL_ROLLBACK(jcc_candidates, translit_jcc_fall_candidates);
+    TL_ROLLBACK(jcc_admitted, translit_jcc_fall_admitted);
+    TL_ROLLBACK(jcc_page_refused, translit_jcc_fall_page_refused);
+    TL_ROLLBACK(jcc_successor_refused, translit_jcc_fall_successor_page_refused);
+    TL_ROLLBACK(jcc_decode_refused, translit_jcc_fall_decode_refused);
+    TL_ROLLBACK(mixed_encounters, translit_mixed_sse_encounters);
+    TL_ROLLBACK(displaced_operand_declined, translit_displaced_operand_declined);
+    TL_ROLLBACK(displaced_sse2_declined, translit_displaced_sse2_memory_declined);
+    TL_ROLLBACK(displaced_riprel_projected, translit_displaced_riprel_projected);
+    TL_ROLLBACK(displaced_riprel_unreachable, translit_displaced_riprel_unreachable);
+    TL_ROLLBACK(displaced_riprel_lowered, translit_displaced_riprel_lowered);
+    TL_ROLLBACK(displaced_scratch_lowered, translit_displaced_scratch_lowered);
+    TL_ROLLBACK(displaced_lea_lowered, translit_displaced_lea_lowered);
+    TL_ROLLBACK(natural_abs32_lowered, translit_natural_abs32_lowered);
+    TL_ROLLBACK(natural_lea_lowered, translit_natural_lea_lowered);
+    TL_ROLLBACK(rip_indirect_lowered, translit_rip_indirect_lowered);
+    TL_ROLLBACK(refusal_prefix, translit_displaced_refusal_prefix);
+    TL_ROLLBACK(refusal_width, translit_displaced_refusal_width);
+    TL_ROLLBACK(refusal_rsp, translit_displaced_refusal_rsp);
+    TL_ROLLBACK(refusal_opcode_other, translit_displaced_refusal_opcode_other);
+    for (size_t i = 0; i < 512; i++) {
+        uint64_t current = __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED);
+        __atomic_fetch_sub(&translit_displaced_refusal_opcode[i], current - saved->refusal_opcode[i],
+                           __ATOMIC_RELAXED);
+    }
+#undef TL_ROLLBACK
+}
+
 static void *translit_build(hl_x86_hot_context *context, struct interp_block *block, uint64_t gpc,
                             uint64_t *jcc_ibtc_sites_out) {
     if (jcc_ibtc_sites_out != NULL) *jcc_ibtc_sites_out = 0;
@@ -2821,6 +2901,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
         return NULL;
     }
+    translit_attempt_telemetry telemetry_before;
+    translit_attempt_telemetry_save(&telemetry_before);
     struct insn first_insn;
     int first_decoded = hl_x86_decode_context(context, gpc, &first_insn);
     int first_kind = first_decoded > 0 ? translit_classify(&first_insn) : TL_NO;
@@ -3485,11 +3567,20 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
     }
 
+    /* Decoding used one captured authority token. Atomically acquire the short
+       publication lease only if no writer crossed the build; writers register
+       intent before waiting, so none can enter until translate_block publishes
+       the descriptor and map entry and releases this lease. */
+    if (!hl_x86_decode_transaction_commit(context)) {
+        translit_attempt_telemetry_restore(&telemetry_before);
+        return NULL;
+    }
     int owner_published = jit_body_owner_publish_n(g_cache_gen, owner_token, owners, owner_count);
     if (!owner_published) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+        hl_x86_decode_transaction_release(context);
         return NULL;
     }
     // The instruction map is deliberately staged behind the all-or-nothing owner publication.  Failed
@@ -3604,6 +3695,9 @@ static int translit_fall_fixture_test(unsigned scenario) {
     case 75: bytes = tl_no; length = sizeof tl_no; expected = HL_BACKEND_FALL_TL_NO; break;
     case 76: bytes = cap; length = sizeof cap; expected = HL_BACKEND_FALL_CAP; break;
     case 77: bytes = sse_to_tl_no; length = sizeof sse_to_tl_no; expected = HL_BACKEND_FALL_TL_NO; break;
+    case 78: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
+    case 79: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
+    case 80: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
     default: return 90;
     }
     uint8_t *saved_cache = g_cache;
@@ -3620,7 +3714,53 @@ static int translit_fall_fixture_test(unsigned scenario) {
     translit_fall_fixture_length = length;
     translit_test_last_fall_marker = 0;
     translit_test_fall_marker_seen = 0;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    hl_x86_hot_context *context =
+        hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL,
+                                  scenario >= 78 ? hl_guest_fetch_authority_source() : NULL);
+    if (scenario >= 78 && context != NULL) {
+        jit_body_owner_set *owners = jit_body_owner_set_for(g_cache_gen, 1);
+        uint32_t owners_before = owners == NULL ? UINT32_MAX
+                                               : atomic_load_explicit(&owners->count, memory_order_acquire);
+        uint64_t blocks_before = __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED);
+        uint64_t mixed_before = __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED);
+        g_cp = arena;
+        if (scenario == 78)
+            hl_x86_decode_test_transaction_invalidate_on_sample(2);
+        else if (scenario == 79)
+            hl_x86_decode_test_transaction_invalidate_before_commit();
+        else
+            atomic_store_explicit(&translit_test_commit_gap, 1, memory_order_release);
+        struct interp_block *rejected = translate_block(context, translit_fall_fixture_guest);
+        uint32_t owners_after = owners == NULL ? UINT32_MAX
+                                              : atomic_load_explicit(&owners->count, memory_order_acquire);
+        int isolated = scenario == 80
+                           ? rejected != NULL && rejected->host_entry_off != 0 && rejected->host_len != 0 &&
+                                 map_body(translit_fall_fixture_guest) == rejected && owners_after > owners_before &&
+                                 __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED) == blocks_before + 1 &&
+                                 atomic_load_explicit(&translit_test_gap_payload, memory_order_acquire) == 1 &&
+                                 atomic_load_explicit(&translit_test_gap_early, memory_order_acquire) == 0
+                           : rejected != NULL && owners_before != UINT32_MAX && owners_after == owners_before &&
+                       g_cp == (uint8_t *)rejected + sizeof *rejected && rejected->host_entry_off == 0 &&
+                       rejected->host_len == 0 && map_body(translit_fall_fixture_guest) == rejected &&
+                       __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED) == blocks_before &&
+                       __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED) == mixed_before;
+        map_clear();
+        struct interp_block *retry = scenario == 80 ? rejected : translate_block(context, translit_fall_fixture_guest);
+        int retried = scenario == 80 || (retry != NULL && retry->host_entry_off != 0 && retry->host_len != 0 &&
+                      map_body(translit_fall_fixture_guest) == retry &&
+                      __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED) == blocks_before + 1 &&
+                      __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED) == mixed_before + 1);
+        map_clear();
+        translit_fall_fixture_bytes = NULL;
+        hl_x86_hot_context_destroy(context);
+        jit_body_owner_drop_generation(g_cache_gen);
+        g_cache = saved_cache;
+        g_cp = saved_cp;
+        g_rw2rx = saved_rw2rx;
+        g_cache_gen = saved_generation;
+        munmap(arena, arena_size);
+        return isolated && retried ? 0 : 120 + (int)(scenario - 78);
+    }
     void *body = context == NULL ? NULL : translit_build(context, block, translit_fall_fixture_guest, NULL);
     unsigned actual = (translit_test_last_fall_marker >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK;
     unsigned kind = (translit_test_last_fall_marker >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK;
