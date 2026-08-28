@@ -16,6 +16,18 @@ cases:
     run: []
     timeout: 15
     expect: { exit: 0, stdout: golden/shared_writeback.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
+  - id: runtime/publication/decoder-authority-shared-map
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shared_writeback.c, output: decoder-authority-shared-map, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/publication/decoder-authority-shared-map }
+    run: []
+    timeout: 15
+    expect:
+      exit: 0
+      stdout: golden/shared_writeback.out
+      diagnostics: [{ counter: byte_unstable, equals: 1 }]
   - id: runtime/publication/multi-view
     targets: [arm64, amd64]
     status: active

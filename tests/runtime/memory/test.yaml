@@ -44,6 +44,19 @@ cases:
     artifact: { destination: /opt/husklet/vector-pipe }
     run: []
     expect: { exit: 0, stdout: golden/vectorpipe.txt }
+  - id: runtime/memory/decoder-authority-private-rx
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vectorpipe.c, output: decoder-authority-private-rx, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/decoder-authority-private-rx }
+    run: []
+    expect:
+      exit: 0
+      stdout: golden/vectorpipe.txt
+      diagnostics:
+        - { counter: authorized_hits, greater-than: 0 }
+        - { counter: byte_unstable, equals: 0 }
   - id: runtime/memory/fd-reclamation
     targets: [arm64, amd64]
     status: active
