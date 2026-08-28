@@ -704,6 +704,10 @@ static void gnx_reset(void) {
     gnx_writer_unlock();
 }
 
+#if defined(HL_X86_DECODE_MEMO_TEST)
+void hl_x86_decode_test_invalidate_direct_registry(void) { gnx_reset(); }
+#endif
+
 typedef struct {
     uint64_t generation;
     uint64_t first;
@@ -933,6 +937,8 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 37: result = hl_x86_decode_authority_test(scenario, scans); break;
     case 38: result = hl_x86_decode_authority_test(scenario, scans); break;
     case 39: result = hl_x86_decode_authority_test(scenario, scans); break;
+    case 40: result = hl_x86_decode_authority_test(scenario, scans); break;
+    case 41: result = hl_x86_decode_authority_test(scenario, scans); break;
 #endif
     default: result = -10;
     }

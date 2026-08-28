@@ -1,6 +1,7 @@
 // translator/guest/x86_64 -- the x86-64 instruction decoder (prefixes, ModRM/SIB, the insn IR).
 
 #include "decoder.h"
+#include "../../../linux_abi/logical_vma.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -619,7 +620,7 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
     if (scenario == 32 || scenario == 35) fixture.authority_to_bump = &authority;
     hl_x86_hot_context *context = hl_x86_hot_context_create(decode_context_fixture_fetch, &fixture, &unstable);
     if (context == NULL) return -70;
-    context->authority_source = &authority;
+    context->authority_source = (scenario == 40 || scenario == 41) ? hl_guest_fetch_authority_source() : &authority;
     g_decode_authority_samples = 0;
     hl_x86_insn first, second;
     int result = 0;
@@ -724,6 +725,26 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -98;
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -99;
         if (result == 0 && (fixture.fetches != 5 || context->memo[slot].authority_epoch == 0)) result = -100;
+        break;
+    }
+    case 40: { /* Logical-ledger publication alone invalidates an authorized entry. */
+        hl_logical_vma_ledger ledger;
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -101;
+        if (result == 0 && context->memo[slot].authority_epoch == 0) result = -106;
+        if (result == 0 && hl_logical_vma_init(&ledger) != 0) result = -102;
+        if (result == 0) hl_logical_vma_destroy(&ledger);
+        fixture.bytes[0] = 0xc3;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 || second.op != 0xc3)) result = -103;
+        break;
+    }
+    case 41: { /* Direct executable-registry publication alone invalidates an authorized entry. */
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -104;
+        if (result == 0 && context->memo[slot].authority_epoch == 0) result = -107;
+        hl_x86_decode_test_invalidate_direct_registry();
+        fixture.bytes[0] = 0xc3;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 || second.op != 0xc3)) result = -105;
         break;
     }
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */

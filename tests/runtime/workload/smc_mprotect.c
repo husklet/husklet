@@ -88,9 +88,26 @@ int main(void) {
     if (fd >= 0) close(fd);
 #endif
 
+#if defined(DECODER_AUTHORITY_STATIC_PRIVATE)
+    if (mprotect(p, sz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        perror("mprotect rwx");
+        return 1;
+    }
+    emit_ret_imm(p, 111);
+    __builtin___clear_cache((char *)p, (char *)p + sz);
+    int (*f)(void) = (int (*)(void))p;
+    int r1 = f();
+    emit_ret_imm(p, 222);
+    __builtin___clear_cache((char *)p, (char *)p + sz);
+    int r2 = f();
+    emit_ret_imm(p, 333);
+    __builtin___clear_cache((char *)p, (char *)p + sz);
+    int r3 = f();
+#else
     int r1 = rewrite_and_call(p, sz, 111);
     int r2 = rewrite_and_call(p, sz, 222); // must invalidate the r1 translation
     int r3 = rewrite_and_call(p, sz, 333); // must invalidate the r2 translation (coverage kept)
+#endif
 
     printf("smc mprotect r1=%d r2=%d r3=%d\n", r1, r2, r3);
     return 0;

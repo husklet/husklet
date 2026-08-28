@@ -74,6 +74,7 @@ int hl_x86_hot_context_test(void);
 int hl_x86_hot_context_thread_test(void);
 int hl_x86_hot_context_allocation_test(void);
 int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches);
+void hl_x86_decode_test_invalidate_direct_registry(void);
 #endif
 
 #endif

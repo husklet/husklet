@@ -97,6 +97,12 @@ fn x86_decode_authority_waits_for_every_overlapping_writer() {
     assert_eq!(exec_page_cache_test(2, 39), Ok(5));
 }
 
+#[test]
+fn x86_decode_authority_tracks_each_production_publication_family() {
+    assert!(exec_page_cache_test(2, 40).is_ok());
+    assert!(exec_page_cache_test(2, 41).is_ok());
+}
+
 #[cfg(unix)]
 #[test]
 fn x86_decode_authority_revalidates_after_fork() {
