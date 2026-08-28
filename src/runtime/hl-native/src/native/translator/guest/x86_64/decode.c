@@ -512,6 +512,7 @@ typedef struct {
     int second_page_executable;
     uint64_t fetches;
     _Atomic uint64_t *generation_to_bump;
+    _Atomic uint64_t *unstable_to_latch;
 } decode_memo_fixture;
 
 static _Thread_local decode_memo_fixture *g_decode_memo_fixture;
@@ -526,6 +527,8 @@ static int decode_memo_fetch(uint64_t guest, void *destination, size_t length) {
     memcpy(destination, fixture->bytes, length);
     if (fixture->generation_to_bump != NULL)
         atomic_fetch_add_explicit(fixture->generation_to_bump, 2, memory_order_release);
+    if (fixture->unstable_to_latch != NULL)
+        atomic_store_explicit(fixture->unstable_to_latch, 1, memory_order_release);
     return 0;
 }
 
@@ -699,14 +702,27 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         break;
     }
     case 36: /* Cold and colliding memo keys reach fetch and decode without sampling authority. */
-        if (result == 0 && (fixture.fetches != 1 || g_decode_authority_samples != 0)) result = -87;
+        {
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        if (result == 0 && (fixture.fetches != 1 || g_decode_authority_samples != 0 ||
+                            context->memo[slot].authority_epoch != 0)) result = -87;
         fixture.pc += UINT64_C(0x401); /* Same 10-bit memo hash as 0x50000100, but a different key. */
         fixture.fetches = 0;
         g_decode_authority_samples = 0;
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
-                            second.op != first.op || fixture.fetches != 1 || g_decode_authority_samples != 0))
+                            second.op != first.op || fixture.fetches != 1 || g_decode_authority_samples != 0 ||
+                            context->memo[slot].authority_epoch != 0))
             result = -88;
         break;
+        }
+    case 37: { /* Instability latched during byte validation cannot authorize that memo entry. */
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        fixture.unstable_to_latch = &unstable;
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -89;
+        if (result == 0 && (fixture.fetches != 2 || atomic_load_explicit(&unstable, memory_order_acquire) != 1 ||
+                            context->memo[slot].authority_epoch != 0)) result = -90;
+        break;
+    }
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */
         context->authority_epoch = UINT64_MAX;
         atomic_fetch_add_explicit(&logical, 2, memory_order_release);

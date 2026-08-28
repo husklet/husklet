@@ -82,6 +82,11 @@ fn x86_decode_memo_key_miss_does_not_sample_authority() {
     assert_eq!(exec_page_cache_test(2, 36), Ok(1));
 }
 
+#[test]
+fn x86_decode_memo_does_not_authorize_when_instability_latches_during_fetch() {
+    assert_eq!(exec_page_cache_test(2, 37), Ok(2));
+}
+
 #[cfg(unix)]
 #[test]
 fn x86_decode_authority_revalidates_after_fork() {
