@@ -141,7 +141,8 @@ static __thread uintptr_t g_backend_shape_edge_source_host_hi;
 static __thread int g_backend_shape_edge_same_page;
 
 static void interp_backend_shape_dispatch_enter(struct cpu *cpu) {
-    cpu->ibtc_base = 0;
+    cpu->ibtc_base = (uint64_t)g_ibtc;
+    cpu->jcc_ibtc_miss = 0;
     g_backend_shape_open = 0;
     g_backend_shape_edge_pending = 0;
     g_backend_shape_edge_source_resolved = 0;

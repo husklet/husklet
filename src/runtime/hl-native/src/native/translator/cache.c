@@ -383,6 +383,7 @@ static uint32_t g_instruction_map_next;
 static int jit_host_to_rwpc(uint64_t host_pc, uint64_t *rwpc);
 static inline __attribute__((always_inline)) int jit_resolve_rw_code(void *rwcode, void **rxcode, uint64_t *generation);
 static void ibtc_drop_target(uint64_t target);
+static void ibtc_clear_lazy(void);
 
 static void jit_instruction_map_put_preserve(uint64_t host, uint64_t end, uint64_t guest,
                                              uint32_t preserve_registers) {
@@ -452,6 +453,9 @@ static void map_clear(void) {
         g_map_epoch = 1;
     }
     map_host_cache_invalidate();
+    /* A map epoch change invalidates every cached body. Callers are at a quiescent lifecycle boundary
+       (single-threaded, stop-the-world, or fork child), so keep the data-only IBTC in the same lifecycle. */
+    ibtc_clear_lazy();
 }
 
 // Crash-only reverse lookup: map a host RX pc back to the nearest translated block start.
@@ -978,11 +982,31 @@ static void ibtc_clear_lazy(void) {
     memset(g_ibtc, 0, sizeof g_ibtc);
 }
 
+static inline uint32_t ibtc_index(uint64_t target) {
+    return (uint32_t)((target >> 2) & (IBTC_N - 1));
+}
+
+static inline void ibtc_publish(ibtc_ent *e, uint64_t target, void *body);
+
+static inline ibtc_ent ibtc_snapshot(const ibtc_ent *e) {
+#if defined(HL_HOST_CPU_AARCH64)
+    ibtc_ent pair;
+    __asm__ volatile("ldp %0, %1, [%2]" : "=r"(pair.target), "=r"(pair.body) : "r"(e) : "memory");
+    return pair;
+#else
+    typedef unsigned long long ibtc_pair __attribute__((vector_size(16)));
+    ibtc_pair pair;
+    __asm__ volatile("movdqa %1, %0" : "=x"(pair) : "m"(*e) : "memory");
+    return (ibtc_ent){pair[0], (void *)(uintptr_t)pair[1]};
+#endif
+}
+
 static void ibtc_drop_target(uint64_t target) {
-    uint32_t index = (uint32_t)((target >> 2) & (IBTC_N - 1));
-    if (g_ibtc[index].target != target) return;
-    g_ibtc[index].target = 0;
-    g_ibtc[index].body = NULL;
+    ibtc_ent *entry = &g_ibtc[ibtc_index(target)];
+    if (ibtc_snapshot(entry).target != target) return;
+    /* Mapping invalidation owns the same STW/quiescent gate as tombstoning. Keep the pair atomic too so a
+       future caller cannot accidentally expose target=0 with an old executable body to an emitted reader. */
+    ibtc_publish(entry, 0, NULL);
 }
 
 // ---- W5C: race-free threaded IBTC fill ----

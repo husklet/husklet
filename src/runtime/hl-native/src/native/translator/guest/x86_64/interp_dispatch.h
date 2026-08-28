@@ -57,7 +57,11 @@ static void *interp_backend_shape_map_host(void *cache, uint64_t gpc);
 static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
 #define G_DISPATCH_ENTER(c) interp_backend_shape_dispatch_enter(c)
 #else
-#define G_DISPATCH_ENTER(c) ((c)->ibtc_base = 0)
+#define G_DISPATCH_ENTER(c)                                                                                           \
+    do {                                                                                                              \
+        (c)->ibtc_base = (uint64_t)g_ibtc;                                                                            \
+        (c)->jcc_ibtc_miss = 0;                                                                                       \
+    } while (0)
 #endif
 
 #define G_DISPATCH_DEBUG(c)                                                                                            \
@@ -86,8 +90,10 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
 // lacks. Identical to dispatch.h's; stored C is NOT x86 CF.
 #define G_TRACE_DUMP(c) ((void)0)
 
-// No inline branch-target cache: cpu->ic_miss is never set here.
-#define G_IBTC_FILL(c) ((void)0)
+// Register-indirect ic_miss stays absent. Same-ISA unresolved constant JCCs carry a distinct typed miss,
+// filled only after this dispatcher has mapped and published the target descriptor under g_jit_lock.
+static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code);
+#define G_IBTC_FILL(c) translit_jcc_ibtc_fill((c), code)
 
 // Structurally dispatch.h's, because the reason codes name guest events. No arm advances rip: this
 // frontend's convention is that rip is ALREADY past the `0F 05` when the block exits (aarch64, whose PC

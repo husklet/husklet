@@ -107,6 +107,9 @@ struct cpu {
        publication, so clone can inherit this pointer byte-for-byte. */
     void *seccomp_filters;
     unsigned int seccomp_mode;
+    /* Same-ISA constant-JCC IBTC miss kind. Separate from ic_miss, whose producer and fill contract belong
+       to register-indirect branches on the AArch64-host JIT. Occupies the existing post-mode padding. */
+    uint32_t jcc_ibtc_miss;
     // Thread-DIRECTED pending signals (1<<signo) -- the per-thread analogue of g_pending. A tkill/tgkill to
     // THIS thread sets a bit here so only this thread delivers it. Drained by maybe_deliver_signal.
     volatile uint64_t tpending;
@@ -216,6 +219,12 @@ _Static_assert(__builtin_offsetof(struct cpu, stw_slot) == __builtin_offsetof(st
                "stw_slot must occupy the existing post-tid padding");
 _Static_assert(__builtin_offsetof(struct cpu, seccomp_filters) == __builtin_offsetof(struct cpu, tid) + 8,
                "stw_slot must not move serialized CPU fields");
+_Static_assert(__builtin_offsetof(struct cpu, jcc_ibtc_miss) ==
+                   __builtin_offsetof(struct cpu, seccomp_mode) + sizeof(unsigned int),
+               "JCC IBTC miss kind must consume only the existing post-seccomp padding");
+_Static_assert(__builtin_offsetof(struct cpu, tpending) ==
+                   __builtin_offsetof(struct cpu, seccomp_mode) + 2 * sizeof(unsigned int),
+               "JCC IBTC miss kind must not move serialized pending-signal state");
 #if defined(HL_NATIVE_TEST_HOOKS)
 _Static_assert(sizeof(struct cpu) == 0x54e0, "hook-only backend shape must stay inside checkpoint padding");
 #else
@@ -240,6 +249,7 @@ _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offs
 #define OFF_EXITED ((int)__builtin_offsetof(struct cpu, exited)) // int exited; int exit_code (the next word)
 #define OFF_IBSRC ((int)__builtin_offsetof(struct cpu, dbg_ibsrc))
 #define OFF_ICMISS ((int)__builtin_offsetof(struct cpu, ic_miss))
+#define OFF_JCC_IBTC_MISS ((int)__builtin_offsetof(struct cpu, jcc_ibtc_miss))
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define OFF_BACKEND_SHAPE ((int)__builtin_offsetof(struct cpu, backend_shape))
 #define OFF_MIXED_PROFILE ((int)__builtin_offsetof(struct cpu, mmscratch[1]))

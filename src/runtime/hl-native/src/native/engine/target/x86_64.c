@@ -1297,6 +1297,7 @@ static void ckpt_poll(struct cpu *c);
     do {                                                                                                               \
         (c)->dbg_ibsrc = 0;                                                                                            \
         (c)->ic_miss = 0;                                                                                              \
+        (c)->jcc_ibtc_miss = 0;                                                                                        \
         (c)->x87_ea = 0;                                                                                               \
         (c)->divop = 0;                                                                                                \
         (c)->ibtc_base = 0;                                                                                            \

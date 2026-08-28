@@ -516,6 +516,18 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn unresolved_constant_jcc_ibtc_lifecycle_is_exact() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in 88..=95 {
+            // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
+            assert_eq!(unsafe { hook(scenario) }, 0, "JCC IBTC scenario {scenario}");
+        }
+    }
+
     #[cfg(feature = "native-test-hooks")]
     struct IsolatedTestChild(Option<std::process::Child>);
 

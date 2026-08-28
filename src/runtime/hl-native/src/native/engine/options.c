@@ -100,6 +100,8 @@ static const hl_option_definition hl_option_definitions[] = {
                      "disable mixed normal/SSE same-ISA descriptor admission", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_JCC_LINK_DISABLE",
                         "test-only disable already-published same-page JCC links", HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_TRANSLIT_JCC_IBTC_DISABLE",
+                     "disable late publication for unresolved same-ISA constant JCC targets", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",
                         "test-only render every same-ISA profile counter at UINT64 width", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PERF_MAP",

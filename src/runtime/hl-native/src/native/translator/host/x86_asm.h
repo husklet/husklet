@@ -75,6 +75,57 @@ static inline void hl_x64_store_gs_imm32(hl_x64_asm *a, int32_t value, int32_t d
     hl_x64_u32(a, (uint32_t)value);
 }
 
+// movdqa disp32(%base), %xmm. The IBTC table and every entry are 16-byte aligned, so this is the
+// indivisible pair load matched by cache.c's movdqa publish. Never split it into target/body loads.
+static inline void hl_x64_load_xmm_aligned_disp32(hl_x64_asm *a, int xmm, int base, int32_t disp) {
+    hl_x64_u8(a, 0x66);
+    if (xmm >= 8 || base >= 8) hl_x64_u8(a, (uint8_t)(0x40 | ((xmm >= 8) ? 4 : 0) | ((base >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x0F);
+    hl_x64_u8(a, 0x6F);
+    hl_x64_u8(a, (uint8_t)(0x80 | ((xmm & 7) << 3) | (base & 7)));
+    if ((base & 7) == 4) hl_x64_u8(a, (uint8_t)(0x20 | (base & 7)));
+    hl_x64_u32(a, (uint32_t)disp);
+}
+
+// movq %xmm, %reg (SSE2). The caller has already made the guest XMM image canonical in cpu.
+static inline void hl_x64_movq_xmm_to_reg(hl_x64_asm *a, int reg, int xmm) {
+    hl_x64_u8(a, 0x66);
+    hl_x64_u8(a, (uint8_t)(0x48 | ((xmm >= 8) ? 4 : 0) | ((reg >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x0F);
+    hl_x64_u8(a, 0x7E);
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((xmm & 7) << 3) | (reg & 7)));
+}
+
+static inline void hl_x64_psrldq(hl_x64_asm *a, int xmm, uint8_t bytes) {
+    hl_x64_u8(a, 0x66);
+    if (xmm >= 8) hl_x64_u8(a, 0x41);
+    hl_x64_u8(a, 0x0F);
+    hl_x64_u8(a, 0x73);
+    hl_x64_u8(a, (uint8_t)(0xD8 | (xmm & 7))); // mod=11 /3
+    hl_x64_u8(a, bytes);
+}
+
+static inline void hl_x64_cmp_reg(hl_x64_asm *a, int left, int right) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((right >= 8) ? 4 : 0) | ((left >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x39); // left - right
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((right & 7) << 3) | (left & 7)));
+}
+
+static inline void hl_x64_test_reg(hl_x64_asm *a, int reg) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 5 : 0)));
+    hl_x64_u8(a, 0x85);
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((reg & 7) << 3) | (reg & 7)));
+}
+
+// jmpq *%gs:disp32. ModRM /4 is the near transfer; /5 would consume a far pointer and fault.
+static inline void hl_x64_jmp_gs_indirect(hl_x64_asm *a, int32_t disp) {
+    hl_x64_u8(a, 0x65);
+    hl_x64_u8(a, 0xFF);
+    hl_x64_u8(a, 0x24);
+    hl_x64_u8(a, 0x25);
+    hl_x64_u32(a, (uint32_t)disp);
+}
+
 // cmpq $imm8, %gs:disp32. Used only after the guest register file and flags have been spilled, so the
 // condition-code clobber is private to an emitted boundary stub.
 static inline void hl_x64_cmp_gs_imm8(hl_x64_asm *a, int32_t disp, uint8_t value) {
