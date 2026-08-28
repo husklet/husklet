@@ -125,6 +125,9 @@ hl_status hl_run_linux_guest_status(void) {
 
 static uint64_t g_host_launch_monotonic_ns;
 static uint64_t g_emit_next;
+/* Monotonic for the process lifetime. Zero proves no guest-visible route capable of changing
+   executable bytes has ever been published; one permanently selects byte revalidation. */
+static _Atomic uint64_t g_exec_bytes_unstable;
 static void filemap_refresh_emulated(uint64_t lo, uint64_t hi);
 static int jit_guest_soft_activate(void);
 static void jit_guest_soft_restore_activate(void);

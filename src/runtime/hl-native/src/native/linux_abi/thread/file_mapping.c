@@ -332,7 +332,12 @@ static void filemap_register(uint64_t address, uint64_t size, int fd, uint64_t o
         g_filemap[g_nfilemap++] = (struct guest_file_mapping){
             address, address + size, offset,           (uint64_t)st.st_dev, (uint64_t)st.st_ino, 0,
             0,       retained,       (uint32_t)shared, (uint32_t)emulated};
-        if (shared && emulated) atomic_store_explicit(&g_filemap_emulated_shared, 1, memory_order_release);
+        if (shared) {
+            /* The registry entry is not yet visible outside g_filemap_lock. Disable byte-authorized
+               decode hits before releasing it, so a writable alias cannot race stale decoded IR. */
+            atomic_store_explicit(&g_exec_bytes_unstable, 1, memory_order_release);
+            if (emulated) atomic_store_explicit(&g_filemap_emulated_shared, 1, memory_order_release);
+        }
         if (shared) atomic_fetch_add_explicit(&g_filemap_shared_epoch, 1, memory_order_seq_cst);
     } else if (retained >= 0) {
         int shared_source = 0;

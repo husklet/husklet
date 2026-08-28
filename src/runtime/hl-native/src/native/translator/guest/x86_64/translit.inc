@@ -3620,7 +3620,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     translit_fall_fixture_length = length;
     translit_test_last_fall_marker = 0;
     translit_test_fall_marker_seen = 0;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     void *body = context == NULL ? NULL : translit_build(context, block, translit_fall_fixture_guest, NULL);
     unsigned actual = (translit_test_last_fall_marker >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK;
     unsigned kind = (translit_test_last_fall_marker >> TL_SHAPE_KIND_SHIFT) & TL_SHAPE_KIND_MASK;
@@ -3708,7 +3708,7 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     translit_fall_fixture_bytes = bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
     translit_fall_fixture_length = length;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     int result = 121;
     if (context == NULL) goto done;
 
@@ -4313,7 +4313,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest_bytes;
     translit_fall_fixture_length = sizeof guest_bytes;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     if (context == NULL) return 135;
     hl_backend_tree_begin(1, effective_host_services());
     uint64_t source = translit_fall_fixture_guest;

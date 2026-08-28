@@ -23,6 +23,10 @@ typedef struct {
 } hl_guest_fetch_context;
 hl_guest_fetch_context *hl_guest_fetch_context_current(void);
 int hl_guest_fetch_exec_context(hl_guest_fetch_context *, uint64_t, void *, size_t);
+/* Snapshot both mapping authorities which make an executable fetch verdict current.
+   Returns zero when either authority is unavailable or a direct-map writer is active. */
+void hl_guest_fetch_authority_sources(const _Atomic uint64_t **logical_generation,
+                                      const _Atomic uint64_t **direct_generation);
 typedef int (*hl_guest_fetch_direct_validator)(uint64_t, size_t);
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator);
 void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation);

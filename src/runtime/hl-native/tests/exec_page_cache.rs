@@ -68,6 +68,21 @@ fn x86_hot_context_allocation_failure_leaks_nothing_and_does_not_latch() {
 }
 
 #[test]
+fn x86_stable_decode_authority_skips_fetch_but_every_invalidation_revalidates() {
+    assert_eq!(exec_page_cache_test(2, 26), Ok(1));
+    for scenario in 27..=33 {
+        let result = exec_page_cache_test(2, scenario);
+        assert!(result.is_ok(), "scenario={scenario}: {result:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn x86_decode_authority_revalidates_after_fork() {
+    assert!(exec_page_cache_test(2, 34).is_ok());
+}
+
+#[test]
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
         assert_eq!(exec_page_cache_test(isa, 15), Ok(2));

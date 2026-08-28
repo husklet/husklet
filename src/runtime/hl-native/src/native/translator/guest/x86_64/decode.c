@@ -15,6 +15,13 @@ static hl_x86_instruction_fetch_fn g_instruction_fetch;
 enum { DECODE_MEMO_SLOTS = HL_X86_DECODE_MEMO_SLOTS, X86_MAX_INSN = HL_X86_MAX_INSN };
 typedef hl_x86_decode_memo_entry decode_memo_entry;
 
+_Static_assert(sizeof(decode_memo_entry) == 216, "decode memo entry footprint changed");
+_Static_assert(offsetof(decode_memo_entry, authority_epoch) == 208, "decode memo epoch left reclaimed padding");
+_Static_assert(offsetof(hl_x86_hot_context, memo) == 0, "decode memo must lead its context");
+_Static_assert(sizeof(((hl_x86_hot_context *)0)->memo) == 216 * DECODE_MEMO_SLOTS,
+               "decode memo table footprint changed");
+_Static_assert(sizeof(hl_x86_hot_context) == 221320, "decode hot context footprint changed");
+
 static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -320,16 +327,81 @@ static int decode_bytes(const uint8_t bytes[15], hl_x86_insn *I) {
     return n;
 }
 
-static int decode_with(uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
+typedef struct {
+    uint64_t logical_generation;
+    uint64_t direct_generation;
+    uint8_t state; /* 0 unavailable, 1 stable, 2 unstable */
+} decode_authority;
+
+static decode_authority decode_authority_sample(const hl_x86_hot_context *context) {
+    decode_authority authority = {0};
+    if (context == NULL || context->byte_unstable == NULL || context->logical_generation_source == NULL ||
+        context->direct_generation_source == NULL)
+        return authority;
+    uint64_t direct_before =
+        atomic_load_explicit(context->direct_generation_source, memory_order_acquire);
+    if (direct_before & 1) return authority;
+    uint64_t logical_before =
+        atomic_load_explicit(context->logical_generation_source, memory_order_acquire);
+    if (logical_before & 1) return authority;
+    authority.direct_generation =
+        atomic_load_explicit(context->direct_generation_source, memory_order_acquire);
+    if (direct_before != authority.direct_generation || (authority.direct_generation & 1)) return (decode_authority){0};
+    authority.logical_generation =
+        atomic_load_explicit(context->logical_generation_source, memory_order_acquire);
+    if (logical_before != authority.logical_generation || (authority.logical_generation & 1))
+        return (decode_authority){0};
+    authority.state = atomic_load_explicit(context->byte_unstable, memory_order_acquire) == 0 ? 1 : 2;
+    return authority;
+}
+
+static int decode_authority_equal(decode_authority left, decode_authority right) {
+    return left.state == right.state && left.logical_generation == right.logical_generation &&
+           left.direct_generation == right.direct_generation;
+}
+
+static void decode_authority_sync(hl_x86_hot_context *context, decode_authority authority) {
+    if (context == NULL ||
+        (context->authority_state == authority.state &&
+         context->authority_logical_generation == authority.logical_generation &&
+         context->authority_direct_generation == authority.direct_generation))
+        return;
+    context->authority_state = authority.state;
+    context->authority_logical_generation = authority.logical_generation;
+    context->authority_direct_generation = authority.direct_generation;
+    if (++context->authority_epoch == 0) {
+        /* Exact even after the practically unreachable local epoch wrap: no old entry may alias epoch one. */
+        memset(context->memo, 0, sizeof context->memo);
+        context->authority_epoch = 1;
+    }
+}
+
+static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
                        hl_x86_context_fetch_fn context_fetch, void *fetch_opaque) {
     uint8_t bytes[X86_MAX_INSN] = {0};
     decode_memo_entry *memo = &entries[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
+    decode_authority before = decode_authority_sample(context);
+    decode_authority_sync(context, before);
 #define FETCH(address, destination, length)                                                                            \
     (context_fetch != NULL ? context_fetch(fetch_opaque, address, destination, length)                                \
                            : instruction_fetch(address, destination, length))
-    if (memo->valid && memo->pc == pc && FETCH(pc, bytes, memo->length) == 0 &&
+    if (memo->length != 0 && memo->pc == pc && before.state == 1 &&
+        memo->authority_epoch == context->authority_epoch) {
+        *I = memo->instruction;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        ++g_decode_memo_hits;
+#endif
+        return memo->length;
+    }
+    if (memo->length != 0 && memo->pc == pc && FETCH(pc, bytes, memo->length) == 0 &&
         memcmp(bytes, memo->bytes, memo->length) == 0) {
         *I = memo->instruction;
+        decode_authority after = decode_authority_sample(context);
+        if (before.state == 1 && decode_authority_equal(before, after) &&
+            context->authority_epoch != 0)
+            memo->authority_epoch = context->authority_epoch;
+        else
+            memo->authority_epoch = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_hits;
 #endif
@@ -362,7 +434,11 @@ static int decode_with(uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
         memo->instruction = *I;
         memcpy(memo->bytes, bytes, (size_t)length);
         memo->length = (uint8_t)length;
-        memo->valid = 1;
+        decode_authority after = decode_authority_sample(context);
+        memo->authority_epoch = before.state == 1 && decode_authority_equal(before, after) &&
+                                        context != NULL && context->authority_epoch != 0
+                                    ? context->authority_epoch
+                                    : 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_decodes;
 #endif
@@ -372,10 +448,11 @@ static int decode_with(uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
 }
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
-    return decode_with(pc, I, g_decode_memo, NULL, NULL);
+    return decode_with(NULL, pc, I, g_decode_memo, NULL, NULL);
 }
 
-hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque) {
+hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque,
+                                              const _Atomic uint64_t *byte_unstable) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (atomic_exchange_explicit(&g_hot_context_test_fail_allocation, 0, memory_order_relaxed)) return NULL;
 #endif
@@ -383,6 +460,8 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
     if (context != NULL) {
         context->fetch_fn = fetch;
         context->fetch_opaque = opaque != NULL ? opaque : &context->fetch;
+        context->byte_unstable = byte_unstable;
+        hl_guest_fetch_authority_sources(&context->logical_generation_source, &context->direct_generation_source);
 #if defined(HL_NATIVE_TEST_HOOKS)
         atomic_fetch_add_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
 #endif
@@ -399,7 +478,7 @@ void hl_x86_hot_context_destroy(hl_x86_hot_context *context) {
 }
 
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I) {
-    return decode_with(pc, I, context->memo, context->fetch_fn, context->fetch_opaque);
+    return decode_with(context, pc, I, context->memo, context->fetch_fn, context->fetch_opaque);
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -408,17 +487,22 @@ typedef struct {
     uint8_t bytes[X86_MAX_INSN];
     int first_page_executable;
     int second_page_executable;
+    uint64_t fetches;
+    _Atomic uint64_t *generation_to_bump;
 } decode_memo_fixture;
 
 static _Thread_local decode_memo_fixture *g_decode_memo_fixture;
 
 static int decode_memo_fetch(uint64_t guest, void *destination, size_t length) {
     decode_memo_fixture *fixture = g_decode_memo_fixture;
+    if (fixture != NULL) fixture->fetches++;
     if (fixture == NULL || guest != fixture->pc || length > sizeof fixture->bytes || !fixture->first_page_executable)
         return -1;
     size_t first_page = 4096u - (size_t)(guest & UINT64_C(4095));
     if (length > first_page && !fixture->second_page_executable) return -1;
     memcpy(destination, fixture->bytes, length);
+    if (fixture->generation_to_bump != NULL)
+        atomic_fetch_add_explicit(fixture->generation_to_bump, 2, memory_order_release);
     return 0;
 }
 
@@ -436,8 +520,8 @@ int hl_x86_hot_context_test(void) {
                                          .first_page_executable = 1, .second_page_executable = 1};
     decode_memo_fixture second_fixture = first_fixture;
     second_fixture.bytes[0] = 0xc3;
-    hl_x86_hot_context *first = hl_x86_hot_context_create(decode_context_fixture_fetch, &first_fixture);
-    hl_x86_hot_context *second = hl_x86_hot_context_create(decode_context_fixture_fetch, &second_fixture);
+    hl_x86_hot_context *first = hl_x86_hot_context_create(decode_context_fixture_fetch, &first_fixture, NULL);
+    hl_x86_hot_context *second = hl_x86_hot_context_create(decode_context_fixture_fetch, &second_fixture, NULL);
     if (first == NULL || second == NULL) {
         hl_x86_hot_context_destroy(first);
         hl_x86_hot_context_destroy(second);
@@ -472,12 +556,18 @@ int hl_x86_hot_context_test(void) {
 typedef struct { uint8_t opcode; int result; } hot_context_thread_fixture;
 static void *hot_context_thread_worker(void *opaque) {
     hot_context_thread_fixture *thread = opaque;
+    _Atomic uint64_t unstable = 0, logical = 2, direct = 2;
     decode_memo_fixture fixture = {.pc = UINT64_C(0x50000100), .bytes = {thread->opcode},
                                    .first_page_executable = 1, .second_page_executable = 1};
-    hl_x86_hot_context *context = hl_x86_hot_context_create(decode_context_fixture_fetch, &fixture);
-    hl_x86_insn instruction;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(decode_context_fixture_fetch, &fixture, &unstable);
+    if (context != NULL) {
+        context->logical_generation_source = &logical;
+        context->direct_generation_source = &direct;
+    }
+    hl_x86_insn instruction, repeated;
     thread->result = context != NULL && hl_x86_decode_context(context, fixture.pc, &instruction) == 1 &&
-                             instruction.op == thread->opcode
+                             hl_x86_decode_context(context, fixture.pc, &repeated) == 1 &&
+                             instruction.op == thread->opcode && repeated.op == thread->opcode && fixture.fetches == 1
                          ? 0 : -1;
     hl_x86_hot_context_destroy(context);
     return NULL;
@@ -501,12 +591,99 @@ int hl_x86_hot_context_thread_test(void) { return 0; }
 int hl_x86_hot_context_allocation_test(void) {
     int before = atomic_load_explicit(&g_hot_context_test_live, memory_order_relaxed);
     atomic_store_explicit(&g_hot_context_test_fail_allocation, 1, memory_order_relaxed);
-    if (hl_x86_hot_context_create(NULL, NULL) != NULL) return -60;
+    if (hl_x86_hot_context_create(NULL, NULL, NULL) != NULL) return -60;
     if (atomic_load_explicit(&g_hot_context_test_live, memory_order_relaxed) != before) return -61;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(NULL, NULL);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(NULL, NULL, NULL);
     if (context == NULL) return -62;
     hl_x86_hot_context_destroy(context);
     return atomic_load_explicit(&g_hot_context_test_live, memory_order_relaxed) == before ? 0 : -63;
+}
+
+int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
+    _Atomic uint64_t unstable = 0;
+    _Atomic uint64_t logical = 2;
+    _Atomic uint64_t direct = 2;
+    decode_memo_fixture fixture = {
+        .pc = scenario == 30 ? UINT64_C(0x50000fff) : UINT64_C(0x50000100),
+        .bytes = {0x90}, .first_page_executable = 1, .second_page_executable = 1,
+    };
+    if (scenario == 30) {
+        fixture.bytes[0] = 0x66;
+        fixture.bytes[1] = 0x90;
+    }
+    if (scenario == 32) fixture.generation_to_bump = &direct;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(decode_context_fixture_fetch, &fixture, &unstable);
+    if (context == NULL) return -70;
+    context->logical_generation_source = &logical;
+    context->direct_generation_source = &direct;
+    hl_x86_insn first, second;
+    int result = 0;
+    if (hl_x86_decode_context(context, fixture.pc, &first) <= 0) result = -71;
+    switch (scenario) {
+    case 26: /* Stable bytes authorize a decode-memo hit without another fetch. */
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != first.len ||
+                            second.op != first.op || fixture.fetches != 1)) result = -72;
+        break;
+    case 27: /* Once writable/executable aliasing is observed, exact byte validation remains mandatory. */
+        atomic_store_explicit(&unstable, 1, memory_order_release);
+        fixture.bytes[0] = 0xc3;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
+                            second.op != 0xc3 || fixture.fetches != 3)) result = -73;
+        break;
+    case 28: /* MAP_FIXED/unmap-remap changes the direct-map authority. */
+        atomic_fetch_add_explicit(&direct, 2, memory_order_release);
+        fixture.bytes[0] = 0xc3;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
+                            second.op != 0xc3 || fixture.fetches != 3)) result = -74;
+        break;
+    case 29: /* Checkpoint/exec replacement changes logical VMA authority. */
+        atomic_fetch_add_explicit(&logical, 2, memory_order_release);
+        fixture.bytes[0] = 0xc3;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
+                            second.op != 0xc3 || fixture.fetches != 3)) result = -75;
+        break;
+    case 30: /* A crossing instruction is invalidated when either page loses execute authority. */
+        atomic_fetch_add_explicit(&direct, 2, memory_order_release);
+        fixture.second_page_executable = 0;
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != -1) result = -76;
+        break;
+    case 31: /* PROT_NONE invalidates a warm same-page entry before use. */
+        atomic_fetch_add_explicit(&direct, 2, memory_order_release);
+        fixture.first_page_executable = 0;
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != -1) result = -77;
+        break;
+    case 32: /* A generation change during fill cannot authorize that fill. */
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -78;
+        fixture.generation_to_bump = NULL;
+        if (result == 0 && fixture.fetches != 2) result = -79;
+        break;
+    case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */
+        context->authority_epoch = UINT64_MAX;
+        atomic_fetch_add_explicit(&logical, 2, memory_order_release);
+        fixture.bytes[0] = 0xc3;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
+                            second.op != 0xc3 || context->authority_epoch != 1)) result = -80;
+        break;
+#if !defined(_WIN32)
+    case 34: { /* A fork child cannot authorize bytes changed in its inherited address-space view. */
+        pid_t child = fork();
+        if (child < 0) result = -81;
+        else if (child == 0) {
+            atomic_fetch_add_explicit(&logical, 2, memory_order_release);
+            fixture.bytes[0] = 0xc3;
+            _exit(hl_x86_decode_context(context, fixture.pc, &second) == 1 && second.op == 0xc3 ? 0 : 1);
+        } else {
+            int status = 0;
+            if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -82;
+        }
+        break;
+    }
+#endif
+    default: result = -83;
+    }
+    *fetches = fixture.fetches;
+    hl_x86_hot_context_destroy(context);
+    return result;
 }
 
 /* Invoked through the existing target-local scenario/count hook. */

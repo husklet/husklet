@@ -35,6 +35,10 @@ if (a1) {
             break;
         }
     }
+    /* Publish before any execute-permission registry or logical mapping can become visible to a peer.
+       This is monotonic and may conservatively latch if a later host operation fails. */
+    if (((int)a2 & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC))
+        atomic_store_explicit(&g_exec_bytes_unstable, 1, memory_order_release);
     uint64_t glo = a0 & ~(uint64_t)0xfff, ghi = (a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
     int logical_protect_prepared = 0;
     int logical_protect_locked = 0;

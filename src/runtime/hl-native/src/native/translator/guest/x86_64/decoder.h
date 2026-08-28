@@ -38,7 +38,9 @@ typedef struct {
     hl_x86_insn instruction;
     uint8_t bytes[HL_X86_MAX_INSN];
     uint8_t length;
-    uint8_t valid;
+    /* Zero means invalid. The old validity byte plus its seven padding bytes carry this
+       context-local authority epoch without increasing the 216-byte entry. */
+    uint64_t authority_epoch;
 } hl_x86_decode_memo_entry;
 typedef int (*hl_x86_context_fetch_fn)(void *, uint64_t, void *, size_t);
 typedef struct {
@@ -46,9 +48,17 @@ typedef struct {
     hl_guest_fetch_context fetch;
     hl_x86_context_fetch_fn fetch_fn;
     void *fetch_opaque;
+    const _Atomic uint64_t *byte_unstable;
+    const _Atomic uint64_t *logical_generation_source;
+    const _Atomic uint64_t *direct_generation_source;
+    uint64_t authority_logical_generation;
+    uint64_t authority_direct_generation;
+    uint64_t authority_epoch;
+    uint8_t authority_state;
 } hl_x86_hot_context;
 
-hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque);
+hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque,
+                                              const _Atomic uint64_t *byte_unstable);
 void hl_x86_hot_context_destroy(hl_x86_hot_context *context);
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn);
 
@@ -60,6 +70,7 @@ int hl_x86_decode_memo_test(uint32_t scenario, uint64_t *decodes);
 int hl_x86_hot_context_test(void);
 int hl_x86_hot_context_thread_test(void);
 int hl_x86_hot_context_allocation_test(void);
+int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches);
 #endif
 
 #endif

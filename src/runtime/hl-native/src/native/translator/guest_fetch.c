@@ -17,6 +17,12 @@ void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation) {
     g_direct_generation = generation;
 }
 
+void hl_guest_fetch_authority_sources(const _Atomic uint64_t **logical_generation,
+                                      const _Atomic uint64_t **direct_generation) {
+    if (logical_generation != NULL) *logical_generation = hl_guest_memory_generation;
+    if (direct_generation != NULL) *direct_generation = g_direct_generation;
+}
+
 /*
  * One resolved executable mapping, remembered per thread.
  *
