@@ -3983,7 +3983,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     cpu.v[0] = UINT64_C(0x8877665544332211);
     cpu.ibtc_base = (uint64_t)g_ibtc;
     run_block(context, &cpu, source_block);
-    if (cpu.rip != target || cpu.jcc_ibtc_miss != TL_DIRECT_JMP_IBTC_MISS ||
+    if (cpu.rip != target || cpu.jcc_ibtc_miss != 2 ||
         __atomic_load_n(&translit_direct_jmp_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1)
         goto done_direct_ibtc;
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
@@ -4088,7 +4088,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
         cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
         cpu.ibtc_base = (uint64_t)g_ibtc;
         run_block(context, &cpu, source_block);
-        int a_missed_b = cpu.rip == target && cpu.jcc_ibtc_miss == TL_DIRECT_JMP_IBTC_MISS;
+        int a_missed_b = cpu.rip == target && cpu.jcc_ibtc_miss == 2;
         translit_jcc_ibtc_fill(&cpu, target_block);
         cpu = (struct cpu){0};
         cpu.rip = source;
