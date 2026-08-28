@@ -150,3 +150,46 @@ fn fetch_span_hits_reuse_the_authoritative_execute_page_verdict() {
         assert!(validations <= 1, "isa={isa} validated {validations} times");
     }
 }
+
+#[test]
+fn source_page_index_invalidates_one_and_multi_page_blocks_precisely() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 26), Ok(1), "isa={isa}");
+    }
+}
+
+#[test]
+fn source_page_index_ignores_stale_nodes_after_tombstone_reuse() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 27), Ok(1), "isa={isa}");
+    }
+}
+
+#[test]
+fn source_page_index_reset_changes_generation_without_clearing_tables() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 28), Ok(1), "isa={isa}");
+    }
+}
+
+#[test]
+fn source_page_index_overflow_falls_back_to_the_live_map_scan() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 29), Ok(1), "isa={isa}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn source_page_index_is_inherited_coherently_across_fork() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 30), Ok(1), "isa={isa}");
+    }
+}
+
+#[test]
+fn source_page_index_publication_precedes_concurrent_invalidation() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 31), Ok(1), "isa={isa}");
+    }
+}

@@ -890,6 +890,12 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 16:
     case 17: result = map_host_cache_test(scenario, scans); break;
     case 25: result = map_host_cache_test(scenario, scans); break;
+    case 26:
+    case 27:
+    case 28:
+    case 29:
+    case 30:
+    case 31: result = map_source_index_test(scenario, scans); break;
     case 18: result = HL_TARGET_LOCAL(jit_rollover_mapping_test)(scans); break;
     case 19: { // Fetch-span hits reuse the page verdict until its authority changes.
         _Alignas(4096) unsigned char page_bytes[4096] = {0};
