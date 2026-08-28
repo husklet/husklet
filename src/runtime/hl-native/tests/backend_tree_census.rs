@@ -114,9 +114,9 @@ fn each_real_translation_stop_site_keeps_its_exact_reason() {
     let source = include_str!("../src/native/translator/guest/x86_64/translit.inc");
     for assignment in [
         "fall_stop = HL_BACKEND_FALL_DECODE;",
-        "fall_stop = kind == TL_FS_MEM ? HL_BACKEND_FALL_SSE2_TO_FS : HL_BACKEND_FALL_SSE2_TO_NORMAL;",
         "fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;",
-        "fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2 : HL_BACKEND_FALL_NORMAL_TO_FS;",
+        "fall_stop = previous_kind == TL_SSE2 ? HL_BACKEND_FALL_SSE2_TO_FS",
+        "fall_stop = current_sse2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2",
         "fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;",
         "fall_stop = HL_BACKEND_FALL_FETCH;",
         "fall_stop = HL_BACKEND_FALL_RIPREL_LOWER;",
@@ -130,7 +130,7 @@ fn each_real_translation_stop_site_keeps_its_exact_reason() {
             "missing or duplicated real stop site: {assignment}"
         );
     }
-    assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_TL_NO;").count(), 2);
+    assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_TL_NO;").count(), 1);
 }
 
 #[test]

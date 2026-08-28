@@ -164,6 +164,12 @@ static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
 static uint64_t translit_provenance_fallback;
 static uint64_t translit_body_owner_recovered;
+// Production diagnostics for the same-binary mixed normal/SSE control.  Opportunities are observed
+// before the typed disable is applied; admitted descriptors/transitions advance only after the complete
+// body and its ordered recovery batch are published.
+static uint64_t translit_mixed_sse_opportunities;
+static uint64_t translit_mixed_sse_admitted;
+static uint64_t translit_mixed_sse_transitions;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_body_owner_published;
 static uint64_t translit_sse2_runs_admitted;
@@ -190,6 +196,7 @@ static size_t translit_fall_fixture_length;
 static uint32_t translit_test_last_fall_marker;
 static int translit_test_fall_marker_seen;
 static int translit_fall_fixture_test(unsigned scenario);
+static int translit_mixed_fixture_test(unsigned scenario);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
 static uint64_t translit_fs_fixture_admitted;
@@ -981,6 +988,22 @@ static int translit_rel32(uint64_t target, int64_t host_next, uint32_t *encoded)
 
 static uint32_t translit_preserve_mask(int reg) {
     return reg < 0 ? 0 : 1u << reg;
+}
+
+static int translit_owner_append(jit_body_owner_range ranges[TL_MAX_INSNS + 1], uint32_t *count,
+                                 const uint8_t *lo, const uint8_t *hi, uint64_t guest,
+                                 uint32_t preserve_registers) {
+    if (hi <= lo) return 1; // a stitched direct jump can advance guest PC without emitting host bytes
+    if (*count >= TL_MAX_INSNS + 1) return 0;
+    ranges[(*count)++] = (jit_body_owner_range){(uint64_t)(uintptr_t)lo, (uint64_t)(uintptr_t)hi,
+                                                guest, preserve_registers};
+    return 1;
+}
+
+static void translit_instruction_ranges_publish(const jit_body_owner_range *ranges, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++)
+        jit_instruction_map_put_preserve(ranges[i].lo, ranges[i].hi, ranges[i].guest,
+                                         ranges[i].preserve_registers);
 }
 
 // Generated code owns no persistent XMM state.  Each selected instruction reloads its operands from
@@ -2160,10 +2183,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 89;
     }
-    if (scenario >= 71 && scenario <= 77) {
+    if (scenario >= 71 && scenario <= 83) {
         pid_t child = fork();
         if (child < 0) return 97;
-        if (child == 0) _exit(translit_fall_fixture_test(scenario));
+        if (child == 0)
+            _exit(scenario <= 77 ? translit_fall_fixture_test(scenario)
+                                 : translit_mixed_fixture_test(scenario));
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
     }
@@ -2208,8 +2233,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         block->profile_fallback_form = translit_unsupported_key(&first_insn);
     }
 #endif
-    int sse2_run = first_kind == TL_SSE2;
     int fs_run = first_kind == TL_FS_MEM;
+    int mixed_sse_enabled = hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") == NULL;
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
     // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
     int fs_authority = g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active();
@@ -2230,22 +2255,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (set != NULL) atomic_store_explicit(&set->count, JIT_BODY_OWNER_N, memory_order_relaxed);
     }
 #endif
-    if (fs_run) {
-        if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) {
-#if defined(HL_NATIVE_TEST_HOOKS)
-            block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
-#endif
-            return NULL;
-        }
-    } else if (!jit_body_owner_reserve(g_cache_gen, &owner_token)) {
-#if defined(HL_NATIVE_TEST_HOOKS)
-        block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
-#endif
-        return NULL;
-    }
     // Reserve the worst case before emitting a byte.  Publication advances only the exact populated
     // prefix; conservative capacity refusal falls back to the interpreter with no reachable partial body.
-    if (sse2_run && !jit_body_owner_reserve_n(g_cache_gen, TL_MAX_INSNS + 1, &owner_token)) {
+    // FS remains one isolated transaction (two recovery spans plus its tail bound); every other body may
+    // need one exact range per retired instruction plus the final fall-through tail.
+    uint32_t owner_reservation = fs_run ? 3u : TL_MAX_INSNS + 1u;
+    if (!jit_body_owner_reserve_n(g_cache_gen, owner_reservation, &owner_token)) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
@@ -2264,7 +2279,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
+    int previous_kind = TL_NO;
+    uint64_t mixed_sse_transition_count = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
+    uint64_t sse2_instruction_count = 0;
     unsigned fall_stop = HL_BACKEND_FALL_OTHER;
     uint64_t sse2_signature = 0;
     uint64_t sse2_store_count = 0;
@@ -2282,10 +2300,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t would_link_source = 0, would_link_target = 0;
     uint8_t *would_link_marker = NULL;
 #endif
-    jit_body_owner_range sse2_owner[TL_MAX_INSNS + 1];
-    uint32_t sse2_owner_count = 0;
-    jit_body_owner_range fs_owner[3];
-    uint32_t fs_owner_count = 0;
+    jit_body_owner_range owners[TL_MAX_INSNS + 1];
+    uint32_t owner_count = 0;
     int jcc_fall_stitched = 0;
     int direct_jmp_stitched = 0;
     unsigned jcc_link_admitted = 0;
@@ -2301,25 +2317,36 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             break;
         }
         int kind = translit_classify(&insn);
-        if ((sse2_run && kind != TL_SSE2) || (!sse2_run && kind == TL_SSE2) ||
-            (fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) {
-#if defined(HL_NATIVE_TEST_HOOKS)
-            if (kind == TL_NO)
-                fall_stop = HL_BACKEND_FALL_TL_NO;
-            else if (sse2_run)
-                fall_stop = kind == TL_FS_MEM ? HL_BACKEND_FALL_SSE2_TO_FS : HL_BACKEND_FALL_SSE2_TO_NORMAL;
-            else if (fs_run)
-                fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;
-            else
-                fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2 : HL_BACKEND_FALL_NORMAL_TO_FS;
-#endif
-            break;
-        }
         if (kind == TL_NO) {
 #if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_TL_NO;
 #endif
             break;
+        }
+        // FS is still an isolated one-instruction transaction.  Only the normal/SSE ownership-ledger
+        // boundary is removable in phase one.
+        if ((fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (fs_run)
+                fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;
+            else
+                fall_stop = previous_kind == TL_SSE2 ? HL_BACKEND_FALL_SSE2_TO_FS
+                                                      : HL_BACKEND_FALL_NORMAL_TO_FS;
+#endif
+            break;
+        }
+        int previous_sse2 = previous_kind == TL_SSE2;
+        int current_sse2 = kind == TL_SSE2;
+        if (previous_kind != TL_NO && previous_sse2 != current_sse2) {
+            (void)__atomic_fetch_add(&translit_mixed_sse_opportunities, 1, __ATOMIC_RELAXED);
+            if (!mixed_sse_enabled) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+                fall_stop = current_sse2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2
+                                         : HL_BACKEND_FALL_SSE2_TO_NORMAL;
+#endif
+                break;
+            }
+            mixed_sse_transition_count++;
         }
         if (!translit_displaced_safe(&insn, kind)) {
             (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
@@ -2373,11 +2400,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 if (preserve_register >= 0)
                     (void)__atomic_fetch_add(&translit_displaced_scratch_lowered, 1, __ATOMIC_RELAXED);
             }
-            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)instruction_start,
-                                             (uint64_t)(uintptr_t)a->cursor, pc,
-                                             translit_preserve_mask(preserve_register));
+            if (!translit_owner_append(owners, &owner_count, instruction_start, a->cursor, pc,
+                                       translit_preserve_mask(preserve_register))) {
+                a->overflow = 1;
+                a->cursor = instruction_start;
+                break;
+            }
             pc = next;
             count++;
+            previous_kind = kind;
             continue;
         }
 
@@ -2393,16 +2424,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 a->cursor = instruction_start;
                 break;
             }
-            fs_owner[fs_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc, preserve};
-            fs_owner[fs_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)commit_end, (uint64_t)(uintptr_t)a->cursor, next, preserve};
-            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)instruction_start,
-                                             (uint64_t)(uintptr_t)commit_end, pc, preserve);
-            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)commit_end,
-                                             (uint64_t)(uintptr_t)a->cursor, next, preserve);
+            if (!translit_owner_append(owners, &owner_count, instruction_start, commit_end, pc, preserve) ||
+                !translit_owner_append(owners, &owner_count, commit_end, a->cursor, next, preserve)) {
+                a->overflow = 1;
+                a->cursor = instruction_start;
+                break;
+            }
             pc = next;
             count++;
+            previous_kind = kind;
 #if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_FS_TRANSACTION;
 #endif
@@ -2446,13 +2476,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 break;
             }
             uint8_t *commit_end = a->cursor;
-            sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)instruction_start, (uint64_t)(uintptr_t)commit_end, pc, 0};
-            jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start,
-                                    (uint64_t)(uintptr_t)commit_end, pc);
+            if (!translit_owner_append(owners, &owner_count, instruction_start, commit_end, pc, 0)) {
+                a->overflow = 1;
+                a->cursor = instruction_start;
+                break;
+            }
             pc = next;
             count++;
+            previous_kind = kind;
 #if defined(HL_NATIVE_TEST_HOOKS)
+            sse2_instruction_count++;
             sse2_signature = (sse2_signature << 8) | insn.op;
             sse2_store_count += (uint64_t)sse2_store;
             sse2_store_movups += (uint64_t)(sse2_store && insn.op == 0x11);
@@ -2510,12 +2543,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         a->cursor = instruction_start;
                         break;
                     }
-                    jit_instruction_map_put((uint64_t)(uintptr_t)instruction_start,
-                                            (uint64_t)(uintptr_t)a->cursor, pc);
+                    if (!translit_owner_append(owners, &owner_count, instruction_start, a->cursor, pc, 0)) {
+                        a->overflow = 1;
+                        a->cursor = instruction_start;
+                        break;
+                    }
                     pc = next;
                     count++;
                     stitched++;
                     jcc_fall_stitched++;
+                    previous_kind = kind;
                     (void)__atomic_fetch_add(&translit_jcc_fall_admitted, 1, __ATOMIC_RELAXED);
                     continue;
                 }
@@ -2544,6 +2581,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     count++;
                     stitched++;
                     direct_jmp_stitched++;
+                    previous_kind = kind;
                     (void)__atomic_fetch_add(&translit_stitch_admitted, 1, __ATOMIC_RELAXED);
                     continue;
                 }
@@ -2700,16 +2738,23 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             a->cursor = instruction_start;
             break;
         }
+        int owner_ok;
         if (preserve_start) {
-            jit_instruction_map_put_preserve((uint64_t)(uintptr_t)preserve_start,
-                                             (uint64_t)(uintptr_t)preserve_end, pc,
-                                             translit_preserve_mask(preserve_register));
+            owner_ok = translit_owner_append(owners, &owner_count, instruction_start, preserve_end, pc,
+                                              translit_preserve_mask(preserve_register)) &&
+                       translit_owner_append(owners, &owner_count, preserve_end, a->cursor, pc, 0);
             (void)__atomic_fetch_add(&translit_rip_indirect_lowered, 1, __ATOMIC_RELAXED);
+        } else {
+            owner_ok = translit_owner_append(owners, &owner_count, instruction_start, a->cursor, pc, 0);
         }
-        jit_instruction_map_put((uint64_t)(uintptr_t)(preserve_end ? preserve_end : instruction_start),
-                                (uint64_t)(uintptr_t)a->cursor, pc);
+        if (!owner_ok) {
+            a->overflow = 1;
+            a->cursor = instruction_start;
+            break;
+        }
         pc = next;
         count++;
+        previous_kind = kind;
         terminated = 1;
         break;
     }
@@ -2746,25 +2791,28 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
             return NULL;
         }
-        if (sse2_run)
-            sse2_owner[sse2_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
-        if (fs_run)
-            fs_owner[fs_owner_count++] = (jit_body_owner_range){
-                (uint64_t)(uintptr_t)tail, (uint64_t)(uintptr_t)a->cursor, pc, 0};
+        if (!translit_owner_append(owners, &owner_count, tail, a->cursor, pc, 0)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
+#endif
+            return NULL;
+        }
     }
 
-    int owner_published = fs_run
-                              ? jit_body_owner_publish_n(g_cache_gen, owner_token, fs_owner, fs_owner_count)
-                          : sse2_run
-                              ? jit_body_owner_publish_n(g_cache_gen, owner_token, sse2_owner, sse2_owner_count)
-                              : jit_body_owner_publish(g_cache_gen, owner_token, (uint64_t)(uintptr_t)start,
-                                                       (uint64_t)(uintptr_t)a->cursor, gpc);
+    int owner_published = jit_body_owner_publish_n(g_cache_gen, owner_token, owners, owner_count);
     if (!owner_published) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
         return NULL;
+    }
+    // The instruction map is deliberately staged behind the all-or-nothing owner publication.  Failed
+    // emission and capacity refusal therefore cannot leave stale provenance naming unreachable bytes.
+    translit_instruction_ranges_publish(owners, owner_count);
+    if (mixed_sse_transition_count != 0) {
+        (void)__atomic_fetch_add(&translit_mixed_sse_admitted, 1, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_mixed_sse_transitions, mixed_sse_transition_count,
+                                 __ATOMIC_RELAXED);
     }
 #if defined(HL_NATIVE_TEST_HOOKS)
     (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
@@ -2779,14 +2827,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                          (uint32_t)would_link_marker[3] << 24;
         translit_test_fall_marker_seen = 1;
     }
-    if (sse2_run) {
+    if (sse2_instruction_count != 0) {
         (void)__atomic_fetch_add(&translit_sse2_runs_admitted, 1, __ATOMIC_RELAXED);
-        (void)__atomic_fetch_add(&translit_sse2_instructions_admitted, (uint64_t)count, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_instructions_admitted, sse2_instruction_count,
+                                 __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_store_instructions, sse2_store_count, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_store_movups, sse2_store_movups, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_store_movaps, sse2_store_movaps, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_store_movdqu, sse2_store_movdqu, __ATOMIC_RELAXED);
-        if (count == 6 && sse2_signature == UINT64_C(0x6FDB6F73EB7E))
+        if (sse2_instruction_count == 6 && sse2_signature == UINT64_C(0x6FDB6F73EB7E))
             (void)__atomic_fetch_add(&translit_sse2_target_runs, 1, __ATOMIC_RELAXED);
         if (sse2_next_family_seen)
             (void)__atomic_fetch_add(&translit_sse2_next_family_runs, 1, __ATOMIC_RELAXED);
@@ -2847,8 +2896,8 @@ static int translit_fall_fixture_test(unsigned scenario) {
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (arena == MAP_FAILED) return 98;
-    static const uint8_t normal_to_sse[] = {0x90, 0x66, 0x0f, 0xef, 0xc0};
-    static const uint8_t sse_to_normal[] = {0x66, 0x0f, 0xef, 0xc0, 0x90};
+    static const uint8_t normal_to_sse[] = {0x90, 0x66, 0x0f, 0xef, 0xc0, 0x0f, 0x0b};
+    static const uint8_t sse_to_normal[] = {0x66, 0x0f, 0xef, 0xc0, 0x90, 0x0f, 0x0b};
     static const uint8_t normal_to_fs[] = {0x90, 0x64, 0x48, 0x8b, 0x04, 0x25, 0x40, 0x23, 0x01, 0x00};
     static const uint8_t fs_transaction[] = {0x64, 0x48, 0x8b, 0x04, 0x25, 0x40, 0x23, 0x01, 0x00};
     static const uint8_t tl_no[] = {0x90, 0x0f, 0x0b};
@@ -2860,8 +2909,8 @@ static int translit_fall_fixture_test(unsigned scenario) {
     size_t length = 0;
     unsigned expected = HL_BACKEND_FALL_OTHER;
     switch (scenario) {
-    case 71: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_NORMAL_TO_SSE2; break;
-    case 72: bytes = sse_to_normal; length = sizeof sse_to_normal; expected = HL_BACKEND_FALL_SSE2_TO_NORMAL; break;
+    case 71: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_TL_NO; break;
+    case 72: bytes = sse_to_normal; length = sizeof sse_to_normal; expected = HL_BACKEND_FALL_TL_NO; break;
     case 73: bytes = normal_to_fs; length = sizeof normal_to_fs; expected = HL_BACKEND_FALL_NORMAL_TO_FS; break;
     case 74: bytes = fs_transaction; length = sizeof fs_transaction; expected = HL_BACKEND_FALL_FS_TRANSACTION; break;
     case 75: bytes = tl_no; length = sizeof tl_no; expected = HL_BACKEND_FALL_TL_NO; break;
@@ -2915,6 +2964,140 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_cache_gen = saved_generation;
     munmap(arena, arena_size);
     return built && cap_exact && executed ? 0 : 100 + (int)(scenario - 71);
+}
+
+static int translit_mixed_fixture_test(unsigned scenario) {
+    const size_t arena_size = 8192;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 120;
+    static const uint8_t alternating[] = {
+        0x90,                         // normal
+        0x66, 0x0f, 0xef, 0xc0,       // pxor xmm0,xmm0
+        0x4d, 0x89, 0xd2,             // mov r10,r10
+        0x66, 0x0f, 0xef, 0xc9,       // pxor xmm1,xmm1
+        0x90,                         // normal
+        0x0f, 0x0b,                   // unsupported terminator for a deterministic tail
+    };
+    uint8_t overflow[96 * 5 + 2];
+    for (unsigned i = 0; i < 96; i++) {
+        overflow[i * 5] = 0x90;
+        memcpy(overflow + i * 5 + 1, (uint8_t[]){0x66, 0x0f, 0xef, 0xc1}, 4);
+    }
+    overflow[sizeof overflow - 2] = 0x0f;
+    overflow[sizeof overflow - 1] = 0x0b;
+    const uint8_t *bytes = scenario == 81 ? overflow : alternating;
+    size_t length = scenario == 81 ? sizeof overflow : sizeof alternating;
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - scenario;
+    map_clear();
+    struct interp_block *block = (struct interp_block *)arena;
+    translit_fall_fixture_bytes = bytes;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
+    translit_fall_fixture_length = length;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL);
+    int result = 121;
+    if (context == NULL) goto done;
+
+    jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
+    if (set == NULL) goto done;
+    if (scenario == 80)
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - TL_MAX_INSNS, memory_order_relaxed);
+    uint64_t admitted_before = __atomic_load_n(&translit_mixed_sse_admitted, __ATOMIC_RELAXED);
+    uint64_t transitions_before = __atomic_load_n(&translit_mixed_sse_transitions, __ATOMIC_RELAXED);
+    void *body = translit_build(context, block, translit_fall_fixture_guest);
+    jit_body_owner_entry *entries = atomic_load_explicit(&set->entry, memory_order_acquire);
+
+    if (scenario == 78) {
+        static const uint64_t offsets[] = {0, 1, 5, 8, 12, 13};
+        uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
+        int exact = body != NULL && block->profile_insns == 5 && published == 6 && entries != NULL;
+        for (unsigned i = 0; exact && i < sizeof offsets / sizeof offsets[0]; i++)
+            exact = entries[i].guest == translit_fall_fixture_guest + offsets[i] &&
+                    entries[i].rw_start < entries[i].rw_end &&
+                    (i == 0 || entries[i - 1].rw_end <= entries[i].rw_start);
+        exact = exact && __atomic_load_n(&translit_mixed_sse_admitted, __ATOMIC_RELAXED) == admitted_before + 1 &&
+                __atomic_load_n(&translit_mixed_sse_transitions, __ATOMIC_RELAXED) == transitions_before + 4;
+        result = exact ? 0 : 122;
+    } else if (scenario == 79) {
+        struct cpu cpu = {0};
+        block->magic = INTERP_BLOCK_MAGIC;
+        block->gpc = translit_fall_fixture_guest;
+        cpu.rip = translit_fall_fixture_guest;
+        cpu.irq = 1;
+        hl_backend_tree_begin(1, effective_host_services());
+        if (body != NULL) run_block(context, &cpu, block);
+        struct hl_backend_tree_summary summary;
+        hl_backend_tree_summary(&summary);
+        result = body != NULL && cpu.irq == 1 && cpu.reason == R_BRANCH && cpu.v[0] == 0 && cpu.v[1] == 0 &&
+                         cpu.v[2] == 0 && cpu.v[3] == 0 &&
+                         summary.translated_exit[HL_BACKEND_SHAPE_T_IRQ] == 1
+                     ? 0
+                     : 123;
+    } else if (scenario == 80) {
+        uint64_t guest = 0;
+        uint32_t before = JIT_BODY_OWNER_N - TL_MAX_INSNS;
+        int refused = body == NULL && atomic_load_explicit(&set->count, memory_order_acquire) == before &&
+                      !jit_instruction_map_lookup((uint64_t)(uintptr_t)(arena + sizeof *block), &guest, NULL);
+        memset(block, 0, sizeof *block);
+        g_cp = arena + sizeof *block;
+        atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (TL_MAX_INSNS + 1), memory_order_relaxed);
+        body = translit_build(context, block, translit_fall_fixture_guest);
+        uint32_t after = atomic_load_explicit(&set->count, memory_order_acquire);
+        result = refused && body != NULL && after == JIT_BODY_OWNER_N - (TL_MAX_INSNS + 1) + 6 ? 0 : 124;
+    } else if (scenario == 81) {
+        uint64_t guest = 0;
+        result = body == NULL && atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
+                         !jit_instruction_map_lookup((uint64_t)(uintptr_t)(arena + sizeof *block), &guest, NULL)
+                     ? 0
+                     : 125;
+    } else if (scenario == 82) {
+        uint64_t guest = 0;
+        int before = body != NULL && jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest) &&
+                     guest == translit_fall_fixture_guest;
+        jit_body_owner_after_fork(1);
+        int preserved = jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest) &&
+                        guest == translit_fall_fixture_guest;
+        jit_body_owner_after_fork(0);
+        int rebuilt = !jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest);
+        result = before && preserved && rebuilt ? 0 : 126;
+    } else if (scenario == 83) {
+        uint64_t guest = 0;
+        const uint64_t dirty[1][2] = {{translit_fall_fixture_guest + 5,
+                                       translit_fall_fixture_guest + 6}};
+        int published = body != NULL && block->guest_start <= dirty[0][0] &&
+                        block->guest_end >= dirty[0][1] &&
+                        jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest) &&
+                        guest == translit_fall_fixture_guest;
+        if (published)
+            map_put(translit_fall_fixture_guest, block->guest_start, block->guest_end, block, block);
+        int reachable = published && map_host(translit_fall_fixture_guest) == block;
+        uint32_t invalidated = map_invalidate_source_ranges(dirty, 1);
+        int retained_for_fault = invalidated == 1 && map_host(translit_fall_fixture_guest) == NULL &&
+                                 jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest) &&
+                                 guest == translit_fall_fixture_guest;
+        jit_body_owner_drop_generation(g_cache_gen);
+        int retired = !jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest);
+        result = reachable && retained_for_fault && retired ? 0 : 127;
+    }
+
+done:
+    map_clear();
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    munmap(arena, arena_size);
+    return result;
 }
 #endif
 
@@ -3037,6 +3220,10 @@ static int translit_report(char *out, size_t size) {
     uint64_t rip_indirect_lowered = __atomic_load_n(&translit_rip_indirect_lowered, __ATOMIC_RELAXED);
     uint64_t provenance_fallback = __atomic_load_n(&translit_provenance_fallback, __ATOMIC_RELAXED);
     uint64_t body_owner_recovered = __atomic_load_n(&translit_body_owner_recovered, __ATOMIC_RELAXED);
+    uint64_t mixed_sse_opportunities =
+        __atomic_load_n(&translit_mixed_sse_opportunities, __ATOMIC_RELAXED);
+    uint64_t mixed_sse_admitted = __atomic_load_n(&translit_mixed_sse_admitted, __ATOMIC_RELAXED);
+    uint64_t mixed_sse_transitions = __atomic_load_n(&translit_mixed_sse_transitions, __ATOMIC_RELAXED);
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t body_owner_published = __atomic_load_n(&translit_body_owner_published, __ATOMIC_RELAXED);
     uint64_t sse2_runs_admitted = __atomic_load_n(&translit_sse2_runs_admitted, __ATOMIC_RELAXED);
@@ -3103,6 +3290,7 @@ static int translit_report(char *out, size_t size) {
     if (hl_option_get("HL_TRANSLIT_PROFILE_WIDE_TEST") != NULL) {
         blocks = entries = declined = stitch_candidates = stitch_admitted = UINT64_MAX;
         rip_indirect_lowered = provenance_fallback = body_owner_recovered = body_owner_published = UINT64_MAX;
+        mixed_sse_opportunities = mixed_sse_admitted = mixed_sse_transitions = UINT64_MAX;
         sse2_runs_admitted = sse2_instructions_admitted = sse2_target_runs = sse2_next_family_runs = UINT64_MAX;
         sse2_store_instructions = sse2_store_movups = sse2_store_movaps = sse2_store_movdqu = UINT64_MAX;
         sse2_store_family_runs = sse2_pxor_admitted = sse2_pxor_runs_admitted = UINT64_MAX;
@@ -3135,7 +3323,8 @@ static int translit_report(char *out, size_t size) {
                         " jcc_fall_page_refused=%llu jcc_fall_successor_page_refused=%llu"
                         " jcc_fall_decode_refused=%llu jcc_fall_executed=%llu"
                         " jcc_link_admitted=%llu jcc_link_taken=%llu jcc_link_irq_fallback=%llu"
-                        " jcc_link_dispatcher=%llu\n",
+                        " jcc_link_dispatcher=%llu mixed_sse_opportunities=%llu"
+                        " mixed_sse_admitted=%llu mixed_sse_transitions=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -3154,7 +3343,9 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)jcc_fall_successor_page_refused,
                         (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed,
                         (unsigned long long)jcc_link_admitted, (unsigned long long)jcc_link_taken,
-                        (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher);
+                        (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher,
+                        (unsigned long long)mixed_sse_opportunities, (unsigned long long)mixed_sse_admitted,
+                        (unsigned long long)mixed_sse_transitions);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
@@ -3179,7 +3370,8 @@ static int translit_report(char *out, size_t size) {
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
                     " jcc_fall_executed=%llu jcc_link_admitted=%llu jcc_link_taken=%llu"
-                    " jcc_link_irq_fallback=%llu jcc_link_dispatcher=%llu\n",
+                    " jcc_link_irq_fallback=%llu jcc_link_dispatcher=%llu"
+                    " mixed_sse_opportunities=%llu mixed_sse_admitted=%llu mixed_sse_transitions=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
@@ -3202,7 +3394,9 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)jcc_fall_successor_page_refused,
                     (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed,
                     (unsigned long long)jcc_link_admitted, (unsigned long long)jcc_link_taken,
-                    (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher);
+                    (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher,
+                    (unsigned long long)mixed_sse_opportunities, (unsigned long long)mixed_sse_admitted,
+                    (unsigned long long)mixed_sse_transitions);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.

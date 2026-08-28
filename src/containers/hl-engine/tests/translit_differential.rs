@@ -80,6 +80,9 @@ struct Backend {
     provenance_fallback: u64,
     body_owner_recovered: u64,
     body_owner_published: u64,
+    mixed_sse_opportunities: u64,
+    mixed_sse_admitted: u64,
+    mixed_sse_transitions: u64,
     sse2_runs_admitted: u64,
     sse2_instructions_admitted: u64,
     sse2_target_runs: u64,
@@ -399,6 +402,9 @@ fn backend(stderr: &[u8]) -> Backend {
         provenance_fallback: counter("provenance_fallback="),
         body_owner_recovered: counter("body_owner_recovered="),
         body_owner_published: counter("body_owner_published="),
+        mixed_sse_opportunities: counter("mixed_sse_opportunities="),
+        mixed_sse_admitted: counter("mixed_sse_admitted="),
+        mixed_sse_transitions: counter("mixed_sse_transitions="),
         sse2_runs_admitted: counter("sse2_runs_admitted="),
         sse2_instructions_admitted: counter("sse2_instructions_admitted="),
         sse2_target_runs: counter("sse2_target_runs="),
@@ -616,8 +622,9 @@ fn fs_disp32_loads_fall_back_under_direct_data_authority() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "fs_tls");
     let args = [b"direct".as_slice()];
-    let (interpreted, interpreted_status, _) = run_with_arguments(&executable, "0", &args, false, false, true);
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &args, false, false, true);
+    let (interpreted, interpreted_status, _) = run_with_arguments(&executable, "0", &args, false, false, true, false);
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &args, false, false, true, false);
     let native = std::process::Command::new(&executable)
         .arg("direct")
         .output()
@@ -634,7 +641,8 @@ fn fs_disp32_fault_restarts_at_guest_source_with_old_destination() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "fs_tls_fault");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false, false);
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &[], true, false, false, false);
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native FS fault fixture");
@@ -671,6 +679,47 @@ fn a_contiguous_sse2_run_matches_interpreter_and_native() {
         selected_backend.line
     );
     assert_eq!(selected_backend.sse2_target_runs, 1, "{}", selected_backend.line);
+}
+
+#[test]
+fn alternating_normal_and_sse_share_one_exact_recovery_descriptor() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "mixed_sse");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &[], true, false, false, false);
+    let (disabled, disabled_status, disabled_backend) =
+        run_with_arguments(&executable, "1", &[], true, false, false, true);
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native mixed normal/SSE fixture");
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!((disabled_status, &disabled), (interpreted_status, &interpreted));
+    assert_eq!(native.status.code(), Some(selected_status));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(
+        selected,
+        b"mixed state=1 faults=7 registers=7 vectors=04030201/04030201/04030201 fork=1\n"
+    );
+    assert!(
+        selected_backend.mixed_sse_opportunities > 0,
+        "{}",
+        selected_backend.line
+    );
+    assert!(selected_backend.mixed_sse_admitted > 0, "{}", selected_backend.line);
+    assert!(
+        selected_backend.mixed_sse_transitions >= selected_backend.mixed_sse_admitted,
+        "{}",
+        selected_backend.line
+    );
+    assert!(selected_backend.body_owner_recovered >= 3, "{}", selected_backend.line);
+    assert!(
+        disabled_backend.mixed_sse_opportunities > 0,
+        "{}",
+        disabled_backend.line
+    );
+    assert_eq!(disabled_backend.mixed_sse_admitted, 0, "{}", disabled_backend.line);
+    assert_eq!(disabled_backend.mixed_sse_transitions, 0, "{}", disabled_backend.line);
 }
 
 #[test]
@@ -798,7 +847,8 @@ fn movd_movq_body_owner_exhaustion_falls_back_without_partial_authority() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse_movd");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true, false);
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &[], false, true, false, false);
     assert_eq!((selected_status, selected), (interpreted_status, interpreted));
     assert_eq!(selected_backend.entries, 0, "{}", selected_backend.line);
     assert_eq!(selected_backend.sse2_movd_admitted, 0, "{}", selected_backend.line);
@@ -810,7 +860,8 @@ fn sse2_alignment_faults_replay_old_vectors_and_boundary_immediates_match_native
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse2_fault");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], true, false, false);
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &[], true, false, false, false);
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native SSE2 fault fixture");
@@ -970,6 +1021,7 @@ fn run_with_arguments(
     force_provenance_miss: bool,
     exhaust_body_owners: bool,
     force_fs_authority: bool,
+    disable_mixed_sse: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -989,6 +1041,11 @@ fn run_with_arguments(
         options
             .set("HL_TRANSLIT_FS_AUTHORITY_TEST", "1", true)
             .expect("HL_TRANSLIT_FS_AUTHORITY_TEST");
+    }
+    if disable_mixed_sse {
+        options
+            .set("HL_TRANSLIT_MIXED_SSE_DISABLE", "1", true)
+            .expect("HL_TRANSLIT_MIXED_SSE_DISABLE");
     }
     let plan = RuntimePlan {
         rootfs: None,
@@ -1012,7 +1069,7 @@ fn run_with_arguments(
 }
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
-    run_with_arguments(executable, translit, &[], false, false, false)
+    run_with_arguments(executable, translit, &[], false, false, false, false)
 }
 
 fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
@@ -1318,7 +1375,8 @@ fn exhausted_body_owner_capacity_falls_back_to_the_interpreter() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "flags");
     let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, selected_backend) = run_with_arguments(&executable, "1", &[], false, true, false);
+    let (selected, selected_status, selected_backend) =
+        run_with_arguments(&executable, "1", &[], false, true, false, false);
     assert_eq!(selected_status, interpreted_status);
     assert_eq!(selected, interpreted);
     assert_eq!(selected_backend.entries, 0, "{}", selected_backend.line);
@@ -1695,7 +1753,7 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     // path pinned to native architectural behaviour without making that older compatibility defect the
     // oracle for this lowering.
     let (selected_stack, selected_stack_status, selected_stack_backend) =
-        run_with_arguments(&executable, "1", &[b"stack"], true, false, false);
+        run_with_arguments(&executable, "1", &[b"stack"], true, false, false, false);
     assert!(
         selected_stack_backend.rip_indirect_lowered >= 4,
         "{}",

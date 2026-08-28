@@ -94,6 +94,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only exhaust immutable same-ISA body-owner capacity", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_FS_AUTHORITY_TEST",
                         "test-only force same-ISA FS direct-data authority refusal", HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_TRANSLIT_MIXED_SSE_DISABLE",
+                     "disable mixed normal/SSE same-ISA descriptor admission", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_JCC_LINK_DISABLE",
                         "test-only disable already-published same-page JCC links", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",

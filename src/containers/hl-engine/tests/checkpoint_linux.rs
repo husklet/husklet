@@ -2703,6 +2703,9 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     assert_eq!(output.matches("JCC-LINK phase=0 value=42").count(), 1, "{output}");
     assert_eq!(output.matches("JCC-LINK phase=1 value=43").count(), 1, "{output}");
     assert_eq!(output.matches("JCC-LINK phase=2 value=44").count(), 1, "{output}");
+    assert_eq!(output.matches("MIXED-SSE phase=0 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("MIXED-SSE phase=1 value=43").count(), 1, "{output}");
+    assert_eq!(output.matches("MIXED-SSE phase=2 value=44").count(), 1, "{output}");
     if translit {
         let diagnostic_text = [
             capture_terminal.text(),
@@ -2722,6 +2725,19 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         assert!(
             chained.len() == 3 && chained.iter().all(|count| *count > 0),
             "each capture/restore process must execute a newly chained JCC: {chained:?}\n{diagnostic_text}"
+        );
+        let mixed = diagnostic_text
+            .lines()
+            .filter(|line| line.starts_with("[prof] translit: "))
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .find_map(|field| field.strip_prefix("mixed_sse_admitted="))
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            mixed.len() == 3 && mixed.iter().all(|count| *count > 0),
+            "each capture/restore process must publish a fresh mixed normal/SSE body: {mixed:?}\n{diagnostic_text}"
         );
     }
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");

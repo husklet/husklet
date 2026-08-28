@@ -46,6 +46,12 @@ impl Guest {
 /// Runs one architecture-specific engine worker process.
 pub struct Worker;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum MixedSseControl {
+    On,
+    Off,
+}
+
 #[derive(Parser)]
 struct BackendReceiptArguments {
     #[arg(long = "guest-isa")]
@@ -85,6 +91,9 @@ struct LaunchArguments {
     /// Run supported x86-64 guest blocks through the experimental translation backend.
     #[arg(long)]
     translit: bool,
+    /// Admit normal and SSE instructions into one bounded same-ISA descriptor.
+    #[arg(long, value_enum, value_name = "on|off")]
+    translit_mixed_sse: Option<MixedSseControl>,
     /// Execute a same-ISA Linux x86-64 guest under the experimental native syscall supervisor.
     #[arg(long)]
     native_supervised: bool,
@@ -267,6 +276,9 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--native-supervised is available only in the x86-64 worker".to_owned(),
         ));
     }
+    if launch.translit_mixed_sse.is_some() && !launch.translit {
+        return Err(Failure::Request("--translit-mixed-sse requires --translit".to_owned()));
+    }
     if launch.rootfs.is_none() && (launch.diagnostics || launch.translit || launch.native_supervised) {
         return Err(Failure::Request(
             "--diagnostics, --translit and --native-supervised require --rootfs; raw host-path launches do not carry launch options"
@@ -353,6 +365,15 @@ fn rootfs_plan(
                 .set(name, "1", true)
                 .map_err(|error| Failure::Request(format!("cannot set the engine launch option {name}: {error:?}")))?;
         }
+    }
+    if launch.translit_mixed_sse == Some(MixedSseControl::Off) {
+        options
+            .set("HL_TRANSLIT_MIXED_SSE_DISABLE", "1", true)
+            .map_err(|error| {
+                Failure::Request(format!(
+                    "cannot set the engine launch option HL_TRANSLIT_MIXED_SSE_DISABLE: {error:?}"
+                ))
+            })?;
     }
     #[cfg(feature = "native-test-hooks")]
     for injected in &launch.native_test_option {
@@ -564,11 +585,13 @@ mod tests {
         let defaults = launch(&["program"]);
         assert!(!defaults.diagnostics);
         assert!(!defaults.translit);
+        assert_eq!(defaults.translit_mixed_sse, None);
         assert!(!defaults.native_supervised);
 
         let selected = launch(&[
             "--diagnostics",
             "--translit",
+            "--translit-mixed-sse=off",
             "--native-supervised",
             "--rootfs",
             "/image",
@@ -576,8 +599,26 @@ mod tests {
         ]);
         assert!(selected.diagnostics);
         assert!(selected.translit);
+        assert_eq!(selected.translit_mixed_sse, Some(super::MixedSseControl::Off));
         assert!(selected.native_supervised);
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
+    }
+
+    #[test]
+    fn mixed_sse_control_is_typed_and_requires_transliteration() {
+        for invalid in ["yes", "0", "disabled", ""] {
+            let option = format!("--translit-mixed-sse={invalid}");
+            assert!(
+                LaunchArguments::try_parse_from(["hl-x86_64", option.as_str(), "program",]).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+        let failure = execute(
+            Guest::X86_64,
+            &launch(&["--translit-mixed-sse=off", "--rootfs", "/image", "bin/program"]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("--translit-mixed-sse requires --translit"));
     }
 
     #[cfg(not(feature = "native-test-hooks"))]
@@ -667,6 +708,7 @@ mod tests {
         .unwrap();
         assert_eq!(defaults.options.get("HL_C_DIAGNOSTICS"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT"), None);
+        assert_eq!(defaults.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_NATIVE_SUPERVISED"), None);
 
         let selected = rootfs_plan(
@@ -674,6 +716,7 @@ mod tests {
             &launch(&[
                 "--diagnostics",
                 "--translit",
+                "--translit-mixed-sse=off",
                 "--native-supervised",
                 "--rootfs",
                 root.path().to_str().unwrap(),
@@ -683,9 +726,30 @@ mod tests {
         .unwrap();
         assert_eq!(selected.options.get("HL_C_DIAGNOSTICS"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT"), Some("1"));
+        assert_eq!(selected.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), Some("1"));
+        assert!(
+            selected
+                .environment
+                .iter()
+                .all(|entry| !entry.starts_with(b"HL_TRANSLIT_MIXED_SSE_DISABLE=")),
+            "launch options must not enter the guest environment"
+        );
         assert_eq!(selected.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
         assert_eq!(selected.box_policy.flags & (1 << 2), 1 << 2);
         assert_eq!(defaults.box_policy.flags & (1 << 2), 0);
+
+        let explicitly_enabled = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--translit",
+                "--translit-mixed-sse=on",
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(explicitly_enabled.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), None);
     }
 
     #[cfg(all(unix, feature = "native-test-hooks"))]

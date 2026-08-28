@@ -140,6 +140,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only force same-ISA FS direct-data authority refusal",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_MIXED_SSE_DISABLE",
+        "disable mixed normal/SSE same-ISA descriptor admission",
+        Flag
+    ),
     internal!(
         "HL_TRANSLIT_JCC_LINK_DISABLE",
         "test-only disable already-published same-page JCC links",

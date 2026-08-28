@@ -56,6 +56,7 @@ static int helper(int cycle) {
 #if defined(__x86_64__)
 extern long checkpoint_link_target(long, long, long, long);
 extern long checkpoint_link_source(long, long, long, long);
+extern long checkpoint_mixed_sse(long);
 __asm__(".pushsection .text.checkpoint_jcc_link,\"ax\",@progbits\n"
         ".balign 4096\n"
         ".global checkpoint_link_target\n.type checkpoint_link_target,@function\n"
@@ -68,13 +69,33 @@ __asm__(".pushsection .text.checkpoint_jcc_link,\"ax\",@progbits\n"
         ".size checkpoint_link_source,.-checkpoint_link_source\n"
         ".popsection\n");
 
+__asm__(".text\n"
+        ".global checkpoint_mixed_sse\n.type checkpoint_mixed_sse,@function\n"
+        "checkpoint_mixed_sse:\n"
+        "mov %rdi,%rax\n"
+        "movq %rax,%xmm0\n"
+        "lea 42(%rax),%rax\n"
+        "movq %rax,%xmm1\n"
+        "movq %xmm1,%rax\n"
+        "ret\n"
+        ".size checkpoint_mixed_sse,.-checkpoint_mixed_sse\n");
+
 static long checkpoint_link_check(int phase) {
     volatile long warm = checkpoint_link_target(0, 31 + phase, 0, 4);
     long linked = checkpoint_link_source(1, 31 + phase, 0, 4);
     return warm == linked ? linked : -1;
 }
+
+static long checkpoint_mixed_check(int phase) {
+    return checkpoint_mixed_sse(phase);
+}
 #else
 static long checkpoint_link_check(int phase) {
+    return 42 + phase;
+}
+
+
+static long checkpoint_mixed_check(int phase) {
     return 42 + phase;
 }
 #endif
@@ -142,8 +163,10 @@ int main(int argc, char **argv) {
     }
     close(transport[1]);
     long initial_link = checkpoint_link_check(0);
-    if (initial_link != 42) return 16;
+    long initial_mixed = checkpoint_mixed_check(0);
+    if (initial_link != 42 || initial_mixed != 42) return 16;
     dprintf(STDOUT_FILENO, "JCC-LINK phase=0 value=%ld\n", initial_link);
+    dprintf(STDOUT_FILENO, "MIXED-SSE phase=0 value=%ld\n", initial_mixed);
     dprintf(STDOUT_FILENO, "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader,
             (long)sleeper, (long)worker, (long)group, (long)session, (long)foreground);
 
@@ -165,8 +188,10 @@ int main(int argc, char **argv) {
         if (progress < previous + 5 || exists(directory, marker) != 1) continue;
 
         long restored_link = checkpoint_link_check(next_cycle);
-        if (restored_link != 42 + next_cycle) return 17;
+        long restored_mixed = checkpoint_mixed_check(next_cycle);
+        if (restored_link != 42 + next_cycle || restored_mixed != 42 + next_cycle) return 17;
         dprintf(STDOUT_FILENO, "JCC-LINK phase=%d value=%ld\n", next_cycle, restored_link);
+        dprintf(STDOUT_FILENO, "MIXED-SSE phase=%d value=%ld\n", next_cycle, restored_mixed);
 
         pid_t child = fork();
         if (child < 0) return 9;
