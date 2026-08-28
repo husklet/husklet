@@ -3927,11 +3927,30 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
 
     if (scenario == 95) {
         uint64_t collision_target = target + ((uint64_t)IBTC_N << 2);
+        translit_jcc_ibtc_stub_header *header = (translit_jcc_ibtc_stub_header *)g_cache;
         pid_t child = fork();
         if (child == 0) {
+            // Fork-preserve reconstructs process-local pointers solely from the
+            // generation-owned offset header before any inherited source runs.
+            translit_jcc_ibtc_stub_entry = NULL;
+            translit_jcc_ibtc_stub_rsp_canonical = NULL;
+            translit_jcc_ibtc_stub_flags_canonical = NULL;
+            translit_jcc_ibtc_stub_end = NULL;
+            if (!translit_jcc_ibtc_stub_init() ||
+                translit_jcc_ibtc_stub_entry != g_cache + header->entry_off ||
+                translit_jcc_ibtc_stub_rsp_canonical != g_cache + header->rsp_canonical_off ||
+                translit_jcc_ibtc_stub_flags_canonical != g_cache + header->flags_canonical_off ||
+                translit_jcc_ibtc_stub_end != g_cache + header->end_off)
+                _exit(1);
+            struct cpu child_cpu = {0};
+            child_cpu.rip = source;
+            child_cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+            child_cpu.ibtc_base = (uint64_t)g_ibtc;
+            run_block(context, &child_cpu, source_block);
+            if (child_cpu.r[0] != 42 || child_cpu.rip != target + 5) _exit(2);
             ibtc_publish(cell, collision_target, (void *)UINT64_C(0x12345000));
             ibtc_ent child_pair = ibtc_snapshot(cell);
-            _exit(child_pair.target == collision_target ? 0 : 1);
+            _exit(child_pair.target == collision_target ? 0 : 3);
         }
         int status = 0;
         ibtc_ent parent_pair = ibtc_snapshot(cell);
