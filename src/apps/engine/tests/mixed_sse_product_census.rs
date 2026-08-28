@@ -97,6 +97,21 @@ fn run(root: &Path, mode: &str) -> std::process::Output {
         .expect("run production no-hooks worker")
 }
 
+fn run_fatal_root(root: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .args([
+            "--diagnostics",
+            "--translit",
+            "--translit-mixed-sse=on",
+            "--rootfs",
+            root.to_str().unwrap(),
+            "bin/mixed-sse-child",
+            "fatal-root",
+        ])
+        .output()
+        .expect("run production no-hooks worker with fatal root")
+}
+
 #[test]
 fn nohooks_product_aggregates_child_only_mixed_execution_after_reap() {
     let root = tempfile::tempdir().unwrap();
@@ -122,6 +137,20 @@ fn nohooks_product_aggregates_child_only_mixed_execution_after_reap() {
     assert_eq!(disabled["mixed_sse_executed"], 0);
     assert_eq!(disabled["mixed_sse_executed_transitions"], 0);
     assert!(disabled["mixed_sse_disabled_boundaries"] > 0, "{disabled:?}");
+}
+
+#[test]
+fn nohooks_parent_barrier_settles_a_child_that_outlives_a_fatal_root() {
+    let root = tempfile::tempdir().unwrap();
+    build_fixture(root.path());
+    let output = run_fatal_root(root.path());
+    assert!(!output.status.success(), "fatal-root fixture unexpectedly succeeded");
+    assert_eq!(output.stdout, b"mixed-child=1\n");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let report = census(&stderr).unwrap_or_else(|error| panic!("{error}:\n{stderr}"));
+    assert!(report["mixed_sse_executed"] > 0, "{report:?}");
+    assert!(report["mixed_sse_executed_transitions"] >= report["mixed_sse_executed"]);
+    assert_eq!(report["mixed_sse_disabled_boundaries"], 0);
 }
 
 #[test]

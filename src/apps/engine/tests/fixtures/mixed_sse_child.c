@@ -20,7 +20,7 @@ __asm__(".text\n"
         "ret\n"
         ".size child_mixed,.-child_mixed\n");
 
-int main(void) {
+int main(int argc, char **argv) {
     static const uint8_t input[16] __attribute__((aligned(16))) = {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
     int ready[2];
@@ -42,7 +42,12 @@ int main(void) {
     char byte = 0;
     int started = read(ready[0], &byte, 1) == 1 && byte == 'x';
     close(ready[0]);
-    printf("mixed-child=%d\n", started);
+    const char record[] = "mixed-child=1\n";
+    if (started && write(STDOUT_FILENO, record, sizeof record - 1) != (ssize_t)(sizeof record - 1)) return 7;
+    if (argc == 2 && __builtin_strcmp(argv[1], "fatal-root") == 0) {
+        *(volatile int *)(uintptr_t)1 = 1;
+        return 8;
+    }
     /* Intentionally do not reap: the engine root's PID/birth barrier must settle this descendant before
        publishing the fork-shared census. Without that barrier the delayed line escapes after root exit. */
     return started ? 0 : 6;
