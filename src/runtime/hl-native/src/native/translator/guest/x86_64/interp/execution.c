@@ -418,11 +418,13 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;
     block->profile_fallback_form = 0;
 #endif
-    (void)translit_build(context, block, gpc);
+    uint64_t jcc_ibtc_sites = 0;
+    (void)translit_build(context, block, gpc, &jcc_ibtc_sites);
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.
     map_put(gpc, block->guest_start, block->guest_end, block, block);
+    translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_EMITTED, jcc_ibtc_sites);
     return block;
 }
 

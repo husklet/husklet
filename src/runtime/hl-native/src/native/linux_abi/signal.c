@@ -840,6 +840,10 @@ static void ckpt_restored_member_exit_signal(int signal);
 /* Defined by the activation registry, which follows this file in both target unity builds. */
 static void launch_reg_terminate_peers(void);
 
+#ifndef HL_BACKEND_TREE_FINALIZE_CPU
+#define HL_BACKEND_TREE_FINALIZE_CPU(c) ((void)(c))
+#endif
+
 static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
     sig_diag_raise_default(c, sig);
     if (container_pid() != 1) {
@@ -856,6 +860,7 @@ static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
     ckpt_restored_member_exit_signal(sig);
     /* The census contribution is a single lock-free atomic transition. The lifecycle parent owns every
        blocking teardown, reap and report operation after this signal context reaches _exit. */
+    HL_BACKEND_TREE_FINALIZE_CPU(c);
     (void)hl_backend_tree_finalize(1);
     _exit(128 + sig);
 }

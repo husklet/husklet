@@ -4,6 +4,21 @@ use std::io::Write;
 
 const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
 const BACKEND_SHAPE_PREFIX: &str = "[diag] backend-shape ";
+const BACKEND_SHAPE_PRODUCT_FIELDS: &[&str] = &[
+    "version",
+    "available",
+    "mixed_sse_executed",
+    "mixed_sse_executed_transitions",
+    "mixed_sse_disabled_boundaries",
+    "jcc_ibtc_enabled",
+    "jcc_ibtc_emitted",
+    "jcc_ibtc_hits",
+    "jcc_ibtc_misses",
+    "jcc_ibtc_irq",
+    "jcc_ibtc_fills",
+    "jcc_ibtc_suppressed",
+    "jcc_ibtc_invalid_refusals",
+];
 const BACKEND_TREE_FIELDS: [&str; 33] = [
     "version",
     "root_pid",
@@ -222,10 +237,22 @@ pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
 }
 
 pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), Error> {
+    let product = std::str::from_utf8(stderr).is_ok_and(|text| {
+        text.lines()
+            .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
+            .any(|record| record.split_whitespace().any(|field| field == "version=3"))
+    });
     let records = stderr
         .split(|byte| *byte == b'\n')
         .filter(|line| line.starts_with(BACKEND_TREE_PREFIX.as_bytes()))
         .count();
+    if product {
+        if records != 0 {
+            return Err("backend-shape product diagnostic cannot accompany backend-tree".into());
+        }
+        backend_shape_product(stderr, enabled)?;
+        return Ok(());
+    }
     let expected = usize::from(enabled);
     if records != expected {
         return Err(format!("backend-tree diagnostic appeared {records} times, expected {expected}").into());
@@ -498,6 +525,87 @@ fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
     Ok(fields)
 }
 
+pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+    let stderr = std::str::from_utf8(stderr).map_err(|_| "backend-shape product diagnostic is not UTF-8")?;
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
+        .collect::<Vec<_>>();
+    if !enabled {
+        if records.is_empty() {
+            return Ok(None);
+        }
+        return Err(format!(
+            "backend-shape product diagnostic appeared {} times, expected 0",
+            records.len()
+        )
+        .into());
+    }
+    if records.len() != 1 {
+        return Err(format!(
+            "backend-shape product diagnostic appeared {} times, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let mut fields = BTreeMap::new();
+    for field in records[0].split_whitespace() {
+        let Some((name, value)) = field.split_once('=') else {
+            return Err(format!("backend-shape product diagnostic has malformed field {field:?}").into());
+        };
+        if !BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
+            return Err(format!("backend-shape product diagnostic has unknown field {name:?}").into());
+        }
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| format!("backend-shape product field {name:?} is not an integer"))?;
+        if fields.insert(name, value).is_some() {
+            return Err(format!("backend-shape product diagnostic duplicates field {name:?}").into());
+        }
+    }
+    for name in BACKEND_SHAPE_PRODUCT_FIELDS {
+        if !fields.contains_key(name) {
+            return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+        }
+    }
+    if fields["version"] != 3 {
+        return Err("backend-shape product diagnostic has invalid version".into());
+    }
+    if fields["available"] != 1 {
+        return Err("backend-shape product diagnostic is unavailable".into());
+    }
+    if fields["jcc_ibtc_enabled"] > 1 {
+        return Err("backend-shape product JCC IBTC enable value is not boolean".into());
+    }
+    if fields["mixed_sse_executed_transitions"] < fields["mixed_sse_executed"]
+        || (fields["mixed_sse_executed"] == 0 && fields["mixed_sse_executed_transitions"] != 0)
+    {
+        return Err("backend-shape product mixed-SSE totals do not reconcile".into());
+    }
+    if fields["mixed_sse_executed"] != 0 && fields["mixed_sse_disabled_boundaries"] != 0 {
+        return Err("backend-shape product mixed-SSE polarity is inconsistent".into());
+    }
+    let dispositions = fields["jcc_ibtc_fills"]
+        .checked_add(fields["jcc_ibtc_suppressed"])
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_invalid_refusals"]));
+    if dispositions != Some(fields["jcc_ibtc_misses"]) {
+        return Err("backend-shape product JCC IBTC miss dispositions do not reconcile".into());
+    }
+    if fields["jcc_ibtc_enabled"] == 0 && (fields["jcc_ibtc_hits"] != 0 || fields["jcc_ibtc_fills"] != 0) {
+        return Err("backend-shape product disabled JCC IBTC polarity is inconsistent".into());
+    }
+    if fields["jcc_ibtc_enabled"] == 1 && fields["jcc_ibtc_suppressed"] != 0 {
+        return Err("backend-shape product enabled JCC IBTC polarity is inconsistent".into());
+    }
+    let dynamic = fields["jcc_ibtc_hits"]
+        .checked_add(fields["jcc_ibtc_misses"])
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_irq"]));
+    if dynamic.is_none() || (dynamic != Some(0) && fields["jcc_ibtc_emitted"] == 0) {
+        return Err("backend-shape product JCC IBTC execution has no emitted site".into());
+    }
+    Ok(Some(fields))
+}
+
 pub(crate) fn backend_tree_digest(stderr: &[u8]) -> String {
     let Ok(text) = std::str::from_utf8(stderr) else {
         return String::new();
@@ -606,6 +714,8 @@ mod tests {
     }
 
     const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
+    const PRODUCT_SHAPE_ON: &str = "[diag] backend-shape version=3 available=1 mixed_sse_executed=0 mixed_sse_executed_transitions=0 mixed_sse_disabled_boundaries=0 jcc_ibtc_enabled=1 jcc_ibtc_emitted=1 jcc_ibtc_hits=1 jcc_ibtc_misses=1 jcc_ibtc_irq=0 jcc_ibtc_fills=1 jcc_ibtc_suppressed=0 jcc_ibtc_invalid_refusals=0\n";
+    const PRODUCT_SHAPE_OFF: &str = "[diag] backend-shape version=3 available=1 mixed_sse_executed=0 mixed_sse_executed_transitions=0 mixed_sse_disabled_boundaries=0 jcc_ibtc_enabled=0 jcc_ibtc_emitted=1 jcc_ibtc_hits=0 jcc_ibtc_misses=2 jcc_ibtc_irq=0 jcc_ibtc_fills=0 jcc_ibtc_suppressed=2 jcc_ibtc_invalid_refusals=0\n";
     const SHAPE: &str = "[diag] backend-shape version=1 translated_entries=2 translated_transfers=5 t_fallthrough=1 t_cond_taken=1 t_cond_not_taken=0 t_direct_jump=0 t_direct_call=0 t_return=0 t_indirect_branch=0 t_indirect_call=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0 fall_total=1 fall_cap=0 fall_decode=0 fall_normal_to_sse2=0 fall_sse2_to_normal=0 fall_normal_to_fs=0 fall_fs_to_normal=0 fall_sse2_to_fs=0 fall_fs_to_sse2=0 fall_tl_no=1 fall_displaced=0 fall_fetch=0 fall_riprel=0 fall_fs_transaction=0 fall_sse_riprel=0 fall_other=0 stitch_jmp=1 stitch_cond_fall=2 e_fall_total=1 e_fall_mapped=1 e_fall_unmapped=0 e_fall_interrupted=0 e_fall_chained=0 e_fall_dispatcher=1 e_jt_total=1 e_jt_mapped=1 e_jt_unmapped=0 e_jt_interrupted=0 e_jt_chained=0 e_jt_dispatcher=1 e_jn_total=0 e_jn_mapped=0 e_jn_unmapped=0 e_jn_interrupted=0 e_jn_chained=0 e_jn_dispatcher=0 e_jmp_total=0 e_jmp_mapped=0 e_jmp_unmapped=0 e_jmp_interrupted=0 e_jmp_chained=0 e_jmp_dispatcher=0 e_call_total=0 e_call_mapped=0 e_call_unmapped=0 e_call_interrupted=0 e_call_chained=0 e_call_dispatcher=0 jt_same_page=1 jt_cross_page=0 jt_target_translated=1 jt_target_interpreted=0 jt_generation_current=1 jt_generation_retired=0 jt_rel32=1 jt_rel32_unreachable=0 jt_eligible=1 jt_ineligible=0 interpreted_entries=3 i_disabled=0 i_image=0 i_decode=0 i_unsupported=2 i_authority=0 i_resource=0 i_emit=0 i_runtime_image=1 i_runtime_bind=0 i_other=0 s_fallthrough=0 s_cond_taken=0 s_cond_not_taken=0 s_direct_jump=0 s_direct_call=1 s_return=0 s_indirect_branch=0 s_indirect_call=0 s_syscall=0 s_irq=0 s_fault=1 s_service=1 s_other=0 fallback_total=2 fallback_unique=1 fallback_overflow=0 stop_total=3 stop_unique=3 stop_overflow=0 family_jmem=1 family_div_total=3 family_div_inline=1 family_div_service64=1 family_div_service64_completed=1 family_div_de=1 family_idiv_total=3 family_idiv_inline=1 family_idiv_service64=1 family_idiv_service64_completed=1 family_idiv_de=1 family_total=7 mixed_sse_executed=2 mixed_sse_executed_transitions=3 mixed_sse_disabled_boundaries=0 fallback0_key=17 fallback0_count=2 fallback1_key=0 fallback1_count=0 fallback2_key=0 fallback2_count=0 fallback3_key=0 fallback3_count=0 fallback4_key=0 fallback4_count=0 fallback5_key=0 fallback5_count=0 fallback6_key=0 fallback6_count=0 fallback7_key=0 fallback7_count=0 stop0_key=1 stop0_count=1 stop1_key=2 stop1_count=1 stop2_key=3 stop2_count=1 stop3_key=0 stop3_count=0 stop4_key=0 stop4_count=0 stop5_key=0 stop5_count=0 stop6_key=0 stop6_count=0 stop7_key=0 stop7_count=0\n";
 
     fn census() -> String {
@@ -620,6 +730,75 @@ mod tests {
         assert!(
             digest.contains("crossings=5 translated_entries=2 interpreted_entries=3"),
             "{digest}"
+        );
+    }
+
+    #[test]
+    fn product_backend_shape_is_exact_and_reconciles_repeated_misses() {
+        validate_backend_tree(PRODUCT_SHAPE_ON.as_bytes(), true).unwrap();
+        validate_backend_tree(PRODUCT_SHAPE_OFF.as_bytes(), true).unwrap();
+        let on = backend_shape_product(PRODUCT_SHAPE_ON.as_bytes(), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(on["jcc_ibtc_hits"], 1);
+        let off = backend_shape_product(PRODUCT_SHAPE_OFF.as_bytes(), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(off["jcc_ibtc_misses"], 2);
+        backend_shape_product(b"ordinary guest stderr\n", false).unwrap();
+
+        for (needle, replacement, message) in [
+            (" jcc_ibtc_hits=1", "", "omitted field"),
+            (
+                " jcc_ibtc_hits=1",
+                " jcc_ibtc_hits=1 jcc_ibtc_hits=1",
+                "duplicates field",
+            ),
+            (" jcc_ibtc_hits=1", " jcc_ibtc_hits=notdecimal", "not an integer"),
+            (" jcc_ibtc_hits=1", " jcc_ibtc_hits=1 unknown=0", "unknown field"),
+        ] {
+            let record = PRODUCT_SHAPE_ON.replacen(needle, replacement, 1);
+            let error = backend_shape_product(record.as_bytes(), true).unwrap_err().to_string();
+            assert!(error.contains(message), "{error}");
+        }
+        for (record, message) in [
+            (
+                PRODUCT_SHAPE_ON.replace(" jcc_ibtc_fills=1", " jcc_ibtc_fills=0"),
+                "miss dispositions",
+            ),
+            (
+                PRODUCT_SHAPE_ON.replace(" jcc_ibtc_suppressed=0", " jcc_ibtc_suppressed=1"),
+                "miss dispositions",
+            ),
+            (
+                PRODUCT_SHAPE_OFF.replace(" jcc_ibtc_hits=0", " jcc_ibtc_hits=1"),
+                "disabled JCC IBTC polarity",
+            ),
+            (
+                PRODUCT_SHAPE_ON.replace(" jcc_ibtc_emitted=1", " jcc_ibtc_emitted=0"),
+                "no emitted site",
+            ),
+        ] {
+            let error = backend_shape_product(record.as_bytes(), true).unwrap_err().to_string();
+            assert!(error.contains(message), "{error}");
+        }
+        assert!(
+            backend_shape_product(format!("{PRODUCT_SHAPE_ON}{PRODUCT_SHAPE_ON}").as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("appeared 2 times")
+        );
+        assert!(
+            backend_shape_product(PRODUCT_SHAPE_ON.as_bytes(), false)
+                .unwrap_err()
+                .to_string()
+                .contains("expected 0")
+        );
+        assert!(
+            validate_backend_tree(format!("{TREE}{PRODUCT_SHAPE_ON}").as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot accompany backend-tree")
         );
     }
 

@@ -522,7 +522,7 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 89..=96 {
+        for scenario in 89..=97 {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "JCC IBTC scenario {scenario}");
         }
@@ -893,6 +893,129 @@ mod tests {
         // `b .`: a valid AArch64 process that remains live until force-stop.
         bytes[0x100..0x104].copy_from_slice(&0x1400_0000_u32.to_le_bytes());
         bytes
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    fn run_product_jcc_ibtc_diagnostic(disabled: bool) -> std::collections::BTreeMap<String, u64> {
+        let mut bytes = image();
+        put16(&mut bytes, 18, 0x3e);
+        // The first execution misses because the taken target is not published. The target
+        // returns to the already-published source once, so ON subsequently hits while OFF
+        // consumes and suppresses a second miss. Both arms execute identical probe bytes.
+        bytes[0x100..0x106].copy_from_slice(&[0x31, 0xc0, 0x74, 0x0c, 0x0f, 0x0b]);
+        bytes[0x110..0x120].copy_from_slice(&[
+            0xff, 0xc1, 0x83, 0xf9, 0x02, 0x7c, 0xe9, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
+        ]);
+        let mut executable = tempfile::tempfile().unwrap();
+        executable.write_all(&bytes).unwrap();
+        executable.seek(SeekFrom::Start(0)).unwrap();
+        let mut output = tempfile::tempfile().unwrap();
+        let pcache = tempfile::tempdir().unwrap();
+        let names = [
+            CString::new("HL_TRANSLIT").unwrap(),
+            CString::new("HL_C_DIAGNOSTICS").unwrap(),
+            CString::new("HL_PCACHE").unwrap(),
+            CString::new("HL_PCACHE_DIR").unwrap(),
+            CString::new("HL_TRANSLIT_JCC_IBTC_DISABLE").unwrap(),
+        ];
+        let one = CString::new("1").unwrap();
+        let pcache_path = CString::new(pcache.path().to_str().unwrap()).unwrap();
+        let option_names = names[..if disabled { 5 } else { 4 }]
+            .iter()
+            .map(|name| name.as_ptr())
+            .collect::<Vec<_>>();
+        let mut option_values = vec![one.as_ptr(), one.as_ptr(), one.as_ptr(), pcache_path.as_ptr()];
+        if disabled {
+            option_values.push(one.as_ptr());
+        }
+        let config = EngineConfig {
+            isa: 2,
+            rootfs: None,
+            executable_host: None,
+            executable_fd: executable.as_raw_fd(),
+            option_names: &option_names,
+            option_values: &option_values,
+            box_config: None,
+            standard_fds: [output.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        // SAFETY: descriptors, C strings and borrowed slices remain live through create;
+        // the bridge imports its own descriptors and copies the launch options.
+        let engine = unsafe { Engine::create(config) }.unwrap();
+        let argument = CString::new("jcc-ibtc-product-proof").unwrap();
+        assert_eq!(engine.run(&[argument.as_ptr()]), Ok(()));
+        drop(engine);
+        assert_eq!(
+            pcache.path().read_dir().unwrap().count(),
+            0,
+            "diagnostics persisted code"
+        );
+        output.seek(SeekFrom::Start(0)).unwrap();
+        let mut stderr = String::new();
+        output.read_to_string(&mut stderr).unwrap();
+        let records = stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix("[diag] backend-shape "))
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1, "unexpected diagnostic output: {stderr}");
+        let expected = [
+            "version",
+            "available",
+            "mixed_sse_executed",
+            "mixed_sse_executed_transitions",
+            "mixed_sse_disabled_boundaries",
+            "jcc_ibtc_enabled",
+            "jcc_ibtc_emitted",
+            "jcc_ibtc_hits",
+            "jcc_ibtc_misses",
+            "jcc_ibtc_irq",
+            "jcc_ibtc_fills",
+            "jcc_ibtc_suppressed",
+            "jcc_ibtc_invalid_refusals",
+        ];
+        let mut fields = std::collections::BTreeMap::new();
+        for token in records[0].split_whitespace() {
+            let (name, value) = token.split_once('=').expect("well-formed diagnostic token");
+            assert!(expected.contains(&name), "unexpected diagnostic token {name}: {stderr}");
+            let value = value.parse::<u64>().expect("decimal diagnostic value");
+            assert!(
+                fields.insert(name.to_owned(), value).is_none(),
+                "duplicate {name}: {stderr}"
+            );
+        }
+        for name in expected {
+            assert!(fields.contains_key(name), "missing {name}: {stderr}");
+        }
+        assert_eq!(fields.len(), expected.len());
+        fields
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
+        let on = run_product_jcc_ibtc_diagnostic(false);
+        assert_eq!(on["version"], 3);
+        assert_eq!(on["available"], 1);
+        assert_eq!(on["jcc_ibtc_enabled"], 1);
+        assert_eq!(on["jcc_ibtc_emitted"], 1);
+        assert_eq!(on["jcc_ibtc_hits"], 1);
+        assert_eq!(on["jcc_ibtc_misses"], 1);
+        assert_eq!(on["jcc_ibtc_irq"], 0);
+        assert_eq!(on["jcc_ibtc_fills"], 1);
+        assert_eq!(on["jcc_ibtc_suppressed"], 0);
+        assert_eq!(on["jcc_ibtc_invalid_refusals"], 0);
+
+        let off = run_product_jcc_ibtc_diagnostic(true);
+        assert_eq!(off["version"], 3);
+        assert_eq!(off["available"], 1);
+        assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
+        assert_eq!(off["jcc_ibtc_emitted"], 1);
+        assert_eq!(off["jcc_ibtc_hits"], 0);
+        assert_eq!(off["jcc_ibtc_misses"], 2);
+        assert_eq!(off["jcc_ibtc_irq"], 0);
+        assert_eq!(off["jcc_ibtc_fills"], 0);
+        assert_eq!(off["jcc_ibtc_suppressed"], 2);
+        assert_eq!(off["jcc_ibtc_invalid_refusals"], 0);
     }
 
     fn x86_tcsetsf_image(termios: &[u8; 36]) -> Vec<u8> {

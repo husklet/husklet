@@ -697,9 +697,11 @@ static int32_t hl_production_entry(void *opaque) {
         if (terminal_status != HL_STATUS_OK) return terminal_status;
     }
     active_result = context->result;
-    hl_target_backend_tree_child_begin(context->backend_tree, context->backend_tree_size);
     atomic_store_explicit(&result_published, 0, memory_order_release);
     hl_options *previous = hl_options_bind_process(context->options);
+    /* The census snapshots typed launch policy before the guest can fork, so bind this
+     * launch's option store before publishing its root lifecycle slot. */
+    hl_target_backend_tree_child_begin(context->backend_tree, context->backend_tree_size);
     hl_options process_state;
     hl_options *previous_state;
     memset(&process_state, 0, sizeof(process_state));

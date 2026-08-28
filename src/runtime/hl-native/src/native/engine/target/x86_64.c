@@ -504,11 +504,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
 }
 #endif
 
+#define HL_BACKEND_TREE_FINALIZE_CPU(c) ((void)(c))
+
 #else
 // interp.c defines the same names emit.c/translate.c/cache.c do, so everything below is host-identical.
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
 static int x86_guest_fetch_exec_context(void *opaque, uint64_t guest, void *destination, size_t length);
 #include "../../translator/guest/x86_64/interp.c"
+
+#define HL_BACKEND_TREE_FINALIZE_CPU(c) translit_jcc_ibtc_finalize_cpu(c)
 
 // The interpreter does not protect translated source pages because it emits
 // no translated code.  Preserve the shared store-publication call site while
@@ -1659,6 +1663,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     thread_process_owner_register(&c);
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
+    HL_BACKEND_TREE_FINALIZE_CPU(&c);
     if (!hl_backend_tree_is_finalized()) (void)hl_backend_tree_finalize(1);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
     // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
@@ -1674,8 +1679,10 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
         // hl_x86_64_store_preflight_test answers "not applicable" rather than a clean zero.
 #if defined(HL_HOST_CPU_AARCH64)
         const char *ibtc_mode = "ON";
+#elif defined(HL_HOST_CPU_X86_64)
+        const char *ibtc_mode = "ON: constant-JCC late link";
 #else
-        const char *ibtc_mode = "absent: interpreter host";
+        const char *ibtc_mode = "absent: unsupported host";
 #endif
         char profile[512];
         int profile_size = snprintf(profile, sizeof profile,
@@ -1752,7 +1759,10 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
     g_coldprof = 0;
-    g_pcache = hl_option_get("HL_PCACHE") != NULL;
+    /* Diagnostic stubs embed fork-shared counter addresses. They are launch-private and deliberately have
+       no persistent-cache relocation: diagnostics therefore disables restore/save before cache lookup. */
+    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    g_pcache = hl_option_get("HL_PCACHE") != NULL && !g_prof;
     if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
     int rc = engine_global_init();
     if (rc) return hl_vfs_cursor_state_finish(rc);
