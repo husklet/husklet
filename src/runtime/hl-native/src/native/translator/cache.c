@@ -403,6 +403,10 @@ static jit_source_page_entry g_source_pages[JIT_SOURCE_PAGE_N];
 static jit_source_node g_source_nodes[JIT_SOURCE_NODE_N];
 static uint32_t g_source_node_count;
 static int g_source_index_overflow;
+#if HL_NATIVE_TEST_HOOKS
+static int g_source_index_publish_probe;
+static int g_source_index_publish_observed;
+#endif
 
 // Bounded instruction provenance shared by diagnostics and synchronous guest-fault delivery. Translation
 // records source boundaries; execution performs no checkpoint writes. Epoch publication makes signal-side
@@ -927,6 +931,19 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
         source_index_put(destination, guest_start, source_end);
         g_live_map_positions[destination] = g_live_map_count;
         g_live_map_indices[g_live_map_count++] = destination;
+#if HL_NATIVE_TEST_HOOKS
+        if (g_source_index_publish_probe) {
+            jit_source_page_entry *page = source_page_find(guest_start >> JIT_SOURCE_PAGE_SHIFT, 0);
+            int indexed = 0;
+            if (page != NULL)
+                for (uint32_t node = page->head; node != JIT_SOURCE_NONE; node = g_source_nodes[node].next)
+                    if (g_source_nodes[node].map_index == destination) {
+                        indexed = 1;
+                        break;
+                    }
+            g_source_index_publish_observed = indexed && !map_live(destination);
+        }
+#endif
         /* Publish liveness last: every live entry already has metadata, a live-list position, and either
            complete reverse-index nodes or the overflow latch which forces the authoritative full scan. */
         g_map[destination].generation = g_map_epoch;
@@ -1081,6 +1098,12 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
     } else if (scenario == 29) {
         map_put(first, first, first + 1, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
         map_put(second, second, second + 1, (void *)(uintptr_t)0x2020, (void *)(uintptr_t)0x2021);
+        jit_source_page_entry *missing = source_page_find(second >> JIT_SOURCE_PAGE_SHIFT, 0);
+        if (missing == NULL) {
+            verdict = -EIO;
+        } else {
+            missing->epoch = 0;
+        }
         g_source_index_overflow = 1;
         uint64_t dirty[][2] = {{second, second + 1}};
         *result = map_invalidate_source_ranges(dirty, 1);
@@ -1106,9 +1129,14 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
         if (pthread_create(&thread, NULL, map_source_index_invalidator, &test) != 0) {
             verdict = -errno;
         } else {
+            g_source_index_publish_probe = 1;
+            g_source_index_publish_observed = 0;
             map_put(first, first, first + 1, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
+            g_source_index_publish_probe = 0;
             atomic_store_explicit(&test.published, 1, memory_order_release);
-            if (pthread_join(thread, NULL) != 0 || test.removed != 1 || map_body(first) != NULL) verdict = -EIO;
+            if (pthread_join(thread, NULL) != 0 || !g_source_index_publish_observed || test.removed != 1 ||
+                map_body(first) != NULL)
+                verdict = -EIO;
             *result = test.removed;
         }
     } else {
