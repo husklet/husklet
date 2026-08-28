@@ -722,6 +722,9 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
     // ENOMEM
     if (!child) return -12;
     *child = *parent;
+#if defined(G_MIXED_PROFILE_CLEAR)
+    G_MIXED_PROFILE_CLEAR(child);
+#endif
     // child sees clone return 0
     G_RET(child) = 0;
     G_SP(child) = stack_top;

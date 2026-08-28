@@ -197,6 +197,11 @@ struct cpu {
     /* Hook-only per-entry handoff written by same-ISA emitted exits and consumed immediately by run_block.
        Production layout and checkpoint ABI remain byte-for-byte unchanged. */
     uint32_t backend_shape;
+#else
+    /* Diagnostic-only per-entry mixed-builder completion marker. This occupies existing alignment padding:
+       production keeps the same checkpoint size and the following soft-TLB offset. Hooks already use this
+       slot for backend_shape, whose exact 32-bit format must remain unchanged. */
+    uint32_t mixed_profile;
 #endif
     /* The emitted guard reads this array; the soft_* scalars above stay the
        most-recently-installed entry and remain the direct-store span cache.
@@ -214,8 +219,11 @@ _Static_assert(__builtin_offsetof(struct cpu, seccomp_filters) == __builtin_offs
 #if defined(HL_NATIVE_TEST_HOOKS)
 _Static_assert(sizeof(struct cpu) == 0x54e0, "hook-only backend shape must stay inside checkpoint padding");
 #else
-_Static_assert(sizeof(struct cpu) == 0x54e0, "stw_slot must not change the x86 CPU checkpoint size");
+_Static_assert(sizeof(struct cpu) == 0x54e0,
+               "mixed marker must stay inside padding and preserve the x86 CPU checkpoint size");
 #endif
+_Static_assert(__builtin_offsetof(struct cpu, soft_tlb) == 0x14e0,
+               "mixed marker must not move the ABI-sensitive soft-TLB array");
 
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
 #define OFF_FCRES ((int)__builtin_offsetof(struct cpu, fastclk_resume))
@@ -234,6 +242,13 @@ _Static_assert(__builtin_offsetof(struct cpu, vdirty) % 8 == 0 && __builtin_offs
 #define OFF_ICMISS ((int)__builtin_offsetof(struct cpu, ic_miss))
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define OFF_BACKEND_SHAPE ((int)__builtin_offsetof(struct cpu, backend_shape))
+#define OFF_MIXED_PROFILE ((int)__builtin_offsetof(struct cpu, mmscratch[1]))
+#define G_MIXED_PROFILE_VALUE(c) ((uint32_t)(c)->mmscratch[1])
+#define G_MIXED_PROFILE_CLEAR(c) ((c)->mmscratch[1] = 0)
+#else
+#define OFF_MIXED_PROFILE ((int)__builtin_offsetof(struct cpu, mixed_profile))
+#define G_MIXED_PROFILE_VALUE(c) ((c)->mixed_profile)
+#define G_MIXED_PROFILE_CLEAR(c) ((c)->mixed_profile = 0)
 #endif
 #define OFF_ST ((int)__builtin_offsetof(struct cpu, st))
 #define OFF_FPTOP ((int)__builtin_offsetof(struct cpu, fptop))

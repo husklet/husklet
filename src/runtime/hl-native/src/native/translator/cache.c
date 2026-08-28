@@ -1405,6 +1405,7 @@ static int jit_host_to_rwpc(uint64_t host_pc, uint64_t *rwpc) {
 // is no longer pinned or reachable.  Exhaustion declines the optional emitted body rather than overwriting
 // a live owner.
 #define JIT_BODY_OWNER_N 1398101u
+#define JIT_BODY_OWNER_BLOCK_HEADROOM 193u
 typedef struct {
     uint32_t rw_start, rw_end;
     uint64_t guest;
@@ -1471,6 +1472,26 @@ static int jit_body_owner_reserve_n(uint64_t generation, uint32_t wanted, uint32
     if (wanted > JIT_BODY_OWNER_N - count) return 0;
     *token = count;
     return 1;
+}
+
+// A body may publish at most one owner per decoded instruction plus one terminal tail.  Capacity is a
+// cache-rotation condition, not a per-PC refusal: returning NULL here forever would leave most of a 64 MiB
+// arena unusable for legal short SSE-heavy bodies.  The shared dispatcher checks this before translation,
+// while it still owns the ordinary single-thread/STW rollover decision.
+static int jit_body_owner_needs_rotation(uint64_t generation) {
+    jit_body_owner_set *set = jit_body_owner_set_for(generation, 0);
+    if (set == NULL) return 0;
+    uint32_t count = atomic_load_explicit(&set->count, memory_order_relaxed);
+    return JIT_BODY_OWNER_BLOCK_HEADROOM > JIT_BODY_OWNER_N - count;
+}
+
+// Keep the dispatcher's two independent cache-capacity limits behind one predicate so the exact
+// pre-translation decision is directly testable.  In particular, owner exhaustion must rotate even
+// while the byte arena still has ample space; otherwise every later translation in that generation
+// would refuse permanently.
+static int jit_cache_needs_rotation(void) {
+    return g_cp + CACHE_EMIT_HEADROOM > g_cache + CACHE_SZ ||
+           jit_body_owner_needs_rotation(g_cache_gen);
 }
 
 static jit_body_owner_preserve *jit_body_owner_preserves(jit_body_owner_entry *entries) {

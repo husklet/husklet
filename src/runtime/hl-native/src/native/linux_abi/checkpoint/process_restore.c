@@ -755,6 +755,9 @@ static int ckpt_restore_cpu_dir(const char *procdir, const struct ckpt_meta *m, 
         c->host_sp = 0;
         c->reason = 0;
         c->irq = 0;
+#if defined(G_MIXED_PROFILE_CLEAR)
+        G_MIXED_PROFILE_CLEAR(c);
+#endif
         c->in_service = 0;
         c->exited = 0;
         c->redirect = 0;

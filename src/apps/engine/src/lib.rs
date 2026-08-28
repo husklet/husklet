@@ -279,6 +279,11 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
     if launch.translit_mixed_sse.is_some() && !launch.translit {
         return Err(Failure::Request("--translit-mixed-sse requires --translit".to_owned()));
     }
+    if launch.translit_mixed_sse.is_some() && guest != Guest::X86_64 {
+        return Err(Failure::Request(
+            "--translit-mixed-sse is available only in the x86-64 worker".to_owned(),
+        ));
+    }
     if launch.rootfs.is_none() && (launch.diagnostics || launch.translit || launch.native_supervised) {
         return Err(Failure::Request(
             "--diagnostics, --translit and --native-supervised require --rootfs; raw host-path launches do not carry launch options"
@@ -619,6 +624,19 @@ mod tests {
         )
         .unwrap_err();
         assert!(reason(&failure).contains("--translit-mixed-sse requires --translit"));
+
+        let failure = execute(
+            Guest::Aarch64,
+            &launch(&[
+                "--translit",
+                "--translit-mixed-sse=off",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("available only in the x86-64 worker"));
     }
 
     #[cfg(not(feature = "native-test-hooks"))]

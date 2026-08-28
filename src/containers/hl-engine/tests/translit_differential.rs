@@ -80,9 +80,12 @@ struct Backend {
     provenance_fallback: u64,
     body_owner_recovered: u64,
     body_owner_published: u64,
-    mixed_sse_opportunities: u64,
+    mixed_sse_encounters: u64,
     mixed_sse_admitted: u64,
     mixed_sse_transitions: u64,
+    mixed_sse_executed: u64,
+    mixed_sse_executed_transitions: u64,
+    mixed_sse_disabled_boundaries: u64,
     sse2_runs_admitted: u64,
     sse2_instructions_admitted: u64,
     sse2_target_runs: u64,
@@ -160,18 +163,32 @@ struct Backend {
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
 fn backend(stderr: &[u8]) -> Backend {
     let text = String::from_utf8_lossy(stderr);
-    let line = text
+    let lines = text
         .lines()
-        .find(|line| line.starts_with("[prof] translit:"))
-        .unwrap_or_else(|| {
-            panic!("the exit report carried no translit line; HL_C_DIAGNOSTICS produced:\n{text}");
-        })
-        .to_owned();
+        .filter(|line| line.starts_with("[prof] translit:"))
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
+    let line = lines[0].to_owned();
     let counter = |name: &str| {
         line.split_whitespace()
             .find_map(|field| field.strip_prefix(name))
             .and_then(|value| value.trim_end_matches(')').parse().ok())
             .unwrap_or(0)
+    };
+    let required_counter = |name: &str| {
+        line.split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("missing typed translit field {name} in {line}"))
+    };
+    // An unselected backend has no mixed-builder contract to prove. Every selected report form -- normal,
+    // displaced, and store-alias-declined -- must carry the complete typed diagnostic surface.
+    let mixed_counter = |name: &str| {
+        if line.contains("not selected") || line.contains("absent") {
+            0
+        } else {
+            required_counter(name)
+        }
     };
     let translations = text
         .lines()
@@ -402,9 +419,12 @@ fn backend(stderr: &[u8]) -> Backend {
         provenance_fallback: counter("provenance_fallback="),
         body_owner_recovered: counter("body_owner_recovered="),
         body_owner_published: counter("body_owner_published="),
-        mixed_sse_opportunities: counter("mixed_sse_opportunities="),
-        mixed_sse_admitted: counter("mixed_sse_admitted="),
-        mixed_sse_transitions: counter("mixed_sse_transitions="),
+        mixed_sse_encounters: mixed_counter("mixed_sse_encounters="),
+        mixed_sse_admitted: mixed_counter("mixed_sse_admitted="),
+        mixed_sse_transitions: mixed_counter("mixed_sse_transitions="),
+        mixed_sse_executed: mixed_counter("mixed_sse_executed="),
+        mixed_sse_executed_transitions: mixed_counter("mixed_sse_executed_transitions="),
+        mixed_sse_disabled_boundaries: mixed_counter("mixed_sse_disabled_boundaries="),
         sse2_runs_admitted: counter("sse2_runs_admitted="),
         sse2_instructions_admitted: counter("sse2_instructions_admitted="),
         sse2_target_runs: counter("sse2_target_runs="),
@@ -701,11 +721,7 @@ fn alternating_normal_and_sse_share_one_exact_recovery_descriptor() {
         selected,
         b"mixed state=1 faults=7 registers=7 vectors=04030201/04030201/04030201 fork=1\n"
     );
-    assert!(
-        selected_backend.mixed_sse_opportunities > 0,
-        "{}",
-        selected_backend.line
-    );
+    assert!(selected_backend.mixed_sse_encounters > 0, "{}", selected_backend.line);
     assert!(selected_backend.mixed_sse_admitted > 0, "{}", selected_backend.line);
     assert!(
         selected_backend.mixed_sse_transitions >= selected_backend.mixed_sse_admitted,
@@ -713,13 +729,31 @@ fn alternating_normal_and_sse_share_one_exact_recovery_descriptor() {
         selected_backend.line
     );
     assert!(selected_backend.body_owner_recovered >= 3, "{}", selected_backend.line);
+    assert!(disabled_backend.mixed_sse_encounters > 0, "{}", disabled_backend.line);
+    assert_eq!(disabled_backend.mixed_sse_admitted, 0, "{}", disabled_backend.line);
+    assert_eq!(disabled_backend.mixed_sse_transitions, 0, "{}", disabled_backend.line);
+    assert!(selected_backend.mixed_sse_executed > 0, "{}", selected_backend.line);
     assert!(
-        disabled_backend.mixed_sse_opportunities > 0,
+        selected_backend.mixed_sse_executed_transitions >= selected_backend.mixed_sse_executed,
+        "{}",
+        selected_backend.line
+    );
+    assert_eq!(
+        selected_backend.mixed_sse_disabled_boundaries, 0,
+        "{}",
+        selected_backend.line
+    );
+    assert_eq!(disabled_backend.mixed_sse_executed, 0, "{}", disabled_backend.line);
+    assert_eq!(
+        disabled_backend.mixed_sse_executed_transitions, 0,
         "{}",
         disabled_backend.line
     );
-    assert_eq!(disabled_backend.mixed_sse_admitted, 0, "{}", disabled_backend.line);
-    assert_eq!(disabled_backend.mixed_sse_transitions, 0, "{}", disabled_backend.line);
+    assert!(
+        disabled_backend.mixed_sse_disabled_boundaries > 0,
+        "{}",
+        disabled_backend.line
+    );
 }
 
 #[test]

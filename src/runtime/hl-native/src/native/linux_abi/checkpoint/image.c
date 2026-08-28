@@ -1756,8 +1756,14 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
     }
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++) {
         images[i] = *live[i];
+        /* Written only while translated code is active and consumed before returning to the dispatcher.
+           A stopped checkpoint must not serialize an incomplete diagnostic transaction. */
+#if defined(G_MIXED_PROFILE_CLEAR)
+        G_MIXED_PROFILE_CLEAR(&images[i]);
+#endif
+    }
     g_ckpt_cpu_images = images;
     g_ckpt_cpu_count = count;
     int result = ckpt_dump_self_locked(c, procdir);

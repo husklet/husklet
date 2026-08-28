@@ -2711,6 +2711,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             capture_terminal.text(),
             recapture_terminal.text(),
             restore_terminal.text(),
+            output.clone(),
         ]
         .concat();
         let chained = diagnostic_text
@@ -2728,16 +2729,29 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         );
         let mixed = diagnostic_text
             .lines()
-            .filter(|line| line.starts_with("[prof] translit: "))
-            .filter_map(|line| {
-                line.split_whitespace()
-                    .find_map(|field| field.strip_prefix("mixed_sse_admitted="))
-                    .and_then(|value| value.parse::<u64>().ok())
+            .filter(|line| line.starts_with("[diag] backend-shape "))
+            .map(|line| {
+                let field = |name: &str| {
+                    line.split_whitespace()
+                        .find_map(|field| field.strip_prefix(name))
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or_else(|| panic!("missing {name} in {line}"))
+                };
+                (
+                    field("mixed_sse_executed="),
+                    field("mixed_sse_executed_transitions="),
+                    field("mixed_sse_disabled_boundaries="),
+                )
             })
             .collect::<Vec<_>>();
         assert!(
-            mixed.len() == 3 && mixed.iter().all(|count| *count > 0),
-            "each capture/restore process must publish a fresh mixed normal/SSE body: {mixed:?}\n{diagnostic_text}"
+            mixed.len() == 3
+                && mixed
+                    .iter()
+                    .all(|(descriptors, transitions, boundaries)| *descriptors > 0
+                        && *transitions >= *descriptors
+                        && *boundaries == 0),
+            "each capture/restore generation must execute a mixed body in its own fork-shared census: {mixed:?}\n{diagnostic_text}"
         );
     }
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");

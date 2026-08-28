@@ -745,6 +745,9 @@ static void signal_after_fork(struct cpu *cpu) {
     __atomic_store_n(&g_pending, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&g_pending_hi, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&cpu->tpending, 0, __ATOMIC_SEQ_CST);
+#if defined(G_MIXED_PROFILE_CLEAR)
+    G_MIXED_PROFILE_CLEAR(cpu);
+#endif
     thread_pending_hi_clear(cpu);
     // Pending signals do not survive fork.  The pipe used to emulate a signalfd wake queue does, however,
     // and its underlying open-file description is shared with the parent.  Draining that inherited pipe in

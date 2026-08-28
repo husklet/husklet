@@ -196,6 +196,9 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t family_jmem;
     _Atomic uint64_t family_div[HL_BACKEND_FAMILY_DIV_KIND_COUNT][HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT];
     _Atomic uint64_t family_div_service64_completed[HL_BACKEND_FAMILY_DIV_KIND_COUNT];
+    _Atomic uint64_t mixed_sse_executed;
+    _Atomic uint64_t mixed_sse_executed_transitions;
+    _Atomic uint64_t mixed_sse_disabled_boundaries;
 };
 
 struct hl_backend_tree_shared {
@@ -261,6 +264,9 @@ struct hl_backend_tree_summary {
     uint64_t family_jmem;
     uint64_t family_div[HL_BACKEND_FAMILY_DIV_KIND_COUNT][HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT];
     uint64_t family_div_service64_completed[HL_BACKEND_FAMILY_DIV_KIND_COUNT];
+    uint64_t mixed_sse_executed;
+    uint64_t mixed_sse_executed_transitions;
+    uint64_t mixed_sse_disabled_boundaries;
     uint64_t fallback_form_total;
     uint64_t fallback_form_unique;
     uint64_t fallback_form_overflow;
@@ -467,6 +473,19 @@ static inline void hl_backend_tree_translated_fall_stop(unsigned reason) {
     if (slot == NULL) return;
     if (reason >= HL_BACKEND_FALL_COUNT) reason = HL_BACKEND_FALL_OTHER;
     atomic_fetch_add_explicit(&slot->translated_fall_stop[reason], 1, memory_order_relaxed);
+}
+
+static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot == NULL) return;
+    if (disabled_boundary) {
+        if (transitions == 0)
+            atomic_fetch_add_explicit(&slot->mixed_sse_disabled_boundaries, 1, memory_order_relaxed);
+        return;
+    }
+    if (transitions == 0) return;
+    atomic_fetch_add_explicit(&slot->mixed_sse_executed, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&slot->mixed_sse_executed_transitions, transitions, memory_order_relaxed);
 }
 
 static inline void hl_backend_tree_interpreter_entry(unsigned kind, uint64_t fallback_form) {
@@ -753,6 +772,11 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
                 summary->would_link[family][disposition] +=
                     atomic_load_explicit(&slot->would_link[family][disposition], memory_order_relaxed);
         summary->family_jmem += atomic_load_explicit(&slot->family_jmem, memory_order_relaxed);
+        summary->mixed_sse_executed += atomic_load_explicit(&slot->mixed_sse_executed, memory_order_relaxed);
+        summary->mixed_sse_executed_transitions +=
+            atomic_load_explicit(&slot->mixed_sse_executed_transitions, memory_order_relaxed);
+        summary->mixed_sse_disabled_boundaries +=
+            atomic_load_explicit(&slot->mixed_sse_disabled_boundaries, memory_order_relaxed);
         for (uint32_t kind = 0; kind < HL_BACKEND_FAMILY_DIV_KIND_COUNT; ++kind) {
             for (uint32_t outcome = 0; outcome < HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT; ++outcome)
                 summary->family_div[kind][outcome] +=
@@ -898,7 +922,8 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "family_jmem=%llu family_div_total=%llu family_div_inline=%llu family_div_service64=%llu "
         "family_div_service64_completed=%llu family_div_de=%llu family_idiv_total=%llu "
         "family_idiv_inline=%llu family_idiv_service64=%llu family_idiv_service64_completed=%llu "
-        "family_idiv_de=%llu family_total=%llu "
+        "family_idiv_de=%llu family_total=%llu mixed_sse_executed=%llu "
+        "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
         "fallback0_key=%llu fallback0_count=%llu fallback1_key=%llu fallback1_count=%llu "
         "fallback2_key=%llu fallback2_count=%llu fallback3_key=%llu fallback3_count=%llu "
         "fallback4_key=%llu fallback4_count=%llu fallback5_key=%llu fallback5_count=%llu "
@@ -1027,7 +1052,9 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_SERVICE64],
         (unsigned long long)summary.family_div_service64_completed[HL_BACKEND_FAMILY_DIV_SIGNED],
         (unsigned long long)summary.family_div[HL_BACKEND_FAMILY_DIV_SIGNED][HL_BACKEND_FAMILY_DIV_DE],
-        (unsigned long long)family_total,
+        (unsigned long long)family_total, (unsigned long long)summary.mixed_sse_executed,
+        (unsigned long long)summary.mixed_sse_executed_transitions,
+        (unsigned long long)summary.mixed_sse_disabled_boundaries,
         (unsigned long long)summary.fallback_top_key[0], (unsigned long long)summary.fallback_top_count[0],
         (unsigned long long)summary.fallback_top_key[1], (unsigned long long)summary.fallback_top_count[1],
         (unsigned long long)summary.fallback_top_key[2], (unsigned long long)summary.fallback_top_count[2],
@@ -1416,6 +1443,7 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 #define hl_backend_tree_reason(reason) ((void)0)
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
 #define hl_backend_tree_translated_fall_stop(reason) ((void)0)
+#define hl_backend_tree_mixed_sse_completed(transitions, disabled_boundary) ((void)0)
 #define hl_backend_tree_interpreter_entry(kind, fallback_form) ((void)0)
 #define hl_backend_tree_interpreter_stop(kind, stop_form) ((void)0)
 #define hl_backend_tree_direct_edge(family, same_page) ((void)0)

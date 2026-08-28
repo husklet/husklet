@@ -636,6 +636,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
     int image_ok = translit_image_ok();
     int translated = block->host_entry_off != 0 && image_ok && translit_bind_cpu(cpu);
     if (translated) {
+        if (g_prof) G_MIXED_PROFILE_CLEAR(cpu);
 #if defined(HL_NATIVE_TEST_HOOKS)
         cpu->backend_shape = HL_BACKEND_SHAPE_T_OTHER |
                              HL_BACKEND_WOULD_LINK_FAMILY_COUNT << TL_SHAPE_WOULD_FAMILY_SHIFT;
@@ -650,6 +651,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
            translated-exit family and its would-link publication disposition must describe the same
            completed terminal, or exact family reconciliation gains a signal-sized race window. */
         int terminal_completed = cpu->irq == 0;
+        if (g_prof && terminal_completed) translit_mixed_profile_completed(G_MIXED_PROFILE_VALUE(cpu));
         unsigned exit_kind = terminal_completed ? terminator : HL_BACKEND_SHAPE_T_IRQ;
         hl_backend_tree_translated_exit(exit_kind, (packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK,
                                         (packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK);
@@ -688,6 +690,11 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
             g_backend_shape_edge_same_page = same_page;
         }
         g_backend_shape_open = 0;
+#else
+        // A fault leaves through the siglongjmp arm above and never reaches this completion seam. IRQ is
+        // likewise not a completed terminal. Only a validated marker written by the terminal that actually
+        // ran may advance the production execution proof.
+        if (g_prof && cpu->irq == 0) translit_mixed_profile_completed(G_MIXED_PROFILE_VALUE(cpu));
 #endif
         hl_backend_tree_reason(cpu->reason);
     } else {
