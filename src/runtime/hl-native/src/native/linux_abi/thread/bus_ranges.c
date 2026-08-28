@@ -669,6 +669,7 @@ static void gnx_clear_raw(uint64_t lo, uint64_t hi) {
 static void gnx_add(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
     gnx_writer_lock();
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
     gnx_clear_raw(lo, hi);
     int count = __atomic_load_n(&g_ngnx, __ATOMIC_RELAXED);
@@ -678,23 +679,28 @@ static void gnx_add(uint64_t lo, uint64_t hi) {
         __atomic_store_n(&g_ngnx, count + 1, __ATOMIC_RELEASE);
     }
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     gnx_writer_unlock();
 }
 
 static void gnx_clear(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
     gnx_writer_lock();
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
     gnx_clear_raw(lo, hi);
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     gnx_writer_unlock();
 }
 
 static void gnx_reset(void) {
     gnx_writer_lock();
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
     __atomic_store_n(&g_ngnx, 0, __ATOMIC_RELEASE);
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     gnx_writer_unlock();
 }
 
@@ -930,10 +936,12 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     }
     if (scenario <= 4) *scans = g_gnx_scan_count;
     gnx_writer_lock();
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
     memcpy(g_gnx, saved, sizeof g_gnx);
     __atomic_store_n(&g_ngnx, saved_count, __ATOMIC_RELEASE);
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     gnx_writer_unlock();
     free(saved);
     g_exec_page = saved_page;

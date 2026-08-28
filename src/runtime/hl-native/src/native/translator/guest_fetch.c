@@ -8,6 +8,7 @@
 
 static hl_guest_fetch_direct_validator g_direct_validator;
 static const _Atomic uint64_t *g_direct_generation;
+static hl_guest_fetch_authority g_decode_authority = {.started = 1, .completed = 1};
 
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator validator) {
     g_direct_validator = validator;
@@ -17,10 +18,26 @@ void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation) {
     g_direct_generation = generation;
 }
 
-void hl_guest_fetch_authority_sources(const _Atomic uint64_t **logical_generation,
-                                      const _Atomic uint64_t **direct_generation) {
-    if (logical_generation != NULL) *logical_generation = hl_guest_memory_generation;
-    if (direct_generation != NULL) *direct_generation = g_direct_generation;
+const hl_guest_fetch_authority *hl_guest_fetch_authority_source(void) { return &g_decode_authority; }
+
+int hl_guest_fetch_authority_begin(void) {
+    uint64_t started = atomic_load_explicit(&g_decode_authority.started, memory_order_seq_cst);
+    for (;;) {
+        if (started >> 63) return 0;
+        uint64_t next = started + 1;
+        if ((next & (UINT64_MAX >> 1)) == 0) next = UINT64_C(1) << 63;
+        if (atomic_compare_exchange_weak_explicit(&g_decode_authority.started, &started, next,
+                                                  memory_order_seq_cst, memory_order_seq_cst))
+            return (next >> 63) == 0;
+    }
+}
+
+void hl_guest_fetch_authority_end(int begun) {
+    if (begun) atomic_fetch_add_explicit(&g_decode_authority.completed, 1, memory_order_seq_cst);
+}
+
+void hl_guest_fetch_authority_disable(void) {
+    (void)hl_guest_fetch_authority_begin();
 }
 
 /*

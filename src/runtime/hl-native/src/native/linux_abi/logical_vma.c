@@ -1,6 +1,7 @@
 #include "logical_vma.h"
 
 #include "fdhandle.h"
+#include "../translator/guest_fetch.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -251,9 +252,11 @@ static void publish_locked(hl_logical_vma_ledger *ledger, hl_logical_vma_snapsho
     qsort(snapshot->views, snapshot->count, sizeof(*snapshot->views), view_compare);
     /* Odd while publication is in flight, even once the new snapshot is visible. Readers which
        authorize work rather than merely refill must sample both sides and reject odd values. */
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&ledger->generation, 1, memory_order_acq_rel);
     hl_logical_vma_snapshot *old = atomic_exchange_explicit(&ledger->current, snapshot, memory_order_acq_rel);
     atomic_fetch_add_explicit(&ledger->generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     if (old != NULL) {
         old->next = ledger->retired;
         ledger->retired = old;
@@ -315,9 +318,11 @@ void hl_logical_vma_destroy(hl_logical_vma_ledger *ledger) {
     pthread_mutex_lock(&ledger->lock);
     while (ledger->count != 0)
         backing_put(ledger->entries[--ledger->count].backing);
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&ledger->generation, 1, memory_order_acq_rel);
     hl_logical_vma_snapshot *snapshot = atomic_exchange_explicit(&ledger->current, NULL, memory_order_acq_rel);
     atomic_fetch_add_explicit(&ledger->generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     snapshot_free(snapshot);
     while (ledger->retired != NULL) {
         snapshot = ledger->retired;
@@ -519,9 +524,11 @@ void hl_logical_vma_commit_shared(hl_logical_vma_plan *plan) {
     plan->staged.count = plan->staged.capacity = 0;
 
     hl_logical_vma_snapshot *next = atomic_exchange_explicit(&plan->staged.current, NULL, memory_order_acq_rel);
+    int decode_authority = hl_guest_fetch_authority_begin();
     atomic_fetch_add_explicit(&live->generation, 1, memory_order_acq_rel);
     hl_logical_vma_snapshot *old = atomic_exchange_explicit(&live->current, next, memory_order_acq_rel);
     atomic_fetch_add_explicit(&live->generation, 1, memory_order_release);
+    hl_guest_fetch_authority_end(decode_authority);
     if (old != NULL) {
         old->next = live->retired;
         live->retired = old;

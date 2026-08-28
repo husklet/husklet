@@ -335,6 +335,7 @@ static void filemap_register(uint64_t address, uint64_t size, int fd, uint64_t o
         if (shared) {
             /* The registry entry is not yet visible outside g_filemap_lock. Disable byte-authorized
                decode hits before releasing it, so a writable alias cannot race stale decoded IR. */
+            hl_guest_fetch_authority_disable();
             atomic_store_explicit(&g_exec_bytes_unstable, 1, memory_order_release);
             if (emulated) atomic_store_explicit(&g_filemap_emulated_shared, 1, memory_order_release);
         }

@@ -48,7 +48,7 @@ typedef struct {
     hl_guest_fetch_context fetch;
     hl_x86_context_fetch_fn fetch_fn;
     void *fetch_opaque;
-    const _Atomic uint64_t *byte_unstable;
+    const hl_guest_fetch_authority *authority_source;
     const _Atomic uint64_t *logical_generation_source;
     const _Atomic uint64_t *direct_generation_source;
     uint64_t authority_logical_generation;

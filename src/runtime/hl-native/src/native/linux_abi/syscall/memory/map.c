@@ -97,8 +97,10 @@ case 222: {
          * anonymous executable mappings are made writable below even if the guest requested RX.
          * filemap_register separately arms before publishing every MAP_SHARED view.
          */
-        if ((prot & PROT_WRITE) || (a3 & 0x20))
+        if ((prot & PROT_WRITE) || (a3 & 0x20)) {
+            hl_guest_fetch_authority_disable();
             atomic_store_explicit(&g_exec_bytes_unstable, 1, memory_order_release);
+        }
         g_rwx_guest = 1;
         if (a3 & 0x20) {
             // Anon JIT arena: strip EXEC and map R+W so the guest can write its generated code.
