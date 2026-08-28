@@ -23,14 +23,17 @@ typedef struct {
 } hl_guest_fetch_context;
 hl_guest_fetch_context *hl_guest_fetch_context_current(void);
 int hl_guest_fetch_exec_context(hl_guest_fetch_context *, uint64_t, void *, size_t);
-typedef struct {
-    _Atomic uint64_t started;
-    _Atomic uint64_t completed;
-} hl_guest_fetch_authority;
-const hl_guest_fetch_authority *hl_guest_fetch_authority_source(void);
+#define HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK UINT64_C(0xffff)
+#define HL_GUEST_FETCH_AUTHORITY_VERSION_ONE UINT64_C(0x10000)
+#define HL_GUEST_FETCH_AUTHORITY_DISABLED (UINT64_C(1) << 63)
+const _Atomic uint64_t *hl_guest_fetch_authority_source(void);
 int hl_guest_fetch_authority_begin(void);
 void hl_guest_fetch_authority_end(int begun);
 void hl_guest_fetch_authority_disable(void);
+#if defined(HL_NATIVE_TEST_HOOKS)
+int hl_guest_fetch_authority_test_begin(_Atomic uint64_t *);
+void hl_guest_fetch_authority_test_end(_Atomic uint64_t *, int);
+#endif
 typedef int (*hl_guest_fetch_direct_validator)(uint64_t, size_t);
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator);
 void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation);

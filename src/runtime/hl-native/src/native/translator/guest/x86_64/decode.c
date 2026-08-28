@@ -332,33 +332,30 @@ static int decode_bytes(const uint8_t bytes[15], hl_x86_insn *I) {
     return n;
 }
 
-typedef struct {
-    uint64_t completed;
-    uint64_t started;
-} decode_authority;
+typedef uint64_t decode_authority;
+
+static int decode_authority_stable(decode_authority authority) {
+    return authority != 0 && !(authority & HL_GUEST_FETCH_AUTHORITY_DISABLED) &&
+           !(authority & HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
+}
 
 static decode_authority decode_authority_sample(const hl_x86_hot_context *context) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     ++g_decode_authority_samples;
 #endif
-    decode_authority authority = {0};
-    if (context == NULL || context->authority_source == NULL) return authority;
-    /* Completed first is essential: a writer beginning between these two loads
-       makes the pair unequal rather than admitting its pre-publication bytes. */
-    authority.completed = atomic_load_explicit(&context->authority_source->completed, memory_order_seq_cst);
+    if (context == NULL || context->authority_source == NULL) return 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_decode_authority_begin_between_loads) {
         g_decode_authority_begin_between_loads = 0;
-        atomic_fetch_add_explicit((_Atomic uint64_t *)&context->authority_source->started, 1,
-                                  memory_order_seq_cst);
+        atomic_fetch_add_explicit((_Atomic uint64_t *)context->authority_source,
+                                  HL_GUEST_FETCH_AUTHORITY_VERSION_ONE + 1, memory_order_release);
     }
 #endif
-    authority.started = atomic_load_explicit(&context->authority_source->started, memory_order_seq_cst);
-    return authority;
+    return atomic_load_explicit(context->authority_source, memory_order_acquire);
 }
 
 static int decode_authority_equal(decode_authority left, decode_authority right) {
-    return left.completed == right.completed && left.started == right.started;
+    return left == right;
 }
 
 static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
@@ -366,15 +363,14 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
     uint8_t bytes[X86_MAX_INSN] = {0};
     decode_memo_entry *memo = &entries[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
     int key_matches = memo->length != 0 && memo->pc == pc;
-    decode_authority before = {0};
+    decode_authority before = 0;
 #define FETCH(address, destination, length)                                                                            \
     (context_fetch != NULL ? context_fetch(fetch_opaque, address, destination, length)                                \
                            : instruction_fetch(address, destination, length))
     if (key_matches) {
         before = decode_authority_sample(context);
     }
-    if (key_matches && before.started != 0 && before.started == before.completed &&
-        memo->authority_epoch == before.started) {
+    if (key_matches && decode_authority_stable(before) && memo->authority_epoch == before) {
         *I = memo->instruction;
         if (context->count_authorized_hits)
             atomic_fetch_add_explicit(&g_decode_authorized_hits, 1, memory_order_relaxed);
@@ -387,8 +383,8 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
         memcmp(bytes, memo->bytes, memo->length) == 0) {
         *I = memo->instruction;
         decode_authority after = decode_authority_sample(context);
-        if (before.started != 0 && before.started == before.completed && decode_authority_equal(before, after))
-            memo->authority_epoch = before.started;
+        if (decode_authority_stable(before) && decode_authority_equal(before, after))
+            memo->authority_epoch = before;
         else
             memo->authority_epoch = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -424,9 +420,8 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
         memcpy(memo->bytes, bytes, (size_t)length);
         memo->length = (uint8_t)length;
         decode_authority after = key_matches ? decode_authority_sample(context) : (decode_authority){0};
-        memo->authority_epoch = key_matches && before.started != 0 && before.started == before.completed &&
-                                        decode_authority_equal(before, after)
-                                    ? before.started
+        memo->authority_epoch = key_matches && decode_authority_stable(before) && decode_authority_equal(before, after)
+                                    ? before
                                     : 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_decodes;
@@ -485,8 +480,8 @@ typedef struct {
     int first_page_executable;
     int second_page_executable;
     uint64_t fetches;
-    hl_guest_fetch_authority *authority_to_bump;
-    hl_guest_fetch_authority *authority_to_disable;
+    _Atomic uint64_t *authority_to_bump;
+    _Atomic uint64_t *authority_to_disable;
     _Atomic uint64_t *unstable_to_latch;
 } decode_memo_fixture;
 
@@ -501,11 +496,12 @@ static int decode_memo_fetch(uint64_t guest, void *destination, size_t length) {
     if (length > first_page && !fixture->second_page_executable) return -1;
     memcpy(destination, fixture->bytes, length);
     if (fixture->authority_to_bump != NULL) {
-        atomic_fetch_add_explicit(&fixture->authority_to_bump->started, 1, memory_order_release);
-        atomic_fetch_add_explicit(&fixture->authority_to_bump->completed, 1, memory_order_release);
+        atomic_fetch_add_explicit(fixture->authority_to_bump, 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE,
+                                  memory_order_release);
     }
     if (fixture->authority_to_disable != NULL)
-        atomic_fetch_add_explicit(&fixture->authority_to_disable->started, 1, memory_order_release);
+        atomic_fetch_or_explicit(fixture->authority_to_disable, HL_GUEST_FETCH_AUTHORITY_DISABLED,
+                                 memory_order_release);
     if (fixture->unstable_to_latch != NULL)
         atomic_store_explicit(fixture->unstable_to_latch, 1, memory_order_release);
     return 0;
@@ -608,7 +604,7 @@ int hl_x86_hot_context_allocation_test(void) {
 
 int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
     _Atomic uint64_t unstable = 0;
-    hl_guest_fetch_authority authority = {.started = 1, .completed = 1};
+    _Atomic uint64_t authority = HL_GUEST_FETCH_AUTHORITY_VERSION_ONE;
     decode_memo_fixture fixture = {
         .pc = scenario == 30 ? UINT64_C(0x50000fff) : UINT64_C(0x50000100),
         .bytes = {0x90}, .first_page_executable = 1, .second_page_executable = 1,
@@ -633,35 +629,31 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
                             second.op != first.op || fixture.fetches != 2)) result = -72;
         break;
     case 27: /* Once writable/executable aliasing is observed, exact byte validation remains mandatory. */
-        atomic_fetch_add_explicit(&authority.started, 1, memory_order_release);
+        atomic_fetch_or_explicit(&authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
         atomic_store_explicit(&unstable, 1, memory_order_release);
         fixture.bytes[0] = 0xc3;
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
                             second.op != 0xc3 || fixture.fetches != 3)) result = -73;
         break;
     case 28: /* MAP_FIXED/unmap-remap changes the direct-map authority. */
-        atomic_fetch_add_explicit(&authority.started, 1, memory_order_release);
-        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_release);
+        atomic_fetch_add_explicit(&authority, 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE, memory_order_release);
         fixture.bytes[0] = 0xc3;
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
                             second.op != 0xc3 || fixture.fetches != 3)) result = -74;
         break;
     case 29: /* Checkpoint/exec replacement changes logical VMA authority. */
-        atomic_fetch_add_explicit(&authority.started, 1, memory_order_release);
-        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_release);
+        atomic_fetch_add_explicit(&authority, 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE, memory_order_release);
         fixture.bytes[0] = 0xc3;
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
                             second.op != 0xc3 || fixture.fetches != 3)) result = -75;
         break;
     case 30: /* A crossing instruction is invalidated when either page loses execute authority. */
-        atomic_fetch_add_explicit(&authority.started, 1, memory_order_release);
-        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_release);
+        atomic_fetch_add_explicit(&authority, 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE, memory_order_release);
         fixture.second_page_executable = 0;
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != -1) result = -76;
         break;
     case 31: /* PROT_NONE invalidates a warm same-page entry before use. */
-        atomic_fetch_add_explicit(&authority.started, 1, memory_order_release);
-        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_release);
+        atomic_fetch_add_explicit(&authority, 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE, memory_order_release);
         fixture.first_page_executable = 0;
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != -1) result = -77;
         break;
@@ -717,11 +709,12 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
     case 39: { /* Overlapping writers keep authority unequal until both have completed. */
         size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -95;
-        atomic_fetch_add_explicit(&authority.started, 2, memory_order_seq_cst);
+        int first_writer = hl_guest_fetch_authority_test_begin(&authority);
+        int second_writer = hl_guest_fetch_authority_test_begin(&authority);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -96;
-        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_seq_cst);
+        hl_guest_fetch_authority_test_end(&authority, second_writer);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -97;
-        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_seq_cst);
+        hl_guest_fetch_authority_test_end(&authority, first_writer);
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -98;
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -99;
         if (result == 0 && (fixture.fetches != 5 || context->memo[slot].authority_epoch == 0)) result = -100;
@@ -748,9 +741,12 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         break;
     }
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */
-        atomic_store_explicit(&authority.started, UINT64_MAX >> 1, memory_order_release);
-        atomic_store_explicit(&authority.completed, UINT64_MAX >> 1, memory_order_release);
-        atomic_store_explicit(&authority.started, UINT64_C(1) << 63, memory_order_release);
+        atomic_store_explicit(&authority,
+                              HL_GUEST_FETCH_AUTHORITY_DISABLED - HL_GUEST_FETCH_AUTHORITY_VERSION_ONE,
+                              memory_order_release);
+        if (hl_guest_fetch_authority_test_begin(&authority) != 0 ||
+            !(atomic_load_explicit(&authority, memory_order_acquire) & HL_GUEST_FETCH_AUTHORITY_DISABLED))
+            result = -108;
         fixture.bytes[0] = 0xc3;
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
                             second.op != 0xc3 || context->memo[(fixture.pc ^ (fixture.pc >> 10)) &
@@ -758,17 +754,18 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         break;
 #if !defined(_WIN32)
     case 34: { /* A fork child cannot authorize bytes changed in its inherited address-space view. */
+        int inherited_writer = hl_guest_fetch_authority_test_begin(&authority);
         pid_t child = fork();
         if (child < 0) result = -81;
         else if (child == 0) {
-            atomic_fetch_add_explicit(&authority.started, 1, memory_order_release);
-            atomic_fetch_add_explicit(&authority.completed, 1, memory_order_release);
+            atomic_fetch_add_explicit(&authority, 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE, memory_order_release);
             fixture.bytes[0] = 0xc3;
             _exit(hl_x86_decode_context(context, fixture.pc, &second) == 1 && second.op == 0xc3 ? 0 : 1);
         } else {
             int status = 0;
             if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -82;
         }
+        hl_guest_fetch_authority_test_end(&authority, inherited_writer);
         break;
     }
 #endif

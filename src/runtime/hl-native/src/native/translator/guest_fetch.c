@@ -8,7 +8,7 @@
 
 static hl_guest_fetch_direct_validator g_direct_validator;
 static const _Atomic uint64_t *g_direct_generation;
-static hl_guest_fetch_authority g_decode_authority = {.started = 1, .completed = 1};
+static _Atomic uint64_t g_decode_authority = HL_GUEST_FETCH_AUTHORITY_VERSION_ONE;
 
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator validator) {
     g_direct_validator = validator;
@@ -18,27 +18,59 @@ void hl_guest_fetch_set_direct_generation(const _Atomic uint64_t *generation) {
     g_direct_generation = generation;
 }
 
-const hl_guest_fetch_authority *hl_guest_fetch_authority_source(void) { return &g_decode_authority; }
+const _Atomic uint64_t *hl_guest_fetch_authority_source(void) { return &g_decode_authority; }
 
-int hl_guest_fetch_authority_begin(void) {
-    uint64_t started = atomic_load_explicit(&g_decode_authority.started, memory_order_seq_cst);
+static int authority_begin(_Atomic uint64_t *authority) {
+    uint64_t state = atomic_load_explicit(authority, memory_order_relaxed);
     for (;;) {
-        if (started >> 63) return 0;
-        uint64_t next = started + 1;
-        if ((next & (UINT64_MAX >> 1)) == 0) next = UINT64_C(1) << 63;
-        if (atomic_compare_exchange_weak_explicit(&g_decode_authority.started, &started, next,
-                                                  memory_order_seq_cst, memory_order_seq_cst))
-            return (next >> 63) == 0;
+        if (state & HL_GUEST_FETCH_AUTHORITY_DISABLED) return 0;
+        uint64_t version = state & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED | HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
+        uint64_t active = state & HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK;
+        uint64_t next;
+        int begun;
+        if (active == HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK ||
+            version == (HL_GUEST_FETCH_AUTHORITY_DISABLED - HL_GUEST_FETCH_AUTHORITY_VERSION_ONE)) {
+            next = state | HL_GUEST_FETCH_AUTHORITY_DISABLED;
+            begun = 0;
+        } else {
+            next = state + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE + 1;
+            begun = 1;
+        }
+        if (atomic_compare_exchange_weak_explicit(authority, &state, next,
+                                                  memory_order_release, memory_order_relaxed))
+            return begun;
     }
 }
 
-void hl_guest_fetch_authority_end(int begun) {
-    if (begun) atomic_fetch_add_explicit(&g_decode_authority.completed, 1, memory_order_seq_cst);
+static void authority_end(_Atomic uint64_t *authority, int begun) {
+    if (!begun) return;
+    uint64_t state = atomic_load_explicit(authority, memory_order_relaxed);
+    for (;;) {
+        if (state & HL_GUEST_FETCH_AUTHORITY_DISABLED) return;
+        uint64_t version = state & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED | HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
+        uint64_t active = state & HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK;
+        uint64_t next = active == 0 ||
+                                version == (HL_GUEST_FETCH_AUTHORITY_DISABLED - HL_GUEST_FETCH_AUTHORITY_VERSION_ONE)
+                            ? state | HL_GUEST_FETCH_AUTHORITY_DISABLED
+                            : state + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE - 1;
+        if (atomic_compare_exchange_weak_explicit(authority, &state, next,
+                                                  memory_order_release, memory_order_relaxed))
+            return;
+    }
 }
 
+int hl_guest_fetch_authority_begin(void) { return authority_begin(&g_decode_authority); }
+
+void hl_guest_fetch_authority_end(int begun) { authority_end(&g_decode_authority, begun); }
+
 void hl_guest_fetch_authority_disable(void) {
-    (void)hl_guest_fetch_authority_begin();
+    atomic_fetch_or_explicit(&g_decode_authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+int hl_guest_fetch_authority_test_begin(_Atomic uint64_t *authority) { return authority_begin(authority); }
+void hl_guest_fetch_authority_test_end(_Atomic uint64_t *authority, int begun) { authority_end(authority, begun); }
+#endif
 
 /*
  * One resolved executable mapping, remembered per thread.
