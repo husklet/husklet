@@ -1020,6 +1020,26 @@ static uint8_t *translit_direct_jmp_ibtc_stub_rsp_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_flags_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_end;
 
+/* Cursor rewinds can be followed by an ordinary interpreter descriptor when
+   transliteration is disabled.  Withdraw every process-local entry before the
+   first byte is reusable; a later enabled translation republishes pointers
+   only after rebuilding the generation-owned header and owner ranges. */
+static void translit_shared_ibtc_stubs_reset(void) {
+    translit_jcc_ibtc_stub_entry = NULL;
+    translit_jcc_ibtc_stub_rsp_canonical = NULL;
+    translit_jcc_ibtc_stub_flags_canonical = NULL;
+    translit_jcc_ibtc_stub_end = NULL;
+    translit_direct_jmp_ibtc_stub_entry = NULL;
+    translit_direct_jmp_ibtc_stub_rsp_canonical = NULL;
+    translit_direct_jmp_ibtc_stub_flags_canonical = NULL;
+    translit_direct_jmp_ibtc_stub_end = NULL;
+}
+
+static void translit_cache_rewind_in_place(void) {
+    translit_shared_ibtc_stubs_reset();
+    jit_cache_rewind_in_place();
+}
+
 typedef struct {
     uint8_t *save_end;
     uint8_t *target_end;
@@ -2760,7 +2780,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 101 && scenario <= 110) {
+    if (scenario >= 101 && scenario <= 111) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_direct_jmp_ibtc_fixture_test(scenario));
@@ -3924,6 +3944,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     g_cache = arena;
     g_cp = arena;
     g_rw2rx = 0;
+    g_dualmap = 1; /* fixture mapping is permanently RWX; keep the lifecycle test off the host W^X service */
     g_cache_gen = UINT64_MAX - scenario;
     if (scenario == 110)
         (void)hl_option_unset("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE");
@@ -3946,6 +3967,54 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     const uint64_t collision_before = __atomic_load_n(&translit_direct_jmp_ibtc_collision, __ATOMIC_RELAXED);
     const uint64_t invalid_before = __atomic_load_n(&translit_direct_jmp_ibtc_invalid_refusal, __ATOMIC_RELAXED);
     int result = 154;
+
+    if (scenario == 111) {
+        if (!translit_jcc_ibtc_stub_init() || !translit_direct_jmp_ibtc_stub_init()) {
+            result = 198;
+            goto done_direct_ibtc;
+        }
+        translit_jcc_ibtc_stub_header *before = (translit_jcc_ibtc_stub_header *)g_cache;
+        uint32_t old_end = before->direct_jmp_end_off;
+        uint64_t old_generation = g_cache_gen;
+        jit_body_owner_set *old_owners = jit_body_owner_set_for(g_cache_gen, 0);
+        if (old_end == 0 || g_cp != g_cache + old_end || old_owners == NULL ||
+            atomic_load_explicit(&old_owners->count, memory_order_acquire) != 6)
+            { result = 199; goto done_direct_ibtc; }
+        translit_cache_rewind_in_place();
+        if (g_cp != g_cache) { result = 202; goto done_direct_ibtc; }
+        if (g_cache_gen == old_generation || jit_body_owner_set_for(old_generation, 0) != NULL) {
+            result = 205;
+            goto done_direct_ibtc;
+        }
+        if (jit_body_owner_set_for(g_cache_gen, 0) != NULL) { result = 203; goto done_direct_ibtc; }
+        if (translit_jcc_ibtc_stub_entry != NULL || translit_jcc_ibtc_stub_rsp_canonical != NULL ||
+            translit_jcc_ibtc_stub_flags_canonical != NULL || translit_jcc_ibtc_stub_end != NULL ||
+            translit_direct_jmp_ibtc_stub_entry != NULL || translit_direct_jmp_ibtc_stub_rsp_canonical != NULL ||
+            translit_direct_jmp_ibtc_stub_flags_canonical != NULL || translit_direct_jmp_ibtc_stub_end != NULL) {
+            result = 204;
+            goto done_direct_ibtc;
+        }
+        if (!translit_jcc_ibtc_stub_init() || !translit_direct_jmp_ibtc_stub_init()) {
+            result = 201;
+            goto done_direct_ibtc;
+        }
+        translit_jcc_ibtc_stub_header *after = (translit_jcc_ibtc_stub_header *)g_cache;
+        uint32_t header_end = after->direct_jmp_end_off;
+        jit_body_owner_set *owners = jit_body_owner_set_for(g_cache_gen, 0);
+        uint32_t owner_count =
+            owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
+        struct interp_block *block = translit_jcc_ibtc_test_build(context, source);
+        uint32_t final_count =
+            owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
+        result = after->magic == TL_JCC_IBTC_STUB_MAGIC && header_end == old_end &&
+                         g_cp > g_cache + header_end && owners != NULL && owners->generation == g_cache_gen &&
+                         owners->rw == g_cache && owner_count == 6 && final_count > owner_count && block != NULL &&
+                         (uint8_t *)block >= g_cache + header_end &&
+                         ((translit_jcc_ibtc_stub_header *)g_cache)->magic == TL_JCC_IBTC_STUB_MAGIC
+                     ? 0
+                     : 197;
+        goto done_direct_ibtc;
+    }
 
     if (scenario == 106 || scenario == 107) {
         if (!translit_jcc_ibtc_stub_init()) goto done_direct_ibtc;

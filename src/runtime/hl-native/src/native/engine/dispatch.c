@@ -380,12 +380,10 @@ static void run_guest(struct cpu *c) {
                         c->exited = 1;
                         continue;
                     }
-                    g_cp = g_cache;
                     // Body-owner capacity is generation-owned just like immutable arena bytes.  Reusing
                     // the byte arena in place must detach the old signal-recovery index and advance its
                     // identity before a replacement can publish at the same host addresses.
-                    jit_body_owner_drop_generation(g_cache_gen);
-                    g_cache_gen++;
+                    G_CACHE_REWIND();
                     /* Map visibility is generation-tagged; clearing only the payload leaves
                        old generation slots live and publishes zeroed translation records. */
                     map_clear();

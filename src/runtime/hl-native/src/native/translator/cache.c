@@ -1674,6 +1674,16 @@ static void jit_body_owner_drop_generation(uint64_t generation) {
     }
 }
 
+/* Rewind the current arena only at a lifecycle boundary where no generated
+   frame can still execute in it.  Body-owner ranges are append-only within a
+   generation, so retaining them while reusing offsets from the arena base
+   would make the replacement ranges overlap stale provenance. */
+static void jit_cache_rewind_in_place(void) {
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache_gen++;
+    g_cp = g_cache;
+}
+
 static void jit_body_owner_clear(void) {
     for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
         /* Called only in the single surviving fork child or under dispatcher

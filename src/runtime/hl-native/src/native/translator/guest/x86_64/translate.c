@@ -45,9 +45,10 @@ void hl_x86_legacy_jcc_spill(int kind) {
 // cleared map and re-translates with barriers; the peer starts on the same flushed cache. Returns 0 only
 // on a host W^X reprotect failure (treated as clone failure by the caller). Never call once g_threaded is
 // already 1 -- a live peer could be executing in the arena being reset.
+static void translit_cache_rewind_in_place(void);
 static int hl_x86_flush_for_thread_start(void) {
     if (!jit_wprot(0)) return 0;
-    g_cp = g_cache;
+    translit_cache_rewind_in_place();
     map_clear();
     pend_reset();
     memset(g_ibtc, 0, sizeof g_ibtc);

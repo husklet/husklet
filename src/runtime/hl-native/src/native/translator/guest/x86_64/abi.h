@@ -55,6 +55,7 @@
 // barrier-elided (single-threaded) blocks are re-translated WITH barriers before any peer runs. Evaluates
 // to nonzero on success, 0 on host W^X failure. See hl_x86_flush_for_thread_start (translate.c).
 #define G_THREAD_START_FLUSH() hl_x86_flush_for_thread_start()
+#define G_CACHE_REWIND() translit_cache_rewind_in_place()
 // Guest established a MAP_SHARED mapping: force x86-TSO barriers (a peer PROCESS can now observe us).
 #define G_SHARED_MAP_BARRIERS() hl_x86_force_barriers_for_shared()
 
