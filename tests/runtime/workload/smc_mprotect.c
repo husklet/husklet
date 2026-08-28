@@ -21,6 +21,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#if defined(DECODER_AUTHORITY_STATIC_PRIVATE)
+_Alignas(4096) static unsigned char decoder_authority_page[4096];
+#endif
+
 // Emit a leaf function `int f(void){ return imm; }` at buf; return its length in bytes.
 static int emit_ret_imm(unsigned char *buf, int imm) {
 #if defined(__aarch64__)
@@ -64,7 +68,9 @@ int main(void) {
     // Deliberately RW-only (NOT PROT_EXEC): this is the path the mmap case does NOT arm; mprotect must.
     int fd = -1;
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#if defined(DECODER_AUTHORITY_FILE_PRIVATE)
+#if defined(DECODER_AUTHORITY_STATIC_PRIVATE)
+    unsigned char *p = decoder_authority_page;
+#elif defined(DECODER_AUTHORITY_FILE_PRIVATE)
     char path[] = "/tmp/husklet-decoder-authority-XXXXXX";
     fd = mkstemp(path);
     if (fd < 0 || unlink(path) != 0 || ftruncate(fd, (off_t)sz) != 0) {
@@ -73,12 +79,14 @@ int main(void) {
     }
     flags = MAP_PRIVATE;
 #endif
+#if !defined(DECODER_AUTHORITY_STATIC_PRIVATE)
     unsigned char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, flags, fd, 0);
     if (p == MAP_FAILED) {
         perror("mmap");
         return 1;
     }
     if (fd >= 0) close(fd);
+#endif
 
     int r1 = rewrite_and_call(p, sz, 111);
     int r2 = rewrite_and_call(p, sz, 222); // must invalidate the r1 translation
