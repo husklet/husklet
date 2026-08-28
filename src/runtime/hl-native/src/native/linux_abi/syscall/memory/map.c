@@ -93,11 +93,12 @@ case 222: {
     // so a guest that OVERWRITES already-translated code re-translates. NORWXFIX=1 disables the strip.
     if (prot & PROT_EXEC) {
         /*
-         * Ordinary private RX text is byte-stable. Arm here only when this mapping is itself
-         * writable; filemap_register arms before publishing every MAP_SHARED view so a distinct
-         * writable alias is covered as well.
+         * Ordinary file-backed private RX text is byte-stable. Arm when this mapping is writable;
+         * anonymous executable mappings are made writable below even if the guest requested RX.
+         * filemap_register separately arms before publishing every MAP_SHARED view.
          */
-        if (prot & PROT_WRITE) atomic_store_explicit(&g_exec_bytes_unstable, 1, memory_order_release);
+        if ((prot & PROT_WRITE) || (a3 & 0x20))
+            atomic_store_explicit(&g_exec_bytes_unstable, 1, memory_order_release);
         g_rwx_guest = 1;
         if (a3 & 0x20) {
             // Anon JIT arena: strip EXEC and map R+W so the guest can write its generated code.
