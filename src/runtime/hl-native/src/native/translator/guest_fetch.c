@@ -87,31 +87,24 @@ void hl_guest_fetch_authority_disable(void) {
 }
 
 static int authority_lease(_Atomic uint64_t *source, uint64_t authority) {
-    uint64_t state = atomic_load_explicit(source, memory_order_acquire);
-    for (;;) {
-        uint64_t token = state & ~HL_GUEST_FETCH_AUTHORITY_READER_MASK;
-        uint64_t readers = state & HL_GUEST_FETCH_AUTHORITY_READER_MASK;
-        if (token != authority || (token & (HL_GUEST_FETCH_AUTHORITY_DISABLED |
-                                            HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK)) ||
-            readers == HL_GUEST_FETCH_AUTHORITY_READER_MASK)
-            return 0;
-        uint64_t next = state + HL_GUEST_FETCH_AUTHORITY_READER_ONE;
-        if (atomic_compare_exchange_weak_explicit(source, &state, next,
-                                                  memory_order_acquire, memory_order_relaxed))
-            return 1;
-    }
+    /* g_jit serializes block publication, so at most one commit reader exists.
+       A writer may race this fetch-or in either order: if it registered first,
+       ACTIVE makes us undo and reject; if we registered first, its CAS preserves
+       READER_ONE and waits. This keeps the common path to one locked operation. */
+    uint64_t state = atomic_fetch_or_explicit(source, HL_GUEST_FETCH_AUTHORITY_READER_ONE,
+                                              memory_order_acquire);
+    uint64_t token = state & ~HL_GUEST_FETCH_AUTHORITY_READER_MASK;
+    if ((state & HL_GUEST_FETCH_AUTHORITY_READER_MASK) != 0) return 0;
+    if (token == authority && !(token & (HL_GUEST_FETCH_AUTHORITY_DISABLED |
+                                         HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK)))
+        return 1;
+    atomic_fetch_and_explicit(source, ~HL_GUEST_FETCH_AUTHORITY_READER_ONE, memory_order_release);
+    return 0;
 }
 
 static void authority_unlease(_Atomic uint64_t *source) {
-    uint64_t state = atomic_load_explicit(source, memory_order_relaxed);
-    for (;;) {
-        uint64_t readers = state & HL_GUEST_FETCH_AUTHORITY_READER_MASK;
-        if (readers == 0 || (state & HL_GUEST_FETCH_AUTHORITY_DISABLED)) return;
-        uint64_t next = state - HL_GUEST_FETCH_AUTHORITY_READER_ONE;
-        if (atomic_compare_exchange_weak_explicit(source, &state, next,
-                                                  memory_order_acq_rel, memory_order_relaxed))
-            return;
-    }
+    (void)atomic_fetch_and_explicit(source, ~HL_GUEST_FETCH_AUTHORITY_READER_ONE,
+                                    memory_order_release);
 }
 
 int hl_guest_fetch_authority_lease(uint64_t authority) {

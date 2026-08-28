@@ -895,8 +895,19 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         uint64_t token = atomic_load_explicit(&authority, memory_order_acquire);
         authority_writer_fixture writer = {.authority = &authority};
         pthread_t thread;
-        if (!hl_guest_fetch_authority_test_lease(&authority, token) ||
-            pthread_create(&thread, NULL, authority_writer_worker, &writer) != 0) {
+        if (!hl_guest_fetch_authority_test_lease(&authority, token)) {
+            result = -110;
+            break;
+        }
+        if (hl_guest_fetch_authority_test_lease(&authority, token) ||
+            (atomic_load_explicit(&authority, memory_order_acquire) &
+             HL_GUEST_FETCH_AUTHORITY_READER_MASK) != HL_GUEST_FETCH_AUTHORITY_READER_ONE) {
+            result = -115;
+            hl_guest_fetch_authority_test_unlease(&authority);
+            break;
+        }
+        if (pthread_create(&thread, NULL, authority_writer_worker, &writer) != 0) {
+            hl_guest_fetch_authority_test_unlease(&authority);
             result = -110;
             break;
         }
