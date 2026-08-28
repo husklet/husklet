@@ -95,6 +95,8 @@ static uint64_t g_host_launch_monotonic_ns;
    decoder consumes it; on the AArch64 JIT it is intentionally only lifecycle bookkeeping. */
 static _Atomic uint64_t g_exec_bytes_unstable;
 static uint64_t hl_x86_decode_authorized_hits(void) { return 0; }
+static uint64_t hl_x86_decode_authorized_hits_after_fork(void) { return 0; }
+static void hl_x86_decode_after_fork_rebind(void) {}
 static void filemap_refresh_emulated(uint64_t lo, uint64_t hi);
 
 #include "../../translator/guest/aarch64/cpu.h"

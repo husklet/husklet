@@ -35,6 +35,7 @@ void hl_guest_fetch_authority_disable(void);
 int hl_guest_fetch_authority_lease(uint64_t authority);
 void hl_guest_fetch_authority_unlease(void);
 void hl_guest_fetch_authority_after_fork_child(void);
+void hl_guest_fetch_authority_after_fork_rebind(void);
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_guest_fetch_authority_test_begin(_Atomic uint64_t *);
 int hl_guest_fetch_authority_test_begin_observed(_Atomic uint64_t *, _Atomic int *);
@@ -43,6 +44,7 @@ void hl_guest_fetch_authority_test_end(_Atomic uint64_t *, int);
 int hl_guest_fetch_authority_test_lease(_Atomic uint64_t *, uint64_t);
 void hl_guest_fetch_authority_test_unlease(_Atomic uint64_t *);
 void hl_guest_fetch_authority_test_after_fork_child(_Atomic uint64_t *);
+void hl_guest_fetch_authority_test_after_fork_rebind(_Atomic uint64_t *);
 #endif
 typedef int (*hl_guest_fetch_direct_validator)(uint64_t, size_t);
 void hl_guest_fetch_set_direct_validator(hl_guest_fetch_direct_validator);

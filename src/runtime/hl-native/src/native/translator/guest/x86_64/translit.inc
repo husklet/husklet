@@ -476,6 +476,29 @@ static uint64_t translit_displaced_refusal_prefix;
 static uint64_t translit_displaced_refusal_width;
 static uint64_t translit_displaced_refusal_rsp;
 static uint64_t translit_displaced_refusal_opcode_other;
+
+typedef struct {
+    uint64_t declined, stitch_candidates, stitch_admitted;
+    uint64_t jcc_candidates, jcc_admitted, jcc_page_refused, jcc_successor_refused, jcc_decode_refused;
+    uint64_t mixed_encounters, mixed_admitted, mixed_transitions;
+    uint64_t displaced_operand_declined, displaced_sse2_declined;
+    uint64_t displaced_riprel_projected, displaced_riprel_unreachable, displaced_riprel_lowered;
+    uint64_t displaced_scratch_lowered, displaced_lea_lowered, natural_abs32_lowered, natural_lea_lowered;
+    uint64_t rip_indirect_lowered;
+    uint64_t body_owner_published, jcc_link_admitted;
+    uint64_t refusal_opcode[512];
+    uint64_t refusal_prefix, refusal_width, refusal_rsp, refusal_opcode_other;
+} translit_attempt_telemetry;
+
+static _Thread_local translit_attempt_telemetry translit_attempt_pending;
+static _Thread_local int translit_attempt_staging;
+
+#define TL_ATTEMPT_ADD(global, member) do { \
+    if (translit_attempt_staging) \
+        ++translit_attempt_pending.member; \
+    else \
+        (void)__atomic_fetch_add(&(global), 1, __ATOMIC_RELAXED); \
+} while (0)
 #endif
 
 static int translit_enabled(void) {
@@ -495,7 +518,10 @@ static int translit_enabled(void) {
 
 static void translit_count_displaced_refusal(const struct insn *insn) {
     unsigned key = (insn->two ? 256u : 0u) | insn->op;
-    (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[key], 1, __ATOMIC_RELAXED);
+    if (translit_attempt_staging)
+        ++translit_attempt_pending.refusal_opcode[key];
+    else
+        (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[key], 1, __ATOMIC_RELAXED);
 }
 
 // %gs base == this thread's cpu. Per thread, so re-published whenever run_block sees a cpu it has not
@@ -1636,7 +1662,7 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         return !a->overflow;
     }
     if (insn->lock || insn->rep || insn->repne) {
-        if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_refusal_prefix, 1, __ATOMIC_RELAXED);
+        if (g_nonpie_lo) TL_ATTEMPT_ADD(translit_displaced_refusal_prefix, refusal_prefix);
         return 0;
     }
     // In 64-bit mode an address-size override plus a no-base/no-index SIB names an unsigned absolute disp32.
@@ -1673,13 +1699,14 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         int reg = insn->reg;
         if (!supported) {
             if (g_nonpie_lo)
-                (void)__atomic_fetch_add(family ? &translit_displaced_refusal_width
-                                                : &translit_displaced_refusal_opcode_other,
-                                         1, __ATOMIC_RELAXED);
+                if (family)
+                    TL_ATTEMPT_ADD(translit_displaced_refusal_width, refusal_width);
+                else
+                    TL_ATTEMPT_ADD(translit_displaced_refusal_opcode_other, refusal_opcode_other);
             return 0;
         }
         if (reg == HL_X64_RSP) {
-            if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_refusal_rsp, 1, __ATOMIC_RELAXED);
+            if (g_nonpie_lo) TL_ATTEMPT_ADD(translit_displaced_refusal_rsp, refusal_rsp);
             return 0;
         }
         hl_x64_mov_imm64(a, reg, storage_target);
@@ -2811,84 +2838,56 @@ static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, 
     return TL_SUCCESSOR_OK;
 }
 
-typedef struct {
-    uint64_t declined, stitch_candidates, stitch_admitted;
-    uint64_t jcc_candidates, jcc_admitted, jcc_page_refused, jcc_successor_refused, jcc_decode_refused;
-    uint64_t mixed_encounters, displaced_operand_declined, displaced_sse2_declined;
-    uint64_t displaced_riprel_projected, displaced_riprel_unreachable, displaced_riprel_lowered;
-    uint64_t displaced_scratch_lowered, displaced_lea_lowered, natural_abs32_lowered, natural_lea_lowered;
-    uint64_t rip_indirect_lowered;
-    uint64_t refusal_opcode[512];
-    uint64_t refusal_prefix, refusal_width, refusal_rsp, refusal_opcode_other;
-} translit_attempt_telemetry;
-
-static void translit_attempt_telemetry_save(translit_attempt_telemetry *saved) {
-#define TL_SNAPSHOT(field, source) saved->field = __atomic_load_n(&(source), __ATOMIC_RELAXED)
-    *saved = (translit_attempt_telemetry){
-        0
-    };
-    TL_SNAPSHOT(declined, translit_declined);
-    TL_SNAPSHOT(stitch_candidates, translit_stitch_candidates);
-    TL_SNAPSHOT(stitch_admitted, translit_stitch_admitted);
-    TL_SNAPSHOT(jcc_candidates, translit_jcc_fall_candidates);
-    TL_SNAPSHOT(jcc_admitted, translit_jcc_fall_admitted);
-    TL_SNAPSHOT(jcc_page_refused, translit_jcc_fall_page_refused);
-    TL_SNAPSHOT(jcc_successor_refused, translit_jcc_fall_successor_page_refused);
-    TL_SNAPSHOT(jcc_decode_refused, translit_jcc_fall_decode_refused);
-    TL_SNAPSHOT(mixed_encounters, translit_mixed_sse_encounters);
-    TL_SNAPSHOT(displaced_operand_declined, translit_displaced_operand_declined);
-    TL_SNAPSHOT(displaced_sse2_declined, translit_displaced_sse2_memory_declined);
-    TL_SNAPSHOT(displaced_riprel_projected, translit_displaced_riprel_projected);
-    TL_SNAPSHOT(displaced_riprel_unreachable, translit_displaced_riprel_unreachable);
-    TL_SNAPSHOT(displaced_riprel_lowered, translit_displaced_riprel_lowered);
-    TL_SNAPSHOT(displaced_scratch_lowered, translit_displaced_scratch_lowered);
-    TL_SNAPSHOT(displaced_lea_lowered, translit_displaced_lea_lowered);
-    TL_SNAPSHOT(natural_abs32_lowered, translit_natural_abs32_lowered);
-    TL_SNAPSHOT(natural_lea_lowered, translit_natural_lea_lowered);
-    TL_SNAPSHOT(rip_indirect_lowered, translit_rip_indirect_lowered);
-    TL_SNAPSHOT(refusal_prefix, translit_displaced_refusal_prefix);
-    TL_SNAPSHOT(refusal_width, translit_displaced_refusal_width);
-    TL_SNAPSHOT(refusal_rsp, translit_displaced_refusal_rsp);
-    TL_SNAPSHOT(refusal_opcode_other, translit_displaced_refusal_opcode_other);
-    for (size_t i = 0; i < 512; i++)
-        saved->refusal_opcode[i] = __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED);
-#undef TL_SNAPSHOT
+static void translit_attempt_telemetry_begin(void) {
+    memset(&translit_attempt_pending, 0, sizeof translit_attempt_pending);
+    translit_attempt_staging = 1;
 }
 
-static void translit_attempt_telemetry_restore(const translit_attempt_telemetry *saved) {
-#define TL_ROLLBACK(field, source) do { \
-    uint64_t current = __atomic_load_n(&(source), __ATOMIC_RELAXED); \
-    __atomic_fetch_sub(&(source), current - saved->field, __ATOMIC_RELAXED); \
+static void translit_attempt_telemetry_discard(void) {
+    translit_attempt_staging = 0;
+    memset(&translit_attempt_pending, 0, sizeof translit_attempt_pending);
+}
+
+static void translit_attempt_telemetry_publish(void) {
+#define TL_PUBLISH(field, destination) do { \
+    if (translit_attempt_pending.field != 0) \
+        (void)__atomic_fetch_add(&(destination), translit_attempt_pending.field, __ATOMIC_RELAXED); \
 } while (0)
-    TL_ROLLBACK(declined, translit_declined);
-    TL_ROLLBACK(stitch_candidates, translit_stitch_candidates);
-    TL_ROLLBACK(stitch_admitted, translit_stitch_admitted);
-    TL_ROLLBACK(jcc_candidates, translit_jcc_fall_candidates);
-    TL_ROLLBACK(jcc_admitted, translit_jcc_fall_admitted);
-    TL_ROLLBACK(jcc_page_refused, translit_jcc_fall_page_refused);
-    TL_ROLLBACK(jcc_successor_refused, translit_jcc_fall_successor_page_refused);
-    TL_ROLLBACK(jcc_decode_refused, translit_jcc_fall_decode_refused);
-    TL_ROLLBACK(mixed_encounters, translit_mixed_sse_encounters);
-    TL_ROLLBACK(displaced_operand_declined, translit_displaced_operand_declined);
-    TL_ROLLBACK(displaced_sse2_declined, translit_displaced_sse2_memory_declined);
-    TL_ROLLBACK(displaced_riprel_projected, translit_displaced_riprel_projected);
-    TL_ROLLBACK(displaced_riprel_unreachable, translit_displaced_riprel_unreachable);
-    TL_ROLLBACK(displaced_riprel_lowered, translit_displaced_riprel_lowered);
-    TL_ROLLBACK(displaced_scratch_lowered, translit_displaced_scratch_lowered);
-    TL_ROLLBACK(displaced_lea_lowered, translit_displaced_lea_lowered);
-    TL_ROLLBACK(natural_abs32_lowered, translit_natural_abs32_lowered);
-    TL_ROLLBACK(natural_lea_lowered, translit_natural_lea_lowered);
-    TL_ROLLBACK(rip_indirect_lowered, translit_rip_indirect_lowered);
-    TL_ROLLBACK(refusal_prefix, translit_displaced_refusal_prefix);
-    TL_ROLLBACK(refusal_width, translit_displaced_refusal_width);
-    TL_ROLLBACK(refusal_rsp, translit_displaced_refusal_rsp);
-    TL_ROLLBACK(refusal_opcode_other, translit_displaced_refusal_opcode_other);
-    for (size_t i = 0; i < 512; i++) {
-        uint64_t current = __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED);
-        __atomic_fetch_sub(&translit_displaced_refusal_opcode[i], current - saved->refusal_opcode[i],
-                           __ATOMIC_RELAXED);
-    }
-#undef TL_ROLLBACK
+    TL_PUBLISH(declined, translit_declined);
+    TL_PUBLISH(stitch_candidates, translit_stitch_candidates);
+    TL_PUBLISH(stitch_admitted, translit_stitch_admitted);
+    TL_PUBLISH(jcc_candidates, translit_jcc_fall_candidates);
+    TL_PUBLISH(jcc_admitted, translit_jcc_fall_admitted);
+    TL_PUBLISH(jcc_page_refused, translit_jcc_fall_page_refused);
+    TL_PUBLISH(jcc_successor_refused, translit_jcc_fall_successor_page_refused);
+    TL_PUBLISH(jcc_decode_refused, translit_jcc_fall_decode_refused);
+    TL_PUBLISH(mixed_encounters, translit_mixed_sse_encounters);
+    TL_PUBLISH(mixed_admitted, translit_mixed_sse_admitted);
+    TL_PUBLISH(mixed_transitions, translit_mixed_sse_transitions);
+    TL_PUBLISH(displaced_operand_declined, translit_displaced_operand_declined);
+    TL_PUBLISH(displaced_sse2_declined, translit_displaced_sse2_memory_declined);
+    TL_PUBLISH(displaced_riprel_projected, translit_displaced_riprel_projected);
+    TL_PUBLISH(displaced_riprel_unreachable, translit_displaced_riprel_unreachable);
+    TL_PUBLISH(displaced_riprel_lowered, translit_displaced_riprel_lowered);
+    TL_PUBLISH(displaced_scratch_lowered, translit_displaced_scratch_lowered);
+    TL_PUBLISH(displaced_lea_lowered, translit_displaced_lea_lowered);
+    TL_PUBLISH(natural_abs32_lowered, translit_natural_abs32_lowered);
+    TL_PUBLISH(natural_lea_lowered, translit_natural_lea_lowered);
+    TL_PUBLISH(rip_indirect_lowered, translit_rip_indirect_lowered);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    TL_PUBLISH(body_owner_published, translit_body_owner_published);
+    TL_PUBLISH(jcc_link_admitted, translit_jcc_link_admitted);
+#endif
+    TL_PUBLISH(refusal_prefix, translit_displaced_refusal_prefix);
+    TL_PUBLISH(refusal_width, translit_displaced_refusal_width);
+    TL_PUBLISH(refusal_rsp, translit_displaced_refusal_rsp);
+    TL_PUBLISH(refusal_opcode_other, translit_displaced_refusal_opcode_other);
+    for (size_t i = 0; i < 512; i++)
+        if (translit_attempt_pending.refusal_opcode[i] != 0)
+            (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[i],
+                                     translit_attempt_pending.refusal_opcode[i], __ATOMIC_RELAXED);
+#undef TL_PUBLISH
+    translit_attempt_telemetry_discard();
 }
 
 static void *translit_build(hl_x86_hot_context *context, struct interp_block *block, uint64_t gpc,
@@ -2901,8 +2900,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
         return NULL;
     }
-    translit_attempt_telemetry telemetry_before;
-    translit_attempt_telemetry_save(&telemetry_before);
+    int staged_telemetry = context != NULL && context->authority_state == 1;
+    if (staged_telemetry) translit_attempt_telemetry_begin();
     struct insn first_insn;
     int first_decoded = hl_x86_decode_context(context, gpc, &first_insn);
     int first_kind = first_decoded > 0 ? translit_classify(&first_insn) : TL_NO;
@@ -2926,6 +2925,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_AUTHORITY;
 #endif
+        if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
     uint32_t owner_token;
@@ -2945,6 +2945,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+        if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
     uint8_t *arena_limit = (uint8_t *)g_cache + CACHE_SZ - CACHE_EMIT_HEADROOM;
@@ -2953,6 +2954,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+        if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
     struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
@@ -3025,7 +3027,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         int previous_sse2 = previous_kind == TL_SSE2;
         int current_sse2 = kind == TL_SSE2;
         if (previous_kind != TL_NO && previous_sse2 != current_sse2) {
-            (void)__atomic_fetch_add(&translit_mixed_sse_encounters, 1, __ATOMIC_RELAXED);
+            TL_ATTEMPT_ADD(translit_mixed_sse_encounters, mixed_encounters);
             if (!mixed_sse_enabled) {
 #if defined(HL_NATIVE_TEST_HOOKS)
                 fall_stop = current_sse2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2
@@ -3037,8 +3039,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             mixed_sse_transition_count++;
         }
         if (!translit_displaced_safe(&insn, kind)) {
-            (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
-            (void)__atomic_fetch_add(&translit_displaced_operand_declined, 1, __ATOMIC_RELAXED);
+            TL_ATTEMPT_ADD(translit_declined, declined);
+            TL_ATTEMPT_ADD(translit_displaced_operand_declined, displaced_operand_declined);
             translit_count_displaced_refusal(&insn);
 #if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;
@@ -3073,7 +3075,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
                                                     &preserve_register)) {
                     if (g_nonpie_lo)
-                        (void)__atomic_fetch_add(&translit_displaced_riprel_unreachable, 1, __ATOMIC_RELAXED);
+                        TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
                     if (g_nonpie_lo) translit_count_displaced_refusal(&insn);
                     a->cursor = instruction_start; // un-emit: the block ends before this instruction
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -3085,9 +3087,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                         ? (g_nonpie_lo ? &translit_displaced_lea_lowered
                                                        : &translit_natural_lea_lowered)
                                         : &translit_displaced_riprel_lowered;
-                (void)__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
+                if (counter == &translit_displaced_lea_lowered)
+                    TL_ATTEMPT_ADD(translit_displaced_lea_lowered, displaced_lea_lowered);
+                else if (counter == &translit_natural_lea_lowered)
+                    TL_ATTEMPT_ADD(translit_natural_lea_lowered, natural_lea_lowered);
+                else
+                    TL_ATTEMPT_ADD(translit_displaced_riprel_lowered, displaced_riprel_lowered);
                 if (preserve_register >= 0)
-                    (void)__atomic_fetch_add(&translit_displaced_scratch_lowered, 1, __ATOMIC_RELAXED);
+                    TL_ATTEMPT_ADD(translit_displaced_scratch_lowered, displaced_scratch_lowered);
             }
             uint32_t preserve = translit_preserve_mask(preserve_register);
             int instruction_ok = translit_owner_append(instruction_ranges, &instruction_range_count,
@@ -3221,16 +3228,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         // second branch. The same-page and decode checks keep the source hull linear and make an
         // inaccessible successor start a fresh interpreted/translated block instead of faulting here.
         if (kind == TL_JCC && (next >> 12) != (pc >> 12))
-            (void)__atomic_fetch_add(&translit_jcc_fall_page_refused, 1, __ATOMIC_RELAXED);
+            TL_ATTEMPT_ADD(translit_jcc_fall_page_refused, jcc_page_refused);
         if (kind == TL_JCC && (next >> 12) == (pc >> 12)) {
-            (void)__atomic_fetch_add(&translit_jcc_fall_candidates, 1, __ATOMIC_RELAXED);
+            TL_ATTEMPT_ADD(translit_jcc_fall_candidates, jcc_candidates);
             if (stitched < TL_STITCH_MAX_JMPS) {
                 struct insn successor;
                 int successor_status = translit_jcc_successor(context, pc, next, &successor);
                 if (successor_status == TL_SUCCESSOR_DECODE_REFUSED) {
-                    (void)__atomic_fetch_add(&translit_jcc_fall_decode_refused, 1, __ATOMIC_RELAXED);
+                    TL_ATTEMPT_ADD(translit_jcc_fall_decode_refused, jcc_decode_refused);
                 } else if (successor_status == TL_SUCCESSOR_PAGE_REFUSED) {
-                    (void)__atomic_fetch_add(&translit_jcc_fall_successor_page_refused, 1, __ATOMIC_RELAXED);
+                    TL_ATTEMPT_ADD(translit_jcc_fall_successor_page_refused, jcc_successor_refused);
                 } else {
                     uint64_t target = next + (uint64_t)insn.imm;
                     struct interp_block *target_block = translit_jcc_link_target(pc, target);
@@ -3278,7 +3285,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     stitched++;
                     jcc_fall_stitched++;
                     previous_kind = kind;
-                    (void)__atomic_fetch_add(&translit_jcc_fall_admitted, 1, __ATOMIC_RELAXED);
+                    TL_ATTEMPT_ADD(translit_jcc_fall_admitted, jcc_admitted);
                     continue;
                 }
             }
@@ -3292,7 +3299,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (kind == TL_JMP) {
             uint64_t target = next + (uint64_t)insn.imm;
             if (target > next && (target >> 12) == (pc >> 12)) {
-                (void)__atomic_fetch_add(&translit_stitch_candidates, 1, __ATOMIC_RELAXED);
+                TL_ATTEMPT_ADD(translit_stitch_candidates, stitch_candidates);
                 struct insn successor;
                 if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode_context(context, target, &successor) > 0 &&
                     successor.len > 0) {
@@ -3318,7 +3325,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     stitched++;
                     direct_jmp_stitched++;
                     previous_kind = kind;
-                    (void)__atomic_fetch_add(&translit_stitch_admitted, 1, __ATOMIC_RELAXED);
+                    TL_ATTEMPT_ADD(translit_stitch_admitted, stitch_admitted);
                     continue;
                 }
             }
@@ -3501,7 +3508,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                               translit_preserve_mask(preserve_register)) &&
                        translit_owner_append(instruction_ranges, &instruction_range_count,
                                               preserve_end, a->cursor, pc, 0);
-            (void)__atomic_fetch_add(&translit_rip_indirect_lowered, 1, __ATOMIC_RELAXED);
+            TL_ATTEMPT_ADD(translit_rip_indirect_lowered, rip_indirect_lowered);
         } else if (ibtc_site.end != NULL) {
             owner_ok = translit_owner_append_ibtc(owners, &owner_count, instruction_start,
                                                   a->cursor, &ibtc_site, pc) &&
@@ -3529,6 +3536,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (block->profile_fallback_kind == HL_BACKEND_SHAPE_I_OTHER)
             block->profile_fallback_kind = HL_BACKEND_SHAPE_I_EMIT;
 #endif
+        if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
     if (!terminated) {
@@ -3555,6 +3563,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
             block->profile_fallback_kind = HL_BACKEND_SHAPE_I_EMIT;
 #endif
+            if (staged_telemetry) translit_attempt_telemetry_discard();
             return NULL;
         }
         owner_normal_pending = 0;
@@ -3563,6 +3572,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
             block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+            if (staged_telemetry) translit_attempt_telemetry_discard();
             return NULL;
         }
     }
@@ -3572,7 +3582,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
        intent before waiting, so none can enter until translate_block publishes
        the descriptor and map entry and releases this lease. */
     if (!hl_x86_decode_transaction_commit(context)) {
-        translit_attempt_telemetry_restore(&telemetry_before);
+        if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
     int owner_published = jit_body_owner_publish_n(g_cache_gen, owner_token, owners, owner_count);
@@ -3581,19 +3591,30 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
         hl_x86_decode_transaction_release(context);
+        if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
     // The instruction map is deliberately staged behind the all-or-nothing owner publication.  Failed
     // emission and capacity refusal therefore cannot leave stale provenance naming unreachable bytes.
     translit_instruction_ranges_publish(instruction_ranges, instruction_range_count);
     if (mixed_sse_transition_count != 0) {
-        (void)__atomic_fetch_add(&translit_mixed_sse_admitted, 1, __ATOMIC_RELAXED);
-        (void)__atomic_fetch_add(&translit_mixed_sse_transitions, mixed_sse_transition_count,
-                                 __ATOMIC_RELAXED);
+        if (translit_attempt_staging) {
+            ++translit_attempt_pending.mixed_admitted;
+            translit_attempt_pending.mixed_transitions += mixed_sse_transition_count;
+        } else {
+            (void)__atomic_fetch_add(&translit_mixed_sse_admitted, 1, __ATOMIC_RELAXED);
+            (void)__atomic_fetch_add(&translit_mixed_sse_transitions, mixed_sse_transition_count,
+                                     __ATOMIC_RELAXED);
+        }
     }
 #if defined(HL_NATIVE_TEST_HOOKS)
-    (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
-    (void)__atomic_fetch_add(&translit_jcc_link_admitted, jcc_link_admitted, __ATOMIC_RELAXED);
+    if (translit_attempt_staging) {
+        ++translit_attempt_pending.body_owner_published;
+        translit_attempt_pending.jcc_link_admitted += jcc_link_admitted;
+    } else {
+        (void)__atomic_fetch_add(&translit_body_owner_published, 1, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_jcc_link_admitted, jcc_link_admitted, __ATOMIC_RELAXED);
+    }
     if (would_link_family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT) {
         unsigned disposition =
             translit_would_link_classify(block, start, a->cursor, would_link_source, would_link_target, 0);

@@ -121,7 +121,27 @@ int hl_guest_fetch_authority_lease(uint64_t authority) {
 void hl_guest_fetch_authority_unlease(void) { authority_unlease(&g_decode_authority); }
 
 void hl_guest_fetch_authority_after_fork_child(void) {
-    atomic_store_explicit(&g_decode_authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
+    uint64_t inherited = atomic_load_explicit(&g_decode_authority, memory_order_relaxed);
+    atomic_store_explicit(&g_decode_authority,
+                          (inherited & ~(HL_GUEST_FETCH_AUTHORITY_READER_MASK |
+                                         HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK)) |
+                              HL_GUEST_FETCH_AUTHORITY_DISABLED,
+                          memory_order_release);
+}
+
+static void authority_after_fork_rebind(_Atomic uint64_t *authority) {
+    uint64_t inherited = atomic_load_explicit(authority, memory_order_relaxed);
+    uint64_t version = inherited & ~(HL_GUEST_FETCH_AUTHORITY_DISABLED |
+                                     HL_GUEST_FETCH_AUTHORITY_READER_MASK |
+                                     HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK);
+    uint64_t fresh = version <= HL_GUEST_FETCH_AUTHORITY_DISABLED - 2 * HL_GUEST_FETCH_AUTHORITY_VERSION_ONE
+                         ? version + HL_GUEST_FETCH_AUTHORITY_VERSION_ONE
+                         : HL_GUEST_FETCH_AUTHORITY_DISABLED;
+    atomic_store_explicit(authority, fresh, memory_order_release);
+}
+
+void hl_guest_fetch_authority_after_fork_rebind(void) {
+    authority_after_fork_rebind(&g_decode_authority);
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -138,7 +158,15 @@ int hl_guest_fetch_authority_test_lease(_Atomic uint64_t *authority, uint64_t to
 }
 void hl_guest_fetch_authority_test_unlease(_Atomic uint64_t *authority) { authority_unlease(authority); }
 void hl_guest_fetch_authority_test_after_fork_child(_Atomic uint64_t *authority) {
-    atomic_store_explicit(authority, HL_GUEST_FETCH_AUTHORITY_DISABLED, memory_order_release);
+    uint64_t inherited = atomic_load_explicit(authority, memory_order_relaxed);
+    atomic_store_explicit(authority,
+                          (inherited & ~(HL_GUEST_FETCH_AUTHORITY_READER_MASK |
+                                         HL_GUEST_FETCH_AUTHORITY_ACTIVE_MASK)) |
+                              HL_GUEST_FETCH_AUTHORITY_DISABLED,
+                          memory_order_release);
+}
+void hl_guest_fetch_authority_test_after_fork_rebind(_Atomic uint64_t *authority) {
+    authority_after_fork_rebind(authority);
 }
 #endif
 

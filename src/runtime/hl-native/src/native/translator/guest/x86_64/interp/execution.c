@@ -468,6 +468,8 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.
     map_put(gpc, block->guest_start, block->guest_end, block, block);
+    if (!hl_x86_decode_transaction_rejected(context) && translit_attempt_staging)
+        translit_attempt_telemetry_publish();
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (gap_test && atomic_load_explicit(&translit_test_gap_payload, memory_order_acquire) != 0)
         atomic_store_explicit(&translit_test_gap_early, 1, memory_order_release);

@@ -57,6 +57,18 @@ cases:
       diagnostics:
         - { counter: authorized_hits, greater-than: 0 }
         - { counter: byte_unstable, equals: 0 }
+  - id: runtime/memory/decoder-authority-fork-exec
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/decoder_authority_forkexec.c, output: decoder-authority-fork-exec, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/decoder-authority-fork-exec }
+    run: []
+    expect:
+      exit: 0
+      stdout: golden/decoder_authority_forkexec.out
+      diagnostics:
+        - { counter: fork_authorized_hits, greater-than: 0 }
   - id: runtime/memory/fd-reclamation
     targets: [arm64, amd64]
     status: active

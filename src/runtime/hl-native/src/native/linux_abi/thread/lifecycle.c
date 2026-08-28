@@ -43,6 +43,8 @@ static void thread_after_fork(void) {
             self->exit_code = 70;
             self->exited = 1;
         }
+        hl_guest_fetch_authority_after_fork_rebind();
+        hl_x86_decode_after_fork_rebind();
         return;
     }
     futex_private_table_after_fork();
@@ -69,6 +71,8 @@ static void thread_after_fork(void) {
         self->exit_code = 70;
         self->exited = 1;
     }
+    hl_guest_fetch_authority_after_fork_rebind();
+    hl_x86_decode_after_fork_rebind();
 }
 
 // A dedicated host signal used only to INTERRUPT a sibling guest thread out of a blocking host syscall

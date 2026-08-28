@@ -5,6 +5,9 @@
 
 #include <string.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 #include <pthread.h>
 #include <sched.h>
@@ -14,6 +17,9 @@
 
 static hl_x86_instruction_fetch_fn g_instruction_fetch;
 static _Atomic uint64_t g_decode_authorized_hits;
+static _Atomic uint64_t g_decode_authorized_hits_after_fork;
+static _Atomic uint64_t *g_decode_authorized_hits_after_fork_shared;
+static _Atomic int g_decode_after_fork;
 static int g_decode_diagnostics;
 
 enum { DECODE_MEMO_SLOTS = HL_X86_DECODE_MEMO_SLOTS, X86_MAX_INSN = HL_X86_MAX_INSN };
@@ -393,6 +399,11 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
                 ++context->authority_logical_generation;
             else
                 atomic_fetch_add_explicit(&g_decode_authorized_hits, 1, memory_order_relaxed);
+            if (atomic_load_explicit(&g_decode_after_fork, memory_order_relaxed))
+                atomic_fetch_add_explicit(&g_decode_authorized_hits_after_fork, 1, memory_order_relaxed);
+            if (atomic_load_explicit(&g_decode_after_fork, memory_order_relaxed) &&
+                g_decode_authorized_hits_after_fork_shared != NULL)
+                atomic_fetch_add_explicit(g_decode_authorized_hits_after_fork_shared, 1, memory_order_relaxed);
         }
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_hits;
@@ -454,9 +465,25 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
 uint64_t hl_x86_decode_authorized_hits(void) {
     return atomic_load_explicit(&g_decode_authorized_hits, memory_order_relaxed);
 }
+uint64_t hl_x86_decode_authorized_hits_after_fork(void) {
+    return g_decode_authorized_hits_after_fork_shared != NULL
+               ? atomic_load_explicit(g_decode_authorized_hits_after_fork_shared, memory_order_relaxed)
+               : atomic_load_explicit(&g_decode_authorized_hits_after_fork, memory_order_relaxed);
+}
+void hl_x86_decode_after_fork_rebind(void) {
+    atomic_store_explicit(&g_decode_authorized_hits_after_fork, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_decode_after_fork, 1, memory_order_release);
+}
 
 void hl_x86_decode_set_diagnostics(int enabled) {
     g_decode_diagnostics = enabled != 0;
+#if !defined(_WIN32)
+    if (g_decode_diagnostics && g_decode_authorized_hits_after_fork_shared == NULL) {
+        void *shared = mmap(NULL, sizeof *g_decode_authorized_hits_after_fork_shared,
+                            PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (shared != MAP_FAILED) g_decode_authorized_hits_after_fork_shared = shared;
+    }
+#endif
 }
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
@@ -545,6 +572,15 @@ void hl_x86_decode_transaction_release(hl_x86_hot_context *context) {
         if (context->count_authorized_hits && context->authority_logical_generation != 0)
             atomic_fetch_add_explicit(&g_decode_authorized_hits, context->authority_logical_generation,
                                       memory_order_relaxed);
+        if (context->count_authorized_hits && context->authority_logical_generation != 0 &&
+            atomic_load_explicit(&g_decode_after_fork, memory_order_relaxed))
+            atomic_fetch_add_explicit(&g_decode_authorized_hits_after_fork,
+                                      context->authority_logical_generation, memory_order_relaxed);
+        if (context->count_authorized_hits && context->authority_logical_generation != 0 &&
+            atomic_load_explicit(&g_decode_after_fork, memory_order_relaxed) &&
+            g_decode_authorized_hits_after_fork_shared != NULL)
+            atomic_fetch_add_explicit(g_decode_authorized_hits_after_fork_shared,
+                                      context->authority_logical_generation, memory_order_relaxed);
         hl_guest_fetch_authority_unlease();
     }
     context->authority_epoch = 0;
@@ -925,11 +961,15 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         if (child < 0) result = -116;
         else if (child == 0) {
             hl_guest_fetch_authority_test_after_fork_child(&authority);
-            uint64_t inherited = atomic_load_explicit(&authority, memory_order_acquire);
-            _exit(inherited == HL_GUEST_FETCH_AUTHORITY_DISABLED &&
-                          !hl_guest_fetch_authority_test_lease(&authority, inherited)
-                      ? 0
-                      : 1);
+            hl_guest_fetch_authority_test_after_fork_rebind(&authority);
+            uint64_t fresh = atomic_load_explicit(&authority, memory_order_acquire);
+            int old_rejected = !hl_guest_fetch_authority_test_lease(&authority, token);
+            int fresh_accepted = decode_authority_stable(fresh) &&
+                                 hl_guest_fetch_authority_test_lease(&authority, fresh);
+            if (fresh_accepted) hl_guest_fetch_authority_test_unlease(&authority);
+            fixture.bytes[0] = 0xc3;
+            int revalidated = hl_x86_decode_context(context, fixture.pc, &second) == 1 && second.op == 0xc3;
+            _exit(old_rejected && fresh_accepted && revalidated ? 0 : 1);
         } else {
             int status = 0;
             if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -117;

@@ -68,6 +68,8 @@ int hl_x86_decode_transaction_rejected(const hl_x86_hot_context *context);
 void hl_x86_decode_transaction_abort(hl_x86_hot_context *context);
 void hl_x86_decode_transaction_release(hl_x86_hot_context *context);
 uint64_t hl_x86_decode_authorized_hits(void);
+uint64_t hl_x86_decode_authorized_hits_after_fork(void);
+void hl_x86_decode_after_fork_rebind(void);
 void hl_x86_decode_set_diagnostics(int enabled);
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *insn);
