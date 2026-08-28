@@ -1,8 +1,6 @@
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 extern uint64_t child_mixed(const uint8_t *, uint8_t *);
@@ -25,15 +23,27 @@ __asm__(".text\n"
 int main(void) {
     static const uint8_t input[16] __attribute__((aligned(16))) = {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    int ready[2];
+    if (pipe(ready) != 0) return 2;
     pid_t child = fork();
-    if (child < 0) return 2;
+    if (child < 0) return 3;
     if (child == 0) {
+        close(ready[0]);
         uint8_t output[16] = {0};
         uint64_t value = child_mixed(input, output);
-        _Exit(value == UINT64_C(0x112233445566778f) && __builtin_memcmp(input, output, 16) == 0 ? 0 : 3);
+        if (value != UINT64_C(0x112233445566778f) || __builtin_memcmp(input, output, 16) != 0) _Exit(4);
+        if (write(ready[1], "x", 1) != 1) _Exit(5);
+        usleep(250000);
+        ssize_t escaped = write(STDOUT_FILENO, "escaped-child\n", 14);
+        (void)escaped;
+        _Exit(0);
     }
-    int status = 0;
-    int passed = waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    printf("mixed-child=%d\n", passed);
-    return passed ? 0 : 4;
+    close(ready[1]);
+    char byte = 0;
+    int started = read(ready[0], &byte, 1) == 1 && byte == 'x';
+    close(ready[0]);
+    printf("mixed-child=%d\n", started);
+    /* Intentionally do not reap: the engine root's PID/birth barrier must settle this descendant before
+       publishing the fork-shared census. Without that barrier the delayed line escapes after root exit. */
+    return started ? 0 : 6;
 }

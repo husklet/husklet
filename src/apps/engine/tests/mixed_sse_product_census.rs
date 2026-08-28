@@ -68,6 +68,20 @@ fn build_fixture(root: &Path) {
     assert!(status.success(), "fixture compiler exited {status}");
 }
 
+fn build_map_failure_injection(root: &Path) -> std::path::PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fail_shared_mmap.c");
+    let output = root.join("fail-shared-mmap.so");
+    let status = Command::new("cc")
+        .args(["-shared", "-fPIC", "-O2"])
+        .arg(source)
+        .args(["-ldl", "-o"])
+        .arg(&output)
+        .status()
+        .expect("compile shared-map failure injection");
+    assert!(status.success(), "failure injection compiler exited {status}");
+    output
+}
+
 fn run(root: &Path, mode: &str) -> std::process::Output {
     let option = format!("--translit-mixed-sse={mode}");
     Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
@@ -131,17 +145,31 @@ fn product_census_parser_rejects_cardinality_and_coordinated_token_changes() {
 
 #[test]
 fn diagnostic_mapping_failure_is_a_launch_refusal_not_a_zero_census() {
-    let native = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/hl-native/src/native/engine");
-    let lifecycle = std::fs::read_to_string(native.join("lifecycle.c")).unwrap();
-    let census_source = std::fs::read_to_string(native.join("backend_tree.c")).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    build_fixture(root.path());
+    let injection = build_map_failure_injection(root.path());
+    let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .args([
+            "--diagnostics",
+            "--translit",
+            "--translit-mixed-sse=on",
+            "--rootfs",
+            root.path().to_str().unwrap(),
+            "bin/mixed-sse-child",
+        ])
+        .env("LD_PRELOAD", injection)
+        .env("HL_TEST_FAIL_SHARED_ANON", "1")
+        .output()
+        .expect("run launch with injected shared-map failure");
     assert!(
-        lifecycle.contains("if (mapped.status != HL_STATUS_OK) {")
-            && lifecycle.contains("return (hl_status)mapped.status;"),
-        "shared result mapping failure no longer refuses the launch"
+        !output.status.success(),
+        "injected mapping failure unexpectedly launched"
     );
-    assert!(
-        census_source.contains("return enabled ? sizeof(struct hl_backend_mixed_sse_shared) : 0;")
-            && census_source.contains("available=1 mixed_sse_executed=%llu"),
-        "diagnostics can silently skip the shared census or report unavailable storage as zeros"
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("engine refused this launch"), "{stderr}");
+    assert_eq!(
+        stderr.lines().filter(|line| line.starts_with(PREFIX)).count(),
+        0,
+        "{stderr}"
     );
 }
