@@ -1515,6 +1515,7 @@ static int engine_global_init(void) {
         }
     }
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    hl_x86_decode_set_diagnostics(g_prof);
     g_profile_output_owner = 1;
     g_dispatch_diagnostics = g_prof;
     g_fwdskip = 8;

@@ -56,6 +56,7 @@ typedef struct {
     uint64_t authority_epoch;
     uint64_t authorized_hits;
     uint8_t authority_state;
+    uint8_t count_authorized_hits;
 } hl_x86_hot_context;
 
 hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque,
@@ -63,6 +64,7 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
 void hl_x86_hot_context_destroy(hl_x86_hot_context *context);
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn);
 uint64_t hl_x86_decode_authorized_hits(void);
+void hl_x86_decode_set_diagnostics(int enabled);
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *insn);
 typedef int (*hl_x86_instruction_fetch_fn)(uint64_t, void *, size_t);

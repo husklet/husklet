@@ -12,6 +12,7 @@
 
 static hl_x86_instruction_fetch_fn g_instruction_fetch;
 static _Atomic uint64_t g_decode_authorized_hits;
+static int g_decode_diagnostics;
 
 enum { DECODE_MEMO_SLOTS = HL_X86_DECODE_MEMO_SLOTS, X86_MAX_INSN = HL_X86_MAX_INSN };
 typedef hl_x86_decode_memo_entry decode_memo_entry;
@@ -389,7 +390,7 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
     if (memo->length != 0 && memo->pc == pc && before.state == 1 &&
         memo->authority_epoch == context->authority_epoch) {
         *I = memo->instruction;
-        ++context->authorized_hits;
+        if (context->count_authorized_hits) ++context->authorized_hits;
 #if defined(HL_NATIVE_TEST_HOOKS)
         ++g_decode_memo_hits;
 #endif
@@ -453,6 +454,10 @@ uint64_t hl_x86_decode_authorized_hits(void) {
     return atomic_load_explicit(&g_decode_authorized_hits, memory_order_relaxed);
 }
 
+void hl_x86_decode_set_diagnostics(int enabled) {
+    g_decode_diagnostics = enabled != 0;
+}
+
 int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
     return decode_with(NULL, pc, I, g_decode_memo, NULL, NULL);
 }
@@ -467,6 +472,7 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
         context->fetch_fn = fetch;
         context->fetch_opaque = opaque != NULL ? opaque : &context->fetch;
         context->byte_unstable = byte_unstable;
+        context->count_authorized_hits = (uint8_t)g_decode_diagnostics;
         hl_guest_fetch_authority_sources(&context->logical_generation_source, &context->direct_generation_source);
 #if defined(HL_NATIVE_TEST_HOOKS)
         atomic_fetch_add_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
@@ -477,7 +483,8 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
 
 void hl_x86_hot_context_destroy(hl_x86_hot_context *context) {
     if (context == NULL) return;
-    atomic_fetch_add_explicit(&g_decode_authorized_hits, context->authorized_hits, memory_order_relaxed);
+    if (context->count_authorized_hits)
+        atomic_fetch_add_explicit(&g_decode_authorized_hits, context->authorized_hits, memory_order_relaxed);
 #if defined(HL_NATIVE_TEST_HOOKS)
     atomic_fetch_sub_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
 #endif
