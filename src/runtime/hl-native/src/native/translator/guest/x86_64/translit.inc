@@ -486,7 +486,10 @@ typedef struct {
     uint64_t displaced_scratch_lowered, displaced_lea_lowered, natural_abs32_lowered, natural_lea_lowered;
     uint64_t rip_indirect_lowered;
     uint64_t body_owner_published, jcc_link_admitted;
-    uint64_t refusal_opcode[512];
+    uint16_t refusal_key[TL_MAX_INSNS];
+    uint16_t refusal_delta[TL_MAX_INSNS];
+    uint16_t refusal_key_count;
+    uint16_t refusal_sparse_overflow;
     uint64_t refusal_prefix, refusal_width, refusal_rsp, refusal_opcode_other;
 } translit_attempt_telemetry;
 
@@ -518,9 +521,24 @@ static int translit_enabled(void) {
 
 static void translit_count_displaced_refusal(const struct insn *insn) {
     unsigned key = (insn->two ? 256u : 0u) | insn->op;
-    if (translit_attempt_staging)
-        ++translit_attempt_pending.refusal_opcode[key];
-    else
+    if (translit_attempt_staging) {
+        uint16_t count = translit_attempt_pending.refusal_key_count;
+        for (uint16_t i = 0; i < count; ++i) {
+            if (translit_attempt_pending.refusal_key[i] != key) continue;
+            if (translit_attempt_pending.refusal_delta[i] != UINT16_MAX)
+                ++translit_attempt_pending.refusal_delta[i];
+            else
+                ++translit_attempt_pending.refusal_sparse_overflow;
+            return;
+        }
+        if (count < TL_MAX_INSNS) {
+            translit_attempt_pending.refusal_key[count] = (uint16_t)key;
+            translit_attempt_pending.refusal_delta[count] = 1;
+            translit_attempt_pending.refusal_key_count = count + 1;
+        } else {
+            ++translit_attempt_pending.refusal_sparse_overflow;
+        }
+    } else
         (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[key], 1, __ATOMIC_RELAXED);
 }
 
@@ -2882,10 +2900,12 @@ static void translit_attempt_telemetry_publish(void) {
     TL_PUBLISH(refusal_width, translit_displaced_refusal_width);
     TL_PUBLISH(refusal_rsp, translit_displaced_refusal_rsp);
     TL_PUBLISH(refusal_opcode_other, translit_displaced_refusal_opcode_other);
-    for (size_t i = 0; i < 512; i++)
-        if (translit_attempt_pending.refusal_opcode[i] != 0)
-            (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[i],
-                                     translit_attempt_pending.refusal_opcode[i], __ATOMIC_RELAXED);
+    for (uint16_t i = 0; i < translit_attempt_pending.refusal_key_count; ++i)
+        (void)__atomic_fetch_add(&translit_displaced_refusal_opcode[translit_attempt_pending.refusal_key[i]],
+                                 translit_attempt_pending.refusal_delta[i], __ATOMIC_RELAXED);
+    if (translit_attempt_pending.refusal_sparse_overflow != 0)
+        (void)__atomic_fetch_add(&translit_displaced_refusal_opcode_other,
+                                 translit_attempt_pending.refusal_sparse_overflow, __ATOMIC_RELAXED);
 #undef TL_PUBLISH
     translit_attempt_telemetry_discard();
 }
@@ -3771,6 +3791,30 @@ static int translit_fall_fixture_test(unsigned scenario) {
                       map_body(translit_fall_fixture_guest) == retry &&
                       __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED) == blocks_before + 1 &&
                       __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED) == mixed_before + 1);
+        int telemetry_exact = 1;
+        if (scenario == 80 && isolated) {
+            uint64_t opcode_before[TL_MAX_INSNS];
+            for (unsigned i = 0; i < TL_MAX_INSNS; ++i)
+                opcode_before[i] = __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED);
+            uint64_t other_before =
+                __atomic_load_n(&translit_displaced_refusal_opcode_other, __ATOMIC_RELAXED);
+            translit_attempt_telemetry_begin();
+            for (unsigned i = 0; i <= TL_MAX_INSNS; ++i) {
+                struct insn refused = {.op = (uint8_t)i};
+                translit_count_displaced_refusal(&refused);
+            }
+            for (unsigned i = 0; i < TL_MAX_INSNS; ++i)
+                telemetry_exact &= __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED) ==
+                                   opcode_before[i];
+            telemetry_exact &= __atomic_load_n(&translit_displaced_refusal_opcode_other, __ATOMIC_RELAXED) ==
+                               other_before;
+            translit_attempt_telemetry_publish();
+            for (unsigned i = 0; i < TL_MAX_INSNS; ++i)
+                telemetry_exact &= __atomic_load_n(&translit_displaced_refusal_opcode[i], __ATOMIC_RELAXED) ==
+                                   opcode_before[i] + 1;
+            telemetry_exact &= __atomic_load_n(&translit_displaced_refusal_opcode_other, __ATOMIC_RELAXED) ==
+                               other_before + 1;
+        }
         map_clear();
         translit_fall_fixture_bytes = NULL;
         hl_x86_hot_context_destroy(context);
@@ -3780,7 +3824,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
         g_rw2rx = saved_rw2rx;
         g_cache_gen = saved_generation;
         munmap(arena, arena_size);
-        return isolated && retried ? 0 : 120 + (int)(scenario - 78);
+        return isolated && retried && telemetry_exact ? 0 : 120 + (int)(scenario - 78);
     }
     void *body = context == NULL ? NULL : translit_build(context, block, translit_fall_fixture_guest, NULL);
     unsigned actual = (translit_test_last_fall_marker >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK;
