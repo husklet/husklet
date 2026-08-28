@@ -69,12 +69,17 @@ fn x86_hot_context_allocation_failure_leaks_nothing_and_does_not_latch() {
 
 #[test]
 fn x86_stable_decode_authority_skips_fetch_but_every_invalidation_revalidates() {
-    assert_eq!(exec_page_cache_test(2, 26), Ok(1));
+    assert_eq!(exec_page_cache_test(2, 26), Ok(2));
     for scenario in 27..=33 {
         let result = exec_page_cache_test(2, scenario);
         assert!(result.is_ok(), "scenario={scenario}: {result:?}");
     }
     assert!(exec_page_cache_test(2, 35).is_ok());
+}
+
+#[test]
+fn x86_decode_memo_key_miss_does_not_sample_authority() {
+    assert_eq!(exec_page_cache_test(2, 36), Ok(1));
 }
 
 #[cfg(unix)]

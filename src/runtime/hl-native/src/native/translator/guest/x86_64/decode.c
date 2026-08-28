@@ -29,6 +29,7 @@ static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Thread_local uint64_t g_decode_memo_decodes;
 static _Thread_local uint64_t g_decode_memo_hits;
+static _Thread_local uint64_t g_decode_authority_samples;
 static _Atomic int g_hot_context_test_fail_allocation;
 static _Atomic int g_hot_context_test_live;
 #endif
@@ -336,6 +337,9 @@ typedef struct {
 } decode_authority;
 
 static decode_authority decode_authority_sample(const hl_x86_hot_context *context) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    ++g_decode_authority_samples;
+#endif
     decode_authority authority = {0};
     if (context == NULL || context->byte_unstable == NULL || context->logical_generation_source == NULL ||
         context->direct_generation_source == NULL)
@@ -382,13 +386,19 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
                        hl_x86_context_fetch_fn context_fetch, void *fetch_opaque) {
     uint8_t bytes[X86_MAX_INSN] = {0};
     decode_memo_entry *memo = &entries[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
-    decode_authority before = decode_authority_sample(context);
-    decode_authority_sync(context, before);
+    int key_matches = memo->length != 0 && memo->pc == pc;
+    decode_authority before = {0};
 #define FETCH(address, destination, length)                                                                            \
     (context_fetch != NULL ? context_fetch(fetch_opaque, address, destination, length)                                \
                            : instruction_fetch(address, destination, length))
-    if (memo->length != 0 && memo->pc == pc && before.state == 1 &&
-        memo->authority_epoch == context->authority_epoch) {
+    if (key_matches) {
+        before = decode_authority_sample(context);
+        decode_authority_sync(context, before);
+        /* Epoch wrap clears the whole memo table; do not keep using the eligibility
+           decision made before that clear. */
+        key_matches = memo->length != 0 && memo->pc == pc;
+    }
+    if (key_matches && before.state == 1 && memo->authority_epoch == context->authority_epoch) {
         *I = memo->instruction;
         if (context->count_authorized_hits)
             atomic_fetch_add_explicit(&g_decode_authorized_hits, 1, memory_order_relaxed);
@@ -397,7 +407,7 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
 #endif
         return memo->length;
     }
-    if (memo->length != 0 && memo->pc == pc && FETCH(pc, bytes, memo->length) == 0 &&
+    if (key_matches && FETCH(pc, bytes, memo->length) == 0 &&
         memcmp(bytes, memo->bytes, memo->length) == 0) {
         *I = memo->instruction;
         decode_authority after = decode_authority_sample(context);
@@ -438,8 +448,8 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
         memo->instruction = *I;
         memcpy(memo->bytes, bytes, (size_t)length);
         memo->length = (uint8_t)length;
-        decode_authority after = decode_authority_sample(context);
-        memo->authority_epoch = before.state == 1 && decode_authority_equal(before, after) &&
+        decode_authority after = key_matches ? decode_authority_sample(context) : (decode_authority){0};
+        memo->authority_epoch = key_matches && before.state == 1 && decode_authority_equal(before, after) &&
                                         context != NULL && context->authority_epoch != 0
                                     ? context->authority_epoch
                                     : 0;
@@ -577,10 +587,12 @@ static void *hot_context_thread_worker(void *opaque) {
         context->logical_generation_source = &logical;
         context->direct_generation_source = &direct;
     }
-    hl_x86_insn instruction, repeated;
+    hl_x86_insn instruction, validated, repeated;
     thread->result = context != NULL && hl_x86_decode_context(context, fixture.pc, &instruction) == 1 &&
+                             hl_x86_decode_context(context, fixture.pc, &validated) == 1 &&
                              hl_x86_decode_context(context, fixture.pc, &repeated) == 1 &&
-                             instruction.op == thread->opcode && repeated.op == thread->opcode && fixture.fetches == 1
+                             instruction.op == thread->opcode && validated.op == thread->opcode &&
+                             repeated.op == thread->opcode && fixture.fetches == 2
                          ? 0 : -1;
     hl_x86_hot_context_destroy(context);
     return NULL;
@@ -630,13 +642,16 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
     if (context == NULL) return -70;
     context->logical_generation_source = &logical;
     context->direct_generation_source = &direct;
+    g_decode_authority_samples = 0;
     hl_x86_insn first, second;
     int result = 0;
     if (hl_x86_decode_context(context, fixture.pc, &first) <= 0) result = -71;
     switch (scenario) {
     case 26: /* Stable bytes authorize a decode-memo hit without another fetch. */
         if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != first.len ||
-                            second.op != first.op || fixture.fetches != 1)) result = -72;
+                            second.op != first.op || fixture.fetches != 2)) result = -72;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != first.len ||
+                            second.op != first.op || fixture.fetches != 2)) result = -72;
         break;
     case 27: /* Once writable/executable aliasing is observed, exact byte validation remains mandatory. */
         atomic_store_explicit(&unstable, 1, memory_order_release);
@@ -683,6 +698,15 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         if (result == 0 && (fixture.fetches != 2 || context->memo[slot].authority_epoch != 0)) result = -86;
         break;
     }
+    case 36: /* Cold and colliding memo keys reach fetch and decode without sampling authority. */
+        if (result == 0 && (fixture.fetches != 1 || g_decode_authority_samples != 0)) result = -87;
+        fixture.pc += UINT64_C(0x401); /* Same 10-bit memo hash as 0x50000100, but a different key. */
+        fixture.fetches = 0;
+        g_decode_authority_samples = 0;
+        if (result == 0 && (hl_x86_decode_context(context, fixture.pc, &second) != 1 ||
+                            second.op != first.op || fixture.fetches != 1 || g_decode_authority_samples != 0))
+            result = -88;
+        break;
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */
         context->authority_epoch = UINT64_MAX;
         atomic_fetch_add_explicit(&logical, 2, memory_order_release);
