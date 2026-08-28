@@ -17,7 +17,9 @@
 // not lost after the first.
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 // Emit a leaf function `int f(void){ return imm; }` at buf; return its length in bytes.
 static int emit_ret_imm(unsigned char *buf, int imm) {
@@ -60,11 +62,23 @@ static int rewrite_and_call(unsigned char *p, size_t sz, int imm) {
 int main(void) {
     size_t sz = 4096;
     // Deliberately RW-only (NOT PROT_EXEC): this is the path the mmap case does NOT arm; mprotect must.
-    unsigned char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int fd = -1;
+    int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#if defined(DECODER_AUTHORITY_FILE_PRIVATE)
+    char path[] = "/tmp/husklet-decoder-authority-XXXXXX";
+    fd = mkstemp(path);
+    if (fd < 0 || unlink(path) != 0 || ftruncate(fd, (off_t)sz) != 0) {
+        perror("prepare private code file");
+        return 1;
+    }
+    flags = MAP_PRIVATE;
+#endif
+    unsigned char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, flags, fd, 0);
     if (p == MAP_FAILED) {
         perror("mmap");
         return 1;
     }
+    if (fd >= 0) close(fd);
 
     int r1 = rewrite_and_call(p, sz, 111);
     int r2 = rewrite_and_call(p, sz, 222); // must invalidate the r1 translation

@@ -158,7 +158,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: smc_mprotect.c, output: decoder-authority-mprotect-exec, flags: [-static, -O2, -pthread, -lm] }
+    build: { source: smc_mprotect.c, output: decoder-authority-mprotect-exec, flags: [-static, -O2, -pthread, -lm, -DDECODER_AUTHORITY_FILE_PRIVATE] }
     artifact: { destination: /opt/husklet/workload/decoder-authority-mprotect-exec }
     run: []
     expect:
