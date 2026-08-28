@@ -3954,7 +3954,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest_bytes;
     translit_fall_fixture_length = sizeof guest_bytes;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     if (context == NULL) return 153;
     hl_backend_tree_begin(1, effective_host_services());
     const uint64_t source = translit_fall_fixture_guest + source_offset;
