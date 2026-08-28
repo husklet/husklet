@@ -102,6 +102,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only disable already-published same-page JCC links", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_TRANSLIT_JCC_IBTC_DISABLE",
                      "disable late publication for unresolved same-ISA constant JCC targets", HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE",
+                     "disable late publication for same-ISA direct JMP targets", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",
                         "test-only render every same-ISA profile counter at UINT64 width", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PERF_MAP",

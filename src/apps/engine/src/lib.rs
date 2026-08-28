@@ -58,6 +58,12 @@ enum JccIbtcControl {
     Off,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum DirectJmpIbtcControl {
+    On,
+    Off,
+}
+
 #[derive(Parser)]
 struct BackendReceiptArguments {
     #[arg(long = "guest-isa")]
@@ -103,6 +109,9 @@ struct LaunchArguments {
     /// Late-link unresolved constant JCC targets through the same-ISA IBTC.
     #[arg(long, value_enum, value_name = "on|off")]
     translit_jcc_ibtc: Option<JccIbtcControl>,
+    /// Late-link direct JMP targets through the same-ISA IBTC.
+    #[arg(long, value_enum, value_name = "on|off")]
+    translit_direct_jmp_ibtc: Option<DirectJmpIbtcControl>,
     /// Execute a same-ISA Linux x86-64 guest under the experimental native syscall supervisor.
     #[arg(long)]
     native_supervised: bool,
@@ -301,6 +310,16 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--translit-jcc-ibtc is available only in the x86-64 worker".to_owned(),
         ));
     }
+    if launch.translit_direct_jmp_ibtc.is_some() && !launch.translit {
+        return Err(Failure::Request(
+            "--translit-direct-jmp-ibtc requires --translit".to_owned(),
+        ));
+    }
+    if launch.translit_direct_jmp_ibtc.is_some() && guest != Guest::X86_64 {
+        return Err(Failure::Request(
+            "--translit-direct-jmp-ibtc is available only in the x86-64 worker".to_owned(),
+        ));
+    }
     if launch.rootfs.is_none() && (launch.diagnostics || launch.translit || launch.native_supervised) {
         return Err(Failure::Request(
             "--diagnostics, --translit and --native-supervised require --rootfs; raw host-path launches do not carry launch options"
@@ -403,6 +422,15 @@ fn rootfs_plan(
             .map_err(|error| {
                 Failure::Request(format!(
                     "cannot set the engine launch option HL_TRANSLIT_JCC_IBTC_DISABLE: {error:?}"
+                ))
+            })?;
+    }
+    if launch.translit_direct_jmp_ibtc == Some(DirectJmpIbtcControl::Off) {
+        options
+            .set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1", true)
+            .map_err(|error| {
+                Failure::Request(format!(
+                    "cannot set the engine launch option HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE: {error:?}"
                 ))
             })?;
     }
@@ -618,6 +646,7 @@ mod tests {
         assert!(!defaults.translit);
         assert_eq!(defaults.translit_mixed_sse, None);
         assert_eq!(defaults.translit_jcc_ibtc, None);
+        assert_eq!(defaults.translit_direct_jmp_ibtc, None);
         assert!(!defaults.native_supervised);
 
         let selected = launch(&[
@@ -625,6 +654,7 @@ mod tests {
             "--translit",
             "--translit-mixed-sse=off",
             "--translit-jcc-ibtc=off",
+            "--translit-direct-jmp-ibtc=off",
             "--native-supervised",
             "--rootfs",
             "/image",
@@ -634,6 +664,10 @@ mod tests {
         assert!(selected.translit);
         assert_eq!(selected.translit_mixed_sse, Some(super::MixedSseControl::Off));
         assert_eq!(selected.translit_jcc_ibtc, Some(super::JccIbtcControl::Off));
+        assert_eq!(
+            selected.translit_direct_jmp_ibtc,
+            Some(super::DirectJmpIbtcControl::Off)
+        );
         assert!(selected.native_supervised);
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
     }
@@ -689,6 +723,35 @@ mod tests {
             &launch(&[
                 "--translit",
                 "--translit-jcc-ibtc=off",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("available only in the x86-64 worker"));
+    }
+
+    #[test]
+    fn direct_jmp_ibtc_control_is_typed_and_x86_transliteration_only() {
+        for invalid in ["yes", "0", "disabled", ""] {
+            let option = format!("--translit-direct-jmp-ibtc={invalid}");
+            assert!(
+                LaunchArguments::try_parse_from(["hl-x86_64", option.as_str(), "program"]).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+        let failure = execute(
+            Guest::X86_64,
+            &launch(&["--translit-direct-jmp-ibtc=off", "--rootfs", "/image", "bin/program"]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("--translit-direct-jmp-ibtc requires --translit"));
+        let failure = execute(
+            Guest::Aarch64,
+            &launch(&[
+                "--translit",
+                "--translit-direct-jmp-ibtc=off",
                 "--rootfs",
                 "/image",
                 "bin/program",
@@ -793,6 +856,7 @@ mod tests {
         assert_eq!(defaults.options.get("HL_TRANSLIT"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), None);
+        assert_eq!(defaults.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_NATIVE_SUPERVISED"), None);
 
         let selected = rootfs_plan(
@@ -802,6 +866,7 @@ mod tests {
                 "--translit",
                 "--translit-mixed-sse=off",
                 "--translit-jcc-ibtc=off",
+                "--translit-direct-jmp-ibtc=off",
                 "--native-supervised",
                 "--rootfs",
                 root.path().to_str().unwrap(),
@@ -813,12 +878,20 @@ mod tests {
         assert_eq!(selected.options.get("HL_TRANSLIT"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), Some("1"));
+        assert_eq!(selected.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"), Some("1"));
         assert!(
             selected
                 .environment
                 .iter()
                 .all(|entry| !entry.starts_with(b"HL_TRANSLIT_MIXED_SSE_DISABLE=")),
             "launch options must not enter the guest environment"
+        );
+        assert!(
+            selected
+                .environment
+                .iter()
+                .all(|entry| !entry.starts_with(b"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE=")),
+            "direct-JMP IBTC launch policy must not enter the guest environment"
         );
         assert!(
             selected
@@ -837,6 +910,7 @@ mod tests {
                 "--translit",
                 "--translit-mixed-sse=on",
                 "--translit-jcc-ibtc=on",
+                "--translit-direct-jmp-ibtc=on",
                 "--rootfs",
                 root.path().to_str().unwrap(),
                 "bin/program",
@@ -845,6 +919,10 @@ mod tests {
         .unwrap();
         assert_eq!(explicitly_enabled.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), None);
         assert_eq!(explicitly_enabled.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), None);
+        assert_eq!(
+            explicitly_enabled.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"),
+            None
+        );
     }
 
     #[cfg(all(unix, feature = "native-test-hooks"))]

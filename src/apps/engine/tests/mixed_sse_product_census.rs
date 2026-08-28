@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, path::Path, process::Command};
 
 const PREFIX: &str = "[diag] backend-shape ";
-const FIELDS: [&str; 13] = [
+const FIELDS: [&str; 21] = [
     "version",
     "available",
     "mixed_sse_executed",
@@ -17,6 +17,14 @@ const FIELDS: [&str; 13] = [
     "jcc_ibtc_fills",
     "jcc_ibtc_suppressed",
     "jcc_ibtc_invalid_refusals",
+    "direct_jmp_ibtc_enabled",
+    "direct_jmp_ibtc_emitted",
+    "direct_jmp_ibtc_hits",
+    "direct_jmp_ibtc_misses",
+    "direct_jmp_ibtc_irq",
+    "direct_jmp_ibtc_fills",
+    "direct_jmp_ibtc_suppressed",
+    "direct_jmp_ibtc_invalid_refusals",
 ];
 
 fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
@@ -50,7 +58,7 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
             return Err(format!("production mixed-SSE census omits field {name:?}"));
         }
     }
-    if fields["version"] != 3 || fields["available"] != 1 {
+    if fields["version"] != 4 || fields["available"] != 1 {
         return Err("production mixed-SSE census is unavailable or has the wrong version".into());
     }
     if fields["mixed_sse_executed_transitions"] < fields["mixed_sse_executed"]
@@ -76,6 +84,25 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
         .and_then(|value| value.checked_add(fields["jcc_ibtc_irq"]));
     if dynamic.is_none() || (dynamic != Some(0) && fields["jcc_ibtc_emitted"] == 0) {
         return Err("production JCC IBTC execution has no emitted site".into());
+    }
+    let direct_dispositions = fields["direct_jmp_ibtc_fills"]
+        .checked_add(fields["direct_jmp_ibtc_suppressed"])
+        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_invalid_refusals"]));
+    if direct_dispositions != Some(fields["direct_jmp_ibtc_misses"]) {
+        return Err("production direct-JMP IBTC miss dispositions do not reconcile".into());
+    }
+    if fields["direct_jmp_ibtc_enabled"] > 1
+        || (fields["direct_jmp_ibtc_enabled"] == 0
+            && (fields["direct_jmp_ibtc_hits"] != 0 || fields["direct_jmp_ibtc_fills"] != 0))
+        || (fields["direct_jmp_ibtc_enabled"] == 1 && fields["direct_jmp_ibtc_suppressed"] != 0)
+    {
+        return Err("production direct-JMP IBTC polarity is inconsistent".into());
+    }
+    let direct_dynamic = fields["direct_jmp_ibtc_hits"]
+        .checked_add(fields["direct_jmp_ibtc_misses"])
+        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_irq"]));
+    if direct_dynamic.is_none() || (direct_dynamic != Some(0) && fields["direct_jmp_ibtc_emitted"] == 0) {
+        return Err("production direct-JMP IBTC execution has no emitted site".into());
     }
     Ok(fields)
 }
@@ -120,6 +147,51 @@ fn build_jcc_ibtc_fixture(root: &Path) {
     std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
     std::fs::write(&destination, bytes).unwrap();
     std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn build_direct_jmp_ibtc_fixture(root: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut bytes = vec![0; 0x3000];
+    bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    put16(&mut bytes, 16, 2);
+    put16(&mut bytes, 18, 0x3e);
+    put32(&mut bytes, 20, 1);
+    put64(&mut bytes, 24, 0x40_1ff0);
+    put64(&mut bytes, 32, 64);
+    put16(&mut bytes, 52, 64);
+    put16(&mut bytes, 54, 56);
+    put16(&mut bytes, 56, 1);
+    put32(&mut bytes, 64, 1);
+    put32(&mut bytes, 68, 5);
+    put64(&mut bytes, 80, 0x40_0000);
+    put64(&mut bytes, 88, 0x40_0000);
+    let image_len = bytes.len() as u64;
+    put64(&mut bytes, 96, image_len);
+    put64(&mut bytes, 104, image_len);
+    put64(&mut bytes, 112, 0x1000);
+    // Cross-page direct JMP executes twice: first miss publishes 0x402000, second execution hits it.
+    bytes[0x1ff0..0x1ff6].copy_from_slice(&[0x31, 0xc9, 0xeb, 0x0c, 0x0f, 0x0b]);
+    bytes[0x2000..0x2010].copy_from_slice(&[
+        0xff, 0xc1, 0x83, 0xf9, 0x02, 0x7c, 0xeb, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
+    ]);
+    let destination = root.join("bin/direct-jmp-ibtc");
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    std::fs::write(&destination, bytes).unwrap();
+    std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn run_direct_jmp_ibtc(root: &Path, mode: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .args([
+            "--diagnostics",
+            "--translit",
+            &format!("--translit-direct-jmp-ibtc={mode}"),
+            "--rootfs",
+            root.to_str().unwrap(),
+            "bin/direct-jmp-ibtc",
+        ])
+        .output()
+        .unwrap()
 }
 
 fn run_jcc_ibtc(root: &Path, mode: &str) -> std::process::Output {
@@ -226,7 +298,7 @@ fn nohooks_product_aggregates_child_only_mixed_execution_after_reap() {
 }
 
 #[test]
-fn real_worker_cli_typed_jcc_ibtc_on_and_off_reach_product_v3() {
+fn real_worker_cli_typed_jcc_ibtc_on_and_off_reach_product_v4() {
     let root = tempfile::tempdir().unwrap();
     build_jcc_ibtc_fixture(root.path());
     let on = run_jcc_ibtc(root.path(), "on");
@@ -254,6 +326,33 @@ fn real_worker_cli_typed_jcc_ibtc_on_and_off_reach_product_v3() {
 }
 
 #[test]
+fn real_worker_cli_cross_page_direct_jmp_ibtc_on_and_off_reach_product_v4() {
+    let root = tempfile::tempdir().unwrap();
+    build_direct_jmp_ibtc_fixture(root.path());
+    let on = run_direct_jmp_ibtc(root.path(), "on");
+    let off = run_direct_jmp_ibtc(root.path(), "off");
+    assert!(on.status.success(), "{}", String::from_utf8_lossy(&on.stderr));
+    assert!(off.status.success(), "{}", String::from_utf8_lossy(&off.stderr));
+    assert_eq!(on.stdout, off.stdout);
+    let on_stderr = String::from_utf8(on.stderr).unwrap();
+    let off_stderr = String::from_utf8(off.stderr).unwrap();
+    let on = census(&on_stderr).unwrap_or_else(|error| panic!("{error}:\n{on_stderr}"));
+    let off = census(&off_stderr).unwrap_or_else(|error| panic!("{error}:\n{off_stderr}"));
+    assert_eq!(on["direct_jmp_ibtc_enabled"], 1, "{on:?}");
+    assert!(on["direct_jmp_ibtc_emitted"] > 0, "{on:?}");
+    assert_eq!(on["direct_jmp_ibtc_hits"], 1, "{on:?}");
+    assert_eq!(on["direct_jmp_ibtc_misses"], 1, "{on:?}");
+    assert_eq!(on["direct_jmp_ibtc_fills"], 1, "{on:?}");
+    assert_eq!(on["direct_jmp_ibtc_suppressed"], 0, "{on:?}");
+    assert_eq!(off["direct_jmp_ibtc_enabled"], 0, "{off:?}");
+    assert_eq!(off["direct_jmp_ibtc_emitted"], on["direct_jmp_ibtc_emitted"]);
+    assert_eq!(off["direct_jmp_ibtc_hits"], 0, "{off:?}");
+    assert_eq!(off["direct_jmp_ibtc_misses"], 2, "{off:?}");
+    assert_eq!(off["direct_jmp_ibtc_fills"], 0, "{off:?}");
+    assert_eq!(off["direct_jmp_ibtc_suppressed"], 2, "{off:?}");
+}
+
+#[test]
 fn nohooks_parent_barrier_settles_a_child_that_outlives_a_fatal_root() {
     let root = tempfile::tempdir().unwrap();
     build_fixture(root.path());
@@ -269,10 +368,13 @@ fn nohooks_parent_barrier_settles_a_child_that_outlives_a_fatal_root() {
 
 #[test]
 fn product_census_parser_rejects_cardinality_and_coordinated_token_changes() {
-    let valid = "[diag] backend-shape version=3 available=1 mixed_sse_executed=3 \
+    let valid = "[diag] backend-shape version=4 available=1 mixed_sse_executed=3 \
                  mixed_sse_executed_transitions=7 mixed_sse_disabled_boundaries=0 \
                  jcc_ibtc_enabled=1 jcc_ibtc_emitted=1 jcc_ibtc_hits=1 jcc_ibtc_misses=1 \
-                 jcc_ibtc_irq=0 jcc_ibtc_fills=1 jcc_ibtc_suppressed=0 jcc_ibtc_invalid_refusals=0\n";
+                 jcc_ibtc_irq=0 jcc_ibtc_fills=1 jcc_ibtc_suppressed=0 jcc_ibtc_invalid_refusals=0 \
+                 direct_jmp_ibtc_enabled=1 direct_jmp_ibtc_emitted=1 direct_jmp_ibtc_hits=1 \
+                 direct_jmp_ibtc_misses=1 direct_jmp_ibtc_irq=0 direct_jmp_ibtc_fills=1 \
+                 direct_jmp_ibtc_suppressed=0 direct_jmp_ibtc_invalid_refusals=0\n";
     census(valid).unwrap();
     let invalid = [
         String::new(),
@@ -284,6 +386,14 @@ fn product_census_parser_rejects_cardinality_and_coordinated_token_changes() {
         valid.replace("available=1", "available=0"),
         valid.replace("jcc_ibtc_fills=1", "jcc_ibtc_fills=0"),
         valid.replace("jcc_ibtc_suppressed=0", "jcc_ibtc_suppressed=1"),
+        valid.replace(" direct_jmp_ibtc_emitted=1", ""),
+        valid.replace("direct_jmp_ibtc_hits=1", "direct_jmp_ibtc_hits=notdecimal"),
+        valid.replace(
+            "direct_jmp_ibtc_hits=1",
+            "direct_jmp_ibtc_hits=1 direct_jmp_ibtc_hits=1",
+        ),
+        valid.replace("direct_jmp_ibtc_fills=1", "direct_jmp_ibtc_fills=0"),
+        valid.replace("direct_jmp_ibtc_suppressed=0", "direct_jmp_ibtc_suppressed=1"),
     ];
     for invalid in invalid {
         assert!(census(&invalid).is_err(), "accepted invalid census: {invalid}");

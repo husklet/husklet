@@ -405,7 +405,10 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // shared stub cannot be established, translit_build keeps using the
     // ordinary dispatcher path; this function must still return its unique
     // interpreter descriptor.
-    if (translit_enabled()) (void)translit_jcc_ibtc_stub_init();
+    if (translit_enabled()) {
+        (void)translit_jcc_ibtc_stub_init();
+        (void)translit_direct_jmp_ibtc_stub_init();
+    }
     while ((uintptr_t)g_cp & 15)
         g_cp++;
     struct interp_block *block = (struct interp_block *)g_cp;

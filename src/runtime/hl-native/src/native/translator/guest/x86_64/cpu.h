@@ -107,8 +107,8 @@ struct cpu {
        publication, so clone can inherit this pointer byte-for-byte. */
     void *seccomp_filters;
     unsigned int seccomp_mode;
-    /* Same-ISA constant-JCC IBTC miss kind. Separate from ic_miss, whose producer and fill contract belong
-       to register-indirect branches on the AArch64-host JIT. Occupies the existing post-mode padding. */
+    /* Same-ISA constant-edge IBTC miss kind (none/JCC/direct-JMP). Separate from ic_miss, whose producer
+       and fill contract belong to register-indirect branches on the AArch64-host JIT. */
     uint32_t jcc_ibtc_miss;
     // Thread-DIRECTED pending signals (1<<signo) -- the per-thread analogue of g_pending. A tkill/tgkill to
     // THIS thread sets a bit here so only this thread delivers it. Drained by maybe_deliver_signal.

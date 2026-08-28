@@ -528,6 +528,18 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn unresolved_direct_jmp_ibtc_lifecycle_is_exact() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in 101..=108 {
+            // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
+            assert_eq!(unsafe { hook(scenario) }, 0, "direct JMP IBTC scenario {scenario}");
+        }
+    }
+
     #[cfg(feature = "native-test-hooks")]
     struct IsolatedTestChild(Option<std::process::Child>);
 
@@ -972,6 +984,14 @@ mod tests {
             "jcc_ibtc_fills",
             "jcc_ibtc_suppressed",
             "jcc_ibtc_invalid_refusals",
+            "direct_jmp_ibtc_enabled",
+            "direct_jmp_ibtc_emitted",
+            "direct_jmp_ibtc_hits",
+            "direct_jmp_ibtc_misses",
+            "direct_jmp_ibtc_irq",
+            "direct_jmp_ibtc_fills",
+            "direct_jmp_ibtc_suppressed",
+            "direct_jmp_ibtc_invalid_refusals",
         ];
         let mut fields = std::collections::BTreeMap::new();
         for token in records[0].split_whitespace() {
@@ -994,7 +1014,7 @@ mod tests {
     #[test]
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
         let on = run_product_jcc_ibtc_diagnostic(false);
-        assert_eq!(on["version"], 3);
+        assert_eq!(on["version"], 4);
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
@@ -1006,7 +1026,7 @@ mod tests {
         assert_eq!(on["jcc_ibtc_invalid_refusals"], 0);
 
         let off = run_product_jcc_ibtc_diagnostic(true);
-        assert_eq!(off["version"], 3);
+        assert_eq!(off["version"], 4);
         assert_eq!(off["available"], 1);
         assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
         assert_eq!(off["jcc_ibtc_emitted"], 1);
