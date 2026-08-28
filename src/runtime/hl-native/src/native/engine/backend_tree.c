@@ -7,9 +7,11 @@
  * boundary, and inherited by every guest child.  Each process claims exactly
  * one pid slot; threads in that process update the same atomics.
  *
- * The table is diagnostic state only.  Product builds compile every call to a
- * no-op and allocate no mapping.  No counter influences translation,
- * scheduling, signal delivery, or guest-visible state.
+ * The full table is hook-only diagnostic state. Product diagnostics retain a
+ * separate compact fork-shared record for the three mixed normal/SSE execution
+ * facts used by untimed same-binary proof; ordinary launches allocate nothing.
+ * No counter influences translation, scheduling, signal delivery, or
+ * guest-visible state.
  */
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -1419,20 +1421,73 @@ enum {
     HL_BACKEND_SHAPE_T_OTHER,
 };
 
+/* Product diagnostics retain only the three mixed-builder execution facts needed to authenticate an
+   untimed ON/OFF proof.  The anonymous mapping is created by the launch lifecycle only when typed
+   diagnostics are enabled, before the guest root can fork, and is inherited MAP_SHARED by every guest
+   process.  Ordinary launches allocate nothing; their emitted code and completed-terminal path are
+   unchanged because no mixed-profile marker exists without diagnostics. */
+struct hl_backend_mixed_sse_shared {
+    _Atomic uint32_t reported;
+    uint32_t reserved;
+    _Atomic uint64_t executed;
+    _Atomic uint64_t executed_transitions;
+    _Atomic uint64_t disabled_boundaries;
+};
+
+#if ATOMIC_INT_LOCK_FREE != 2
+#error "production mixed-SSE census requires lock-free 32-bit atomics"
+#endif
+#if (defined(_WIN32) && ATOMIC_LLONG_LOCK_FREE != 2) || (!defined(_WIN32) && ATOMIC_LONG_LOCK_FREE != 2)
+#error "production mixed-SSE census requires lock-free 64-bit atomics"
+#endif
+
+_Static_assert(sizeof(struct hl_backend_mixed_sse_shared) == 32,
+               "production mixed-SSE census must remain a compact side record");
+
+static struct hl_backend_mixed_sse_shared *g_backend_mixed_sse;
+
 size_t hl_target_backend_tree_shared_size(int enabled) {
+#if defined(_WIN32)
     (void)enabled;
     return 0;
+#else
+    return enabled ? sizeof(struct hl_backend_mixed_sse_shared) : 0;
+#endif
 }
 
 void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
-    (void)shared;
-    (void)shared_size;
+    g_backend_mixed_sse = shared_size == sizeof(struct hl_backend_mixed_sse_shared) ? shared : NULL;
+    if (g_backend_mixed_sse == NULL) return;
+    /* This is the one root-side initialization, before any guest instruction or guest fork. */
+    atomic_store_explicit(&g_backend_mixed_sse->reported, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_backend_mixed_sse->executed, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_backend_mixed_sse->executed_transitions, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_backend_mixed_sse->disabled_boundaries, 0, memory_order_relaxed);
 }
 
 void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_linux_abi *box) {
-    (void)shared;
-    (void)shared_size;
-    (void)box;
+    struct hl_backend_mixed_sse_shared *census = shared;
+    if (census == NULL || shared_size != sizeof *census || box == NULL) return;
+    uint32_t expected = 0;
+    if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
+                                                 memory_order_relaxed))
+        return;
+    char record[256];
+    int formatted = snprintf(record, sizeof record,
+                             "[diag] backend-shape version=2 available=1 mixed_sse_executed=%llu "
+                             "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu\n",
+                             (unsigned long long)atomic_load_explicit(&census->executed, memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->executed_transitions,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->disabled_boundaries,
+                                                                     memory_order_relaxed));
+    if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    size_t offset = 0;
+    while (offset < (size_t)formatted) {
+        int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+        if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
+        offset += (size_t)written;
+    }
 }
 
 #define hl_backend_tree_begin(enabled, host) ((void)0)
@@ -1443,7 +1498,18 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 #define hl_backend_tree_reason(reason) ((void)0)
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
 #define hl_backend_tree_translated_fall_stop(reason) ((void)0)
-#define hl_backend_tree_mixed_sse_completed(transitions, disabled_boundary) ((void)0)
+static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    if (disabled_boundary) {
+        if (transitions == 0)
+            atomic_fetch_add_explicit(&census->disabled_boundaries, 1, memory_order_relaxed);
+        return;
+    }
+    if (transitions == 0) return;
+    atomic_fetch_add_explicit(&census->executed, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&census->executed_transitions, transitions, memory_order_relaxed);
+}
 #define hl_backend_tree_interpreter_entry(kind, fallback_form) ((void)0)
 #define hl_backend_tree_interpreter_stop(kind, stop_form) ((void)0)
 #define hl_backend_tree_direct_edge(family, same_page) ((void)0)
