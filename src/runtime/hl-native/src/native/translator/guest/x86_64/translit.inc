@@ -2342,7 +2342,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                    ? 0
                    : 89;
     }
-    if (scenario >= 71 && scenario <= 87) {
+    if (scenario >= 71 && scenario <= 88) {
         pid_t child = fork();
         if (child < 0) return 97;
         if (child == 0)
@@ -3239,6 +3239,7 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     ptrdiff_t saved_rw2rx = g_rw2rx;
     uint64_t saved_generation = g_cache_gen;
     int saved_prof = g_prof;
+    uint64_t saved_nonpie_lo = g_nonpie_lo;
     g_cache = arena;
     g_cp = arena + sizeof(struct interp_block);
     g_rw2rx = 0;
@@ -3399,6 +3400,36 @@ static int translit_mixed_fixture_test(unsigned scenario) {
                              boundaries_before + 1
                      ? 0
                      : 131;
+    } else if (scenario == 88) {
+        uint64_t entries_before = __atomic_load_n(&translit_entries, __ATOMIC_RELAXED);
+        uint64_t displaced_before = __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED);
+        block->magic = INTERP_BLOCK_MAGIC;
+        block->gpc = translit_fall_fixture_guest;
+        g_nonpie_lo = 1;
+
+        struct cpu off = {0};
+        off.rip = translit_fall_fixture_guest;
+        off.irq = 1;
+        off.v[0] = off.v[1] = off.v[2] = off.v[3] = UINT64_MAX;
+        g_prof = 0;
+        if (body != NULL) run_block(context, &off, block);
+        int off_exact = body != NULL && off.reason == R_BRANCH && off.v[0] == 0 && off.v[1] == 0 &&
+                        off.v[2] == 0 && off.v[3] == 0 &&
+                        __atomic_load_n(&translit_entries, __ATOMIC_RELAXED) == entries_before &&
+                        __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED) == displaced_before;
+
+        struct cpu on = {0};
+        on.rip = translit_fall_fixture_guest;
+        on.irq = 1;
+        on.v[0] = on.v[1] = on.v[2] = on.v[3] = UINT64_MAX;
+        g_prof = 1;
+        if (body != NULL) run_block(context, &on, block);
+        result = off_exact && on.reason == R_BRANCH && on.v[0] == 0 && on.v[1] == 0 && on.v[2] == 0 &&
+                         on.v[3] == 0 &&
+                         __atomic_load_n(&translit_entries, __ATOMIC_RELAXED) == entries_before + 1 &&
+                         __atomic_load_n(&translit_displaced_entries, __ATOMIC_RELAXED) == displaced_before + 1
+                     ? 0
+                     : 132;
     }
 
 done:
@@ -3411,6 +3442,7 @@ done:
     g_rw2rx = saved_rw2rx;
     g_cache_gen = saved_generation;
     g_prof = saved_prof;
+    g_nonpie_lo = saved_nonpie_lo;
     munmap(arena, arena_size);
     return result;
 }
@@ -3660,8 +3692,12 @@ done_ibtc:
 // interpreter uses, which restores the host callee-saved registers the block is currently holding guest
 // values in.
 static void translit_run(struct cpu *cpu, struct interp_block *block) {
-    (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
-    if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_entries, 1, __ATOMIC_RELAXED);
+    // These counters exist only in the profile report. Normal launches must not serialize every translated
+    // entry on their shared cache lines to maintain telemetry nobody can observe.
+    if (g_prof) {
+        (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
+        if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_entries, 1, __ATOMIC_RELAXED);
+    }
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);
