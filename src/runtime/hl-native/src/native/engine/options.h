@@ -58,6 +58,9 @@ void hl_exec_environment_discard(hl_exec_environment_update *update);
 
 /* Existing engine internals resolve through the scoped store. */
 const char *hl_option_get(const char *name);
+/* Read a flag value with an explicit missing-value default; "0" is false and
+ * every other registered flag spelling is true. */
+int hl_option_flag_value(const char *name, int missing_value);
 int hl_option_set(const char *name, const char *value, int overwrite);
 int hl_option_unset(const char *name);
 void hl_option_reset(void);

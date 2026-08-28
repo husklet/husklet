@@ -425,9 +425,18 @@ fn rootfs_plan(
                 ))
             })?;
     }
-    if launch.translit_direct_jmp_ibtc == Some(DirectJmpIbtcControl::Off) {
+    // Direct-JMP late linking remains opt-in until its CLONE_VM|CLONE_VFORK
+    // child-exec path has the same compatibility evidence as direct launch.
+    // Store both answers explicitly: "0" makes typed ON shadow a contradictory
+    // ambient disable value, while absence at the native boundary stays OFF.
+    if launch.translit {
+        let disabled = if launch.translit_direct_jmp_ibtc == Some(DirectJmpIbtcControl::On) {
+            "0"
+        } else {
+            "1"
+        };
         options
-            .set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1", true)
+            .set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", disabled, true)
             .map_err(|error| {
                 Failure::Request(format!(
                     "cannot set the engine launch option HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE: {error:?}"
@@ -921,7 +930,17 @@ mod tests {
         assert_eq!(explicitly_enabled.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), None);
         assert_eq!(
             explicitly_enabled.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"),
-            None
+            Some("0")
+        );
+
+        let translit_default = rootfs_plan(
+            root.path(),
+            &launch(&["--translit", "--rootfs", root.path().to_str().unwrap(), "bin/program"]),
+        )
+        .unwrap();
+        assert_eq!(
+            translit_default.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"),
+            Some("1")
         );
     }
 

@@ -181,17 +181,18 @@ fn build_direct_jmp_ibtc_fixture(root: &Path) {
 }
 
 fn run_direct_jmp_ibtc(root: &Path, mode: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
-        .args([
-            "--diagnostics",
-            "--translit",
-            &format!("--translit-direct-jmp-ibtc={mode}"),
-            "--rootfs",
-            root.to_str().unwrap(),
-            "bin/direct-jmp-ibtc",
-        ])
-        .output()
-        .unwrap()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"));
+    command.args(["--diagnostics", "--translit"]);
+    if mode != "default" {
+        command.arg(format!("--translit-direct-jmp-ibtc={mode}"));
+    }
+    command.args(["--rootfs", root.to_str().unwrap(), "bin/direct-jmp-ibtc"]);
+    if mode == "on" {
+        // The typed immutable launch option must shadow this contradictory
+        // ambient fallback when explicitly enabling the feature.
+        command.env("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1");
+    }
+    command.output().unwrap()
 }
 
 fn run_jcc_ibtc(root: &Path, mode: &str) -> std::process::Output {
@@ -329,15 +330,20 @@ fn real_worker_cli_typed_jcc_ibtc_on_and_off_reach_product_v4() {
 fn real_worker_cli_cross_page_direct_jmp_ibtc_on_and_off_reach_product_v4() {
     let root = tempfile::tempdir().unwrap();
     build_direct_jmp_ibtc_fixture(root.path());
+    let default = run_direct_jmp_ibtc(root.path(), "default");
     let on = run_direct_jmp_ibtc(root.path(), "on");
     let off = run_direct_jmp_ibtc(root.path(), "off");
+    assert!(default.status.success(), "{}", String::from_utf8_lossy(&default.stderr));
     assert!(on.status.success(), "{}", String::from_utf8_lossy(&on.stderr));
     assert!(off.status.success(), "{}", String::from_utf8_lossy(&off.stderr));
     assert_eq!(on.stdout, off.stdout);
+    assert_eq!(default.stdout, off.stdout);
+    let default_stderr = String::from_utf8(default.stderr).unwrap();
     let on_stderr = String::from_utf8(on.stderr).unwrap();
     let off_stderr = String::from_utf8(off.stderr).unwrap();
     let on = census(&on_stderr).unwrap_or_else(|error| panic!("{error}:\n{on_stderr}"));
     let off = census(&off_stderr).unwrap_or_else(|error| panic!("{error}:\n{off_stderr}"));
+    let default = census(&default_stderr).unwrap_or_else(|error| panic!("{error}:\n{default_stderr}"));
     assert_eq!(on["direct_jmp_ibtc_enabled"], 1, "{on:?}");
     assert!(on["direct_jmp_ibtc_emitted"] > 0, "{on:?}");
     assert_eq!(on["direct_jmp_ibtc_hits"], 1, "{on:?}");
@@ -345,11 +351,21 @@ fn real_worker_cli_cross_page_direct_jmp_ibtc_on_and_off_reach_product_v4() {
     assert_eq!(on["direct_jmp_ibtc_fills"], 1, "{on:?}");
     assert_eq!(on["direct_jmp_ibtc_suppressed"], 0, "{on:?}");
     assert_eq!(off["direct_jmp_ibtc_enabled"], 0, "{off:?}");
-    assert_eq!(off["direct_jmp_ibtc_emitted"], on["direct_jmp_ibtc_emitted"]);
+    assert_eq!(off["direct_jmp_ibtc_emitted"], 0, "{off:?}");
     assert_eq!(off["direct_jmp_ibtc_hits"], 0, "{off:?}");
-    assert_eq!(off["direct_jmp_ibtc_misses"], 2, "{off:?}");
+    assert_eq!(off["direct_jmp_ibtc_misses"], 0, "{off:?}");
     assert_eq!(off["direct_jmp_ibtc_fills"], 0, "{off:?}");
-    assert_eq!(off["direct_jmp_ibtc_suppressed"], 2, "{off:?}");
+    assert_eq!(off["direct_jmp_ibtc_suppressed"], 0, "{off:?}");
+    for field in [
+        "direct_jmp_ibtc_enabled",
+        "direct_jmp_ibtc_emitted",
+        "direct_jmp_ibtc_hits",
+        "direct_jmp_ibtc_misses",
+        "direct_jmp_ibtc_fills",
+        "direct_jmp_ibtc_suppressed",
+    ] {
+        assert_eq!(default[field], 0, "{field}: {default:?}");
+    }
 }
 
 #[test]

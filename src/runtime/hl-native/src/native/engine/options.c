@@ -163,6 +163,11 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_DEBUG_OPTION("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", HL_OPTION_FLAG),
 };
 
+int hl_option_flag_value(const char *name, int missing_value) {
+    const char *value = hl_option_get(name);
+    return value == NULL ? missing_value != 0 : !(value[0] == '0' && value[1] == 0);
+}
+
 #define HL_OPTION_COUNT (sizeof hl_option_definitions / sizeof hl_option_definitions[0])
 
 static _Thread_local hl_options *hl_bound_options;
