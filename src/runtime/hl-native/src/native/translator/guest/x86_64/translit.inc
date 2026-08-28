@@ -3249,7 +3249,8 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         }
         result = exact ? 0 : 128;
     } else if (scenario == 85) {
-        int exact = body != NULL && block->profile_insns == 5 &&
+        uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
+        int exact = body != NULL && block->profile_insns == 5 && published == 6 &&
                     __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED) == stitches_before + 1;
         for (uint32_t offset = 0; exact && offset < block->host_len; offset++) {
             uint64_t owner_guest = 0, instruction_guest = 0;
