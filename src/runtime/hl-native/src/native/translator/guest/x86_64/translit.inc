@@ -3886,7 +3886,6 @@ done:
 
 static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *context, uint64_t guest) {
     if (!translit_jcc_ibtc_stub_init()) return NULL;
-    (void)translit_direct_jmp_ibtc_stub_init();
     while ((uintptr_t)g_cp & 15)
         g_cp++;
     struct interp_block *block = (struct interp_block *)g_cp;
@@ -3968,8 +3967,14 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
         goto done_direct_ibtc;
     }
 
+    if (!translit_jcc_ibtc_stub_init() || !translit_direct_jmp_ibtc_stub_init())
+        goto done_direct_ibtc;
     struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+    jit_body_owner_set *source_owners = jit_body_owner_set_for(g_cache_gen, 0);
+    uint32_t source_owner_count =
+        source_owners == NULL ? 0 : atomic_load_explicit(&source_owners->count, memory_order_acquire);
     if (source_block == NULL || source_block->host_entry_off == 0 || source_block->host_len >= TL_MAX_BYTES ||
+        source_owner_count != 9 ||
         __atomic_load_n(&translit_direct_jmp_ibtc_emitted, __ATOMIC_RELAXED) != emitted_before + 1)
         goto done_direct_ibtc;
     if (scenario == 101 && !translit_jcc_ibtc_signal_stage_test(1)) {
