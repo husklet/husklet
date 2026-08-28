@@ -972,6 +972,7 @@ typedef struct {
 static uint8_t *translit_test_jcc_ibtc_instruction_start;
 static translit_jcc_ibtc_site_ranges translit_test_jcc_ibtc_site;
 static uint64_t translit_test_jcc_ibtc_source_guest;
+static int translit_test_jcc_ibtc_stub_fail;
 #endif
 
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
@@ -984,6 +985,9 @@ static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
 // descriptor is load-bearing: eight legal stitched JCCs must fit inside the
 // unchanged 3072-byte block budget.
 static int translit_jcc_ibtc_stub_init(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_test_jcc_ibtc_stub_fail) return 0;
+#endif
     translit_jcc_ibtc_stub_header *header = (translit_jcc_ibtc_stub_header *)g_cache;
     if (g_cp != g_cache && header->magic == TL_JCC_IBTC_STUB_MAGIC &&
         header->entry_off >= sizeof *header && header->entry_off < header->rsp_canonical_off &&
@@ -2548,7 +2552,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
     }
-    if (scenario >= 89 && scenario <= 99) {
+    if (scenario >= 89 && scenario <= 100) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
@@ -3766,6 +3770,31 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     uint64_t invalid_before = __atomic_load_n(&translit_jcc_ibtc_invalid_refusal, __ATOMIC_RELAXED);
     int result = 136;
 
+    if (scenario == 100) {
+        // A failed optional-stub reservation must leave the arena untouched and
+        // all process-local pointers null, so a later retry can initialize the
+        // generation once and execute the ordinary source-first miss path.
+        uint8_t *before = g_cp;
+        translit_test_jcc_ibtc_stub_fail = 1;
+        int failed = !translit_jcc_ibtc_stub_init();
+        translit_test_jcc_ibtc_stub_fail = 0;
+        int untouched = g_cp == before && translit_jcc_ibtc_stub_entry == NULL &&
+                        translit_jcc_ibtc_stub_rsp_canonical == NULL &&
+                        translit_jcc_ibtc_stub_flags_canonical == NULL && translit_jcc_ibtc_stub_end == NULL;
+        struct interp_block *retry = translit_jcc_ibtc_test_build(context, source);
+        struct cpu retry_cpu = {0};
+        retry_cpu.rip = source;
+        retry_cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        retry_cpu.ibtc_base = (uint64_t)g_ibtc;
+        if (retry != NULL) run_block(context, &retry_cpu, retry);
+        result = failed && untouched && retry != NULL && retry->host_entry_off != 0 &&
+                         retry_cpu.rip == target && retry_cpu.jcc_ibtc_miss == TL_JCC_IBTC_MISS &&
+                         __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before + 1
+                     ? 0
+                     : 151;
+        goto done_ibtc;
+    }
+
     if (scenario == 91) {
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
@@ -3975,6 +4004,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
                  : 143;
 
 done_ibtc:
+    translit_test_jcc_ibtc_stub_fail = 0;
     (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
