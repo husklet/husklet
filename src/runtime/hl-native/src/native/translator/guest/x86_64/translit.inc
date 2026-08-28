@@ -2351,7 +2351,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
     }
-    if (scenario >= 88 && scenario <= 95) {
+    if (scenario >= 89 && scenario <= 96) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
@@ -3464,7 +3464,7 @@ static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *con
 }
 
 static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
-    if (scenario == 88) {
+    if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0}, a_off = {off, off + sizeof off, 0};
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
@@ -3530,7 +3530,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     uint64_t suppressed_before = __atomic_load_n(&translit_jcc_ibtc_suppressed, __ATOMIC_RELAXED);
     int result = 136;
 
-    if (scenario == 90) {
+    if (scenario == 91) {
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
         struct cpu cpu = {0};
@@ -3561,7 +3561,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
 
-    if (scenario == 95) {
+    if (scenario == 96) {
         if (hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) != 0) goto done_ibtc;
         translit_jcc_ibtc_fill(&cpu, target_block);
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
@@ -3580,7 +3580,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         __atomic_load_n(&translit_jcc_ibtc_fill_count, __ATOMIC_RELAXED) != fill_before + 1)
         goto done_ibtc;
 
-    if (scenario == 91) {
+    if (scenario == 92) {
         struct interp_block *collision_block = (struct interp_block *)g_cp;
         g_cp += sizeof *collision_block + 16;
         memset(collision_block, 0, sizeof *collision_block);
@@ -3608,7 +3608,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     }
 
-    if (scenario == 92) {
+    if (scenario == 93) {
         cpu = (struct cpu){0};
         cpu.rip = source;
         cpu.r[1] = UINT64_C(0x1122334455667788);
@@ -3627,7 +3627,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     }
 
-    if (scenario == 93) {
+    if (scenario == 94) {
         const uint64_t dirty[1][2] = {{target, target + 1}};
         uint32_t invalidated = map_invalidate_source_ranges(dirty, 1);
         ibtc_ent cleared = ibtc_snapshot(cell);
@@ -3647,7 +3647,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     }
 
-    if (scenario == 94) {
+    if (scenario == 95) {
         uint64_t collision_target = target + ((uint64_t)IBTC_N << 2);
         pid_t child = fork();
         if (child == 0) {
