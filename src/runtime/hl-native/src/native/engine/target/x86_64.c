@@ -1690,10 +1690,13 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
         char profile[512];
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu\n"
-                                    "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
+                                    "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n"
+                                    "[prof] decoder authorized_hits=%llu byte_unstable=%llu\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
-                                    (unsigned long long)g_ibtc_fill, ibtc_mode);
+                                    (unsigned long long)g_ibtc_fill, ibtc_mode,
+                                    (unsigned long long)hl_x86_decode_authorized_hits(),
+                                    (unsigned long long)atomic_load_explicit(&g_exec_bytes_unstable, memory_order_acquire));
         if (profile_size > 0 && (size_t)profile_size < sizeof profile)
             (void)profile_record_write(profile, (size_t)profile_size);
         (void)translit_profile_write();
