@@ -3562,7 +3562,14 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
         translit_jcc_ibtc_fill(&cpu, collision_block);
         ibtc_ent collided = ibtc_snapshot(cell);
-        result = collided.target == collision_target &&
+        cpu = (struct cpu){0};
+        cpu.rip = source;
+        cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        cpu.ibtc_base = (uint64_t)g_ibtc;
+        run_block(context, &cpu, source_block);
+        result = collided.target == collision_target && cpu.rip == target &&
+                         cpu.jcc_ibtc_miss == TL_JCC_IBTC_MISS &&
+                         __atomic_load_n(&translit_jcc_ibtc_miss, __ATOMIC_RELAXED) == miss_before + 2 &&
                          __atomic_load_n(&translit_jcc_ibtc_collision, __ATOMIC_RELAXED) == collision_before + 1
                      ? 0
                      : 139;
