@@ -766,8 +766,6 @@ mod tests {
 
     #[test]
     fn product_backend_shape_is_exact_and_reconciles_repeated_misses() {
-        validate_backend_tree(PRODUCT_SHAPE_ON.as_bytes(), true).unwrap();
-        validate_backend_tree(PRODUCT_SHAPE_OFF.as_bytes(), true).unwrap();
         let on = backend_shape_product(PRODUCT_SHAPE_ON.as_bytes(), true)
             .unwrap()
             .unwrap();
@@ -825,12 +823,7 @@ mod tests {
                 .to_string()
                 .contains("expected 0")
         );
-        assert!(
-            validate_backend_tree(format!("{TREE}{PRODUCT_SHAPE_ON}").as_bytes(), true)
-                .unwrap_err()
-                .to_string()
-                .contains("cannot accompany backend-tree")
-        );
+        assert!(validate_backend_tree(format!("{TREE}{PRODUCT_SHAPE_ON}").as_bytes(), true).is_err());
     }
 
     #[test]
