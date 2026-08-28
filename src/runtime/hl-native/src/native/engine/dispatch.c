@@ -356,6 +356,9 @@ static void run_guest(struct cpu *c) {
         hl_dispatch_profile_map(&g_dispatch_profile, code != NULL);
         if (code != NULL) hl_backend_tree_map_hit();
         if (!code) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            jit_body_owner_low_test_seed();
+#endif
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;
             // near full -> wholesale flush
             if (jit_cache_needs_rotation()) {
@@ -398,6 +401,9 @@ static void run_guest(struct cpu *c) {
                         continue;
                     }
                 }
+#if defined(HL_NATIVE_TEST_HOOKS)
+                jit_body_owner_low_test_after_rotation();
+#endif
 #ifdef PCACHE_FLUSH_HOOK
                 // the reloc records described the arena we just dropped/renewed; reset so the
                 // records stay in lockstep with what is actually emitted (a later save must never
@@ -430,6 +436,9 @@ static void run_guest(struct cpu *c) {
                 c->exited = 1;
                 continue;
             }
+#if defined(HL_NATIVE_TEST_HOOKS)
+            jit_body_owner_low_test_after_translation();
+#endif
             hl_backend_tree_translation();
             // THEN chain existing blocks to it (still write mode). Frontend hook: aarch64 chains here;
             // x86's translate_block already chained internally, so its hook is a no-op.

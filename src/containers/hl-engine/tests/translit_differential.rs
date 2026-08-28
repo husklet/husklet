@@ -80,6 +80,8 @@ struct Backend {
     provenance_fallback: u64,
     body_owner_recovered: u64,
     body_owner_published: u64,
+    body_owner_low_rotations: u64,
+    body_owner_low_retranslations: u64,
     mixed_sse_encounters: u64,
     mixed_sse_admitted: u64,
     mixed_sse_transitions: u64,
@@ -160,6 +162,31 @@ struct Backend {
     shape_line: String,
 }
 
+const MIXED_SSE_PROFILE_FIELDS: [&str; 6] = [
+    "mixed_sse_encounters=",
+    "mixed_sse_admitted=",
+    "mixed_sse_transitions=",
+    "mixed_sse_executed=",
+    "mixed_sse_executed_transitions=",
+    "mixed_sse_disabled_boundaries=",
+];
+
+fn exact_u64_field(line: &str, name: &str, context: &str) -> Result<u64, String> {
+    let values = line
+        .split_whitespace()
+        .filter_map(|field| field.strip_prefix(name))
+        .collect::<Vec<_>>();
+    let [value] = values.as_slice() else {
+        return Err(format!(
+            "{context} field {name} appeared {} times, expected once in {line}",
+            values.len()
+        ));
+    };
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{context} field {name} is not a decimal integer in {line}"))
+}
+
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
 fn backend(stderr: &[u8]) -> Backend {
     let text = String::from_utf8_lossy(stderr);
@@ -175,20 +202,18 @@ fn backend(stderr: &[u8]) -> Backend {
             .and_then(|value| value.trim_end_matches(')').parse().ok())
             .unwrap_or(0)
     };
-    let required_counter = |name: &str| {
-        line.split_whitespace()
-            .find_map(|field| field.strip_prefix(name))
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or_else(|| panic!("missing typed translit field {name} in {line}"))
-    };
+    let required_counter =
+        |name: &str| exact_u64_field(&line, name, "typed translit").unwrap_or_else(|error| panic!("{error}"));
     // An unselected backend has no mixed-builder contract to prove. Every selected report form -- normal,
     // displaced, and store-alias-declined -- must carry the complete typed diagnostic surface.
-    let mixed_counter = |name: &str| {
-        if line.contains("not selected") || line.contains("absent") {
-            0
-        } else {
-            required_counter(name)
+    let mixed_selected = !line.contains("not selected") && !line.contains("absent");
+    if mixed_selected {
+        for name in MIXED_SSE_PROFILE_FIELDS {
+            let _ = required_counter(name);
         }
+    }
+    let mixed_counter = |name: &str| {
+        if !mixed_selected { 0 } else { required_counter(name) }
     };
     let translations = text
         .lines()
@@ -239,6 +264,20 @@ fn backend(stderr: &[u8]) -> Backend {
             .and_then(|value| value.parse().ok())
             .unwrap_or(0)
     };
+    let shape_required_counter =
+        |name: &str| exact_u64_field(shape, name, "typed backend-shape").unwrap_or_else(|error| panic!("{error}"));
+    if mixed_selected {
+        for name in [
+            "mixed_sse_executed=",
+            "mixed_sse_executed_transitions=",
+            "mixed_sse_disabled_boundaries=",
+        ] {
+            assert!(
+                shape_required_counter(name) >= required_counter(name),
+                "fork-shared {name} regressed below root-local telemetry: {shape}\n{line}"
+            );
+        }
+    }
     let family_counter = |name: &str| {
         shape
             .split_whitespace()
@@ -419,12 +458,16 @@ fn backend(stderr: &[u8]) -> Backend {
         provenance_fallback: counter("provenance_fallback="),
         body_owner_recovered: counter("body_owner_recovered="),
         body_owner_published: counter("body_owner_published="),
+        body_owner_low_rotations: counter("body_owner_low_rotations="),
+        body_owner_low_retranslations: counter("body_owner_low_retranslations="),
         mixed_sse_encounters: mixed_counter("mixed_sse_encounters="),
         mixed_sse_admitted: mixed_counter("mixed_sse_admitted="),
         mixed_sse_transitions: mixed_counter("mixed_sse_transitions="),
-        mixed_sse_executed: mixed_counter("mixed_sse_executed="),
-        mixed_sse_executed_transitions: mixed_counter("mixed_sse_executed_transitions="),
-        mixed_sse_disabled_boundaries: mixed_counter("mixed_sse_disabled_boundaries="),
+        // Publication telemetry is process-local; completed execution is authoritative only in the
+        // exactly-one fork-shared backend-shape record emitted after the complete process tree reaps.
+        mixed_sse_executed: shape_required_counter("mixed_sse_executed="),
+        mixed_sse_executed_transitions: shape_required_counter("mixed_sse_executed_transitions="),
+        mixed_sse_disabled_boundaries: shape_required_counter("mixed_sse_disabled_boundaries="),
         sse2_runs_admitted: counter("sse2_runs_admitted="),
         sse2_instructions_admitted: counter("sse2_instructions_admitted="),
         sse2_target_runs: counter("sse2_target_runs="),
@@ -699,6 +742,49 @@ fn a_contiguous_sse2_run_matches_interpreter_and_native() {
         selected_backend.line
     );
     assert_eq!(selected_backend.sse2_target_runs, 1, "{}", selected_backend.line);
+}
+
+#[test]
+fn mixed_sse_profile_fields_are_single_decimal_tokens() {
+    let good = MIXED_SSE_PROFILE_FIELDS
+        .iter()
+        .map(|name| format!("{name}7"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for name in MIXED_SSE_PROFILE_FIELDS {
+        assert_eq!(exact_u64_field(&good, name, "typed translit").unwrap(), 7);
+        let missing = good.replace(&format!("{name}7"), "");
+        assert!(
+            exact_u64_field(&missing, name, "typed translit")
+                .unwrap_err()
+                .contains("appeared 0 times")
+        );
+        let duplicate = format!("{good} {name}8");
+        assert!(
+            exact_u64_field(&duplicate, name, "typed translit")
+                .unwrap_err()
+                .contains("appeared 2 times")
+        );
+        let nondecimal = good.replace(&format!("{name}7"), &format!("{name}seven"));
+        assert!(
+            exact_u64_field(&nondecimal, name, "typed translit")
+                .unwrap_err()
+                .contains("not a decimal")
+        );
+    }
+}
+
+#[test]
+fn body_owner_low_watermark_rotates_through_the_single_thread_dispatcher() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "mixed_sse");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, report) = run_with_body_owner_rotation(&executable);
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert_eq!(report.body_owner_low_rotations, 1, "{}", report.line);
+    assert!(report.body_owner_low_retranslations > 0, "{}", report.line);
+    assert!(report.mixed_sse_admitted > 0, "{}", report.line);
+    assert!(report.mixed_sse_executed > 0, "{}", report.shape_line);
 }
 
 #[test]
@@ -1048,7 +1134,7 @@ fn elf_is_position_independent(path: &Path) -> bool {
 /// One guest run with the backend explicitly selected -- through the LAUNCH OPTION, never through the
 /// environment, so this gate does not depend on `translit_enabled()`'s command-line fallback existing.
 /// Answers (stdout, exit status, what the backend reported about itself).
-fn run_with_arguments(
+fn run_with_arguments_internal(
     executable: &Path,
     translit: &str,
     extra: &[&[u8]],
@@ -1056,6 +1142,7 @@ fn run_with_arguments(
     exhaust_body_owners: bool,
     force_fs_authority: bool,
     disable_mixed_sse: bool,
+    force_body_owner_rotation: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -1081,6 +1168,11 @@ fn run_with_arguments(
             .set("HL_TRANSLIT_MIXED_SSE_DISABLE", "1", true)
             .expect("HL_TRANSLIT_MIXED_SSE_DISABLE");
     }
+    if force_body_owner_rotation {
+        options
+            .set("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST", "1", true)
+            .expect("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
+    }
     let plan = RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
@@ -1100,6 +1192,31 @@ fn run_with_arguments(
     let out = captured.out.lock().unwrap().clone();
     let report = backend(&captured.err.lock().unwrap());
     (out, exit.guest_status, report)
+}
+
+fn run_with_arguments(
+    executable: &Path,
+    translit: &str,
+    extra: &[&[u8]],
+    force_provenance_miss: bool,
+    exhaust_body_owners: bool,
+    force_fs_authority: bool,
+    disable_mixed_sse: bool,
+) -> (Vec<u8>, i32, Backend) {
+    run_with_arguments_internal(
+        executable,
+        translit,
+        extra,
+        force_provenance_miss,
+        exhaust_body_owners,
+        force_fs_authority,
+        disable_mixed_sse,
+        false,
+    )
+}
+
+fn run_with_body_owner_rotation(executable: &Path) -> (Vec<u8>, i32, Backend) {
+    run_with_arguments_internal(executable, "1", &[], false, false, false, false, true)
 }
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {

@@ -3432,6 +3432,8 @@ static int translit_report(char *out, size_t size) {
         __atomic_load_n(&translit_mixed_sse_disabled_boundaries, __ATOMIC_RELAXED);
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t body_owner_published = __atomic_load_n(&translit_body_owner_published, __ATOMIC_RELAXED);
+    uint64_t body_owner_low_rotations = g_body_owner_low_test_rotations;
+    uint64_t body_owner_low_retranslations = g_body_owner_low_test_retranslations;
     uint64_t sse2_runs_admitted = __atomic_load_n(&translit_sse2_runs_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_instructions_admitted =
         __atomic_load_n(&translit_sse2_instructions_admitted, __ATOMIC_RELAXED);
@@ -3455,6 +3457,7 @@ static int translit_report(char *out, size_t size) {
     uint64_t fs_fixture_admitted = __atomic_load_n(&translit_fs_fixture_admitted, __ATOMIC_RELAXED);
 #else
     uint64_t body_owner_published = 0;
+    uint64_t body_owner_low_rotations = 0, body_owner_low_retranslations = 0;
     uint64_t sse2_runs_admitted = 0, sse2_instructions_admitted = 0, sse2_target_runs = 0,
              sse2_next_family_runs = 0, sse2_store_instructions = 0;
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
@@ -3496,6 +3499,7 @@ static int translit_report(char *out, size_t size) {
     if (hl_option_get("HL_TRANSLIT_PROFILE_WIDE_TEST") != NULL) {
         blocks = entries = declined = stitch_candidates = stitch_admitted = UINT64_MAX;
         rip_indirect_lowered = provenance_fallback = body_owner_recovered = body_owner_published = UINT64_MAX;
+        body_owner_low_rotations = body_owner_low_retranslations = UINT64_MAX;
         mixed_sse_encounters = mixed_sse_admitted = mixed_sse_transitions = UINT64_MAX;
         mixed_sse_executed = mixed_sse_executed_transitions = mixed_sse_disabled_boundaries = UINT64_MAX;
         sse2_runs_admitted = sse2_instructions_admitted = sse2_target_runs = sse2_next_family_runs = UINT64_MAX;
@@ -3533,7 +3537,8 @@ static int translit_report(char *out, size_t size) {
                         " jcc_link_dispatcher=%llu mixed_sse_encounters=%llu"
                         " mixed_sse_admitted=%llu mixed_sse_transitions=%llu"
                         " mixed_sse_executed=%llu mixed_sse_executed_transitions=%llu"
-                        " mixed_sse_disabled_boundaries=%llu\n",
+                        " mixed_sse_disabled_boundaries=%llu body_owner_low_rotations=%llu"
+                        " body_owner_low_retranslations=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)displaced_blocks, (unsigned long long)displaced_entries,
                         (unsigned long long)displaced_operand_declined,
@@ -3556,20 +3561,25 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)mixed_sse_encounters, (unsigned long long)mixed_sse_admitted,
                         (unsigned long long)mixed_sse_transitions, (unsigned long long)mixed_sse_executed,
                         (unsigned long long)mixed_sse_executed_transitions,
-                        (unsigned long long)mixed_sse_disabled_boundaries);
+                        (unsigned long long)mixed_sse_disabled_boundaries,
+                        (unsigned long long)body_owner_low_rotations,
+                        (unsigned long long)body_owner_low_retranslations);
     if (jit86_store_alias_observation_active())
         return snprintf(out, size,
                         "[prof] translit: declined, guest executable mapping or shared alias observed"
                         " blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu stitch_admitted=%llu"
                         " mixed_sse_encounters=%llu mixed_sse_admitted=%llu mixed_sse_transitions=%llu"
                         " mixed_sse_executed=%llu mixed_sse_executed_transitions=%llu"
-                        " mixed_sse_disabled_boundaries=%llu\n",
+                        " mixed_sse_disabled_boundaries=%llu body_owner_low_rotations=%llu"
+                        " body_owner_low_retranslations=%llu\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                         (unsigned long long)mixed_sse_encounters, (unsigned long long)mixed_sse_admitted,
                         (unsigned long long)mixed_sse_transitions, (unsigned long long)mixed_sse_executed,
                         (unsigned long long)mixed_sse_executed_transitions,
-                        (unsigned long long)mixed_sse_disabled_boundaries);
+                        (unsigned long long)mixed_sse_disabled_boundaries,
+                        (unsigned long long)body_owner_low_rotations,
+                        (unsigned long long)body_owner_low_retranslations);
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"
@@ -3591,7 +3601,8 @@ static int translit_report(char *out, size_t size) {
                     " jcc_link_irq_fallback=%llu jcc_link_dispatcher=%llu"
                     " mixed_sse_encounters=%llu mixed_sse_admitted=%llu mixed_sse_transitions=%llu"
                     " mixed_sse_executed=%llu mixed_sse_executed_transitions=%llu"
-                    " mixed_sse_disabled_boundaries=%llu\n",
+                    " mixed_sse_disabled_boundaries=%llu body_owner_low_rotations=%llu"
+                    " body_owner_low_retranslations=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
@@ -3618,7 +3629,9 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)mixed_sse_encounters, (unsigned long long)mixed_sse_admitted,
                     (unsigned long long)mixed_sse_transitions, (unsigned long long)mixed_sse_executed,
                     (unsigned long long)mixed_sse_executed_transitions,
-                    (unsigned long long)mixed_sse_disabled_boundaries);
+                    (unsigned long long)mixed_sse_disabled_boundaries,
+                    (unsigned long long)body_owner_low_rotations,
+                    (unsigned long long)body_owner_low_retranslations);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.

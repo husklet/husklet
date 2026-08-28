@@ -1427,6 +1427,11 @@ static jit_body_owner_set g_body_owners[STW_RETIRED_MAX + 1];
 static _Atomic int g_body_owner_publish_pause;
 static _Atomic int g_body_owner_publish_slot;
 static _Atomic int g_body_owner_batch_pause;
+static uint64_t g_body_owner_low_test_generation;
+static uint64_t g_body_owner_low_test_rotations;
+static uint64_t g_body_owner_low_test_retranslations;
+static int g_body_owner_low_test_seeded;
+static int g_body_owner_low_test_rotated;
 #endif
 
 static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
@@ -1493,6 +1498,35 @@ static int jit_cache_needs_rotation(void) {
     return g_cp + CACHE_EMIT_HEADROOM > g_cache + CACHE_SZ ||
            jit_body_owner_needs_rotation(g_cache_gen);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// Seed the exact single-thread dispatcher condition rather than calling the predicate in isolation.  If
+// the owner-low arm is removed from jit_cache_needs_rotation, translation keeps refusing in the old
+// generation and the end-to-end hook reports neither a rotation nor a replacement publication.
+static void jit_body_owner_low_test_seed(void) {
+    const char *enabled = hl_option_get("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
+    if (g_body_owner_low_test_seeded || enabled == NULL || enabled[0] == '0' || enabled[0] == 0) return;
+    jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
+    if (set == NULL) return;
+    atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (JIT_BODY_OWNER_BLOCK_HEADROOM - 1),
+                          memory_order_relaxed);
+    g_body_owner_low_test_generation = g_cache_gen;
+    g_body_owner_low_test_seeded = 1;
+}
+
+static void jit_body_owner_low_test_after_rotation(void) {
+    if (!g_body_owner_low_test_seeded || g_cache_gen == g_body_owner_low_test_generation) return;
+    if (jit_body_owner_set_for(g_body_owner_low_test_generation, 0) != NULL) return;
+    g_body_owner_low_test_rotations++;
+    g_body_owner_low_test_rotated = 1;
+}
+
+static void jit_body_owner_low_test_after_translation(void) {
+    if (!g_body_owner_low_test_rotated) return;
+    g_body_owner_low_test_retranslations++;
+    g_body_owner_low_test_rotated = 0;
+}
+#endif
 
 static jit_body_owner_preserve *jit_body_owner_preserves(jit_body_owner_entry *entries) {
     return (jit_body_owner_preserve *)(void *)(entries + JIT_BODY_OWNER_N);

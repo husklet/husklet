@@ -136,6 +136,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_BODY_OWNER_ROTATE_TEST",
+        "test-only force single-thread same-ISA body-owner cache rotation",
+        Flag
+    ),
+    internal!(
         "HL_TRANSLIT_FS_AUTHORITY_TEST",
         "test-only force same-ISA FS direct-data authority refusal",
         Flag
