@@ -30,6 +30,7 @@ static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 static _Thread_local uint64_t g_decode_memo_decodes;
 static _Thread_local uint64_t g_decode_memo_hits;
 static _Thread_local uint64_t g_decode_authority_samples;
+static _Thread_local int g_decode_authority_begin_between_loads;
 static _Atomic int g_hot_context_test_fail_allocation;
 static _Atomic int g_hot_context_test_live;
 #endif
@@ -344,6 +345,13 @@ static decode_authority decode_authority_sample(const hl_x86_hot_context *contex
     /* Completed first is essential: a writer beginning between these two loads
        makes the pair unequal rather than admitting its pre-publication bytes. */
     authority.completed = atomic_load_explicit(&context->authority_source->completed, memory_order_seq_cst);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_decode_authority_begin_between_loads) {
+        g_decode_authority_begin_between_loads = 0;
+        atomic_fetch_add_explicit((_Atomic uint64_t *)&context->authority_source->started, 1,
+                                  memory_order_seq_cst);
+    }
+#endif
     authority.started = atomic_load_explicit(&context->authority_source->started, memory_order_seq_cst);
     return authority;
 }
@@ -694,6 +702,28 @@ int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches) {
         if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -89;
         if (result == 0 && (fixture.fetches != 2 || atomic_load_explicit(&unstable, memory_order_acquire) != 1 ||
                             context->memo[slot].authority_epoch != 0)) result = -90;
+        break;
+    }
+    case 38: { /* A writer beginning between the ordered loads defeats an otherwise-authorized hit. */
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -91;
+        if (result == 0 && (fixture.fetches != 2 || context->memo[slot].authority_epoch == 0)) result = -92;
+        g_decode_authority_begin_between_loads = 1;
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -93;
+        if (result == 0 && (fixture.fetches != 3 || context->memo[slot].authority_epoch != 0)) result = -94;
+        break;
+    }
+    case 39: { /* Overlapping writers keep authority unequal until both have completed. */
+        size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -95;
+        atomic_fetch_add_explicit(&authority.started, 2, memory_order_seq_cst);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -96;
+        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_seq_cst);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -97;
+        atomic_fetch_add_explicit(&authority.completed, 1, memory_order_seq_cst);
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -98;
+        if (result == 0 && hl_x86_decode_context(context, fixture.pc, &second) != first.len) result = -99;
+        if (result == 0 && (fixture.fetches != 5 || context->memo[slot].authority_epoch == 0)) result = -100;
         break;
     }
     case 33: /* Epoch wrap clears old entries rather than aliasing epoch zero. */

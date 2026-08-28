@@ -931,6 +931,8 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 35: result = hl_x86_decode_authority_test(scenario, scans); break;
     case 36: result = hl_x86_decode_authority_test(scenario, scans); break;
     case 37: result = hl_x86_decode_authority_test(scenario, scans); break;
+    case 38: result = hl_x86_decode_authority_test(scenario, scans); break;
+    case 39: result = hl_x86_decode_authority_test(scenario, scans); break;
 #endif
     default: result = -10;
     }

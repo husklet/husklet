@@ -87,6 +87,16 @@ fn x86_decode_memo_does_not_authorize_when_instability_latches_during_fetch() {
     assert_eq!(exec_page_cache_test(2, 37), Ok(2));
 }
 
+#[test]
+fn x86_decode_authority_orders_reader_loads_against_writer_begin() {
+    assert_eq!(exec_page_cache_test(2, 38), Ok(3));
+}
+
+#[test]
+fn x86_decode_authority_waits_for_every_overlapping_writer() {
+    assert_eq!(exec_page_cache_test(2, 39), Ok(5));
+}
+
 #[cfg(unix)]
 #[test]
 fn x86_decode_authority_revalidates_after_fork() {
