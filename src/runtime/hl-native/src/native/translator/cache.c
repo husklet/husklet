@@ -538,6 +538,7 @@ static void map_clear(void) {
         }
         for (uint32_t i = 0; i < JIT_INSN_MAP_N; i++)
             __atomic_store_n(&g_instruction_map[i].epoch, 0, __ATOMIC_RELAXED);
+        for (uint32_t i = 0; i < JIT_SOURCE_PAGE_N; i++) g_source_pages[i].epoch = 0;
         g_map_epoch = 1;
     }
     map_host_cache_invalidate();
