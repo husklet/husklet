@@ -968,6 +968,12 @@ typedef struct {
     uint8_t *end;
 } translit_jcc_ibtc_site_ranges;
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint8_t *translit_test_jcc_ibtc_instruction_start;
+static translit_jcc_ibtc_site_ranges translit_test_jcc_ibtc_site;
+static uint64_t translit_test_jcc_ibtc_source_guest;
+#endif
+
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
     return translit_jcc_ibtc_stub_entry != NULL && (source >> 12) == (target >> 12);
 }
@@ -1337,6 +1343,11 @@ static int translit_owner_append_normal(jit_body_owner_range ranges[TL_MAX_OWNER
 static int translit_owner_append_ibtc(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
                                       const uint8_t *instruction_start, const uint8_t *instruction_end,
                                       const translit_jcc_ibtc_site_ranges *site, uint64_t guest) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_jcc_ibtc_instruction_start = (uint8_t *)instruction_start;
+    translit_test_jcc_ibtc_site = *site;
+    translit_test_jcc_ibtc_source_guest = guest;
+#endif
     return translit_owner_append(ranges, count, instruction_start, site->save_end, guest, 0) &&
            translit_owner_append(ranges, count, site->save_end, site->rip_end, guest,
                                  1u << HL_X64_RAX) &&
@@ -4337,20 +4348,40 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-// Deterministic signal-context reconstruction at each canonicalization stage of
-// the shared stub. Distinct context/cpu values make every preserve decision and
-// the post-flags cpu source observable; no asynchronous timing is involved.
+// Deterministic signal-context reconstruction across the source handoff and
+// each canonicalization stage of the shared stub. Distinct context/cpu values
+// make every preserve decision, the static-to-dynamic RIP transition, and the
+// post-flags cpu source observable; no asynchronous timing is involved.
 static int translit_jcc_ibtc_signal_stage_test(void) {
     if (translit_jcc_ibtc_stub_entry == NULL || translit_jcc_ibtc_stub_rsp_canonical == NULL ||
-        translit_jcc_ibtc_stub_flags_canonical == NULL)
+        translit_jcc_ibtc_stub_flags_canonical == NULL || translit_test_jcc_ibtc_instruction_start == NULL ||
+        translit_test_jcc_ibtc_site.save_end == NULL || translit_test_jcc_ibtc_site.target_end == NULL ||
+        translit_test_jcc_ibtc_site.rip_end == NULL)
         return 0;
-    uint8_t *pc[3] = {translit_jcc_ibtc_stub_entry, translit_jcc_ibtc_stub_rsp_canonical,
-                      translit_jcc_ibtc_stub_flags_canonical};
-    uint32_t preserve[3] = {1u << HL_X64_RAX, (1u << HL_X64_RAX) | (1u << HL_X64_RSP), UINT16_MAX};
+    const uint64_t dynamic_target = UINT64_C(0x123456789abcdef0);
+    struct {
+        uint8_t *pc;
+        uint32_t preserve;
+        uint64_t cpu_rip;
+        uint64_t expected_rip;
+        int flags_from_cpu;
+    } stages[] = {
+        {translit_test_jcc_ibtc_instruction_start, 0, dynamic_target,
+         translit_test_jcc_ibtc_source_guest, 0},
+        {translit_test_jcc_ibtc_site.save_end, 1u << HL_X64_RAX,
+         translit_test_jcc_ibtc_source_guest, translit_test_jcc_ibtc_source_guest, 0},
+        {translit_test_jcc_ibtc_site.target_end, 1u << HL_X64_RAX,
+         translit_test_jcc_ibtc_source_guest, translit_test_jcc_ibtc_source_guest, 0},
+        {translit_test_jcc_ibtc_site.rip_end, 1u << HL_X64_RAX, dynamic_target, dynamic_target, 0},
+        {translit_jcc_ibtc_stub_entry, 1u << HL_X64_RAX, dynamic_target, dynamic_target, 0},
+        {translit_jcc_ibtc_stub_rsp_canonical, (1u << HL_X64_RAX) | (1u << HL_X64_RSP),
+         dynamic_target, dynamic_target, 0},
+        {translit_jcc_ibtc_stub_flags_canonical, UINT16_MAX, dynamic_target, dynamic_target, 1},
+    };
     int saved_selected = translit_selected;
     translit_selected = 1;
     int exact = 1;
-    for (unsigned stage = 0; exact && stage < 3; stage++) {
+    for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; stage++) {
         struct cpu cpu = {0}, expected_flags_cpu = {0};
         ucontext_t context;
         memset(&context, 0, sizeof context);
@@ -4361,19 +4392,19 @@ static int translit_jcc_ibtc_signal_stage_test(void) {
         }
         uint64_t context_flags = UINT64_C(0xad7);
         uint64_t canonical_flags = UINT64_C(0x853);
-        cpu.rip = UINT64_C(0x123456789abcdef0);
+        cpu.rip = stages[stage].cpu_rip;
         cpu.mmscratch[0] = canonical_flags;
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)context_flags;
-        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)pc[stage];
-        exact = translit_signal_capture(&cpu, &context) && cpu.rip == UINT64_C(0x123456789abcdef0) &&
+        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == stages[stage].expected_rip &&
                 cpu.reason == R_BRANCH;
         for (unsigned reg = 0; exact && reg < 16; reg++) {
-            uint64_t expected = preserve[stage] & (1u << reg)
+            uint64_t expected = stages[stage].preserve & (1u << reg)
                                     ? UINT64_C(0xc000000000000000) + reg
                                     : UINT64_C(0xa000000000000000) + reg;
             exact = cpu.r[reg] == expected;
         }
-        translit_flags_out(&expected_flags_cpu, stage == 2 ? canonical_flags : context_flags);
+        translit_flags_out(&expected_flags_cpu, stages[stage].flags_from_cpu ? canonical_flags : context_flags);
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
     }
     translit_selected = saved_selected;
