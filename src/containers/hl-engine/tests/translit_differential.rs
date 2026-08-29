@@ -1374,6 +1374,7 @@ fn run_with_sampling_symbols(executable: &Path, directory: &Path, fresh_rollover
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
     options.set("HL_TRANSLIT_SYMBOLIZE", "1", true).unwrap();
+    options.set("HL_TRANSLIT_SYMBOL_RECEIPT", "1", true).unwrap();
     options
         .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
         .unwrap();
@@ -1410,6 +1411,7 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
     assert_eq!(output, b"42\n");
     let stderr = String::from_utf8(stderr).unwrap();
     assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
+    assert!(stderr.contains("stage=svc-exit-group-flushed") && stderr.contains("count=0"), "{stderr}");
     let files = std::fs::read_dir(&maps)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1435,6 +1437,7 @@ fn sampling_symbols_follow_exec_fresh_arena_generations() {
     assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
     let stderr = String::from_utf8(stderr).unwrap();
     assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
+    assert!(stderr.contains("stage=svc-exit-group-flushed") && stderr.contains("count=0"), "{stderr}");
     let files = std::fs::read_dir(&maps)
         .unwrap()
         .map(|entry| entry.unwrap().path())
