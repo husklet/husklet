@@ -622,22 +622,39 @@ fn elf_build_id(path: &Path) -> Result<String, Error> {
 
 fn export_script(data: &Path, destination: &Path) -> Result<(), Error> {
     let output = Command::new("perf")
-        .args([
-            "script",
-            "--no-demangle",
-            "--field-separator",
-            "\t",
-            "-F",
-            "event,ip,sym,dso",
-            "-i",
-        ])
+        .args(["script", "--no-demangle", "-G", "-F", "event,ip,sym,dso", "-i"])
         .arg(data)
         .output()?;
     if !output.status.success() {
         return Err("perf script failed".into());
     }
-    fs::write(destination, output.stdout)?;
+    fs::write(destination, normalize_perf_script(&String::from_utf8(output.stdout)?)?)?;
     Ok(())
+}
+
+fn normalize_perf_script(output: &str) -> Result<Vec<u8>, Error> {
+    let mut normalized = Vec::new();
+    for (index, line) in output.lines().enumerate() {
+        let mut fields = line.splitn(4, char::is_whitespace).filter(|field| !field.is_empty());
+        let event = fields
+            .next()
+            .ok_or_else(|| format!("perf script row {} lacks event", index + 1))?;
+        let ip = fields
+            .next()
+            .ok_or_else(|| format!("perf script row {} lacks ip", index + 1))?;
+        let symbol = fields
+            .next()
+            .ok_or_else(|| format!("perf script row {} lacks symbol", index + 1))?;
+        let dso = fields
+            .next()
+            .ok_or_else(|| format!("perf script row {} lacks dso", index + 1))?;
+        let dso = dso
+            .strip_prefix('(')
+            .and_then(|value| value.strip_suffix(')'))
+            .ok_or_else(|| format!("perf script row {} has unbound dso", index + 1))?;
+        writeln!(normalized, "{event}\t{ip}\t{symbol}\t{dso}")?;
+    }
+    Ok(normalized)
 }
 
 fn freeze_build_ids(data: &Path, results: &Path, index_path: &Path) -> Result<(), Error> {
@@ -959,6 +976,22 @@ mod tests {
         let path = directory.path().join("script.tsv");
         fs::write(&path, text).unwrap();
         (directory, path)
+    }
+
+    #[test]
+    fn normalizes_supported_perf_script_grammar_without_losing_dso_spaces() {
+        let output = concat!(
+            "cpu-clock:u:      60918e9763a1 run_guest (/frozen/hl)\n",
+            "cpu-clock:u:      7c505da05ac7 [.] (/memfd:hl-code (deleted))\n",
+        );
+        assert_eq!(
+            String::from_utf8(normalize_perf_script(output).unwrap()).unwrap(),
+            concat!(
+                "cpu-clock:u:\t60918e9763a1\trun_guest\t/frozen/hl\n",
+                "cpu-clock:u:\t7c505da05ac7\t[.]\t/memfd:hl-code (deleted)\n",
+            )
+        );
+        assert!(normalize_perf_script("cpu-clock:u: malformed\n").is_err());
     }
 
     #[test]
