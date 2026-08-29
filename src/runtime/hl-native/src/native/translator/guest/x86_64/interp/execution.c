@@ -385,10 +385,12 @@ struct interp_block {
     uint64_t guest_end;
     uint32_t host_entry_off;
     uint32_t host_len;
+    // Immutable translated instruction count. Production diagnostics aggregate this at execution time;
+    // zero retains the interpreter-descriptor meaning without a separate side table or policy decision.
+    uint16_t profile_insns;
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint8_t profile_jcc_fall_stitches;
     uint8_t profile_fallback_kind;
-    uint16_t profile_insns;
     uint64_t profile_fallback_form;
 #endif
 };
@@ -437,8 +439,8 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->guest_end = gpc + 1;
     block->host_entry_off = 0;
     block->host_len = 0;
-#if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_insns = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;
     block->profile_fallback_form = 0;

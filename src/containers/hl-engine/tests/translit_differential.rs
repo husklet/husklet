@@ -1579,6 +1579,16 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
         "{}",
         tree.tree_line
     );
+    assert!(
+        tree.translated_steps >= tree.translated_entries,
+        "every aggregated translated child entry must carry its immutable descriptor step count: {}",
+        tree.tree_line
+    );
+    assert!(
+        tree.translated_steps + tree.interpreted_steps >= tree.crossings,
+        "process-tree instruction residence must cover every aggregated crossing: {}",
+        tree.tree_line
+    );
     assert_eq!(tree.reason_total, tree.crossings, "{}", tree.tree_line);
 }
 

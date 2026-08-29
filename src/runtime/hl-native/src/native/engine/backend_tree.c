@@ -1448,6 +1448,10 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t executed;
     _Atomic uint64_t executed_transitions;
     _Atomic uint64_t disabled_boundaries;
+    _Atomic uint64_t translated_entries;
+    _Atomic uint64_t interpreted_entries;
+    _Atomic uint64_t translated_steps;
+    _Atomic uint64_t interpreted_steps;
     _Atomic uint64_t jcc_ibtc_emitted;
     _Atomic uint64_t jcc_ibtc_hits;
     _Atomic uint64_t jcc_ibtc_misses;
@@ -1638,7 +1642,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         return;
     char record[1152];
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=4 available=%d mixed_sse_executed=%llu "
+                             "[diag] backend-shape version=5 available=%d crossings=%llu "
+                             "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
+                             "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
                              "jcc_ibtc_enabled=%d jcc_ibtc_emitted=%llu jcc_ibtc_hits=%llu "
                              "jcc_ibtc_misses=%llu jcc_ibtc_irq=%llu jcc_ibtc_fills=%llu "
@@ -1648,6 +1654,18 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "direct_jmp_ibtc_fills=%llu direct_jmp_ibtc_suppressed=%llu "
                              "direct_jmp_ibtc_invalid_refusals=%llu\n",
                              available,
+                             (unsigned long long)(atomic_load_explicit(&census->translated_entries,
+                                                                      memory_order_relaxed) +
+                                                  atomic_load_explicit(&census->interpreted_entries,
+                                                                      memory_order_relaxed)),
+                             (unsigned long long)atomic_load_explicit(&census->translated_entries,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->interpreted_entries,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->translated_steps,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->interpreted_steps,
+                                                                     memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->executed, memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->executed_transitions,
                                                                      memory_order_relaxed),
@@ -1703,8 +1721,20 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 }
 
 #define hl_backend_tree_begin(enabled, host) ((void)0)
-#define hl_backend_tree_run_begin(translated, steps) ((void)0)
-#define hl_backend_tree_interpreted_steps(steps) ((void)0)
+static inline void hl_backend_tree_run_begin(int translated, uint64_t steps) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    if (translated) {
+        atomic_fetch_add_explicit(&census->translated_entries, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&census->translated_steps, steps, memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&census->interpreted_entries, 1, memory_order_relaxed);
+    }
+}
+static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
+}
 #define hl_backend_tree_reason(reason) ((void)0)
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
 #define hl_backend_tree_translated_fall_stop(reason) ((void)0)
