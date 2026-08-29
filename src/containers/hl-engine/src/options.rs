@@ -150,6 +150,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only force same-ISA FS direct-data authority refusal",
         Flag
     ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST",
+        "test-only omit one same-ISA pcache external relocation",
+        Flag
+    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",
