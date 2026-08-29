@@ -541,6 +541,7 @@ static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct in
     case TL_CALL: return HL_BACKEND_SHAPE_S_DIRECT_CALL;
     case TL_RET: return HL_BACKEND_SHAPE_S_RETURN;
     case TL_JMP_REG:
+    case TL_JMP_MEM:
     case TL_JMP_RIP: return HL_BACKEND_SHAPE_S_INDIRECT_BRANCH;
     case TL_CALL_REG:
     case TL_CALL_RIP: return HL_BACKEND_SHAPE_S_INDIRECT_CALL;
@@ -554,15 +555,14 @@ static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct in
 // operand longjmps before this point, so these are completed instructions rather than decode attempts.
 // The 64-bit divide service has a second completion counter in interp_dispatch.h, after RAX/RDX commit.
 static void interp_backend_family_completed(const struct cpu *cpu, const struct insn *insn, int step) {
-    if (translit_classify(insn) != TL_NO || insn->two || insn->map3 || insn->vex || insn->evex ||
-        !insn->has_modrm)
-        return;
+    if (insn->two || insn->map3 || insn->vex || insn->evex || !insn->has_modrm) return;
     unsigned operation = (unsigned)insn->reg & 7u;
     if (insn->op == 0xFF && operation == 4 && insn->is_mem && !insn->rip_rel &&
         step == STEP_END && cpu->reason == R_BRANCH) {
         hl_backend_tree_family_jmem();
         return;
     }
+    if (translit_classify(insn) != TL_NO) return;
     if ((insn->op != 0xF6 && insn->op != 0xF7) || (operation != 6 && operation != 7)) return;
     unsigned is_signed = operation == 7;
     unsigned expected_reason = is_signed ? R_IDIV : R_DIV;

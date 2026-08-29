@@ -574,6 +574,16 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn memory_indirect_jump_classifier_is_exact() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: the hook accepts one bounded scalar selector and mutates no process state.
+        assert_eq!(unsafe { hook(148) }, 0);
+    }
+
     #[cfg(feature = "native-test-hooks")]
     struct IsolatedTestChild(Option<std::process::Child>);
 

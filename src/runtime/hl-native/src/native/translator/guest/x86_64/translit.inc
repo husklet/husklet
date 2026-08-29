@@ -782,6 +782,7 @@ enum {
     TL_CALL,     // direct call rel32
     TL_RET,      // ret / ret imm16
     TL_JMP_REG,  // jmp *%reg
+    TL_JMP_MEM,  // jmp *memory, with a precise faultable target load
     TL_CALL_REG, // call *%reg
     TL_JMP_RIP,  // jmp *disp32(%rip)
     TL_CALL_RIP, // call *disp32(%rip)
@@ -838,7 +839,7 @@ static int translit_classify(const struct insn *insn) {
     // accesses against cpu->fs_base/gs_base. 0x67: 32-bit addressing wraps, which a verbatim copy would
     // apply to a 64-bit host address. VEX/EVEX/0F38/0F3A and x87: guest xmm/ST live in cpu->v/cpu->st and
     // are never loaded into host registers by this backend.
-    if (insn->len <= 0 || insn->vex || insn->evex || insn->map3 || insn->addr32) return TL_NO;
+    if (insn->len <= 0 || insn->vex || insn->evex || insn->map3) return TL_NO;
     // First TLS family: exactly `64 REX.W 8b|2b mod00 r/m=100 sib=25 disp32`.  This is the dominant
     // compiler TLS form and has no guest base/index register to project.  Everything wider (GS, an
     // address-size or other prefix, a real SIB operand, stores) remains in the authoritative interpreter.
@@ -850,6 +851,10 @@ static int translit_classify(const struct insn *insn) {
             return TL_FS_MEM;
         return TL_NO;
     }
+    if (insn->op == 0xFF && insn->has_modrm && insn->reg == 4 && insn->is_mem && !insn->rip_rel &&
+        !insn->addr32 && !insn->p66 && !insn->lock && !insn->rep && !insn->repne)
+        return TL_JMP_MEM;
+    if (insn->addr32) return TL_NO;
     if (insn->two) return translit_classify_two(insn);
     uint8_t op = insn->op;
     if (op < 0x40 && (op & 7) <= 5) return TL_COPY; // the eight ALU groups
@@ -1020,7 +1025,7 @@ static int translit_displaced_safe_for(const struct insn *insn, int kind, int di
             (void)__atomic_fetch_add(&translit_displaced_sse2_memory_declined, 1, __ATOMIC_RELAXED);
         return insn->rip_rel;
     }
-    if (kind == TL_CALL || kind == TL_CALL_REG || kind == TL_RET) return 0;
+    if (kind == TL_CALL || kind == TL_CALL_REG || kind == TL_RET || kind == TL_JMP_MEM) return 0;
     if (kind != TL_COPY) return 1; // direct control, register jmp, and syscall touch no guest memory here
     if (insn->is_mem) return insn->rip_rel;
     if (insn->two) return 1;
@@ -1107,6 +1112,27 @@ static void translit_emit_exit_const(hl_x64_asm *a, uint64_t rip, uint64_t reaso
 static void translit_emit_exit_preset(hl_x64_asm *a, uint64_t reason) {
     translit_emit_spill(a);
     translit_emit_return(a, reason);
+}
+
+/* Re-encode only the decoded address of FF /4 as `movq r/m64,%r11`.
+   Guest FS/GS never reach here: host GS owns `cpu`. */
+static void translit_emit_jmp_mem_target_load(hl_x64_asm *a, const struct insn *insn) {
+    if (insn->addr32) hl_x64_u8(a, 0x67);
+    unsigned rex = 0x4c; /* W=1, R=1 selects r11 as the MOV destination. */
+    if (insn->m_hasindex && insn->m_index >= 8) rex |= 2;
+    if (insn->m_hasbase && insn->m_base >= 8) rex |= 1;
+    hl_x64_u8(a, (uint8_t)rex);
+    hl_x64_u8(a, 0x8b);
+    hl_x64_u8(a, (uint8_t)((insn->mod << 6) | (3 << 3) | insn->rm));
+    if (insn->rm == 4) {
+        unsigned index = insn->m_hasindex ? (unsigned)insn->m_index & 7u : 4u;
+        unsigned base = insn->m_hasbase ? (unsigned)insn->m_base & 7u : 5u;
+        hl_x64_u8(a, (uint8_t)((insn->m_scale << 6) | (index << 3) | base));
+    }
+    if (insn->mod == 1)
+        hl_x64_u8(a, (uint8_t)insn->disp);
+    else if (insn->mod == 2 || (insn->mod == 0 && !insn->m_hasbase))
+        hl_x64_u32(a, (uint32_t)insn->disp);
 }
 
 // Reload the canonical image produced by translit_emit_spill without creating a second host frame. The
@@ -2136,6 +2162,17 @@ static int translit_owner_append_ret(jit_body_owner_range ranges[TL_MAX_OWNER_RA
                                  JIT_BODY_OWNER_DYNAMIC_RIP, 0);
 }
 
+static int translit_owner_append_jmp_mem(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
+                                         const uint8_t *instruction_start, const uint8_t *instruction_end,
+                                         const uint8_t *borrow_start, const uint8_t *rip_end,
+                                         const uint8_t *r11_end, uint64_t guest) {
+    const uint32_t preserve = 1u << HL_X64_R11;
+    return translit_owner_append(ranges, count, instruction_start, borrow_start, guest, 0) &&
+           translit_owner_append(ranges, count, borrow_start, rip_end, guest, preserve) &&
+           translit_owner_append(ranges, count, rip_end, r11_end, JIT_BODY_OWNER_DYNAMIC_RIP, preserve) &&
+           translit_owner_append(ranges, count, r11_end, instruction_end, JIT_BODY_OWNER_DYNAMIC_RIP, 0);
+}
+
 static void translit_instruction_ranges_publish(const jit_body_owner_range *ranges, uint32_t count) {
     for (uint32_t i = 0; i < count; i++)
         jit_instruction_map_put_preserve(ranges[i].lo, ranges[i].hi, ranges[i].guest,
@@ -2321,6 +2358,41 @@ static void *translit_unsupported_record_thread(void *opaque) {
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
+    if (scenario == 148) {
+        struct insn jump = {.len = 2, .op = 0xff, .has_modrm = 1, .reg = 4, .is_mem = 1,
+                            .m_hasbase = 1, .m_base = HL_X64_RAX};
+        if (translit_classify(&jump) != TL_JMP_MEM) return 148;
+        jump.rm = 4;
+        jump.m_hasindex = 1;
+        jump.m_index = 10;
+        jump.m_scale = 3;
+        jump.m_base = 12;
+        if (translit_classify(&jump) != TL_JMP_MEM) return 149;
+        int rejection_code = 150;
+#define TL_JMP_MEM_REJECT(field) do { jump.field = 1; if (translit_classify(&jump) != TL_NO) return rejection_code; jump.field = 0; rejection_code++; } while (0)
+        TL_JMP_MEM_REJECT(addr32);
+        TL_JMP_MEM_REJECT(p66);
+        TL_JMP_MEM_REJECT(lock);
+        TL_JMP_MEM_REJECT(rep);
+        TL_JMP_MEM_REJECT(repne);
+        TL_JMP_MEM_REJECT(seg);
+#undef TL_JMP_MEM_REJECT
+        jump.rip_rel = 1;
+        jump.rm = 5;
+        jump.m_hasbase = 0;
+        jump.m_hasindex = 0;
+        if (translit_classify(&jump) != TL_JMP_RIP) return 156;
+        jump.rip_rel = 0;
+        jump.rm = 4;
+        jump.m_hasbase = 1;
+        jump.m_hasindex = 1;
+        jump.reg = 2;
+        if (translit_classify(&jump) != TL_NO) return 151;
+        jump.reg = 4;
+        jump.is_mem = 0;
+        jump.mod = 3;
+        return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -3468,11 +3540,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int mixed_sse_enabled = hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") == NULL;
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
     // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
-    int fs_authority = g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active();
+    int direct_data_authority =
+        g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active();
 #if defined(HL_NATIVE_TEST_HOOKS)
-    fs_authority = fs_authority || hl_option_get("HL_TRANSLIT_FS_AUTHORITY_TEST") != NULL;
+    direct_data_authority = direct_data_authority || hl_option_get("HL_TRANSLIT_FS_AUTHORITY_TEST") != NULL;
 #endif
-    if (fs_run && fs_authority) {
+    if ((fs_run || first_kind == TL_JMP_MEM) && direct_data_authority) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_AUTHORITY;
 #endif
@@ -3564,6 +3637,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
             break;
         }
+        if (kind == TL_JMP_MEM && direct_data_authority) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            fall_stop = HL_BACKEND_FALL_TL_NO;
+#endif
+            break;
+        }
         // FS is still an isolated one-instruction transaction.  Only the normal/SSE ownership-ledger
         // boundary is removable in phase one.
         if ((fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) {
@@ -3613,6 +3692,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         translit_ret_sim_ranges ret_site = {0};
         int preserve_register = -1;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
+        uint8_t *jmp_mem_borrow_start = NULL, *jmp_mem_rip_end = NULL, *jmp_mem_r11_end = NULL;
 
         if (kind == TL_COPY) {
             hl_x64_copy(a, bytes, insn.len);
@@ -4024,6 +4104,26 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;
+        case TL_JMP_MEM:
+            /* Keep cpu->rip at the FF /4 until the operand load succeeds.  R11 is
+               borrowed only inside an owner range that reconstructs its guest value. */
+            hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            jmp_mem_borrow_start = a->cursor;
+            translit_emit_jmp_mem_target_load(a, &insn);
+            hl_x64_store_gs(a, HL_X64_R11, TL_MM_ENTRY);
+            hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
+            hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
+            jmp_mem_rip_end = a->cursor;
+            hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            jmp_mem_r11_end = a->cursor;
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                             HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY);
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY,
+                                (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched,
+                                source_page_delta);
+            translit_emit_exit_preset(a, R_BRANCH);
+            break;
         case TL_JMP_RIP: {
             uint64_t guest_target = next + (uint64_t)insn.disp;
             uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
@@ -4065,7 +4165,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
         owner_normal_pending = 0;
         int owner_ok;
-        if (preserve_start) {
+        if (jmp_mem_r11_end) {
+            owner_ok = translit_owner_append_jmp_mem(owners, &owner_count, instruction_start, a->cursor,
+                                                      jmp_mem_borrow_start, jmp_mem_rip_end,
+                                                      jmp_mem_r11_end, pc) &&
+                       translit_owner_append_jmp_mem(instruction_ranges, &instruction_range_count,
+                                                      instruction_start, a->cursor, jmp_mem_borrow_start,
+                                                      jmp_mem_rip_end, jmp_mem_r11_end, pc);
+        } else if (preserve_start) {
             owner_ok = translit_owner_append(owners, &owner_count, instruction_start, preserve_end, pc,
                                               translit_preserve_mask(preserve_register)) &&
                        translit_owner_append(owners, &owner_count, preserve_end, a->cursor, pc, 0) &&

@@ -651,6 +651,58 @@ fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
 }
 
 #[test]
+fn memory_indirect_jump_addressing_forms_match_interpreter_and_native() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jmp_mem_family");
+    let (interpreted, interpreted_status, interpreted_report) = run(&executable, "0");
+    let (selected, selected_status, report) = run_with_jcc_ibtc_disabled(&executable);
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native FF /4 fixture");
+    assert_eq!(interpreted_status, 0);
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(native.status.code(), Some(0));
+    assert_eq!(native.stdout, selected);
+    assert_eq!(selected, b"base=1 index=1 rsp=1 r12=1 rbp=1 r13=1\n");
+    assert!(interpreted_report.family_jmem >= 6, "{}", interpreted_report.shape_line);
+    assert_eq!(report.family_jmem, 0, "{}", report.shape_line);
+}
+
+#[test]
+fn memory_indirect_jump_faults_preserve_source_state() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jmp_mem_fault");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, report) = run_with_jcc_ibtc_disabled(&executable);
+    assert_eq!(interpreted_status, 0, "{}", String::from_utf8_lossy(&interpreted));
+    assert_eq!(selected_status, interpreted_status);
+    assert_eq!(selected, interpreted);
+    assert_eq!(
+        selected,
+        b"faults=4 mismatch=0 unmapped=1 protected=1 split=1 noncanonical=1\n"
+    );
+    assert_eq!(report.family_jmem, 0, "{}", report.shape_line);
+}
+
+#[test]
+fn memory_indirect_jump_survives_real_smc_and_fork() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "jmp_mem_smc_fork");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, _) = run_with_jcc_ibtc_disabled(&executable);
+    assert_eq!(interpreted_status, 0, "{}", String::from_utf8_lossy(&interpreted));
+    assert_eq!(
+        selected_status,
+        interpreted_status,
+        "{}",
+        String::from_utf8_lossy(&selected)
+    );
+    assert_eq!(selected, interpreted);
+    assert_eq!(selected, b"before=1 smc=1 fork=1\n");
+}
+
+#[test]
 fn register_movhlps_matches_native_for_distinct_high_alias_and_flags() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "sse_movhlps");
@@ -1243,6 +1295,9 @@ fn run_with_jcc_controls(executable: &Path, disable_link: bool) -> (Vec<u8>, i32
     options
         .set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", true)
         .expect("HL_TRANSLIT_JCC_IBTC_DISABLE");
+    options
+        .set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1", true)
+        .expect("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE");
     if disable_link {
         options
             .set("HL_TRANSLIT_JCC_LINK_DISABLE", "1", true)
