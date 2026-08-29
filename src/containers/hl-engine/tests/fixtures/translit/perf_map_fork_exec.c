@@ -8,9 +8,17 @@
 
 static _Atomic int worker_stop;
 
+__attribute__((noinline)) static int worker_tick(int value) {
+    return value + 1;
+}
+
 static void *worker(void *unused) {
     (void)unused;
-    while (!atomic_load_explicit(&worker_stop, memory_order_acquire)) sched_yield();
+    volatile int value = 0;
+    while (!atomic_load_explicit(&worker_stop, memory_order_acquire)) {
+        value = worker_tick(value);
+        sched_yield();
+    }
     return NULL;
 }
 
