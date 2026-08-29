@@ -126,8 +126,8 @@ static __thread volatile int g_interp_guest_access; // a guest access is in flig
 static __thread struct cpu *g_interp_pad_cpu;
 static __thread hl_x86_guest_data_pins g_interp_data_pins;
 static __thread int g_interp_data_active;
-#if defined(HL_NATIVE_TEST_HOOKS)
 static __thread uint64_t g_dispatch_census_interp_steps;
+#if defined(HL_NATIVE_TEST_HOOKS)
 static __thread unsigned g_backend_shape_open;
 static __thread unsigned g_backend_shape_interp_stop;
 static __thread uint64_t g_backend_shape_interp_stop_form;
@@ -551,9 +551,8 @@ static unsigned interp_backend_shape_edge_family(unsigned terminator) {
 // Every interpreted guest control transfer ends the block. Transliterated taken JCCs may cross one
 // already-published same-page edge after doing their own spill/IRQ poll; every other transfer returns here.
 static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
-#if defined(HL_NATIVE_TEST_HOOKS)
     g_dispatch_census_interp_steps = 0;
-#endif
+    int census_steps = hl_backend_tree_steps_enabled();
     for (;;) {
         uint64_t pc = cpu->rip; // a fault below reports precisely this PC
         struct insn insn;
@@ -567,9 +566,9 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
             return;
         }
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
+        if (census_steps && step != STEP_END) g_dispatch_census_interp_steps++;
 #if defined(HL_NATIVE_TEST_HOOKS)
         interp_backend_family_completed(cpu, &insn, step);
-        if (step != STEP_END) g_dispatch_census_interp_steps++;
         // This is an execution census, not an admission/attempt census. STEP_END hands deferred work to
         // a service which may still fail or trap, so only the in-interpreter committed path is counted.
         if (g_prof) translit_unsupported_record_completed(&insn, pc, step != STEP_END);
@@ -710,8 +709,8 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         g_backend_shape_open = 2;
 #endif
         interp_execute(context, cpu);
-#if defined(HL_NATIVE_TEST_HOOKS)
         hl_backend_tree_interpreted_steps(g_dispatch_census_interp_steps);
+#if defined(HL_NATIVE_TEST_HOOKS)
         unsigned stop = cpu->irq != 0 ? HL_BACKEND_SHAPE_S_IRQ : g_backend_shape_interp_stop;
         hl_backend_tree_interpreter_stop(stop, g_backend_shape_interp_stop_form);
         g_backend_shape_open = 0;

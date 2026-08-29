@@ -446,6 +446,8 @@ static inline void hl_backend_tree_run_begin(int translated, uint64_t steps) {
     }
 }
 
+static inline int hl_backend_tree_steps_enabled(void) { return g_backend_tree_self != NULL; }
+
 static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->interpreted_steps, steps, memory_order_relaxed);
@@ -1731,6 +1733,7 @@ static inline void hl_backend_tree_run_begin(int translated, uint64_t steps) {
         atomic_fetch_add_explicit(&census->interpreted_entries, 1, memory_order_relaxed);
     }
 }
+static inline int hl_backend_tree_steps_enabled(void) { return g_backend_mixed_sse != NULL; }
 static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
