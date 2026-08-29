@@ -1007,6 +1007,11 @@ mod tests {
         let expected = [
             "version",
             "available",
+            "crossings",
+            "translated_entries",
+            "interpreted_entries",
+            "translated_steps",
+            "interpreted_steps",
             "mixed_sse_executed",
             "mixed_sse_executed_transitions",
             "mixed_sse_disabled_boundaries",
