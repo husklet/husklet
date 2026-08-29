@@ -310,6 +310,7 @@ static void translit_direct_call_ibtc_count(enum translit_direct_call_ibtc_count
     case TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL: counter = &translit_direct_call_ibtc_invalid_refusal; break;
     }
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+    hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
 #else
     hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
 #endif
