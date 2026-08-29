@@ -1369,6 +1369,87 @@ fn run_with_perf_map(
     (out, exit.guest_status, report)
 }
 
+fn run_with_sampling_symbols(executable: &Path, directory: &Path, fresh_rollover: bool) -> (Vec<u8>, Vec<u8>, i32) {
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).unwrap();
+    options.set("HL_TRANSLIT_SYMBOLIZE", "1", true).unwrap();
+    options
+        .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
+        .unwrap();
+    if fresh_rollover {
+        options.set("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST", "1", true).unwrap();
+    }
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait().unwrap();
+    engine.destroy().unwrap();
+    let out = captured.out.lock().unwrap().clone();
+    let err = captured.err.lock().unwrap().clone();
+    (out, err, exit.guest_status)
+}
+
+#[test]
+fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "forward_jump");
+    let maps = work.path().join("sampling-maps");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false);
+    assert_eq!(status, 0);
+    assert_eq!(output, b"42\n");
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
+    let files = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 2, "{files:?}");
+    let map = files
+        .iter()
+        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("perf-"))
+        .unwrap();
+    let text = std::fs::read_to_string(map).unwrap();
+    assert!(text.contains(" hl_tl_helper_jcc_ibtc\n"), "{text}");
+    assert!(text.lines().any(|line| line.contains(" hl_tl_") && line.contains("_gl")), "{text}");
+    let dump = files
+        .iter()
+        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("jit-"))
+        .unwrap();
+    assert!(std::fs::metadata(dump).unwrap().len() > 40);
+}
+
+#[test]
+fn sampling_symbols_follow_exec_fresh_arena_generations() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "perf_map_fork_exec");
+    let maps = work.path().join("sampling-exec-maps");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, true);
+    assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
+    let names = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for generation in 0..=2 {
+        let needle = format!("-g{generation}-rx");
+        assert!(names.iter().any(|name| name.starts_with("perf-") && name.contains(&needle)), "{names:?}");
+        assert!(names.iter().any(|name| name.starts_with("jit-") && name.contains(&needle)), "{names:?}");
+    }
+}
+
 #[test]
 fn transliterated_blocks_publish_perf_map_identities() {
     let work = TempDir::new().unwrap();
