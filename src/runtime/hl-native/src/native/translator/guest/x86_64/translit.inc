@@ -1252,6 +1252,16 @@ static int translit_jcc_ibtc_stub_init(void) {
         hl_x64_patch_rel32(&a, not_call, a.cursor);
     }
 #if defined(HL_NATIVE_TEST_HOOKS)
+    uintptr_t aggregate_call_hit = hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+        HL_BACKEND_DIRECT_CALL_IBTC_HIT);
+    if (aggregate_call_hit != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_DIRECT_CALL_IBTC_MISS);
+        uint8_t *not_call = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, aggregate_call_hit);
+        hl_x64_patch_rel32(&a, not_call, a.cursor);
+    }
+#endif
+#if defined(HL_NATIVE_TEST_HOOKS)
     uintptr_t shape_counter = hl_backend_tree_jcc_link_counter_address();
     if (shape_counter != 0) {
         hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_JCC_IBTC_MISS);
@@ -1280,6 +1290,16 @@ static int translit_jcc_ibtc_stub_init(void) {
         hl_x64_atomic_inc_abs(&a, call_miss_counter);
         hl_x64_patch_rel32(&a, not_call, a.cursor);
     }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    uintptr_t aggregate_call_miss = hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+        HL_BACKEND_DIRECT_CALL_IBTC_MISS);
+    if (aggregate_call_miss != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_DIRECT_CALL_IBTC_MISS);
+        uint8_t *not_call = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, aggregate_call_miss);
+        hl_x64_patch_rel32(&a, not_call, a.cursor);
+    }
+#endif
     translit_emit_return(&a, R_BRANCH); // cpu->rip already names the target
 
     hl_x64_patch_rel32(&a, irq, a.cursor);

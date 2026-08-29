@@ -223,6 +223,12 @@ struct hl_backend_tree_shared {
     /* One shared dynamic count: every admitted link has the same proven JCC disposition. Keeping it in
        the fork-shared record makes emitted increments independent of per-process slot reassignment. */
     _Atomic uint64_t jcc_links;
+    _Atomic uint64_t direct_call_ibtc_emitted;
+    _Atomic uint64_t direct_call_ibtc_hits;
+    _Atomic uint64_t direct_call_ibtc_misses;
+    _Atomic uint64_t direct_call_ibtc_irq;
+    _Atomic uint64_t direct_call_ibtc_fills;
+    _Atomic uint64_t direct_call_ibtc_invalid_refusals;
     struct hl_backend_tree_slot slots[HL_BACKEND_TREE_SLOTS];
 };
 
@@ -939,7 +945,9 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "stop0_key=%llu stop0_count=%llu stop1_key=%llu stop1_count=%llu "
         "stop2_key=%llu stop2_count=%llu stop3_key=%llu stop3_count=%llu "
         "stop4_key=%llu stop4_count=%llu stop5_key=%llu stop5_count=%llu "
-        "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu\n",
+        "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu "
+        "direct_call_ibtc_emitted=%llu direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
+        "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu direct_call_ibtc_invalid_refusals=%llu\n",
         (unsigned long long)summary.translated_entries, (unsigned long long)translated_transfers,
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
@@ -1078,7 +1086,14 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.stop_top_key[4], (unsigned long long)summary.stop_top_count[4],
         (unsigned long long)summary.stop_top_key[5], (unsigned long long)summary.stop_top_count[5],
         (unsigned long long)summary.stop_top_key[6], (unsigned long long)summary.stop_top_count[6],
-        (unsigned long long)summary.stop_top_key[7], (unsigned long long)summary.stop_top_count[7]);
+        (unsigned long long)summary.stop_top_key[7], (unsigned long long)summary.stop_top_count[7],
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_emitted, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_hits, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_misses, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_irq, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_fills, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_invalid_refusals,
+                                                memory_order_relaxed));
 }
 
 static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
@@ -1398,6 +1413,38 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
     return 40;
 }
 #endif
+
+enum hl_backend_direct_call_ibtc_counter {
+    HL_BACKEND_DIRECT_CALL_IBTC_EMITTED,
+    HL_BACKEND_DIRECT_CALL_IBTC_HIT,
+    HL_BACKEND_DIRECT_CALL_IBTC_MISS,
+    HL_BACKEND_DIRECT_CALL_IBTC_IRQ,
+    HL_BACKEND_DIRECT_CALL_IBTC_FILL,
+    HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL,
+};
+static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
+    enum hl_backend_direct_call_ibtc_counter kind) {
+    struct hl_backend_tree_shared *tree = g_backend_tree;
+    if (tree == NULL) return NULL;
+    switch (kind) {
+    case HL_BACKEND_DIRECT_CALL_IBTC_EMITTED: return &tree->direct_call_ibtc_emitted;
+    case HL_BACKEND_DIRECT_CALL_IBTC_HIT: return &tree->direct_call_ibtc_hits;
+    case HL_BACKEND_DIRECT_CALL_IBTC_MISS: return &tree->direct_call_ibtc_misses;
+    case HL_BACKEND_DIRECT_CALL_IBTC_IRQ: return &tree->direct_call_ibtc_irq;
+    case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &tree->direct_call_ibtc_fills;
+    case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &tree->direct_call_ibtc_invalid_refusals;
+    }
+    return NULL;
+}
+static uintptr_t hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+    enum hl_backend_direct_call_ibtc_counter kind) {
+    return (uintptr_t)hl_backend_tree_direct_call_ibtc_counter(kind);
+}
+static void hl_backend_tree_direct_call_ibtc_add(enum hl_backend_direct_call_ibtc_counter kind,
+                                                 uint64_t count) {
+    _Atomic uint64_t *counter = hl_backend_tree_direct_call_ibtc_counter(kind);
+    if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+}
 
 HL_API int HL_BACKEND_TREE_TEST_NAME(uint32_t scenario) {
 #if defined(_WIN32)
