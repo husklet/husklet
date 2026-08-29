@@ -15,7 +15,8 @@ enum Mode {
     Translated,
     CacheCold,
     CacheValid,
-    CacheInvalid,
+    CacheBitflip,
+    CacheTruncated,
 }
 
 impl Mode {
@@ -25,13 +26,14 @@ impl Mode {
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
             "cache-valid" => Ok(Self::CacheValid),
-            "cache-invalid" => Ok(Self::CacheInvalid),
+            "cache-bitflip" => Ok(Self::CacheBitflip),
+            "cache-truncated" => Ok(Self::CacheTruncated),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
 
     const fn cached(self) -> bool {
-        matches!(self, Self::CacheCold | Self::CacheValid | Self::CacheInvalid)
+        matches!(self, Self::CacheCold | Self::CacheValid | Self::CacheBitflip | Self::CacheTruncated)
     }
 
     const fn translated(self) -> bool {
@@ -65,7 +67,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
         )?;
-    } else if matches!(mode, Mode::CacheValid | Mode::CacheInvalid) {
+    } else if matches!(mode, Mode::CacheValid | Mode::CacheBitflip | Mode::CacheTruncated) {
         require(
             cache.read_dir()?.next().is_some(),
             "warm arm began without a published cache",
@@ -174,7 +176,19 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "cache contains a non-private or non-regular entry",
         )?;
         match mode {
-            Mode::CacheCold | Mode::CacheValid | Mode::CacheInvalid => {}
+            Mode::CacheCold => {}
+            Mode::CacheValid => require(
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
+                "valid same-ISA artifact did not reach the C validator's authenticated path",
+            )?,
+            Mode::CacheBitflip => require(
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".checksum-invalid")),
+                "bit-flipped artifact did not reach the checksum refusal path",
+            )?,
+            Mode::CacheTruncated => require(
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")),
+                "truncated artifact did not reach the structural-length refusal path",
+            )?,
             Mode::Interpreter | Mode::Translated => unreachable!(),
         }
     }

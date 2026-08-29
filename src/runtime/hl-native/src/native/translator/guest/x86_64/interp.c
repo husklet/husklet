@@ -1955,6 +1955,7 @@ static int pcache_load(uint64_t entry_jump) {
         !hl_persist_load_at(&g_x64_pc_directory, path, CACHE_SZ + UINT64_C(134217728), &allocation, &size))
         return 0;
     const uint8_t *bytes = allocation;
+    unsigned validation = 2; /* structurally invalid/truncated */
     int valid = size >= X64_PC_HEADER_SIZE && x64_pc_get64(bytes) == X64_PC_MAGIC &&
                 x64_pc_get64(bytes + 8) == X64_PC_VERSION && x64_pc_get64(bytes + 16) == X64_PC_ENDIAN &&
                 x64_pc_get64(bytes + 24) == HL_PCACHE_ABI_X86_64 && x64_pc_get64(bytes + 32) == sizeof(struct cpu) &&
@@ -1977,6 +1978,7 @@ static int pcache_load(uint64_t entry_jump) {
         hl_digest_update(&digest, zero, sizeof zero);
         hl_digest_update(&digest, bytes + X64_PC_HEADER_SIZE, size - X64_PC_HEADER_SIZE);
         valid = x64_pc_get64(bytes + X64_PC_CHECKSUM_OFFSET) == hl_digest_value(&digest);
+        validation = valid ? 1 : 3; /* authenticated or checksum mismatch */
     }
     if (valid) {
         uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
@@ -1993,7 +1995,15 @@ static int pcache_load(uint64_t entry_jump) {
             uint32_t start = x64_pc_get32(record), end = x64_pc_get32(record + 4);
             valid = start <= end && end <= arena;
         }
+        if (!valid) validation = 2;
     }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    char receipt[1024];
+    int receipt_length = snprintf(receipt, sizeof receipt, "%s.%s", path,
+                                  validation == 1 ? "valid" : validation == 3 ? "checksum-invalid" : "length-invalid");
+    if (receipt_length > 0 && (size_t)receipt_length < sizeof receipt)
+        (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &validation, sizeof validation);
+#endif
     free(allocation);
     (void)valid; /* Validating is deliberately not restoring. */
     return 0; // MISS: the dispatcher translates fresh
