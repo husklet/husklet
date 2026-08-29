@@ -1892,6 +1892,8 @@ static int jit_cache_needs_rotation(void) {
            jit_body_owner_needs_rotation(g_cache_gen);
 }
 
+static int jit_flush_to_fresh(int retain_map_generations);
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 // Seed the exact single-thread dispatcher condition rather than calling the predicate in isolation.  If
 // the owner-low arm is removed from jit_cache_needs_rotation, translation keeps refusing in the old
@@ -1920,12 +1922,11 @@ static void jit_body_owner_low_test_after_rotation(void) {
 
 static void jit_body_owner_low_test_after_translation(void) {
     const char *fresh = hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST");
-    if (!g_perf_map_fresh_rollover_test_armed && g_threaded && fresh != NULL && fresh[0] != '0' && fresh[0] != 0) {
-        /* Leave the next real map miss exactly one byte beyond the production
-           capacity threshold. With a live peer, dispatch takes stw_flush() and
-           jit_flush_to_fresh(); the hook does not allocate or publish a file. */
-        g_cp = g_cache + CACHE_SZ - CACHE_EMIT_HEADROOM + 1;
+    if (!g_perf_map_fresh_rollover_test_armed && fresh != NULL && fresh[0] != '0' && fresh[0] != 0) {
+        /* Invoke the production fresh-arena allocator after one real block has
+           published. The hook never binds or writes profiler output itself. */
         g_perf_map_fresh_rollover_test_armed = 1;
+        (void)jit_flush_to_fresh(0);
     }
     const char *enabled = hl_option_get("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
     if (!g_body_owner_low_test_armed && enabled != NULL && enabled[0] != '0' && enabled[0] != 0) {
@@ -2686,7 +2687,6 @@ static int jit_flush_to_fresh(int retain_map_generations) {
         return 0;
     }
     hl_arena_bind(&g_emit, &mapping);
-    translit_perf_map_generation_bind(g_cache_gen + 1, g_cache, J_RX(g_cache), CACHE_SZ);
     HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT,
             "cache rotate generation=%llu rw=%p rx=%p used=%zu blocks=%u evicted=%u retained=%u",
             (unsigned long long)(g_cache_gen + 1), (void *)g_cache, J_RX(g_cache), old_used, old_blocks, evicted,
@@ -2839,6 +2839,9 @@ static int g_fork_preserved;
 static int jit_after_fork(void) {
     int preserve;
     stw_after_fork(); // single-threaded child: shed the inherited thread registry (also for the MAP_JIT path)
+#if defined(HL_NATIVE_TEST_HOOKS)
+    g_perf_map_fresh_rollover_test_armed = 0;
+#endif
     // fork() only clones the CALLING thread. If a peer M was translating (holding g_jit_lock, and g_cache_lock
     // under it in map_put) at the instant the guest forked, the child inherits those mutexes LOCKED with no
     // owner thread left to release them -- so the child's very first dispatcher iteration deadlocks forever in
