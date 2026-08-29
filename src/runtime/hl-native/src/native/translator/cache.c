@@ -1322,6 +1322,9 @@ _Static_assert(IBTC_ALIGN % 16u == 0u, "the ibtc table's alignment must keep eve
    -- the same all-empty result in ~5us, and it never touches the parent's
    pages.  Other kernels (and any failure) fall back to the exact memset. */
 static void ibtc_clear_lazy(void) {
+#ifdef G_IBTC_CLEAR
+    G_IBTC_CLEAR();
+#endif
 #if defined(__linux__)
     if (madvise(g_ibtc, sizeof g_ibtc, MADV_DONTNEED) == 0) return;
 #endif

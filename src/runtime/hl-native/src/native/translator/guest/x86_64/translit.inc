@@ -4640,9 +4640,15 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
     if (scenario == 126) {
         uint64_t target = UINT64_C(0x510004);
         ibtc_publish(&g_ibtc[ibtc_index(target)], target, (void *)(uintptr_t)UINT64_C(0x1234));
-        ibtc_clear_lazy();
-        ibtc_ent entry = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
-        return entry.target == 0 && entry.body == NULL ? 0 : 127;
+        ibtc_publish(&translit_ret_ibtc[ibtc_index(target)], target, (void *)(uintptr_t)UINT64_C(0x5678));
+        g_map_epoch = UINT32_MAX;
+        map_clear();
+        ibtc_ent actual = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+        ibtc_ent shadow = ibtc_snapshot(&translit_ret_ibtc[ibtc_index(target)]);
+        return g_map_epoch == 1 && actual.target == 0 && actual.body == NULL && shadow.target == 0 &&
+                       shadow.body == NULL
+                   ? 0
+                   : 127;
     }
     if (scenario >= 121 && scenario <= 125) {
         const size_t arena_size = 65536;
