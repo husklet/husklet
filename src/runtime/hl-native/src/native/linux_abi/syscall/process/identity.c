@@ -274,6 +274,7 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                        uint64_t a5) {
     switch (nr) {
     case 94:
+        translit_sampling_receipt("svc-exit-group");
         vfork_publish_exit();
         translit_perf_map_flush();
         HL_LOGF(&g_jit_log, HL_LOG_TAG_NETWORK, "exit_group pid=%d code=%d", (int)getpid(), (int)a0);

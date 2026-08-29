@@ -67,6 +67,7 @@ static int sentry_route_exit(struct cpu *c, uint64_t nr) {
     if (nr != 93 && nr != 94) return 0;
     int process_exit = nr == 94 || atomic_fetch_sub(&g_worker_threads, 1) == 1;
     if (process_exit) {
+        translit_sampling_receipt("sentry-process-exit");
         /* The sentry shutdown can terminate the worker before service_local reaches exit_group's
            ordinary cleanup.  Publish this process generation while its translation state and map
            descriptor are still owned by the exiting worker. */

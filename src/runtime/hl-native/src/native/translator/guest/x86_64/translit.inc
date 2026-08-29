@@ -598,6 +598,17 @@ static translit_sampling_record *translit_sampling_records;
 static uint32_t translit_sampling_record_count;
 static int translit_sampling_overflow;
 static void translit_sampling_flush(void);
+static void translit_sampling_receipt(const char *stage) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_option_get("HL_TRANSLIT_SYMBOL_RECEIPT") != NULL)
+        dprintf(STDERR_FILENO, "[symbol-receipt] stage=%s pid=%lld gen=%llu count=%u file=%d overflow=%d\n", stage,
+                (long long)getpid(), (unsigned long long)translit_profile_active.generation,
+                translit_sampling_record_count,
+                translit_perf_map_file == NULL ? -1 : fileno(translit_perf_map_file), translit_sampling_overflow);
+#else
+    (void)stage;
+#endif
+}
 typedef struct translit_profile_generation {
     pid_t pid;
     uint64_t generation;
@@ -762,6 +773,7 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
         record->address = address;
         record->length = host_len;
         memcpy(record->name, name, name_length + 1u);
+        if (translit_sampling_record_count == 1) translit_sampling_receipt("enqueue-first");
         return;
     }
     (void)fprintf(translit_perf_map_file, "%llx %x %s\n", (unsigned long long)address, host_len, name);
@@ -807,6 +819,7 @@ static void translit_perf_map_publish(const struct interp_block *block, const ui
 }
 
 static void translit_sampling_flush(void) {
+    translit_sampling_receipt("flush-enter");
     if (translit_sampling_record_count == 0 || translit_perf_map_file == NULL) return;
     if (translit_sampling_overflow) {
         translit_profile_output_failed("sampling record overflow");
