@@ -598,6 +598,9 @@ static translit_sampling_record *translit_sampling_records;
 static uint32_t translit_sampling_record_count;
 static int translit_sampling_overflow;
 static void translit_sampling_flush(void);
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic uint32_t translit_sampling_pause, translit_sampling_pause_ready, translit_sampling_pause_release;
+#endif
 typedef struct translit_profile_generation {
     pid_t pid;
     uint64_t generation;
@@ -650,6 +653,29 @@ static void translit_profile_output_failed(const char *what) {
     if (length < 0) length = 0;
     if ((size_t)length >= sizeof message) length = (int)sizeof message - 1;
     (void)jit_fail(HL_STATUS_PLATFORM_FAILURE, message, (size_t)length);
+}
+
+static int translit_sampling_record_commit(uint64_t address, uint32_t host_len, const char *name,
+                                           size_t name_length) {
+    if (translit_sampling_records == NULL)
+        translit_sampling_records = calloc(TRANSLIT_SAMPLING_RECORD_CAP, sizeof *translit_sampling_records);
+    if (translit_sampling_records == NULL || translit_sampling_record_count == TRANSLIT_SAMPLING_RECORD_CAP) {
+        translit_sampling_overflow = 1;
+        return 0;
+    }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_load_explicit(&translit_sampling_pause, memory_order_acquire)) {
+        atomic_store_explicit(&translit_sampling_pause_ready, 1, memory_order_release);
+        while (!atomic_load_explicit(&translit_sampling_pause_release, memory_order_acquire)) sched_yield();
+    }
+#endif
+    translit_sampling_record *record = &translit_sampling_records[translit_sampling_record_count++];
+    record->address = address;
+    record->length = host_len;
+    memcpy(record->name, name, name_length + 1u);
+    if (translit_sampling_record_count == 1) translit_sampling_receipt("enqueue-first");
+    if (translit_sampling_record_count == TRANSLIT_SAMPLING_FLUSH_BATCH) translit_sampling_flush();
+    return 1;
 }
 
 static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
@@ -796,18 +822,7 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
     if (name_length == 0 || name_length >= 256) return;
     uint64_t address = (uint64_t)(uintptr_t)(translit_profile_active.rx + (start - translit_profile_active.rw));
     if (symbolize && !g_prof) {
-        if (translit_sampling_records == NULL)
-            translit_sampling_records = calloc(TRANSLIT_SAMPLING_RECORD_CAP, sizeof *translit_sampling_records);
-        if (translit_sampling_records == NULL || translit_sampling_record_count == TRANSLIT_SAMPLING_RECORD_CAP) {
-            translit_sampling_overflow = 1;
-            return;
-        }
-        translit_sampling_record *record = &translit_sampling_records[translit_sampling_record_count++];
-        record->address = address;
-        record->length = host_len;
-        memcpy(record->name, name, name_length + 1u);
-        if (translit_sampling_record_count == 1) translit_sampling_receipt("enqueue-first");
-        if (translit_sampling_record_count == TRANSLIT_SAMPLING_FLUSH_BATCH) translit_sampling_flush();
+        (void)translit_sampling_record_commit(address, host_len, name, name_length);
         return;
     }
     (void)fprintf(translit_perf_map_file, "%llx %x %s\n", (unsigned long long)address, host_len, name);
@@ -2595,6 +2610,25 @@ static void *translit_body_owner_batch_worker(void *opaque) {
     translit_body_owner_batch *batch = opaque;
     return (void *)(uintptr_t)jit_body_owner_publish_n(batch->generation, batch->token, batch->range, 3);
 }
+
+typedef struct {
+    _Atomic uint32_t done;
+} translit_sampling_flush_test;
+
+static void *translit_sampling_publish_worker(void *opaque) {
+    (void)opaque;
+    pthread_mutex_lock(&g_jit_lock);
+    (void)translit_sampling_record_commit(UINT64_C(0x12345000), 0x20, "hl_tl_sampling_barrier", 22);
+    pthread_mutex_unlock(&g_jit_lock);
+    return NULL;
+}
+
+static void *translit_sampling_flush_worker(void *opaque) {
+    translit_sampling_flush_test *test = opaque;
+    translit_perf_map_flush_at_exit();
+    atomic_store_explicit(&test->done, 1, memory_order_release);
+    return NULL;
+}
 #endif
 static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next, struct insn *successor);
 
@@ -2670,6 +2704,40 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             (void)hl_option_unset(modes[i].name);
         }
         return x64_pcache_codegen_modes() == baseline ? 0 : 214;
+    }
+    if (scenario == 151) {
+        FILE *saved_file = translit_perf_map_file;
+        uint32_t saved_count = translit_sampling_record_count;
+        int saved_overflow = translit_sampling_overflow;
+        FILE *sink = tmpfile();
+        if (sink == NULL) return 215;
+        translit_perf_map_file = sink;
+        translit_sampling_record_count = 0;
+        translit_sampling_overflow = 0;
+        atomic_store_explicit(&translit_sampling_pause_ready, 0, memory_order_relaxed);
+        atomic_store_explicit(&translit_sampling_pause_release, 0, memory_order_relaxed);
+        atomic_store_explicit(&translit_sampling_pause, 1, memory_order_release);
+        pthread_t publisher, flusher;
+        translit_sampling_flush_test test = {0};
+        if (pthread_create(&publisher, NULL, translit_sampling_publish_worker, NULL) != 0) return 216;
+        while (!atomic_load_explicit(&translit_sampling_pause_ready, memory_order_acquire)) sched_yield();
+        if (pthread_create(&flusher, NULL, translit_sampling_flush_worker, &test) != 0) return 217;
+        for (int spin = 0; spin < 10000; spin++) sched_yield();
+        int raced = atomic_load_explicit(&test.done, memory_order_acquire);
+        atomic_store_explicit(&translit_sampling_pause_release, 1, memory_order_release);
+        pthread_join(publisher, NULL);
+        pthread_join(flusher, NULL);
+        atomic_store_explicit(&translit_sampling_pause, 0, memory_order_release);
+        long size = ftell(sink);
+        rewind(sink);
+        char line[128] = {0};
+        int exact = fgets(line, sizeof line, sink) != NULL && strcmp(line, "12345000 20 hl_tl_sampling_barrier\n") == 0 &&
+                    fgets(line, sizeof line, sink) == NULL;
+        fclose(sink);
+        translit_perf_map_file = saved_file;
+        translit_sampling_record_count = saved_count;
+        translit_sampling_overflow = saved_overflow;
+        return !raced && test.done && size > 0 && exact ? 0 : 218;
     }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)

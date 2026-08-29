@@ -11,3 +11,8 @@ fn classifier_and_signal_stages_are_exact() {
         "signal-stage fixture"
     );
 }
+
+#[test]
+fn sampling_exit_waits_for_an_inflight_record_commit() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(151), 0, "sampling publication barrier fixture");
+}
