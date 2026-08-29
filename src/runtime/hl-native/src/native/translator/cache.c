@@ -1066,7 +1066,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
     const uint64_t third = UINT64_C(0x53000000);
     int verdict = 0;
     map_clear();
-    if (scenario == 26) {
+    if (scenario == 45) {
         map_put(first, first + 0x100, first + 0x800, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
         map_put(second, second + 0xf00, second + 0x1100, (void *)(uintptr_t)0x2020,
                 (void *)(uintptr_t)0x2021);
@@ -1076,7 +1076,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
         if (*result != 1 || map_body(first) == NULL || map_body(second) != NULL || map_body(third) == NULL ||
             g_live_map_count != 2)
             verdict = -EIO;
-    } else if (scenario == 27) {
+    } else if (scenario == 46) {
         map_put(first, first, first + 1, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
         uint64_t old_page[][2] = {{first, first + 1}};
         if (map_invalidate_source_ranges(old_page, 1) != 1) verdict = -EIO;
@@ -1085,7 +1085,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
         uint64_t new_page[][2] = {{second, second + 1}};
         *result = map_invalidate_source_ranges(new_page, 1);
         if (*result != 1 || map_body(first) != NULL) verdict = -EIO;
-    } else if (scenario == 28) {
+    } else if (scenario == 47) {
         map_put(first, first, first + 1, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
         uint32_t epoch = g_map_epoch;
         map_clear();
@@ -1096,7 +1096,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
         uint64_t dirty[][2] = {{second, second + 1}};
         *result = map_invalidate_source_ranges(dirty, 1);
         if (*result != 1) verdict = -EIO;
-    } else if (scenario == 29) {
+    } else if (scenario == 48) {
         map_put(first, first, first + 1, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
         map_put(second, second, second + 1, (void *)(uintptr_t)0x2020, (void *)(uintptr_t)0x2021);
         jit_source_page_entry *missing = source_page_find(second >> JIT_SOURCE_PAGE_SHIFT, 0);
@@ -1109,7 +1109,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
         uint64_t dirty[][2] = {{second, second + 1}};
         *result = map_invalidate_source_ranges(dirty, 1);
         if (*result != 1 || map_body(first) == NULL || map_body(second) != NULL) verdict = -EIO;
-    } else if (scenario == 30) {
+    } else if (scenario == 49) {
         map_put(first, first, first + 1, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
         pid_t child = fork();
         if (child < 0) {
@@ -1124,7 +1124,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
                 verdict = -EIO;
             *result = 1;
         }
-    } else if (scenario == 31) {
+    } else if (scenario == 50) {
         map_source_index_thread_test test = {.range = {{first, first + 1}}};
         pthread_t thread;
         if (pthread_create(&thread, NULL, map_source_index_invalidator, &test) != 0) {
