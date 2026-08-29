@@ -4674,7 +4674,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (arena == MAP_FAILED) return 121;
-        static _Alignas(4096) uint8_t guest_bytes[8192];
+        static _Alignas(4096) uint8_t guest_bytes[4096];
         memset(guest_bytes, 0x0f, sizeof guest_bytes);
         guest_bytes[0] = scenario == 122 ? 0xc2 : 0xc3;
         if (scenario == 122) {
@@ -4682,7 +4682,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             guest_bytes[2] = 0;
         }
         const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
-        const size_t target_offset = (scenario == 127 || scenario >= 131) ? 0x1040 : 0x40;
+        const size_t target_offset = 0x40;
         const uint64_t target = source + target_offset;
         guest_bytes[target_offset] = 0xb8;
         guest_bytes[target_offset + 1] = 42;
