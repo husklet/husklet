@@ -841,6 +841,7 @@ static int translit_classify(const struct insn *insn) {
     // apply to a 64-bit host address. VEX/EVEX/0F38/0F3A and x87: guest xmm/ST live in cpu->v/cpu->st and
     // are never loaded into host registers by this backend.
     if (insn->len <= 0 || insn->vex || insn->evex || insn->map3) return TL_NO;
+    if (insn->addr32) return TL_NO;
     // First TLS family: exactly `64 REX.W 8b|2b mod00 r/m=100 sib=25 disp32`.  This is the dominant
     // compiler TLS form and has no guest base/index register to project.  Everything wider (GS, an
     // address-size or other prefix, a real SIB operand, stores) remains in the authoritative interpreter.
@@ -855,7 +856,6 @@ static int translit_classify(const struct insn *insn) {
     if (insn->op == 0xFF && insn->has_modrm && insn->reg == 4 && insn->is_mem && !insn->rip_rel &&
         !insn->addr32 && !insn->p66 && !insn->lock && !insn->rep && !insn->repne)
         return TL_JMP_MEM;
-    if (insn->addr32) return TL_NO;
     if (insn->two) return translit_classify_two(insn);
     uint8_t op = insn->op;
     if (op < 0x40 && (op & 7) <= 5) return TL_COPY; // the eight ALU groups
