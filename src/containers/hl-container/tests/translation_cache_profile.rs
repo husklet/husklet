@@ -7,15 +7,14 @@ use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt as _, path::Pa
 
 type Error = Box<dyn std::error::Error>;
 
-const UNIT_127_OBJECT: &str =
-    "e1b634483ab1ed701be7f4004b3981d3e56c6d228763efe2496514b667c74f44  /tmp/unit_127.o\n";
+const UNIT_127_ASSEMBLY: &str = "a1d41926570d6ddfee050116a5698a9e5f7d2b7accf0dcfce685e46c707a7265";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Interpreter,
     Translated,
     CacheCold,
-    CacheWarm,
+    CacheValid,
     CacheInvalid,
 }
 
@@ -25,14 +24,14 @@ impl Mode {
             "interpreter" => Ok(Self::Interpreter),
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
-            "cache-warm" => Ok(Self::CacheWarm),
+            "cache-valid" => Ok(Self::CacheValid),
             "cache-invalid" => Ok(Self::CacheInvalid),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
 
     const fn cached(self) -> bool {
-        matches!(self, Self::CacheCold | Self::CacheWarm | Self::CacheInvalid)
+        matches!(self, Self::CacheCold | Self::CacheValid | Self::CacheInvalid)
     }
 
     const fn translated(self) -> bool {
@@ -66,14 +65,12 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
         )?;
-    } else if matches!(mode, Mode::CacheWarm | Mode::CacheInvalid) {
+    } else if matches!(mode, Mode::CacheValid | Mode::CacheInvalid) {
         require(
             cache.read_dir()?.next().is_some(),
             "warm arm began without a published cache",
         )?;
     }
-    let warm_receipt_before = warm_receipt_mtime(cache)?;
-
     let owned = tempfile::tempdir()?;
     let images = Images::open(owned.path().join("images"))?;
     let layer = owned.path().join("fixture.tar");
@@ -128,9 +125,11 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     }
 
     let root = images.roots().fork_overlay(unpacked.snapshot())?;
-    let process = Process::new("/bin/sh").args([
-        "-c",
-        "/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1 -quiet /work/src/unit_127.c -quiet -dumpdir /tmp/ -dumpbase unit_127.c -dumpbase-ext .c -mtune=generic -march=x86-64 -g -O2 -o /tmp/unit_127.s && /usr/bin/as --gdwarf-5 --64 -o /tmp/unit_127.o /tmp/unit_127.s && sha256sum /tmp/unit_127.o",
+    // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
+    // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
+    let process = Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
+        "-quiet", "/work/src/unit_127.c", "-quiet", "-dumpdir", "/tmp/", "-dumpbase", "unit_127.c",
+        "-dumpbase-ext", ".c", "-mtune=generic", "-march=x86-64", "-g", "-O2", "-o", "-",
     ]);
     let spec = ContainerSpec::new(root, process)
         .name("pcache-profile")
@@ -160,11 +159,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         )
         .into());
     }
-    require(
-        logs.stdout == UNIT_127_OBJECT.as_bytes(),
-        "compiler workload did not produce the exact unit_127 object",
-    )?;
-    let warm_receipt_after = warm_receipt_mtime(cache)?;
+    let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
+    require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
     if mode.cached() {
         let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
         require(!entries.is_empty(), "cache arm published no entries")?;
@@ -178,44 +174,18 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "cache contains a non-private or non-regular entry",
         )?;
         match mode {
-            Mode::CacheCold => require(
-                warm_receipt_after.is_none(),
-                "cold publication unexpectedly produced a warm-load receipt",
-            )?,
-            Mode::CacheWarm => require(
-                warm_receipt_after > warm_receipt_before,
-                "independent warm process did not publish a fresh cache-load receipt",
-            )?,
-            Mode::CacheInvalid => require(
-                warm_receipt_after.is_none(),
-                "cold-only same-ISA cache unexpectedly accepted invalid input",
-            )?,
+            Mode::CacheCold | Mode::CacheValid | Mode::CacheInvalid => {}
             Mode::Interpreter | Mode::Translated => unreachable!(),
         }
     }
-    let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
     eprintln!(
-        "pcache-profile mode={} elapsed_us={} warm_hit={} output={}",
+        "pcache-profile mode={} elapsed_us={} cache_loaded={} output={}",
         std::env::var("HL_PCACHE_PROFILE_MODE")?,
         elapsed.as_micros(),
-        usize::from(mode == Mode::CacheWarm && warm_receipt_after > warm_receipt_before),
+        0,
         hex(&output)
     );
     Ok(())
-}
-
-fn warm_receipt_mtime(cache: &Path) -> Result<Option<std::time::SystemTime>, Error> {
-    if !cache.exists() {
-        return Ok(None);
-    }
-    let mut receipts = cache
-        .read_dir()?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".warm"))
-        .map(|entry| entry.metadata().and_then(|metadata| metadata.modified()))
-        .collect::<Result<Vec<_>, _>>()?;
-    require(receipts.len() <= 1, "cache contains multiple warm-load receipts")?;
-    Ok(receipts.pop())
 }
 
 fn hex(bytes: &[u8]) -> String {

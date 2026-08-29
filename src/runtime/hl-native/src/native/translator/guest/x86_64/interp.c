@@ -1909,6 +1909,7 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 static void x64_pc_put16(uint8_t **p, uint16_t v) { (*p)[0] = (uint8_t)v; (*p)[1] = (uint8_t)(v >> 8); *p += 2; }
 static void x64_pc_put32(uint8_t **p, uint32_t v) { for (unsigned i = 0; i < 4; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 4; }
 static void x64_pc_put64(uint8_t **p, uint64_t v) { for (unsigned i = 0; i < 8; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 8; }
+static uint32_t x64_pc_get32(const uint8_t *p) { uint32_t v = 0; for (unsigned i = 0; i < 4; i++) v |= (uint32_t)p[i] << (8*i); return v; }
 static uint64_t x64_pc_get64(const uint8_t *p) { uint64_t v = 0; for (unsigned i = 0; i < 8; i++) v |= (uint64_t)p[i] << (8*i); return v; }
 
 static hl_persist_directory g_x64_pc_directory;
@@ -1976,6 +1977,22 @@ static int pcache_load(uint64_t entry_jump) {
         hl_digest_update(&digest, zero, sizeof zero);
         hl_digest_update(&digest, bytes + X64_PC_HEADER_SIZE, size - X64_PC_HEADER_SIZE);
         valid = x64_pc_get64(bytes + X64_PC_CHECKSUM_OFFSET) == hl_digest_value(&digest);
+    }
+    if (valid) {
+        uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
+        const uint8_t *record = bytes + X64_PC_HEADER_SIZE;
+        for (uint64_t i = 0; valid && i < maps; i++, record += X64_PC_MAP_SIZE) {
+            uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
+            uint64_t block = x64_pc_get64(record + 40);
+            uint32_t entry = x64_pc_get32(record + 72), length = x64_pc_get32(record + 76);
+            valid = host <= arena && body <= arena && block == body && entry <= length && entry <= arena && host <= arena - entry &&
+                    length <= arena - host;
+        }
+        record = bytes + X64_PC_HEADER_SIZE + maps * X64_PC_MAP_SIZE;
+        for (uint64_t i = 0; valid && i < owners; i++, record += X64_PC_OWNER_SIZE) {
+            uint32_t start = x64_pc_get32(record), end = x64_pc_get32(record + 4);
+            valid = start <= end && end <= arena;
+        }
     }
     free(allocation);
     (void)valid; /* Validating is deliberately not restoring. */
