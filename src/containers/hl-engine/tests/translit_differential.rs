@@ -1395,14 +1395,12 @@ fn forked_translators_publish_process_owned_perf_files() {
             map.display()
         );
     }
-    if backend.shape_line.contains("direct_call_ibtc_emitted=") {
-        assert!(backend.direct_call_ibtc_misses >= 2, "{}", backend.shape_line);
-        assert!(backend.direct_call_ibtc_fills >= 2, "{}", backend.shape_line);
-        // The parent performs exactly 256 warm calls and no calls after fork.
-        // Even if every parent call hits, 257 proves the child's second call
-        // hit after its first call missed and filled the process-local table.
-        assert!(backend.direct_call_ibtc_hits >= 257, "{}", backend.shape_line);
-    }
+    assert!(backend.direct_call_ibtc_misses >= 2, "{}", backend.shape_line);
+    assert!(backend.direct_call_ibtc_fills >= 2, "{}", backend.shape_line);
+    // The parent performs exactly 256 warm calls and no calls after fork.
+    // Even if every parent call hits, 257 proves the child's second call
+    // hit after its first call missed and filled the process-local table.
+    assert!(backend.direct_call_ibtc_hits >= 257, "{}", backend.shape_line);
 }
 
 #[test]
