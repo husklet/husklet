@@ -65,6 +65,8 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
 // abi.h's G_THREAD_START_FLUSH / G_SHARED_MAP_BARRIERS. No block here has its x86-TSO barriers elided, so
 // there is nothing to flush. Must return nonzero -- the clone path reads 0 as a clone failure.
 static int hl_x86_flush_for_thread_start(void) {
+    memset(g_ibtc, 0, sizeof g_ibtc);
+    memset(g_xibtc, 0, sizeof g_xibtc);
     return 1;
 }
 
