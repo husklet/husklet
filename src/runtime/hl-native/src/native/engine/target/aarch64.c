@@ -5,6 +5,9 @@
 #include "../bus.h"
 #include "../../linux_abi/dns.h"
 
+/* Sampling-only translated-code symbol publication is currently an x86-64 backend facility. */
+static void translit_perf_map_flush(void) {}
+
 // HL engine: the aarch64 Linux-guest JIT runner (unity translation unit).
 //
 // A same-ISA aarch64->aarch64 JIT services the guest's Linux syscalls in userspace (no VM). This TU
