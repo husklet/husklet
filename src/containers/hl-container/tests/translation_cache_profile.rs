@@ -15,6 +15,9 @@ enum Mode {
     Translated,
     CacheCold,
     CacheFreshRollover,
+    CacheSemanticMap,
+    CacheSemanticHelper,
+    CacheSemanticRelocation,
     CacheValid,
     CacheBitflip,
     CacheTruncated,
@@ -30,6 +33,9 @@ impl Mode {
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
             "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
+            "cache-semantic-map" => Ok(Self::CacheSemanticMap),
+            "cache-semantic-helper" => Ok(Self::CacheSemanticHelper),
+            "cache-semantic-relocation" => Ok(Self::CacheSemanticRelocation),
             "cache-valid" => Ok(Self::CacheValid),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
@@ -78,7 +84,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
         )?;
-    } else if matches!(mode, Mode::CacheValid | Mode::CacheBitflip | Mode::CacheTruncated) {
+    } else if matches!(mode, Mode::CacheValid | Mode::CacheBitflip | Mode::CacheTruncated |
+                       Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation) {
         require(
             cache.read_dir()?.next().is_some(),
             "warm arm began without a published cache",
@@ -136,6 +143,45 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             std::env::var_os("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST").is_some(),
             "fresh-rollover arm did not enable its native hook",
         )?;
+    }
+    if matches!(mode, Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation) {
+        let artifact = cache.read_dir()?.find_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_name().as_encoded_bytes().ends_with(b".x64pcache").then_some(entry.path())
+        }).ok_or("semantic corruption arm found no cache artifact")?;
+        let mut bytes = fs::read(&artifact)?;
+        require(bytes.len() >= 208, "semantic corruption artifact is truncated")?;
+        let get = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        let maps = get(96) as usize;
+        let owners = get(104) as usize;
+        let relocations = get(184) as usize;
+        let arena = get(88);
+        match mode {
+            Mode::CacheSemanticMap => {
+                require(maps != 0, "semantic map corruption has no map record")?;
+                bytes[208 + 8..208 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+            }
+            Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
+            Mode::CacheSemanticRelocation => {
+                require(relocations != 0, "semantic relocation corruption has no relocation record")?;
+                let offset = 208 + maps * 84 + owners * 24 + 4;
+                bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+            }
+            _ => unreachable!(),
+        }
+        bytes[200..208].fill(0);
+        let mut digest = 1_469_598_103_934_665_603u64;
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            digest ^= u64::from_le_bytes(chunk.try_into().unwrap());
+            digest = digest.wrapping_mul(1_099_511_628_211);
+        }
+        for byte in chunks.remainder() {
+            digest ^= u64::from(*byte);
+            digest = digest.wrapping_mul(1_099_511_628_211);
+        }
+        bytes[200..208].copy_from_slice(&digest.to_le_bytes());
+        fs::write(artifact, bytes)?;
     }
     if mode.cached() {
         let metadata = fs::symlink_metadata(cache)?;
@@ -233,12 +279,35 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
                 }),
                 "fresh generation did not publish an exact relocation-ledger receipt",
             )?,
+            Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation => require(
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")) &&
+                !entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")),
+                "rechecksummed semantic corruption did not remain a pristine MISS",
+            )?,
             Mode::CacheValid => require(
                 entries
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
                 "valid same-ISA artifact did not reach the C validator's authenticated path",
-            )?,
+            ).and_then(|()| {
+                require(
+                    entries.iter().any(|entry| {
+                        entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")
+                    }),
+                    "authenticated cache was not restored as a warm HIT",
+                )
+            }).and_then(|()| {
+                let stats = entries.iter().find(|entry| {
+                    entry.file_name().as_encoded_bytes().windows(12).any(|part| part == b".warm-stats-")
+                }).ok_or("warm HIT emitted no translation-count receipt")?;
+                let bytes = fs::read(stats.path())?;
+                require(bytes.len() == 24, "warm translation-count receipt has wrong size")?;
+                let word = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                let restored = word(0);
+                let translated = word(16);
+                require(restored != 0 && translated < restored / 2,
+                        "warm HIT did not reduce translation count by at least one half")
+            })?,
             Mode::CacheBitflip => require(
                 entries
                     .iter()

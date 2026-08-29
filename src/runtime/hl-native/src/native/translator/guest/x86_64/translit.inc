@@ -440,6 +440,39 @@ static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
     return TL_EXT_NONE;
 }
 
+static uintptr_t translit_external_absolute_address_for(uint32_t kind) {
+    static const enum translit_ret_fast_ibtc_counter ret[] = {
+        TL_RET_FAST_IBTC_HIT, TL_RET_FAST_IBTC_MISS, TL_RET_FAST_IBTC_IRQ};
+    if (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ)
+        return translit_ret_fast_ibtc_dynamic_counter(ret[kind - TL_EXT_RET_HIT]);
+    static const enum translit_jcc_ibtc_counter jcc[] = {
+        TL_JCC_IBTC_COUNT_HIT, TL_JCC_IBTC_COUNT_MISS, TL_JCC_IBTC_COUNT_IRQ};
+    if (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ)
+        return translit_jcc_ibtc_dynamic_counter(jcc[kind - TL_EXT_JCC_HIT]);
+    static const enum translit_direct_jmp_ibtc_counter jmp[] = {
+        TL_DIRECT_JMP_IBTC_COUNT_HIT, TL_DIRECT_JMP_IBTC_COUNT_MISS, TL_DIRECT_JMP_IBTC_COUNT_IRQ};
+    if (kind >= TL_EXT_JMP_HIT && kind <= TL_EXT_JMP_IRQ)
+        return translit_direct_jmp_ibtc_dynamic_counter(jmp[kind - TL_EXT_JMP_HIT]);
+    static const enum translit_direct_call_ibtc_counter call[] = {
+        TL_DIRECT_CALL_IBTC_COUNT_HIT, TL_DIRECT_CALL_IBTC_COUNT_MISS, TL_DIRECT_CALL_IBTC_COUNT_IRQ};
+    if (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ)
+        return translit_direct_call_ibtc_dynamic_counter(call[kind - TL_EXT_CALL_HIT]);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    switch (kind) {
+    case TL_EXT_HOOK_LINK_TAKEN: return (uintptr_t)&translit_jcc_link_taken;
+    case TL_EXT_HOOK_LINK_IRQ: return (uintptr_t)&translit_jcc_link_irq_fallback;
+    case TL_EXT_HOOK_LINK_DISPATCH: return (uintptr_t)&translit_jcc_link_dispatcher;
+    case TL_EXT_HOOK_JCC_SHAPE: return hl_backend_tree_jcc_link_counter_address();
+    case TL_EXT_HOOK_CALL_HIT:
+        return hl_backend_tree_direct_call_ibtc_dynamic_counter_address(HL_BACKEND_DIRECT_CALL_IBTC_HIT);
+    case TL_EXT_HOOK_CALL_MISS:
+        return hl_backend_tree_direct_call_ibtc_dynamic_counter_address(HL_BACKEND_DIRECT_CALL_IBTC_MISS);
+    default: break;
+    }
+#endif
+    return 0;
+}
+
 static int translit_external_absolute_kind_valid(uint32_t kind) {
     return (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ) ||
            (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ) ||
