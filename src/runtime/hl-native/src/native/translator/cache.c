@@ -1792,7 +1792,8 @@ typedef struct {
     uint64_t guest;
 } jit_body_owner_entry;
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
-typedef uint16_t jit_body_owner_preserve;
+typedef uint32_t jit_body_owner_preserve;
+#define JIT_BODY_OWNER_PRESERVE_RET_RAX (1u << 16)
 typedef struct {
     uint64_t generation;
     uint8_t *rw;

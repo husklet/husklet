@@ -1817,11 +1817,9 @@ static int translit_owner_append_ret(jit_body_owner_range ranges[TL_MAX_OWNER_RA
     translit_test_ret_source_guest = guest;
 #endif
     return translit_owner_append(ranges, count, instruction_start, site->load_end, guest, 0) &&
-           translit_owner_append(ranges, count, site->load_end, site->rip_end, guest,
-                                 1u << HL_X64_RAX) &&
-           translit_owner_append(ranges, count, site->rip_end, site->rax_end,
-                                 JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
-           translit_owner_append(ranges, count, site->rax_end, instruction_end,
+           translit_owner_append(ranges, count, site->load_end, site->rsp_end, guest,
+                                 JIT_BODY_OWNER_PRESERVE_RET_RAX | (1u << HL_X64_RSP)) &&
+           translit_owner_append(ranges, count, site->rsp_end, instruction_end,
                                  JIT_BODY_OWNER_DYNAMIC_RIP, 0);
 }
 
@@ -4710,6 +4708,12 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         static _Alignas(4096) uint8_t guest_bytes[4096];
         memset(guest_bytes, 0x0f, sizeof guest_bytes);
         guest_bytes[0] = scenario == 122 ? 0xc2 : 0xc3;
+        if (scenario == 135) {
+            guest_bytes[0] = 0xb8;
+            guest_bytes[1] = 99;
+            memset(guest_bytes + 2, 0, 3);
+            guest_bytes[5] = 0xc3;
+        }
         if (scenario == 122) {
             guest_bytes[1] = 0x10;
             guest_bytes[2] = 0;
@@ -5654,6 +5658,10 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         flags_from_cpu = guest_pc == JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS;
         guest_pc = cpu->rip;
     }
+    if (preserve_registers & JIT_BODY_OWNER_PRESERVE_RET_RAX) {
+        cpu->r[HL_X64_RAX] = cpu->mmscratch[1];
+        preserve_registers &= ~JIT_BODY_OWNER_PRESERVE_RET_RAX;
+    }
     for (int i = 0; i < 16; i++) {
         if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
     }
@@ -5739,13 +5747,16 @@ static int translit_ret_signal_stage_test(void) {
         translit_test_ret_site.rsp_end == NULL)
         return 0;
     const uint64_t target = UINT64_C(0x123456789abcdef0);
-    struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip; } stages[] = {
-        {translit_test_ret_instruction_start, 0, target, translit_test_ret_source_guest},
-        {translit_test_ret_site.load_end, 1u << HL_X64_RAX, translit_test_ret_source_guest,
-         translit_test_ret_source_guest},
-        {translit_test_ret_site.rip_end, 1u << HL_X64_RAX, target, target},
-        {translit_test_ret_site.rax_end, 0, target, target},
-        {translit_test_ret_site.rsp_end, 0, target, target},
+    struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip; int ret_rax; } stages[] = {
+        {translit_test_ret_instruction_start, 0, target, translit_test_ret_source_guest, 0},
+        {translit_test_ret_site.load_end, 1u << HL_X64_RSP, translit_test_ret_source_guest,
+         translit_test_ret_source_guest, 1},
+        {translit_test_ret_site.rip_end, 1u << HL_X64_RSP, target,
+         translit_test_ret_source_guest, 1},
+        {translit_test_ret_site.rax_end, 1u << HL_X64_RSP, target,
+         translit_test_ret_source_guest, 1},
+        {translit_test_ret_site.rsp_end, 0, target, target, 0},
+        {translit_jcc_ibtc_stub_entry, 1u << HL_X64_RAX, target, target, 0},
     };
     int saved_selected = translit_selected;
     translit_selected = 1;
@@ -5760,15 +5771,22 @@ static int translit_ret_signal_stage_test(void) {
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
         cpu.rip = stages[stage].cpu_rip;
+        cpu.mmscratch[1] = UINT64_C(0xb000000000000000);
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
         HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
-        exact = translit_signal_capture(&cpu, &context) && cpu.rip == stages[stage].expected_rip;
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == stages[stage].expected_rip &&
+                cpu.reason == R_BRANCH;
         for (unsigned reg = 0; exact && reg < 16; ++reg) {
             uint64_t expected = stages[stage].preserve & (1u << reg)
                                     ? UINT64_C(0xc000000000000000) + reg
                                     : UINT64_C(0xa000000000000000) + reg;
+            if (reg == HL_X64_RAX && stages[stage].ret_rax)
+                expected = UINT64_C(0xb000000000000000);
             exact = cpu.r[reg] == expected;
         }
+        struct cpu expected_flags = {0};
+        translit_flags_out(&expected_flags, UINT64_C(0xad7));
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
     }
     translit_selected = saved_selected;
     return exact;
