@@ -2059,6 +2059,31 @@ static void pcache_save(void) {
 #else
     if (g_x64_pc_forked) return;
 #endif
+    uint64_t used = (uint64_t)(g_cp - g_cache);
+    /* Failed speculative builders may have emitted into the tail before rewinding g_cp.
+       Compact those dead records; a live unledgered emission still latches refusal above. */
+    uint32_t live_relocs = 0;
+    for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
+        translit_external_absolute relocation = translit_external_absolutes[i];
+        if (relocation.offset > used || used - relocation.offset < 8 || relocation.offset < 2 ||
+            g_cache[relocation.offset - 2] != 0x48 || g_cache[relocation.offset - 1] != 0xb8)
+            continue;
+        uint64_t address;
+        memcpy(&address, g_cache + relocation.offset, sizeof address);
+        if (translit_external_absolute_kind_for((uintptr_t)address) != relocation.kind) continue;
+        translit_external_absolutes[live_relocs++] = relocation;
+    }
+    translit_external_absolute_count = live_relocs;
+    translit_external_absolute_emitted = live_relocs;
+    for (uint32_t i = 1; i < live_relocs; i++) {
+        translit_external_absolute relocation = translit_external_absolutes[i];
+        uint32_t j = i;
+        while (j != 0 && translit_external_absolutes[j - 1].offset > relocation.offset) {
+            translit_external_absolutes[j] = translit_external_absolutes[j - 1];
+            j--;
+        }
+        translit_external_absolutes[j] = relocation;
+    }
     if (translit_external_absolute_unclassified ||
         translit_external_absolute_count != translit_external_absolute_emitted) {
         HL_LOGF(&g_jit_log, HL_LOG_TAG_TRANSLATE,
@@ -2076,7 +2101,6 @@ static void pcache_save(void) {
 #endif
         return;
     }
-    uint64_t used = (uint64_t)(g_cp - g_cache);
     uint32_t prior_reloc = 0;
     for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
         uint32_t offset = translit_external_absolutes[i].offset;

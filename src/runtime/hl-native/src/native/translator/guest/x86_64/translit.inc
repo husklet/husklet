@@ -437,13 +437,13 @@ static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, ui
     (void)emitter_kind;
     uintptr_t base = (uintptr_t)g_cache, value = (uintptr_t)slot;
     if (value < base || value - base > CACHE_SZ - sizeof(uint64_t)) return;
-    translit_external_absolute_emitted++;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if ((translit_test_drop_external_absolute ||
          (hl_option_get("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST") != NULL &&
           !translit_test_dropped_external_absolute))) {
         translit_test_drop_external_absolute = 0;
         translit_test_dropped_external_absolute = 1;
+        translit_external_absolute_unclassified = 1;
         return;
     }
 #endif
@@ -452,8 +452,15 @@ static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, ui
         translit_external_absolute_unclassified = 1;
         return;
     }
-    translit_external_absolutes[translit_external_absolute_count++] =
-        (translit_external_absolute){(uint32_t)(value - base), kind};
+    uint32_t offset = (uint32_t)(value - base);
+    for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
+        if (translit_external_absolutes[i].offset == offset) {
+            translit_external_absolutes[i].kind = kind;
+            return;
+        }
+    }
+    translit_external_absolutes[translit_external_absolute_count++] = (translit_external_absolute){offset, kind};
+    translit_external_absolute_emitted++;
 }
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
