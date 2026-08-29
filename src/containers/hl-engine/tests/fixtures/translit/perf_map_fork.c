@@ -2,6 +2,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifndef CHILD_CALLS
+#define CHILD_CALLS 2
+#endif
+
 __attribute__((noinline, visibility("hidden"))) int translated_after_fork(int value) {
     return value == 7 ? value + 35 : 0;
 }
@@ -19,8 +23,12 @@ int main(void) {
     int answer = 42;
     if (child == 0) {
         answer = direct_call_caller(seed);
+#if CHILD_CALLS == 2
         int second = direct_call_caller(seed);
         _exit(answer == 42 && second == 42 ? 0 : 3);
+#else
+        _exit(answer == 42 ? 0 : 3);
+#endif
     }
     int status = 0;
     if (waitpid(child, &status, 0) != child) return 4;

@@ -1350,57 +1350,50 @@ fn transliterated_blocks_publish_perf_map_identities() {
 #[test]
 fn forked_translators_publish_process_owned_perf_files() {
     let work = TempDir::new().unwrap();
-    let executable = fixture(work.path(), "perf_map_fork");
-    let maps = work.path().join("maps");
-    std::fs::create_dir(&maps).unwrap();
-    let (output, status, backend) = run_with_perf_map(&executable, &maps);
-    assert_eq!(status, 0);
-    let output = String::from_utf8(output).unwrap();
-    assert!(output.starts_with("fork-map=42 warm=10752 child=0 "), "{output}");
-    let field = |name: &str| {
-        output
-            .split_whitespace()
-            .find_map(|field| field.strip_prefix(name))
-            .unwrap_or_else(|| panic!("missing {name} in {output}"))
+    let run = |name: &str| {
+        let executable = fixture(work.path(), name);
+        let maps = work.path().join(format!("maps-{name}"));
+        std::fs::create_dir(&maps).unwrap();
+        let (output, status, backend) = run_with_perf_map(&executable, &maps);
+        assert_eq!(status, 0);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.starts_with("fork-map=42 warm=10752 child=0 "), "{output}");
+        let field = |field_name: &str| {
+            output
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix(field_name))
+                .unwrap_or_else(|| panic!("missing {field_name} in {output}"))
+        };
+        let parent_pid = field("parent-pid=");
+        let child_pid = field("child-pid=");
+        let caller = field("caller=").trim_start_matches("0x");
+        let target = field("target=").trim_start_matches("0x");
+        let names: Vec<_> = std::fs::read_dir(&maps)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.iter().filter(|name| name.starts_with("perf-")).count(), 2, "{names:?}");
+        assert_eq!(names.iter().filter(|name| name.starts_with("jit-")).count(), 2, "{names:?}");
+        for pid in [parent_pid, child_pid] {
+            let map = maps.join(format!("perf-{pid}.map"));
+            let text =
+                std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
+            assert!(text.contains(caller), "caller {caller} absent from {}:\n{text}", map.display());
+            assert!(text.contains(target), "target {target} absent from {}:\n{text}", map.display());
+        }
+        backend
     };
-    let parent_pid = field("parent-pid=");
-    let child_pid = field("child-pid=");
-    let caller = field("caller=").trim_start_matches("0x");
-    let target = field("target=").trim_start_matches("0x");
-    let names: Vec<_> = std::fs::read_dir(&maps)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(
-        names.iter().filter(|name| name.starts_with("perf-")).count(),
-        2,
-        "{names:?}"
+    let one = run("perf_map_fork_one");
+    let two = run("perf_map_fork_two");
+    assert!(one.direct_call_ibtc_misses >= 2, "{}", one.shape_line);
+    assert_eq!(two.direct_call_ibtc_misses, one.direct_call_ibtc_misses);
+    assert_eq!(two.direct_call_ibtc_fills, one.direct_call_ibtc_fills);
+    assert!(
+        two.direct_call_ibtc_hits >= one.direct_call_ibtc_hits + 1,
+        "one={}\ntwo={}",
+        one.shape_line,
+        two.shape_line
     );
-    assert_eq!(
-        names.iter().filter(|name| name.starts_with("jit-")).count(),
-        2,
-        "{names:?}"
-    );
-    for pid in [parent_pid, child_pid] {
-        let map = maps.join(format!("perf-{pid}.map"));
-        let text = std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
-        assert!(
-            text.contains(caller),
-            "caller {caller} absent from {}:\n{text}",
-            map.display()
-        );
-        assert!(
-            text.contains(target),
-            "target {target} absent from {}:\n{text}",
-            map.display()
-        );
-    }
-    assert!(backend.direct_call_ibtc_misses >= 2, "{}", backend.shape_line);
-    assert!(backend.direct_call_ibtc_fills >= 2, "{}", backend.shape_line);
-    // The parent performs exactly 256 warm calls and no calls after fork.
-    // Even if every parent call hits, 257 proves the child's second call
-    // hit after its first call missed and filled the process-local table.
-    assert!(backend.direct_call_ibtc_hits >= 257, "{}", backend.shape_line);
 }
 
 #[test]
