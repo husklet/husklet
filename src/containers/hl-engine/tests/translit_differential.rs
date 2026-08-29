@@ -1530,7 +1530,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
     let executable = fixture(work.path(), "perf_map_fork_exec");
     let maps = work.path().join("maps-fork-exec");
     std::fs::create_dir(&maps).unwrap();
-    let (output, status, _backend) = run_with_perf_map(&executable, &maps, false);
+    let (output, status, backend) = run_with_perf_map(&executable, &maps, false);
     assert_eq!(status, 0);
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("post-exec pid="), "{output}");
@@ -1550,7 +1550,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         })
         .collect::<Vec<_>>();
     child_maps.sort();
-    assert!(child_maps.len() >= 2, "child={child} maps={child_maps:?}\n{output}");
+    assert!(child_maps.len() >= 2, "child={child} maps={child_maps:?}\n{output}\n{}", backend.line);
     let identities = child_maps
         .iter()
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
