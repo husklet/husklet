@@ -139,7 +139,9 @@ fn each_real_translation_stop_site_keeps_its_exact_reason() {
             "missing or duplicated real stop site: {assignment}"
         );
     }
-    assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_TL_NO;").count(), 1);
+    // One site is classifier refusal; the other is the explicit direct-data-authority refusal for
+    // an otherwise supported FF /4 encountered after earlier instructions in the same candidate block.
+    assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_TL_NO;").count(), 2);
 }
 
 #[test]
