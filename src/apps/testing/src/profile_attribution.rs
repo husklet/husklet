@@ -377,7 +377,7 @@ fn validate_sealed_manifest(manifest: &Manifest) -> Result<(), Error> {
 
 fn freeze(role: &str, source: &Path, results: &Path) -> Result<Frozen, Error> {
     let original = fs::canonicalize(source)?;
-    let sha256 = sha256(&original)?;
+    let digest = sha256(&original)?;
     let build_id = elf_build_id(&original)?;
     let directory = results.join("artifacts").join(role);
     fs::create_dir_all(&directory)?;
@@ -387,14 +387,14 @@ fn freeze(role: &str, source: &Path, results: &Path) -> Result<Frozen, Error> {
         fs::remove_file(&frozen)?;
     }
     copy_frozen(&original, &frozen)?;
-    if sha256(&frozen)? != sha256 || elf_build_id(&frozen)? != build_id {
+    if sha256(&frozen)? != digest || elf_build_id(&frozen)? != build_id {
         return Err("artifact changed while it was frozen".into());
     }
     Ok(Frozen {
         role: role.into(),
         original,
         frozen,
-        sha256,
+        sha256: digest,
         build_id,
     })
 }
@@ -603,7 +603,7 @@ fn append_receipt(results: &Path, receipt: &Receipt) -> Result<(), Error> {
     }
     serde_json::to_writer(&mut file, receipt)?;
     writeln!(file)?;
-    file.sync_all()?;
+    file.as_file().sync_all()?;
     file.persist(path).map_err(|error| error.error)?;
     sync_directory(results)?;
     Ok(())
@@ -647,7 +647,7 @@ fn sha256(path: &Path) -> Result<String, Error> {
         }
         digest.update(&buffer[..length]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn validate_digest(value: &str) -> Result<(), Error> {
@@ -661,7 +661,7 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), Error> {
     let parent = path.parent().ok_or("publication path has no parent")?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     serde_json::to_writer_pretty(&mut file, value)?;
-    file.sync_all()?;
+    file.as_file().sync_all()?;
     file.persist(path).map_err(|error| error.error)?;
     sync_directory(parent)?;
     Ok(())
