@@ -119,9 +119,9 @@ struct LaunchArguments {
     #[cfg(feature = "native-test-hooks")]
     #[arg(long, value_name = "KEY=VALUE", hide = true, value_parser = parse_native_test_option)]
     native_test_option: Vec<NativeTestOption>,
-    /// Publish same-ISA block maps and jitdump code bytes for diagnostic profiling.
+    /// Publish same-ISA block maps and jitdump code bytes for sampling-only profiling.
     #[cfg(feature = "native-test-hooks")]
-    #[arg(long, value_name = "PATH", hide = true, requires_all = ["translit", "diagnostics"], value_parser = parse_translit_perf_map)]
+    #[arg(long, value_name = "PATH", hide = true, requires = "translit", value_parser = parse_translit_perf_map)]
     translit_perf_map: Option<PathBuf>,
     /// Existing container root used to resolve the guest entry and `PT_INTERP`.
     #[arg(long)]
@@ -876,13 +876,12 @@ mod tests {
 
     #[cfg(all(unix, feature = "native-test-hooks"))]
     #[test]
-    fn translit_perf_map_requires_a_writable_absolute_directory_and_diagnostics() {
+    fn translit_perf_map_requires_a_writable_absolute_directory_and_translation() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().to_str().unwrap();
         let selected = launch(&[
-            "--diagnostics",
             "--translit",
             "--translit-perf-map",
             path,
@@ -913,7 +912,6 @@ mod tests {
                 "/does/not/exist",
                 "bin/program",
             ],
-            vec!["--translit", "--translit-perf-map", path, "bin/program"],
             vec!["--diagnostics", "--translit-perf-map", path, "bin/program"],
         ] {
             assert!(LaunchArguments::try_parse_from(std::iter::once("hl-x86_64").chain(arguments)).is_err());
