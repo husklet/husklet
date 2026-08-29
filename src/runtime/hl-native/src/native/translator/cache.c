@@ -133,7 +133,7 @@ static int code_mapping_reserve_preferred(hl_host_code_mapping *mapping, int dua
     return code_mapping_reserve_preferred_with(mapping, dual_alias, code_mapping_reserve_adapter, NULL);
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS) && G_GPC_HASH_SHIFT == 0
+#if G_GPC_HASH_SHIFT == 0
 static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
                                                uint64_t size);
 #else
