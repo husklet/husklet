@@ -127,6 +127,10 @@ static __thread struct cpu *g_interp_pad_cpu;
 static __thread hl_x86_guest_data_pins g_interp_data_pins;
 static __thread int g_interp_data_active;
 static __thread uint64_t g_dispatch_census_interp_steps;
+static __thread unsigned g_dispatch_census_interp_stop;
+#if !defined(HL_NATIVE_TEST_HOOKS)
+static __thread unsigned g_dispatch_census_open;
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
 static __thread unsigned g_backend_shape_open;
 static __thread unsigned g_backend_shape_interp_stop;
@@ -492,8 +496,12 @@ static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t
     return interp_step_one_byte(cpu, insn, pc, next);
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
 static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct insn *insn, uint64_t next) {
+    if (insn->op == 0xFF && insn->has_modrm && insn->is_mem) {
+        unsigned operation = (unsigned)insn->reg & 7u;
+        if (operation == 4) return HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY;
+        if (operation == 2) return HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY;
+    }
     switch (translit_classify(insn)) {
     case TL_JCC:
         return cpu->rip == next ? HL_BACKEND_SHAPE_S_COND_NOT_TAKEN : HL_BACKEND_SHAPE_S_COND_TAKEN;
@@ -509,6 +517,7 @@ static unsigned interp_backend_shape_stop(const struct cpu *cpu, const struct in
     }
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
 // Dedicated terminal-family counts are taken only after interp_step has returned. A faulting memory
 // operand longjmps before this point, so these are completed instructions rather than decode attempts.
 // The 64-bit divide service has a second completion counter in interp_dispatch.h, after RAX/RDX commit.
@@ -552,6 +561,7 @@ static unsigned interp_backend_shape_edge_family(unsigned terminator) {
 // already-published same-page edge after doing their own spill/IRQ poll; every other transfer returns here.
 static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
     g_dispatch_census_interp_steps = 0;
+    g_dispatch_census_interp_stop = HL_BACKEND_SHAPE_S_OTHER;
     int census_steps = hl_backend_tree_steps_enabled();
     for (;;) {
         uint64_t pc = cpu->rip; // a fault below reports precisely this PC
@@ -574,6 +584,8 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         if (g_prof) translit_unsupported_record_completed(&insn, pc, step != STEP_END);
 #endif
         if (step == STEP_END) {
+            if (census_steps)
+                g_dispatch_census_interp_stop = interp_backend_shape_stop(cpu, &insn, pc + (uint64_t)insn.len);
 #if defined(HL_NATIVE_TEST_HOOKS)
             g_backend_shape_interp_stop = interp_backend_shape_stop(cpu, &insn, pc + (uint64_t)insn.len);
             g_backend_shape_interp_stop_form = translit_unsupported_key(&insn);
@@ -622,6 +634,13 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
             hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_FAULT, 0);
         }
         g_backend_shape_open = 0;
+#else
+        if (g_dispatch_census_open == 1)
+            hl_backend_tree_translated_exit_count(HL_BACKEND_SHAPE_T_FAULT);
+        else if (g_dispatch_census_open == 2)
+            hl_backend_tree_interpreter_stop(HL_BACKEND_SHAPE_S_FAULT, 0);
+        hl_backend_tree_reason((unsigned)cpu->reason);
+        g_dispatch_census_open = 0;
 #endif
         g_interp_pad_armed = previous;
         g_interp_pad_cpu = previous_cpu;
@@ -641,6 +660,9 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         cpu->backend_shape = HL_BACKEND_SHAPE_T_OTHER |
                              HL_BACKEND_WOULD_LINK_FAMILY_COUNT << TL_SHAPE_WOULD_FAMILY_SHIFT;
         g_backend_shape_open = 1;
+#endif
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        g_dispatch_census_open = g_prof ? 1u : 0u;
 #endif
         hl_backend_tree_run_begin(1, block->profile_insns);
         translit_run(cpu, block);
@@ -695,10 +717,14 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         // likewise not a completed terminal. Only a validated marker written by the terminal that actually
         // ran may advance the production execution proof.
         if (g_prof && cpu->irq == 0) translit_mixed_profile_completed(G_MIXED_PROFILE_VALUE(cpu));
+        g_dispatch_census_open = 0;
 #endif
         hl_backend_tree_reason(cpu->reason);
     } else {
         hl_backend_tree_run_begin(0, 0);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        g_dispatch_census_open = hl_backend_tree_steps_enabled() ? 2u : 0u;
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
         unsigned fallback = block->host_entry_off == 0
                                 ? block->profile_fallback_kind
@@ -714,6 +740,9 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         unsigned stop = cpu->irq != 0 ? HL_BACKEND_SHAPE_S_IRQ : g_backend_shape_interp_stop;
         hl_backend_tree_interpreter_stop(stop, g_backend_shape_interp_stop_form);
         g_backend_shape_open = 0;
+#else
+        hl_backend_tree_interpreter_stop(g_dispatch_census_interp_stop, 0);
+        g_dispatch_census_open = 0;
 #endif
         hl_backend_tree_reason(cpu->reason);
     }

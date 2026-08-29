@@ -1507,8 +1507,10 @@ static uint8_t *translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitc
     hl_x64_store_gs_imm32(a, (int32_t)packed, OFF_BACKEND_SHAPE);
     return a->overflow ? NULL : a->cursor - sizeof(uint32_t);
 #else
-    (void)a;
-    (void)kind;
+    if (g_prof) {
+        uintptr_t counter = hl_backend_tree_translated_exit_counter_address(kind);
+        if (counter != 0) hl_x64_atomic_inc_abs(a, counter);
+    }
     (void)stitched_jmp;
     (void)stitched_cond_fall;
     (void)source_page_delta;
@@ -3448,14 +3450,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
 #if defined(HL_NATIVE_TEST_HOOKS)
             uint8_t *call_marker = translit_shape_exit(a,
-                                    kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
-                                                    : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+                                    kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                    : kind == TL_CALL_RIP ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
+                                                          : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
                                     (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
             if (kind == TL_CALL) would_link_marker = call_marker;
 #else
             translit_shape_exit(a,
-                                kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
-                                                : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+                                kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                : kind == TL_CALL_RIP ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
+                                                      : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
                                 (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
 #endif
             if (kind == TL_CALL)
@@ -3491,7 +3495,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
             hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
-            translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH, (unsigned)direct_jmp_stitched,
+            translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
             break;

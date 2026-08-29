@@ -36,6 +36,8 @@ enum hl_backend_shape_translated_exit {
     HL_BACKEND_SHAPE_T_OTHER,
     HL_BACKEND_SHAPE_T_COUNT,
 };
+#define HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY HL_BACKEND_SHAPE_T_INDIRECT_BRANCH
+#define HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY HL_BACKEND_SHAPE_T_INDIRECT_CALL
 
 /* Why a completed transliterated descriptor used its sequential dispatcher exit.  These are execution
    facts, carried by the emitted terminal marker: counting them while building would include cold blocks
@@ -89,6 +91,8 @@ enum hl_backend_shape_interpreter_stop {
     HL_BACKEND_SHAPE_S_OTHER,
     HL_BACKEND_SHAPE_S_COUNT,
 };
+#define HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY HL_BACKEND_SHAPE_S_INDIRECT_BRANCH
+#define HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY HL_BACKEND_SHAPE_S_INDIRECT_CALL
 
 enum hl_backend_shape_edge_family {
     HL_BACKEND_SHAPE_EDGE_FALLTHROUGH,
@@ -1421,7 +1425,31 @@ enum {
     HL_BACKEND_SHAPE_T_IRQ,
     HL_BACKEND_SHAPE_T_FAULT,
     HL_BACKEND_SHAPE_T_OTHER,
+    HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY,
+    HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY,
+    HL_BACKEND_SHAPE_T_COUNT,
 };
+
+enum {
+    HL_BACKEND_SHAPE_S_FALLTHROUGH,
+    HL_BACKEND_SHAPE_S_COND_TAKEN,
+    HL_BACKEND_SHAPE_S_COND_NOT_TAKEN,
+    HL_BACKEND_SHAPE_S_DIRECT_JUMP,
+    HL_BACKEND_SHAPE_S_DIRECT_CALL,
+    HL_BACKEND_SHAPE_S_RETURN,
+    HL_BACKEND_SHAPE_S_INDIRECT_BRANCH,
+    HL_BACKEND_SHAPE_S_INDIRECT_CALL,
+    HL_BACKEND_SHAPE_S_SYSCALL,
+    HL_BACKEND_SHAPE_S_IRQ,
+    HL_BACKEND_SHAPE_S_FAULT,
+    HL_BACKEND_SHAPE_S_SERVICE,
+    HL_BACKEND_SHAPE_S_OTHER,
+    HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY,
+    HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY,
+    HL_BACKEND_SHAPE_S_COUNT,
+};
+
+#define HL_BACKEND_TREE_REASON_COUNT 20u
 
 /* Product diagnostics retain the mixed-builder execution facts and the seven JCC-IBTC facts needed to
    authenticate untimed ON/OFF proofs.  The anonymous mapping is created by the launch lifecycle only when typed
@@ -1454,6 +1482,10 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t interpreted_entries;
     _Atomic uint64_t translated_steps;
     _Atomic uint64_t interpreted_steps;
+    _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
+    _Atomic uint64_t reason_other;
+    _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    _Atomic uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
     _Atomic uint64_t jcc_ibtc_emitted;
     _Atomic uint64_t jcc_ibtc_hits;
     _Atomic uint64_t jcc_ibtc_misses;
@@ -1642,7 +1674,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    char record[1152];
+    char record[2048];
     int formatted = snprintf(record, sizeof record,
                              "[diag] backend-shape version=5 available=%d crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
@@ -1654,7 +1686,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "direct_jmp_ibtc_enabled=%d direct_jmp_ibtc_emitted=%llu "
                              "direct_jmp_ibtc_hits=%llu direct_jmp_ibtc_misses=%llu direct_jmp_ibtc_irq=%llu "
                              "direct_jmp_ibtc_fills=%llu direct_jmp_ibtc_suppressed=%llu "
-                             "direct_jmp_ibtc_invalid_refusals=%llu\n",
+                             "direct_jmp_ibtc_invalid_refusals=%llu",
                              available,
                              (unsigned long long)(atomic_load_explicit(&census->translated_entries,
                                                                       memory_order_relaxed) +
@@ -1704,6 +1736,51 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)atomic_load_explicit(&census->direct_jmp_ibtc_invalid_refusals,
                                                                      memory_order_relaxed));
     if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    for (unsigned reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason) {
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r%u=%llu", reason,
+                             (unsigned long long)atomic_load_explicit(&census->reason[reason],
+                                                                     memory_order_relaxed));
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        formatted += added;
+    }
+    {
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r_other=%llu",
+                             (unsigned long long)atomic_load_explicit(&census->reason_other,
+                                                                     memory_order_relaxed));
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        formatted += added;
+    }
+#define HL_APPEND_CROSSING(name, array, kind)                                                                          \
+    do {                                                                                                               \
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
+                             (unsigned long long)atomic_load_explicit(&(array)[kind], memory_order_relaxed));           \
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
+        formatted += added;                                                                                           \
+    } while (0)
+    HL_APPEND_CROSSING("t_direct_jmp", census->translated_exit, HL_BACKEND_SHAPE_T_DIRECT_JUMP);
+    HL_APPEND_CROSSING("t_direct_call", census->translated_exit, HL_BACKEND_SHAPE_T_DIRECT_CALL);
+    HL_APPEND_CROSSING("t_ret", census->translated_exit, HL_BACKEND_SHAPE_T_RETURN);
+    HL_APPEND_CROSSING("t_jmp_reg", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH);
+    HL_APPEND_CROSSING("t_jmp_mem", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY);
+    HL_APPEND_CROSSING("t_call_reg", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_CALL);
+    HL_APPEND_CROSSING("t_call_mem", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY);
+    HL_APPEND_CROSSING("t_syscall", census->translated_exit, HL_BACKEND_SHAPE_T_SYSCALL);
+    HL_APPEND_CROSSING("t_irq", census->translated_exit, HL_BACKEND_SHAPE_T_IRQ);
+    HL_APPEND_CROSSING("t_fault", census->translated_exit, HL_BACKEND_SHAPE_T_FAULT);
+    HL_APPEND_CROSSING("i_direct_jmp", census->interpreter_stop, HL_BACKEND_SHAPE_S_DIRECT_JUMP);
+    HL_APPEND_CROSSING("i_direct_call", census->interpreter_stop, HL_BACKEND_SHAPE_S_DIRECT_CALL);
+    HL_APPEND_CROSSING("i_ret", census->interpreter_stop, HL_BACKEND_SHAPE_S_RETURN);
+    HL_APPEND_CROSSING("i_jmp_reg", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_BRANCH);
+    HL_APPEND_CROSSING("i_jmp_mem", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY);
+    HL_APPEND_CROSSING("i_call_reg", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_CALL);
+    HL_APPEND_CROSSING("i_call_mem", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY);
+    HL_APPEND_CROSSING("i_syscall", census->interpreter_stop, HL_BACKEND_SHAPE_S_SYSCALL);
+    HL_APPEND_CROSSING("i_service", census->interpreter_stop, HL_BACKEND_SHAPE_S_SERVICE);
+    HL_APPEND_CROSSING("i_irq", census->interpreter_stop, HL_BACKEND_SHAPE_S_IRQ);
+    HL_APPEND_CROSSING("i_fault", census->interpreter_stop, HL_BACKEND_SHAPE_S_FAULT);
+#undef HL_APPEND_CROSSING
+    if ((size_t)formatted + 1 >= sizeof record) return;
+    record[formatted++] = '\n';
     size_t offset = 0;
     while (offset < (size_t)formatted) {
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
@@ -1738,8 +1815,30 @@ static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
 }
-#define hl_backend_tree_reason(reason) ((void)0)
+static inline void hl_backend_tree_reason(unsigned reason) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    if (reason < HL_BACKEND_TREE_REASON_COUNT)
+        atomic_fetch_add_explicit(&census->reason[reason], 1, memory_order_relaxed);
+    else
+        atomic_fetch_add_explicit(&census->reason_other, 1, memory_order_relaxed);
+}
+static uintptr_t hl_backend_tree_translated_exit_counter_address(unsigned kind) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL || kind >= HL_BACKEND_SHAPE_T_COUNT) return 0;
+    return (uintptr_t)&census->translated_exit[kind];
+}
+static inline void hl_backend_tree_translated_exit_count(unsigned kind) {
+    uintptr_t address = hl_backend_tree_translated_exit_counter_address(kind);
+    if (address != 0) atomic_fetch_add_explicit((_Atomic uint64_t *)address, 1, memory_order_relaxed);
+}
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
+static inline void hl_backend_tree_interpreter_stop(unsigned kind, uint64_t form) {
+    (void)form;
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL && kind < HL_BACKEND_SHAPE_S_COUNT)
+        atomic_fetch_add_explicit(&census->interpreter_stop[kind], 1, memory_order_relaxed);
+}
 #define hl_backend_tree_translated_fall_stop(reason) ((void)0)
 static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
