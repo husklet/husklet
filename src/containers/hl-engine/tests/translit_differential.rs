@@ -453,12 +453,12 @@ fn backend(stderr: &[u8]) -> Backend {
         jcc_link_taken: counter("jcc_link_taken="),
         jcc_link_irq_fallback: counter("jcc_link_irq_fallback="),
         jcc_link_dispatcher: counter("jcc_link_dispatcher="),
-        direct_call_ibtc_emitted: mixed_counter("direct_call_ibtc_emitted="),
-        direct_call_ibtc_hits: mixed_counter("direct_call_ibtc_hits="),
-        direct_call_ibtc_misses: mixed_counter("direct_call_ibtc_misses="),
-        direct_call_ibtc_irq: mixed_counter("direct_call_ibtc_irq="),
-        direct_call_ibtc_fills: mixed_counter("direct_call_ibtc_fills="),
-        direct_call_ibtc_invalid_refusals: mixed_counter("direct_call_ibtc_invalid_refusals="),
+        direct_call_ibtc_emitted: shape_counter("direct_call_ibtc_emitted="),
+        direct_call_ibtc_hits: shape_counter("direct_call_ibtc_hits="),
+        direct_call_ibtc_misses: shape_counter("direct_call_ibtc_misses="),
+        direct_call_ibtc_irq: shape_counter("direct_call_ibtc_irq="),
+        direct_call_ibtc_fills: shape_counter("direct_call_ibtc_fills="),
+        direct_call_ibtc_invalid_refusals: shape_counter("direct_call_ibtc_invalid_refusals="),
         operand_declined: counter("operand_declined="),
         sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
@@ -1829,26 +1829,35 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         "differing-family linked ingress must count the executed target CALL:\n{}\n{}",
         selected_backend.would_link_line, disabled_backend.would_link_line
     );
-    assert!(
-        selected_backend.direct_call_ibtc_emitted > 0,
-        "{}",
-        selected_backend.line
-    );
-    assert!(
-        selected_backend.direct_call_ibtc_hits > 1000,
-        "the warmed direct CALL must execute through the shared target cache: {}",
-        selected_backend.line
-    );
-    assert!(
-        selected_backend.direct_call_ibtc_misses > 0 && selected_backend.direct_call_ibtc_fills > 0,
-        "the cold direct CALL path must publish before it becomes hot: {}",
-        selected_backend.line
-    );
-    assert_eq!(
-        selected_backend.direct_call_ibtc_invalid_refusals, 0,
-        "{}",
-        selected_backend.line
-    );
+    // Settled external test engines predating backend-shape v5 remain valid
+    // semantic oracles.  A current engine must also prove the typed CALL path.
+    if selected_backend.shape_line.contains("direct_call_ibtc_emitted=") {
+        assert!(
+            selected_backend.direct_call_ibtc_emitted > 0,
+            "{}",
+            selected_backend.shape_line
+        );
+        assert!(
+            selected_backend.direct_call_ibtc_hits > 1000,
+            "the warmed direct CALL must execute through the shared target cache: {}",
+            selected_backend.shape_line
+        );
+        assert!(
+            selected_backend.direct_call_ibtc_misses > 0 && selected_backend.direct_call_ibtc_fills > 0,
+            "the cold direct CALL path must publish before it becomes hot: {}",
+            selected_backend.shape_line
+        );
+        assert_eq!(
+            selected_backend.direct_call_ibtc_invalid_refusals, 0,
+            "{}",
+            selected_backend.shape_line
+        );
+        assert!(
+            selected_backend.direct_call_ibtc_irq <= selected_backend.direct_call_ibtc_emitted,
+            "{}",
+            selected_backend.shape_line
+        );
+    }
     assert_eq!(
         selected_backend.would_fall_candidate,
         selected_backend.shape_fallthrough
@@ -1979,6 +1988,19 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     assert_eq!(selected_stack_status, 0, "{}", String::from_utf8_lossy(&selected_stack));
     assert_eq!(native_stack.status.code(), Some(0));
     assert_eq!(selected_stack, native_stack.stdout);
+
+    // The low return-address half commits before the high half crosses into a
+    // protected page.  The architectural CALL itself has not committed: RIP
+    // and RSP must still identify the source instruction and original stack.
+    let (selected_split, selected_split_status, _) =
+        run_with_arguments(&executable, "1", &[b"split"], true, false, false, false);
+    let native_split = std::process::Command::new(&executable)
+        .arg("split")
+        .output()
+        .expect("native split stack-fault fixture");
+    assert_eq!(selected_split_status, 0, "{}", String::from_utf8_lossy(&selected_split));
+    assert_eq!(native_split.status.code(), Some(0));
+    assert_eq!(selected_split, native_split.stdout);
 }
 
 /// The other refusal, and the one that decides whether this backend is worth anything to a developer.

@@ -64,7 +64,7 @@ __attribute__((naked, noinline, used, visibility("hidden"))) void faulting_stack
                      "jmp stack_call_entry\n\t"
                      ".global stack_fault_pc\n"
                      "stack_call_entry:\n"
-                     "stack_fault_pc: call *call_slot(%rip)\n\t"
+                     "stack_fault_pc: call target\n\t"
                      "ret");
 }
 
@@ -112,8 +112,13 @@ int main(int argc, char **argv) {
 
     if (argc > 1) {
         void *stack = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (stack == MAP_FAILED || mprotect(stack, (size_t)page, PROT_NONE) != 0) return 6;
-        stack_pointer = (uintptr_t)stack + (uintptr_t)page;
+        if (stack == MAP_FAILED) return 6;
+        int split = argv[1][0] == 's';
+        void *protected_page = split ? (uint8_t *)stack + page : stack;
+        if (mprotect(protected_page, (size_t)page, PROT_NONE) != 0) return 6;
+        // At page+2 the low 32-bit return-word store succeeds wholly in the
+        // first page and the high store crosses into the protected second page.
+        stack_pointer = (uintptr_t)stack + (uintptr_t)page + (split ? 2u : 0u);
         expected_rsp = stack_pointer;
         fault_pc = (uintptr_t)&stack_fault_pc;
         resume_pc = (uintptr_t)&stack_resume_pc;
