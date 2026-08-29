@@ -5673,6 +5673,7 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     if (preserve_registers & JIT_BODY_OWNER_PRESERVE_RET_RAX) {
         cpu->r[HL_X64_RAX] = cpu->mmscratch[1];
         preserve_registers &= ~JIT_BODY_OWNER_PRESERVE_RET_RAX;
+        preserve_registers |= 1u << HL_X64_RAX;
     }
     for (int i = 0; i < 16; i++) {
         if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
