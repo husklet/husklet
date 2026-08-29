@@ -3011,7 +3011,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 112 && scenario <= 126) {
+    if (scenario >= 112 && scenario <= 134) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
