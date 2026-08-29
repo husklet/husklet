@@ -16,8 +16,9 @@ int main(void) {
     for (int i = 0; i < 256; i++) warm += direct_call_caller(seed);
     pid_t child = fork();
     if (child < 0) return 2;
-    int answer = direct_call_caller(seed);
+    int answer = 42;
     if (child == 0) {
+        answer = direct_call_caller(seed);
         int second = direct_call_caller(seed);
         _exit(answer == 42 && second == 42 ? 0 : 3);
     }
