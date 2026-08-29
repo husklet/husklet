@@ -1418,6 +1418,8 @@ enum {
     TL_MIXED_PROFILE_MAGIC_MASK = 0xffff0000u,
     TL_MIXED_PROFILE_TRANSITIONS_MASK = 0xffu,
     TL_MIXED_PROFILE_DISABLED_BOUNDARY = 1u << 8,
+    TL_MIXED_PROFILE_KIND_SHIFT = 9,
+    TL_MIXED_PROFILE_KIND_MASK = 0xfu,
 };
 
 _Static_assert(TL_MAX_INSNS <= TL_MIXED_PROFILE_TRANSITIONS_MASK,
@@ -1428,11 +1430,13 @@ _Static_assert(TL_MAX_OWNER_RANGES == JIT_BODY_OWNER_BLOCK_HEADROOM,
 // Production diagnostics need execution proof without growing the stable descriptor. Diagnostic builds
 // emit this flag-neutral GS store into existing CPU alignment padding; every terminal pays the same store,
 // while the value says whether this completed body crossed a mixed boundary or stopped at typed OFF.
-static void translit_mixed_profile_terminal(hl_x64_asm *a, uint64_t transitions, int disabled_boundary) {
+static void translit_mixed_profile_terminal(hl_x64_asm *a, uint64_t transitions, int disabled_boundary,
+                                             unsigned kind) {
     if (g_prof) {
         uint32_t marker = TL_MIXED_PROFILE_MAGIC |
                           ((uint32_t)transitions & TL_MIXED_PROFILE_TRANSITIONS_MASK) |
-                          (disabled_boundary ? TL_MIXED_PROFILE_DISABLED_BOUNDARY : 0u);
+                          (disabled_boundary ? TL_MIXED_PROFILE_DISABLED_BOUNDARY : 0u) |
+                          ((kind & TL_MIXED_PROFILE_KIND_MASK) << TL_MIXED_PROFILE_KIND_SHIFT);
         hl_x64_store_gs_imm32(a, (int32_t)marker, OFF_MIXED_PROFILE);
     }
 }
@@ -1441,6 +1445,10 @@ static void translit_mixed_profile_completed(uint32_t marker) {
     if ((marker & TL_MIXED_PROFILE_MAGIC_MASK) != TL_MIXED_PROFILE_MAGIC) return;
     uint64_t transitions = marker & TL_MIXED_PROFILE_TRANSITIONS_MASK;
     int disabled_boundary = (marker & TL_MIXED_PROFILE_DISABLED_BOUNDARY) != 0;
+#if !defined(HL_NATIVE_TEST_HOOKS)
+    unsigned kind = (marker >> TL_MIXED_PROFILE_KIND_SHIFT) & TL_MIXED_PROFILE_KIND_MASK;
+    hl_backend_tree_translated_exit_count(kind);
+#endif
     hl_backend_tree_mixed_sse_completed(transitions, disabled_boundary);
     if (disabled_boundary) {
         if (transitions == 0)
@@ -1507,10 +1515,8 @@ static uint8_t *translit_shape_exit(hl_x64_asm *a, unsigned kind, unsigned stitc
     hl_x64_store_gs_imm32(a, (int32_t)packed, OFF_BACKEND_SHAPE);
     return a->overflow ? NULL : a->cursor - sizeof(uint32_t);
 #else
-    if (g_prof) {
-        uintptr_t counter = hl_backend_tree_translated_exit_counter_address(kind);
-        if (counter != 0) hl_x64_atomic_inc_abs(a, counter);
-    }
+    (void)a;
+    (void)kind;
     (void)stitched_jmp;
     (void)stitched_cond_fall;
     (void)source_page_delta;
@@ -3264,7 +3270,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     uint64_t target = next + (uint64_t)insn.imm;
                     struct interp_block *target_block = translit_jcc_link_target(pc, target);
                     uint8_t *fall = hl_x64_jcc_rel32(a, translit_condition(&insn) ^ 1);
-                    translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+                    translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                                     HL_BACKEND_SHAPE_T_COND_TAKEN);
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                         (unsigned)jcc_fall_stitched, source_page_delta);
                     if (target_block != NULL) {
@@ -3359,13 +3366,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         switch (kind) {
         case TL_SYSCALL:
             // The frontend convention is that rip is already past the 0F 05 when the block exits.
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0, HL_BACKEND_SHAPE_T_SYSCALL);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_SYSCALL, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next, R_SYSCALL);
             break;
         case TL_JMP:
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0, HL_BACKEND_SHAPE_T_DIRECT_JUMP);
 #if defined(HL_NATIVE_TEST_HOOKS)
             would_link_marker =
                 translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
@@ -3391,12 +3398,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             uint64_t target = next + (uint64_t)insn.imm;
             struct interp_block *target_block = translit_jcc_link_target(pc, target);
             uint8_t *taken = hl_x64_jcc_rel32(a, translit_condition(&insn));
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                             HL_BACKEND_SHAPE_T_COND_NOT_TAKEN);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_NOT_TAKEN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_const(a, next, R_BRANCH);
             hl_x64_patch_rel32(a, taken, a->cursor);
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                             HL_BACKEND_SHAPE_T_COND_TAKEN);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             if (target_block != NULL) {
@@ -3447,7 +3456,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
                 hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                             kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                             : kind == TL_CALL_RIP ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
+                                                                   : HL_BACKEND_SHAPE_T_INDIRECT_CALL);
 #if defined(HL_NATIVE_TEST_HOOKS)
             uint8_t *call_marker = translit_shape_exit(a,
                                     kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
@@ -3477,7 +3489,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
         case TL_JMP_REG:
             hl_x64_store_gs(a, insn.rm_reg, OFF_RIP);
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                             HL_BACKEND_SHAPE_T_INDIRECT_BRANCH);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
@@ -3494,7 +3507,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             preserve_register = HL_X64_R11;
             hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
             hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
+                                             HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
@@ -3509,7 +3523,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
             hl_x64_load_gs(a, HL_X64_RAX, TL_MM_ENTRY);
             hl_x64_lea_rsp(a, insn.op == 0xC2 ? (int32_t)(8 + (uint16_t)insn.imm) : 8);
-            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
+            translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0, HL_BACKEND_SHAPE_T_RETURN);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             translit_emit_exit_preset(a, R_BRANCH);
@@ -3568,7 +3582,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (count == TL_MAX_INSNS) fall_stop = HL_BACKEND_FALL_CAP;
 #endif
         uint8_t *tail = a->cursor;
-        translit_mixed_profile_terminal(a, mixed_sse_transition_count, mixed_sse_boundary_stopped);
+        translit_mixed_profile_terminal(a, mixed_sse_transition_count, mixed_sse_boundary_stopped,
+                                         HL_BACKEND_SHAPE_T_FALLTHROUGH);
 #if defined(HL_NATIVE_TEST_HOOKS)
         would_link_marker = translit_shape_fall_exit(a, (unsigned)direct_jmp_stitched,
                                                      (unsigned)jcc_fall_stitched,

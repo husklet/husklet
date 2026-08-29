@@ -1823,14 +1823,10 @@ static inline void hl_backend_tree_reason(unsigned reason) {
     else
         atomic_fetch_add_explicit(&census->reason_other, 1, memory_order_relaxed);
 }
-static uintptr_t hl_backend_tree_translated_exit_counter_address(unsigned kind) {
-    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
-    if (census == NULL || kind >= HL_BACKEND_SHAPE_T_COUNT) return 0;
-    return (uintptr_t)&census->translated_exit[kind];
-}
 static inline void hl_backend_tree_translated_exit_count(unsigned kind) {
-    uintptr_t address = hl_backend_tree_translated_exit_counter_address(kind);
-    if (address != 0) atomic_fetch_add_explicit((_Atomic uint64_t *)address, 1, memory_order_relaxed);
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL && kind < HL_BACKEND_SHAPE_T_COUNT)
+        atomic_fetch_add_explicit(&census->translated_exit[kind], 1, memory_order_relaxed);
 }
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
 static inline void hl_backend_tree_interpreter_stop(unsigned kind, uint64_t form) {
