@@ -7,6 +7,7 @@
 
 /* Sampling-only translated-code symbol publication is currently an x86-64 backend facility. */
 static void translit_perf_map_flush(void) {}
+static void translit_sampling_receipt(const char *stage) { (void)stage; }
 
 // HL engine: the aarch64 Linux-guest JIT runner (unity translation unit).
 //
