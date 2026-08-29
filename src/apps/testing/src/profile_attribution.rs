@@ -1,6 +1,6 @@
 //! Bounded CPU-profile acquisition and deterministic offline attribution.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,6 +15,7 @@ use std::{
 type Error = Box<dyn std::error::Error>;
 const PROFILE_COUNT: usize = 6;
 const FORMAT: &str = "husklet-profile-attribution-v1";
+const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -38,6 +39,14 @@ struct RecordOptions {
     executable: PathBuf,
     #[arg(long)]
     native_library: PathBuf,
+    #[arg(long, value_enum)]
+    execution_mode: ExecutionMode,
+    /// Host executable used for the native before/after controls (normally chroot).
+    #[arg(long)]
+    native_executable: PathBuf,
+    /// One native-control argument; repeat to preserve exact argv boundaries.
+    #[arg(long = "native-arg", allow_hyphen_values = true, required = true)]
+    native_command: Vec<String>,
     /// SHA-256 of the workload's exact stdout bytes.
     #[arg(long)]
     semantic_sha256: String,
@@ -49,6 +58,13 @@ struct RecordOptions {
     /// Workload argv; its executable must be the frozen executable path.
     #[arg(last = true, required = true)]
     command: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+enum ExecutionMode {
+    Interpreter,
+    Translit,
 }
 
 #[derive(Args)]
@@ -74,11 +90,40 @@ struct Manifest {
     frequency_hz: u32,
     call_graph: String,
     direct_jmp: String,
+    execution_mode: ExecutionMode,
     semantic_sha256: String,
     semantic_output: Option<PathBuf>,
     semantic_output_sha256: Option<String>,
     command: Vec<String>,
+    native_command: Vec<String>,
     artifacts: Vec<Frozen>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AnchorReceipt {
+    position: String,
+    executable_sha256: String,
+    stdout_sha256: String,
+    stderr_sha256: String,
+    semantic_output_sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ModeProof {
+    execution_mode: ExecutionMode,
+    stderr_sha256: String,
+    stdout_sha256: String,
+    semantic_output_sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct FinalSeal {
+    format: String,
+    manifest_sha256: String,
+    ledger_sha256: String,
+    proof_sha256: String,
+    anchor_before_sha256: String,
+    anchor_after_sha256: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -143,6 +188,7 @@ fn record(options: RecordOptions) -> Result<(), Error> {
         let artifacts = vec![
             freeze("executable", &options.executable, &options.results)?,
             freeze("native-library", &options.native_library, &options.results)?,
+            freeze("native-executable", &options.native_executable, &options.results)?,
         ];
         let manifest = Manifest {
             format: FORMAT.into(),
@@ -151,15 +197,26 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             frequency_hz: 9_999,
             call_graph: "dwarf,65528".into(),
             direct_jmp: "off".into(),
+            execution_mode: options.execution_mode,
             semantic_sha256: options.semantic_sha256.clone(),
             semantic_output: options.semantic_output.clone(),
             semantic_output_sha256: options.semantic_output_sha256.clone(),
             command: options.command.clone(),
+            native_command: options.native_command.clone(),
             artifacts,
         };
         atomic_json(&manifest_path, &manifest)?;
         manifest
     };
+    validate_mode_command(&manifest)?;
+    let before_path = options.results.join("anchor-before.json");
+    if !before_path.exists() {
+        atomic_json(&before_path, &run_native_anchor(&manifest, &options.results, "before")?)?;
+    }
+    let proof_path = options.results.join("mode-proof.json");
+    if !proof_path.exists() {
+        atomic_json(&proof_path, &run_mode_proof(&manifest, &options.results)?)?;
+    }
     let mut receipts = read_receipts(&options.results, &manifest)?;
     for slot in 1..=PROFILE_COUNT {
         if receipts.contains_key(&slot) {
@@ -217,6 +274,7 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             .arg("--")
             .args(&workload)
             .env("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1")
+            .env_remove("HL_C_DIAGNOSTICS")
             .env(
                 "LD_LIBRARY_PATH",
                 native.parent().ok_or("native library has no parent")?,
@@ -227,8 +285,8 @@ fn record(options: RecordOptions) -> Result<(), Error> {
         if !status.success() {
             return Err(format!("profile {slot} failed").into());
         }
-        if !ibtc_disabled(&stderr)? {
-            return Err(format!("profile {slot} did not prove direct-JMP IBTC was disabled at runtime").into());
+        if fs::metadata(&stderr)?.len() != 0 {
+            return Err(format!("profile {slot} wrote unexpected stderr").into());
         }
         let stdout_hash = sha256(&stdout)?;
         if stdout_hash != manifest.semantic_sha256 {
@@ -274,6 +332,11 @@ fn record(options: RecordOptions) -> Result<(), Error> {
         append_receipt(&options.results, &receipt)?;
         receipts.insert(slot, receipt);
     }
+    let after_path = options.results.join("anchor-after.json");
+    if !after_path.exists() {
+        atomic_json(&after_path, &run_native_anchor(&manifest, &options.results, "after")?)?;
+    }
+    seal_campaign(&options.results)?;
     parse_campaign(&options.results)
 }
 
@@ -292,10 +355,142 @@ fn remove_stale_semantic_output(path: &Path, manifest: &Manifest) -> Result<(), 
     }
 }
 
-fn ibtc_disabled(path: &Path) -> Result<bool, Error> {
-    Ok(String::from_utf8_lossy(&fs::read(path)?)
-        .split_whitespace()
-        .any(|field| field == "direct_jmp_ibtc_enabled=0"))
+fn validate_mode_command(manifest: &Manifest) -> Result<(), Error> {
+    let translit = manifest.command.iter().any(|arg| arg == "--translit");
+    let direct_off = manifest
+        .command
+        .iter()
+        .any(|arg| arg == "--translit-direct-jmp-ibtc=off");
+    match manifest.execution_mode {
+        ExecutionMode::Interpreter if !translit && !direct_off => Ok(()),
+        ExecutionMode::Translit if translit && direct_off => Ok(()),
+        ExecutionMode::Interpreter => Err("interpreter campaign command selects transliteration".into()),
+        ExecutionMode::Translit => Err("translit campaign lacks --translit and exact direct-JMP-off option".into()),
+    }
+}
+
+fn exact_semantics(manifest: &Manifest, stdout: &Path) -> Result<Option<String>, Error> {
+    if sha256(stdout)? != manifest.semantic_sha256 {
+        return Err("control exact stdout hash changed".into());
+    }
+    match (&manifest.semantic_output, &manifest.semantic_output_sha256) {
+        (Some(path), Some(expected)) => {
+            let actual = sha256(path)?;
+            if &actual != expected {
+                return Err("control semantic output hash changed".into());
+            }
+            Ok(Some(actual))
+        }
+        (None, None) => Ok(None),
+        _ => Err("semantic output contract is incomplete".into()),
+    }
+}
+
+fn run_native_anchor(manifest: &Manifest, results: &Path, position: &str) -> Result<AnchorReceipt, Error> {
+    if !matches!(position, "before" | "after") {
+        return Err("native anchor position is invalid".into());
+    }
+    let native = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "native-executable")
+        .ok_or("manifest lacks native executable")?;
+    if let Some(path) = &manifest.semantic_output {
+        remove_stale_semantic_output(path, manifest)?;
+    }
+    let stdout = results.join(format!("anchor-{position}.stdout"));
+    let stderr = results.join(format!("anchor-{position}.stderr"));
+    let status = Command::new(&native.frozen)
+        .args(&manifest.native_command)
+        .env_remove("HL_C_DIAGNOSTICS")
+        .stdout(Stdio::from(File::create(&stdout)?))
+        .stderr(Stdio::from(File::create(&stderr)?))
+        .status()?;
+    if !status.success() {
+        return Err(format!("native {position} anchor failed").into());
+    }
+    let semantic_output_sha256 = exact_semantics(manifest, &stdout)?;
+    Ok(AnchorReceipt {
+        position: position.into(),
+        executable_sha256: native.sha256.clone(),
+        stdout_sha256: sha256(&stdout)?,
+        stderr_sha256: sha256(&stderr)?,
+        semantic_output_sha256,
+    })
+}
+
+fn run_mode_proof(manifest: &Manifest, results: &Path) -> Result<ModeProof, Error> {
+    let executable = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "executable")
+        .ok_or("manifest lacks executable")?;
+    let native = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "native-library")
+        .ok_or("manifest lacks native library")?;
+    if let Some(path) = &manifest.semantic_output {
+        remove_stale_semantic_output(path, manifest)?;
+    }
+    let stdout = results.join("mode-proof.stdout");
+    let stderr = results.join("mode-proof.stderr");
+    let mut command = manifest.command.clone();
+    command[0] = executable.frozen.to_string_lossy().into_owned();
+    let status = Command::new(&command[0])
+        .args(&command[1..])
+        .env("HL_C_DIAGNOSTICS", "1")
+        .env("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1")
+        .env(
+            "LD_LIBRARY_PATH",
+            native.frozen.parent().ok_or("native library has no parent")?,
+        )
+        .stdout(Stdio::from(File::create(&stdout)?))
+        .stderr(Stdio::from(File::create(&stderr)?))
+        .status()?;
+    if !status.success() {
+        return Err("execution-mode proof command failed".into());
+    }
+    verify_mode_diagnostic(manifest.execution_mode, &fs::read_to_string(&stderr)?)?;
+    let semantic_output_sha256 = exact_semantics(manifest, &stdout)?;
+    Ok(ModeProof {
+        execution_mode: manifest.execution_mode,
+        stderr_sha256: sha256(&stderr)?,
+        stdout_sha256: sha256(&stdout)?,
+        semantic_output_sha256,
+    })
+}
+
+fn verify_mode_diagnostic(mode: ExecutionMode, stderr: &str) -> Result<(), Error> {
+    let reports = stderr
+        .lines()
+        .filter(|line| line.starts_with("[prof] translit:"))
+        .collect::<Vec<_>>();
+    match mode {
+        ExecutionMode::Interpreter if reports == ["[prof] translit: not selected"] => Ok(()),
+        ExecutionMode::Translit
+            if reports.len() == 1
+                && reports[0] != "[prof] translit: not selected"
+                && stderr
+                    .split_whitespace()
+                    .any(|field| field == "direct_jmp_ibtc_enabled=0") =>
+        {
+            Ok(())
+        }
+        _ => Err("runtime diagnostic does not prove the immutable execution mode".into()),
+    }
+}
+
+fn seal_campaign(results: &Path) -> Result<(), Error> {
+    let seal = FinalSeal {
+        format: FORMAT.into(),
+        manifest_sha256: sha256(&results.join("manifest.json"))?,
+        ledger_sha256: sha256(&results.join("ledger.jsonl"))?,
+        proof_sha256: sha256(&results.join("mode-proof.json"))?,
+        anchor_before_sha256: sha256(&results.join("anchor-before.json"))?,
+        anchor_after_sha256: sha256(&results.join("anchor-after.json"))?,
+    };
+    atomic_json(&results.join("final.json"), &seal)
 }
 
 fn campaign_lock(results: &Path) -> Result<File, Error> {
@@ -314,8 +509,8 @@ fn validate_artifact_roles(artifacts: &[Frozen]) -> Result<(), Error> {
         .iter()
         .map(|artifact| artifact.role.as_str())
         .collect::<BTreeSet<_>>();
-    if artifacts.len() != 2 || roles != BTreeSet::from(["executable", "native-library"]) {
-        return Err("campaign must contain exactly one executable and one native-library artifact".into());
+    if artifacts.len() != 3 || roles != BTreeSet::from(["executable", "native-executable", "native-library"]) {
+        return Err("campaign must contain exactly one engine, native executable, and native library artifact".into());
     }
     Ok(())
 }
@@ -332,6 +527,8 @@ fn verify_manifest(manifest: &Manifest, options: &RecordOptions) -> Result<(), E
         || manifest.frequency_hz != 9_999
         || manifest.call_graph != "dwarf,65528"
         || manifest.direct_jmp != "off"
+        || manifest.execution_mode != options.execution_mode
+        || manifest.native_command != options.native_command
     {
         return Err("resume request does not match the immutable campaign manifest".into());
     }
@@ -478,6 +675,7 @@ fn freeze_build_ids(data: &Path, results: &Path, index_path: &Path) -> Result<()
 fn parse_campaign(results: &Path) -> Result<(), Error> {
     let manifest: Manifest = serde_json::from_reader(File::open(results.join("manifest.json"))?)?;
     validate_sealed_manifest(&manifest)?;
+    verify_final_seal(results, &manifest)?;
     let receipts = read_receipts(results, &manifest)?;
     if receipts.len() != PROFILE_COUNT {
         return Err("six complete profile receipts are required".into());
@@ -517,6 +715,58 @@ fn parse_campaign(results: &Path) -> Result<(), Error> {
     aggregate.verify()?;
     fs::write(results.join("attribution.tsv"), report)?;
     atomic_json(&results.join("attribution.json"), &aggregate)?;
+    Ok(())
+}
+
+fn verify_final_seal(results: &Path, manifest: &Manifest) -> Result<(), Error> {
+    let seal: FinalSeal = serde_json::from_reader(File::open(results.join("final.json"))?)?;
+    if seal.format != FORMAT
+        || seal.manifest_sha256 != sha256(&results.join("manifest.json"))?
+        || seal.ledger_sha256 != sha256(&results.join("ledger.jsonl"))?
+        || seal.proof_sha256 != sha256(&results.join("mode-proof.json"))?
+        || seal.anchor_before_sha256 != sha256(&results.join("anchor-before.json"))?
+        || seal.anchor_after_sha256 != sha256(&results.join("anchor-after.json"))?
+    {
+        return Err("final campaign seal does not bind its evidence".into());
+    }
+    let before: AnchorReceipt = serde_json::from_reader(File::open(results.join("anchor-before.json"))?)?;
+    let after: AnchorReceipt = serde_json::from_reader(File::open(results.join("anchor-after.json"))?)?;
+    let native = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "native-executable")
+        .ok_or("manifest lacks native executable")?;
+    verify_anchor_receipts(&before, &after, native, manifest)?;
+    let proof: ModeProof = serde_json::from_reader(File::open(results.join("mode-proof.json"))?)?;
+    if proof.execution_mode != manifest.execution_mode
+        || proof.stdout_sha256 != manifest.semantic_sha256
+        || proof.semantic_output_sha256 != manifest.semantic_output_sha256
+        || proof.stderr_sha256 != sha256(&results.join("mode-proof.stderr"))?
+    {
+        return Err("execution-mode proof receipt changed".into());
+    }
+    verify_mode_diagnostic(
+        manifest.execution_mode,
+        &fs::read_to_string(results.join("mode-proof.stderr"))?,
+    )
+}
+
+fn verify_anchor_receipts(
+    before: &AnchorReceipt,
+    after: &AnchorReceipt,
+    native: &Frozen,
+    manifest: &Manifest,
+) -> Result<(), Error> {
+    for (anchor, position) in [(before, "before"), (after, "after")] {
+        if anchor.position != position
+            || anchor.executable_sha256 != native.sha256
+            || anchor.stdout_sha256 != manifest.semantic_sha256
+            || anchor.stderr_sha256 != EMPTY_SHA256
+            || anchor.semantic_output_sha256 != manifest.semantic_output_sha256
+        {
+            return Err(format!("native {position} anchor moved or changed semantics").into());
+        }
+    }
     Ok(())
 }
 
@@ -586,7 +836,6 @@ fn read_receipts(results: &Path, manifest: &Manifest) -> Result<BTreeMap<usize, 
             || sha256(&prefix.with_extension("stderr"))? != receipt.stderr_sha256
             || sha256(&prefix.with_extension("symbols.tsv"))? != receipt.symbol_index_sha256
             || !receipt.direct_jmp_ibtc_disabled
-            || !ibtc_disabled(&prefix.with_extension("stderr"))?
             || match &receipt.semantic_output_sha256 {
                 Some(digest) => sha256(&prefix.with_extension("semantic"))? != *digest,
                 None => false,
@@ -766,10 +1015,12 @@ mod tests {
             frequency_hz: 9_999,
             call_graph: "dwarf,65528".into(),
             direct_jmp: "off".into(),
+            execution_mode: ExecutionMode::Interpreter,
             semantic_sha256: "0".repeat(64),
             semantic_output: None,
             semantic_output_sha256: None,
             command: vec!["x".into()],
+            native_command: vec!["root".into(), "gcc".into()],
             artifacts: vec![],
         };
         assert!(
@@ -793,11 +1044,21 @@ mod tests {
     }
 
     #[test]
-    fn runtime_ibtc_proof_rejects_prefix_and_value_spoofs() {
-        let (_directory, valid) = script("[diag] direct_jmp_ibtc_enabled=0 direct_jmp_ibtc_hits=0\n");
-        assert!(ibtc_disabled(&valid).unwrap());
-        fs::write(&valid, "not_direct_jmp_ibtc_enabled=0 direct_jmp_ibtc_enabled=00\n").unwrap();
-        assert!(!ibtc_disabled(&valid).unwrap());
+    fn execution_mode_diagnostics_reject_mismatch_and_spoofs() {
+        verify_mode_diagnostic(ExecutionMode::Interpreter, "[prof] translit: not selected\n").unwrap();
+        assert!(verify_mode_diagnostic(ExecutionMode::Translit, "[prof] translit: not selected\n").is_err());
+        assert!(
+            verify_mode_diagnostic(
+                ExecutionMode::Translit,
+                "[prof] translit: blocks=2\ndirect_jmp_ibtc_enabled=00\n"
+            )
+            .is_err()
+        );
+        verify_mode_diagnostic(
+            ExecutionMode::Translit,
+            "[prof] translit: blocks=2\n[diag] direct_jmp_ibtc_enabled=0\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -880,6 +1141,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_anchors_cannot_be_missing_or_moved() {
+        let native = frozen("native-executable", Path::new("/native"));
+        let manifest = test_manifest(vec![]);
+        let anchor = |position: &str| AnchorReceipt {
+            position: position.into(),
+            executable_sha256: native.sha256.clone(),
+            stdout_sha256: manifest.semantic_sha256.clone(),
+            stderr_sha256: EMPTY_SHA256.into(),
+            semantic_output_sha256: None,
+        };
+        verify_anchor_receipts(&anchor("before"), &anchor("after"), &native, &manifest).unwrap();
+        assert!(verify_anchor_receipts(&anchor("after"), &anchor("before"), &native, &manifest).is_err());
+    }
+
     fn frozen(role: &str, path: &Path) -> Frozen {
         Frozen {
             role: role.into(),
@@ -898,10 +1174,12 @@ mod tests {
             frequency_hz: 9_999,
             call_graph: "dwarf,65528".into(),
             direct_jmp: "off".into(),
+            execution_mode: ExecutionMode::Interpreter,
             semantic_sha256: "0".repeat(64),
             semantic_output: None,
             semantic_output_sha256: None,
             command: vec!["x".into()],
+            native_command: vec!["root".into(), "gcc".into()],
             artifacts,
         }
     }
