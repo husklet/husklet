@@ -15,6 +15,8 @@ use std::{
 type Error = Box<dyn std::error::Error>;
 const PROFILE_COUNT: usize = 6;
 const FORMAT: &str = "husklet-profile-attribution-v1";
+const PERF_RING_BUFFER: &str = "64M";
+const MAX_LOST_SAMPLE_PERCENT: f64 = 1.0;
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 #[derive(Args)]
@@ -88,6 +90,7 @@ struct Manifest {
     profiles: usize,
     event: String,
     frequency_hz: u32,
+    ring_buffer: String,
     call_graph: String,
     direct_jmp: String,
     execution_mode: ExecutionMode,
@@ -131,12 +134,21 @@ struct Receipt {
     slot: usize,
     perf_data_sha256: String,
     script_sha256: String,
+    exporter_stderr_sha256: String,
     stdout_sha256: String,
     semantic_output_sha256: Option<String>,
     stderr_sha256: String,
     symbol_index_sha256: String,
     direct_jmp_ibtc_disabled: bool,
     samples: u64,
+    lost_chunks: u64,
+    lost_sample_percent: f64,
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct ExportLoss {
+    lost_chunks: u64,
+    lost_sample_percent: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -195,6 +207,7 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             profiles: PROFILE_COUNT,
             event: "cpu-clock:u".into(),
             frequency_hz: 9_999,
+            ring_buffer: PERF_RING_BUFFER.into(),
             call_graph: "dwarf,65528".into(),
             direct_jmp: "off".into(),
             execution_mode: options.execution_mode,
@@ -231,6 +244,7 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             stdout.clone(),
             stderr.clone(),
             prefix.with_extension("script.tsv"),
+            prefix.with_extension("export.stderr"),
             prefix.with_extension("semantic"),
             prefix.with_extension("symbols.tsv"),
         ];
@@ -268,6 +282,8 @@ fn record(options: RecordOptions) -> Result<(), Error> {
                 "9999",
                 "--call-graph",
                 &manifest.call_graph,
+                "-m",
+                &manifest.ring_buffer,
                 "-o",
             ])
             .arg(&data)
@@ -311,9 +327,11 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             None
         };
         let script = prefix.with_extension("script.tsv");
+        let exporter_stderr = prefix.with_extension("export.stderr");
         let symbol_index = prefix.with_extension("symbols.tsv");
         freeze_build_ids(&data, &options.results, &symbol_index)?;
-        export_script(&data, &script)?;
+        let loss = export_script(&data, &script, &exporter_stderr)?;
+        verify_export_loss(slot, &loss)?;
         let samples = count_samples(&script)?;
         if samples == 0 {
             return Err(format!("profile {slot} contains zero cpu-clock:u samples").into());
@@ -322,12 +340,15 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             slot,
             perf_data_sha256: sha256(&data)?,
             script_sha256: sha256(&script)?,
+            exporter_stderr_sha256: sha256(&exporter_stderr)?,
             stdout_sha256: stdout_hash,
             semantic_output_sha256,
             stderr_sha256: sha256(&stderr)?,
             symbol_index_sha256: sha256(&symbol_index)?,
             direct_jmp_ibtc_disabled: true,
             samples,
+            lost_chunks: loss.lost_chunks,
+            lost_sample_percent: loss.lost_sample_percent,
         };
         append_receipt(&options.results, &receipt)?;
         receipts.insert(slot, receipt);
@@ -531,6 +552,7 @@ fn verify_manifest(manifest: &Manifest, options: &RecordOptions) -> Result<(), E
         || manifest.semantic_output_sha256 != options.semantic_output_sha256
         || manifest.event != "cpu-clock:u"
         || manifest.frequency_hz != 9_999
+        || manifest.ring_buffer != PERF_RING_BUFFER
         || manifest.call_graph != "dwarf,65528"
         || manifest.direct_jmp != "off"
         || manifest.execution_mode != options.execution_mode
@@ -566,6 +588,7 @@ fn validate_measurement_contract(manifest: &Manifest) -> Result<(), Error> {
         || manifest.profiles != PROFILE_COUNT
         || manifest.event != "cpu-clock:u"
         || manifest.frequency_hz != 9_999
+        || manifest.ring_buffer != PERF_RING_BUFFER
         || manifest.call_graph != "dwarf,65528"
         || manifest.direct_jmp != "off"
     {
@@ -620,15 +643,66 @@ fn elf_build_id(path: &Path) -> Result<String, Error> {
         .ok_or_else(|| format!("{} has no ELF build ID", path.display()).into())
 }
 
-fn export_script(data: &Path, destination: &Path) -> Result<(), Error> {
+fn export_script(data: &Path, destination: &Path, stderr_path: &Path) -> Result<ExportLoss, Error> {
     let output = Command::new("perf")
         .args(["script", "--no-demangle", "-G", "-F", "event,ip,sym,dso", "-i"])
         .arg(data)
         .output()?;
+    fs::write(stderr_path, &output.stderr)?;
     if !output.status.success() {
         return Err("perf script failed".into());
     }
+    let loss = parse_export_loss(&String::from_utf8(output.stderr)?)?;
     fs::write(destination, normalize_perf_script(&String::from_utf8(output.stdout)?)?)?;
+    Ok(loss)
+}
+
+fn parse_export_loss(stderr: &str) -> Result<ExportLoss, Error> {
+    if stderr.is_empty() {
+        return Ok(ExportLoss::default());
+    }
+    let mut chunks = None;
+    let mut percent = None;
+    for line in stderr.lines().filter(|line| !line.is_empty()) {
+        if line == "Warning:" || line == "Check IO/CPU overload!" {
+            continue;
+        }
+        if let Some((_, value)) = line
+            .strip_prefix("Processed ")
+            .and_then(|line| line.split_once(" events and lost "))
+        {
+            let value = value.strip_suffix(" chunks!").ok_or("malformed lost-chunk report")?;
+            if chunks.replace(value.parse()?).is_some() {
+                return Err("duplicate lost-chunk report".into());
+            }
+            continue;
+        }
+        if let Some((_, value)) = line
+            .strip_prefix("Processed ")
+            .and_then(|line| line.split_once(" samples and lost "))
+        {
+            let value = value.strip_suffix("%!").ok_or("malformed lost-sample report")?;
+            if percent.replace(value.parse()?).is_some() {
+                return Err("duplicate lost-sample report".into());
+            }
+            continue;
+        }
+        return Err(format!("unexpected perf exporter diagnostic: {line}").into());
+    }
+    Ok(ExportLoss {
+        lost_chunks: chunks.ok_or("perf exporter omitted lost-chunk count")?,
+        lost_sample_percent: percent.ok_or("perf exporter omitted lost-sample percentage")?,
+    })
+}
+
+fn verify_export_loss(slot: usize, loss: &ExportLoss) -> Result<(), Error> {
+    if loss.lost_chunks != 0 || loss.lost_sample_percent >= MAX_LOST_SAMPLE_PERCENT {
+        return Err(format!(
+            "profile {slot} exceeded loss threshold: {} chunks, {:.2}% samples",
+            loss.lost_chunks, loss.lost_sample_percent
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -856,10 +930,13 @@ fn read_receipts(results: &Path, manifest: &Manifest) -> Result<BTreeMap<usize, 
             || receipt.semantic_output_sha256 != manifest.semantic_output_sha256
             || sha256(&prefix.with_extension("data"))? != receipt.perf_data_sha256
             || sha256(&prefix.with_extension("script.tsv"))? != receipt.script_sha256
+            || sha256(&prefix.with_extension("export.stderr"))? != receipt.exporter_stderr_sha256
             || sha256(&prefix.with_extension("stdout"))? != receipt.stdout_sha256
             || sha256(&prefix.with_extension("stderr"))? != receipt.stderr_sha256
             || sha256(&prefix.with_extension("symbols.tsv"))? != receipt.symbol_index_sha256
             || !receipt.direct_jmp_ibtc_disabled
+            || receipt.lost_chunks != 0
+            || receipt.lost_sample_percent >= MAX_LOST_SAMPLE_PERCENT
             || match &receipt.semantic_output_sha256 {
                 Some(digest) => sha256(&prefix.with_extension("semantic"))? != *digest,
                 None => false,
@@ -996,6 +1073,34 @@ mod tests {
     }
 
     #[test]
+    fn exporter_loss_is_parsed_sealed_and_bounded() {
+        assert_eq!(parse_export_loss("").unwrap(), ExportLoss::default());
+        let warning = concat!(
+            "Warning:\n",
+            "Processed 4589 events and lost 30 chunks!\n\n",
+            "Check IO/CPU overload!\n\n",
+            "Warning:\n",
+            "Processed 3315 samples and lost 8.14%!\n",
+        );
+        let loss = parse_export_loss(warning).unwrap();
+        assert_eq!(loss.lost_chunks, 30);
+        assert_eq!(loss.lost_sample_percent, 8.14);
+        assert!(verify_export_loss(1, &loss).is_err());
+        assert!(
+            verify_export_loss(
+                1,
+                &ExportLoss {
+                    lost_chunks: 0,
+                    lost_sample_percent: 0.99,
+                }
+            )
+            .is_ok()
+        );
+        assert!(parse_export_loss(&warning.replace("8.14%", "unknown")).is_err());
+        assert!(parse_export_loss(&warning.replace("30 chunks!", "")).is_err());
+    }
+
+    #[test]
     fn partitions_exact_elf_memfd_invalid_and_unresolved_samples() {
         let (_directory, path) = script(concat!(
             "cpu-clock:u:\t0000000000401000\trun_guest\t/frozen/hl\n",
@@ -1043,12 +1148,15 @@ mod tests {
             slot: 7,
             perf_data_sha256: "a".into(),
             script_sha256: "b".into(),
+            exporter_stderr_sha256: EMPTY_SHA256.into(),
             stdout_sha256: "c".into(),
             semantic_output_sha256: None,
             stderr_sha256: "d".into(),
             symbol_index_sha256: "e".into(),
             direct_jmp_ibtc_disabled: true,
             samples: 1,
+            lost_chunks: 0,
+            lost_sample_percent: 0.0,
         };
         append_receipt(directory.path(), &receipt).unwrap();
         let manifest = Manifest {
@@ -1056,6 +1164,7 @@ mod tests {
             profiles: PROFILE_COUNT,
             event: "cpu-clock:u".into(),
             frequency_hz: 9_999,
+            ring_buffer: PERF_RING_BUFFER.into(),
             call_graph: "dwarf,65528".into(),
             direct_jmp: "off".into(),
             execution_mode: ExecutionMode::Interpreter,
@@ -1122,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_contract_rejects_event_frequency_unwind_and_direct_jmp_changes() {
+    fn manifest_contract_rejects_event_frequency_ring_unwind_and_direct_jmp_changes() {
         let mut manifest = test_manifest(vec![]);
         validate_measurement_contract(&manifest).unwrap();
         manifest.event = "cycles:u".into();
@@ -1131,6 +1240,9 @@ mod tests {
         manifest.frequency_hz = 10_000;
         assert!(validate_measurement_contract(&manifest).is_err());
         manifest.frequency_hz = 9_999;
+        manifest.ring_buffer = "8M".into();
+        assert!(validate_measurement_contract(&manifest).is_err());
+        manifest.ring_buffer = PERF_RING_BUFFER.into();
         manifest.call_graph = "fp".into();
         assert!(validate_measurement_contract(&manifest).is_err());
         manifest.call_graph = "dwarf,65528".into();
@@ -1195,12 +1307,15 @@ mod tests {
             slot: 1,
             perf_data_sha256: "a".into(),
             script_sha256: "b".into(),
+            exporter_stderr_sha256: EMPTY_SHA256.into(),
             stdout_sha256: "c".into(),
             semantic_output_sha256: None,
             stderr_sha256: "d".into(),
             symbol_index_sha256: "e".into(),
             direct_jmp_ibtc_disabled: true,
             samples: 0,
+            lost_chunks: 0,
+            lost_sample_percent: 0.0,
         };
         append_receipt(directory.path(), &receipt).unwrap();
         assert!(
@@ -1242,6 +1357,7 @@ mod tests {
             profiles: PROFILE_COUNT,
             event: "cpu-clock:u".into(),
             frequency_hz: 9_999,
+            ring_buffer: PERF_RING_BUFFER.into(),
             call_graph: "dwarf,65528".into(),
             direct_jmp: "off".into(),
             execution_mode: ExecutionMode::Interpreter,
