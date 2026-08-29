@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -48,11 +49,12 @@ int main(int argc, char **argv) {
         while (!atomic_load_explicit(&worker_ready, memory_order_acquire)) sched_yield();
         int answer = profiled_caller(seed);
         int after = post_rollover_caller(seed);
-        atomic_store_explicit(&worker_stop, 1, memory_order_release);
-        if (pthread_join(thread, NULL) != 0) return 9;
         printf("post-exec pid=%d answer=%d after=%d caller=%p target=%p\n", (int)getpid(), answer, after,
                (void *)profiled_caller, (void *)post_rollover_caller);
-        return answer == 42 && after == 42 ? 0 : 8;
+        fflush(stdout);
+        /* Deliberately leave the peer translating: exit_group must serialize
+           the final sampling flush with its publication. */
+        exit(answer == 42 && after == 42 ? 0 : 8);
     }
 
     pid_t child = fork();

@@ -1452,6 +1452,8 @@ fn sampling_symbols_follow_exec_fresh_arena_generations() {
         let text = std::fs::read_to_string(map).unwrap();
         assert!(text.contains(" hl_tl_helper_jcc_ibtc\n"), "{}:\n{text}", map.display());
         assert!(text.lines().any(|line| line.contains(" hl_tl_") && line.contains("_gl")), "{}:\n{text}", map.display());
+        let lines = text.lines().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(lines.len(), text.lines().count(), "inherited sampling records were published twice: {}", map.display());
     }
     assert!(
         files.iter().all(|path| !path.file_name().unwrap().to_string_lossy().starts_with("jit-")),
