@@ -588,7 +588,7 @@ static FILE *translit_jitdump_file;
 static void *translit_jitdump_marker;
 static pid_t translit_jitdump_pid;
 static uint64_t translit_jitdump_index;
-enum { TRANSLIT_SAMPLING_RECORD_CAP = 131072 };
+enum { TRANSLIT_SAMPLING_RECORD_CAP = 131072, TRANSLIT_SAMPLING_FLUSH_BATCH = 4096 };
 typedef struct translit_sampling_record {
     uint64_t address;
     uint32_t length;
@@ -623,6 +623,14 @@ typedef struct translit_profile_named_range {
 static translit_profile_named_range translit_profile_jcc_ibtc, translit_profile_direct_jmp_ibtc;
 extern const char *hl_c_backend_build_fingerprint(void);
 
+static void translit_profile_stream_close(FILE **stream) {
+    if (*stream == NULL) return;
+    int descriptor = fileno(*stream);
+    if (descriptor >= 0) hl_host_process_fd_private_remove(descriptor);
+    (void)fclose(*stream);
+    *stream = NULL;
+}
+
 static void translit_profile_output_failed(const char *what) {
     char message[256];
     int length = snprintf(message, sizeof message, "same-ISA profiling output %s failed: %s", what, strerror(errno));
@@ -638,11 +646,9 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
         translit_profile_active.rw == rw && translit_profile_active.rx == rx && translit_profile_active.size == size)
         return;
     translit_sampling_flush();
-    if (translit_perf_map_file != NULL) fclose(translit_perf_map_file);
+    translit_profile_stream_close(&translit_perf_map_file);
     if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
-    if (translit_jitdump_file != NULL) fclose(translit_jitdump_file);
-    translit_perf_map_file = NULL;
-    translit_jitdump_file = NULL;
+    translit_profile_stream_close(&translit_jitdump_file);
     translit_jitdump_marker = NULL;
     translit_perf_map_pid = 0;
     translit_jitdump_pid = 0;
@@ -737,7 +743,7 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
         return;
     }
     if (translit_perf_map_file == NULL || translit_perf_map_pid != pid) {
-        if (translit_perf_map_file != NULL) fclose(translit_perf_map_file);
+        translit_profile_stream_close(&translit_perf_map_file);
         char path[PATH_MAX];
         int length = snprintf(path, sizeof path, "%s/perf-%lld-g%llu-rx%llx.map", directory, (long long)pid,
                               (unsigned long long)translit_profile_active.generation,
@@ -748,9 +754,15 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
             translit_profile_output_failed("perf-map create-exclusive");
             return;
         }
+        descriptor = hl_host_process_fd_private_adopt(descriptor);
+        if (descriptor < 0) {
+            translit_profile_output_failed("perf-map private descriptor");
+            return;
+        }
         translit_perf_map_file = fdopen(descriptor, "w");
         if (translit_perf_map_file == NULL) {
             int saved = errno;
+            hl_host_process_fd_private_remove(descriptor);
             close(descriptor);
             errno = saved;
             translit_profile_output_failed("perf-map stream");
@@ -774,6 +786,7 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
         record->length = host_len;
         memcpy(record->name, name, name_length + 1u);
         if (translit_sampling_record_count == 1) translit_sampling_receipt("enqueue-first");
+        if (translit_sampling_record_count == TRANSLIT_SAMPLING_FLUSH_BATCH) translit_sampling_flush();
         return;
     }
     (void)fprintf(translit_perf_map_file, "%llx %x %s\n", (unsigned long long)address, host_len, name);
