@@ -188,6 +188,57 @@ mod linux_host {
         assert!(output.stderr.is_empty());
     }
 
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn real_cli_publishes_exclusive_perf_map_and_jitdump_ranges() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("bin")).unwrap();
+        let fixture = root.path().join("bin/profile-fixture");
+        fs::write(&fixture, static_x86_64(60, 43)).unwrap();
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+
+        let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+            .args(["--diagnostics", "--translit", "--translit-perf-map"])
+            .arg(directory.path())
+            .args(["--rootfs", root.path().to_str().unwrap(), "bin/profile-fixture"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(43),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut entries = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries.len(), 2, "expected one perf map and one jitdump: {entries:?}");
+        for path in &entries {
+            assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert!(fs::metadata(path).unwrap().len() > 0, "{} is empty", path.display());
+        }
+        let map = entries
+            .iter()
+            .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("perf-"))
+            .unwrap();
+        let text = fs::read_to_string(map).unwrap();
+        assert!(
+            text.lines().any(|line| line.ends_with(" hl_tl_helper_jcc_ibtc")),
+            "{text}"
+        );
+        assert!(
+            text.lines().any(|line| line.contains(" hl_tl_") && line.contains("_g")),
+            "{text}"
+        );
+    }
+
     #[test]
     fn a_callers_controlling_terminal_survives_redirected_output() {
         let path = std::env::temp_dir().join(format!("hl-mixed-stdio-x86-{}", std::process::id()));

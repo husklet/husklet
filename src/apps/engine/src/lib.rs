@@ -163,6 +163,13 @@ fn parse_translit_perf_map(value: &str) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err(format!("--translit-perf-map {} is not a directory", path.display()));
     }
+    if std::fs::read_dir(&path)
+        .map_err(|error| format!("cannot read --translit-perf-map {}: {error}", path.display()))?
+        .next()
+        .is_some()
+    {
+        return Err(format!("--translit-perf-map {} is not empty", path.display()));
+    }
     if std::fs::metadata(&path)
         .map_err(|error| format!("cannot inspect --translit-perf-map {}: {error}", path.display()))?
         .permissions()
@@ -918,6 +925,19 @@ mod tests {
                 "--translit",
                 "--translit-perf-map",
                 file.to_str().unwrap(),
+                "bin/program"
+            ])
+            .is_err()
+        );
+        let occupied = tempfile::tempdir().unwrap();
+        std::fs::write(occupied.path().join("existing"), b"collision").unwrap();
+        assert!(
+            LaunchArguments::try_parse_from([
+                "hl-x86_64",
+                "--diagnostics",
+                "--translit",
+                "--translit-perf-map",
+                occupied.path().to_str().unwrap(),
                 "bin/program"
             ])
             .is_err()

@@ -482,6 +482,14 @@ static pid_t translit_jitdump_pid;
 static uint64_t translit_jitdump_index;
 extern const char *hl_c_backend_build_fingerprint(void);
 
+static void translit_profile_output_failed(const char *what) {
+    char message[256];
+    int length = snprintf(message, sizeof message, "same-ISA profiling output %s failed: %s", what, strerror(errno));
+    if (length < 0) length = 0;
+    if ((size_t)length >= sizeof message) length = (int)sizeof message - 1;
+    (void)jit_fail(HL_STATUS_PLATFORM_FAILURE, message, (size_t)length);
+}
+
 typedef struct __attribute__((packed)) translit_jitdump_header {
     uint32_t magic, version, total_size, elf_mach, pad1, pid;
     uint64_t timestamp, flags;
@@ -509,8 +517,19 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
     char path[PATH_MAX];
     int length = snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)pid);
     if (length <= 0 || (size_t)length >= sizeof path) return;
-    translit_jitdump_file = fopen(path, "w+b");
-    if (translit_jitdump_file == NULL) return;
+    int descriptor = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (descriptor < 0) {
+        translit_profile_output_failed("jitdump create-exclusive");
+        return;
+    }
+    translit_jitdump_file = fdopen(descriptor, "w+b");
+    if (translit_jitdump_file == NULL) {
+        int saved = errno;
+        close(descriptor);
+        errno = saved;
+        translit_profile_output_failed("jitdump stream");
+        return;
+    }
     translit_jitdump_header header = {UINT32_C(0x4A695444), 1, sizeof header, 62, 0, (uint32_t)pid,
                                       translit_jitdump_now(), 0};
     if (fwrite(&header, sizeof header, 1, translit_jitdump_file) != 1 || fflush(translit_jitdump_file) != 0) {
@@ -531,8 +550,7 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
     translit_jitdump_index = 0;
 }
 
-static void translit_perf_map_publish(const struct interp_block *block, const uint8_t *start, uint32_t host_len,
-                                      uint32_t instruction_count) {
+static void translit_perf_map_publish_named(const char *name, const uint8_t *start, uint32_t host_len) {
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
     if (!g_prof || directory == NULL || directory[0] == '\0' || host_len == 0) return;
     pid_t pid = getpid();
@@ -541,18 +559,24 @@ static void translit_perf_map_publish(const struct interp_block *block, const ui
         char path[PATH_MAX];
         int length = snprintf(path, sizeof path, "%s/perf-%lld.map", directory, (long long)pid);
         if (length <= 0 || (size_t)length >= sizeof path) return;
-        translit_perf_map_file = fopen(path, "a");
-        if (translit_perf_map_file == NULL) return;
+        int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (descriptor < 0) {
+            translit_profile_output_failed("perf-map create-exclusive");
+            return;
+        }
+        translit_perf_map_file = fdopen(descriptor, "w");
+        if (translit_perf_map_file == NULL) {
+            int saved = errno;
+            close(descriptor);
+            errno = saved;
+            translit_profile_output_failed("perf-map stream");
+            return;
+        }
         (void)setvbuf(translit_perf_map_file, NULL, _IONBF, 0);
         translit_perf_map_pid = pid;
     }
-    const char *fingerprint = hl_c_backend_build_fingerprint();
-    uint64_t guest_length = block->guest_end >= block->gpc ? block->guest_end - block->gpc : 0;
-    char name[256];
-    int name_length = snprintf(name, sizeof name, "hl_tl_%s_g%llx_gl%llu_i%u", fingerprint,
-                               (unsigned long long)block->gpc, (unsigned long long)guest_length,
-                               instruction_count);
-    if (name_length <= 0 || (size_t)name_length >= sizeof name) return;
+    size_t name_length = strlen(name);
+    if (name_length == 0 || name_length >= 256) return;
     (void)fprintf(translit_perf_map_file, "%llx %x %s\n",
                   (unsigned long long)(uintptr_t)J_RX(start), host_len, name);
     if (translit_jitdump_file == NULL || translit_jitdump_pid != pid) translit_jitdump_open(directory, pid);
@@ -567,8 +591,19 @@ static void translit_perf_map_publish(const struct interp_block *block, const ui
                                   host_len,
                                   ++translit_jitdump_index};
     (void)fwrite(&load, sizeof load, 1, translit_jitdump_file);
-    (void)fwrite(name, (size_t)name_length + 1u, 1, translit_jitdump_file);
+    (void)fwrite(name, name_length + 1u, 1, translit_jitdump_file);
     (void)fwrite(start, host_len, 1, translit_jitdump_file);
+}
+
+static void translit_perf_map_publish(const struct interp_block *block, const uint8_t *start, uint32_t host_len,
+                                      uint32_t instruction_count) {
+    const char *fingerprint = hl_c_backend_build_fingerprint();
+    uint64_t guest_length = block->guest_end >= block->gpc ? block->guest_end - block->gpc : 0;
+    char name[256];
+    int length = snprintf(name, sizeof name, "hl_tl_%s_g%llx_gl%llu_i%u", fingerprint,
+                          (unsigned long long)block->gpc, (unsigned long long)guest_length, instruction_count);
+    if (length <= 0 || (size_t)length >= sizeof name) return;
+    translit_perf_map_publish_named(name, start, host_len);
 }
 #endif
 static uint64_t translit_displaced_lea_lowered;
@@ -1445,6 +1480,7 @@ static int translit_jcc_ibtc_stub_init(void) {
     translit_jcc_ibtc_stub_rsp_canonical = rsp_canonical;
     translit_jcc_ibtc_stub_flags_canonical = flags_canonical;
     translit_jcc_ibtc_stub_end = a.cursor;
+    translit_perf_map_publish_named("hl_tl_helper_jcc_ibtc", entry, (uint32_t)(a.cursor - entry));
     return 1;
 }
 
