@@ -1353,9 +1353,20 @@ fn forked_translators_publish_process_owned_perf_files() {
     let executable = fixture(work.path(), "perf_map_fork");
     let maps = work.path().join("maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, status, _) = run_with_perf_map(&executable, &maps);
+    let (output, status, backend) = run_with_perf_map(&executable, &maps);
     assert_eq!(status, 0);
-    assert_eq!(output, b"fork-map=42 child=0\n");
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.starts_with("fork-map=42 warm=10752 child=0 "), "{output}");
+    let field = |name: &str| {
+        output
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .unwrap_or_else(|| panic!("missing {name} in {output}"))
+    };
+    let parent_pid = field("parent-pid=");
+    let child_pid = field("child-pid=");
+    let caller = field("caller=").trim_start_matches("0x");
+    let target = field("target=").trim_start_matches("0x");
     let names: Vec<_> = std::fs::read_dir(&maps)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -1370,6 +1381,25 @@ fn forked_translators_publish_process_owned_perf_files() {
         2,
         "{names:?}"
     );
+    for pid in [parent_pid, child_pid] {
+        let map = maps.join(format!("perf-{pid}.map"));
+        let text = std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
+        assert!(
+            text.contains(caller),
+            "caller {caller} absent from {}:\n{text}",
+            map.display()
+        );
+        assert!(
+            text.contains(target),
+            "target {target} absent from {}:\n{text}",
+            map.display()
+        );
+    }
+    if backend.shape_line.contains("direct_call_ibtc_emitted=") {
+        assert!(backend.direct_call_ibtc_misses >= 2, "{}", backend.shape_line);
+        assert!(backend.direct_call_ibtc_fills >= 2, "{}", backend.shape_line);
+        assert!(backend.direct_call_ibtc_hits >= 256, "{}", backend.shape_line);
+    }
 }
 
 #[test]
