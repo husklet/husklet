@@ -2406,7 +2406,14 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         jump.mod = 3;
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
-    if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
+    if (scenario == 149) {
+        pid_t child = fork();
+        if (child < 0) return 148;
+        if (child == 0) _exit(translit_jmp_mem_signal_stage_test() ? 0 : 149);
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 150;
+        return WIFEXITED(status) ? WEXITSTATUS(status) : 151;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
