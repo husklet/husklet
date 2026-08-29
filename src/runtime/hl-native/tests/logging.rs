@@ -1,6 +1,18 @@
 use std::{fs, path::PathBuf, process::Command};
 
 #[test]
+fn sampling_exit_flush_joins_translation_serialization() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let source = fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read transliterator");
+    let start = source.find("static void translit_perf_map_flush_at_exit(void)").expect("exit flush");
+    let body = &source[start..source[start..].find("\n}").map_or(source.len(), |end| start + end)];
+    let lock = body.find("pthread_mutex_lock(&g_jit_lock)").expect("translation lock");
+    let flush = body.find("translit_perf_map_flush()").expect("sampling flush");
+    let unlock = body.find("pthread_mutex_unlock(&g_jit_lock)").expect("translation unlock");
+    assert!(lock < flush && flush < unlock, "exit flush is outside translation serialization: {body}");
+}
+
+#[test]
 fn x86_dispatch_bookkeeping_is_diagnostic_only() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let target = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
