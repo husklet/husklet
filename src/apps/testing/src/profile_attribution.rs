@@ -635,7 +635,7 @@ fn export_script(data: &Path, destination: &Path) -> Result<(), Error> {
 fn normalize_perf_script(output: &str) -> Result<Vec<u8>, Error> {
     let mut normalized = Vec::new();
     for (index, line) in output.lines().enumerate() {
-        let mut fields = line.splitn(4, char::is_whitespace).filter(|field| !field.is_empty());
+        let mut fields = line.split_whitespace();
         let event = fields
             .next()
             .ok_or_else(|| format!("perf script row {} lacks event", index + 1))?;
@@ -645,9 +645,10 @@ fn normalize_perf_script(output: &str) -> Result<Vec<u8>, Error> {
         let symbol = fields
             .next()
             .ok_or_else(|| format!("perf script row {} lacks symbol", index + 1))?;
-        let dso = fields
-            .next()
-            .ok_or_else(|| format!("perf script row {} lacks dso", index + 1))?;
+        let dso = fields.collect::<Vec<_>>().join(" ");
+        if dso.is_empty() {
+            return Err(format!("perf script row {} lacks dso", index + 1).into());
+        }
         let dso = dso
             .strip_prefix('(')
             .and_then(|value| value.strip_suffix(')'))
