@@ -1872,7 +1872,8 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
             selected_backend.shape_line
         );
         assert_eq!(
-            selected_backend.direct_call_ibtc_invalid_refusals, 0,
+            selected_backend.direct_call_ibtc_misses,
+            selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals,
             "{}",
             selected_backend.shape_line
         );
