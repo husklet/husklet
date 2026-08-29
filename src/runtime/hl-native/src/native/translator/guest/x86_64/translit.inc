@@ -176,6 +176,12 @@ static _Atomic uint64_t translit_direct_jmp_ibtc_fill_count;
 static _Atomic uint64_t translit_direct_jmp_ibtc_collision;
 static _Atomic uint64_t translit_direct_jmp_ibtc_suppressed;
 static _Atomic uint64_t translit_direct_jmp_ibtc_invalid_refusal;
+static _Atomic uint64_t translit_direct_call_ibtc_emitted;
+static _Atomic uint64_t translit_direct_call_ibtc_hit;
+static _Atomic uint64_t translit_direct_call_ibtc_miss;
+static _Atomic uint64_t translit_direct_call_ibtc_irq;
+static _Atomic uint64_t translit_direct_call_ibtc_fill_count;
+static _Atomic uint64_t translit_direct_call_ibtc_invalid_refusal;
 #endif
 enum translit_jcc_ibtc_counter {
     TL_JCC_IBTC_COUNT_EMITTED,
@@ -267,6 +273,44 @@ static void translit_direct_jmp_ibtc_count(enum translit_direct_jmp_ibtc_counter
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
 #else
     hl_backend_tree_direct_jmp_ibtc_add((enum hl_backend_direct_jmp_ibtc_counter)kind, count);
+#endif
+}
+
+enum translit_direct_call_ibtc_counter {
+    TL_DIRECT_CALL_IBTC_COUNT_EMITTED,
+    TL_DIRECT_CALL_IBTC_COUNT_HIT,
+    TL_DIRECT_CALL_IBTC_COUNT_MISS,
+    TL_DIRECT_CALL_IBTC_COUNT_IRQ,
+    TL_DIRECT_CALL_IBTC_COUNT_FILL,
+    TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL,
+};
+static uintptr_t translit_direct_call_ibtc_dynamic_counter(enum translit_direct_call_ibtc_counter kind) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    switch (kind) {
+    case TL_DIRECT_CALL_IBTC_COUNT_HIT: return (uintptr_t)&translit_direct_call_ibtc_hit;
+    case TL_DIRECT_CALL_IBTC_COUNT_MISS: return (uintptr_t)&translit_direct_call_ibtc_miss;
+    case TL_DIRECT_CALL_IBTC_COUNT_IRQ: return (uintptr_t)&translit_direct_call_ibtc_irq;
+    default: return 0;
+    }
+#else
+    return hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+        (enum hl_backend_direct_call_ibtc_counter)kind);
+#endif
+}
+static void translit_direct_call_ibtc_count(enum translit_direct_call_ibtc_counter kind, uint64_t count) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    _Atomic uint64_t *counter = NULL;
+    switch (kind) {
+    case TL_DIRECT_CALL_IBTC_COUNT_EMITTED: counter = &translit_direct_call_ibtc_emitted; break;
+    case TL_DIRECT_CALL_IBTC_COUNT_HIT: counter = &translit_direct_call_ibtc_hit; break;
+    case TL_DIRECT_CALL_IBTC_COUNT_MISS: counter = &translit_direct_call_ibtc_miss; break;
+    case TL_DIRECT_CALL_IBTC_COUNT_IRQ: counter = &translit_direct_call_ibtc_irq; break;
+    case TL_DIRECT_CALL_IBTC_COUNT_FILL: counter = &translit_direct_call_ibtc_fill_count; break;
+    case TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL: counter = &translit_direct_call_ibtc_invalid_refusal; break;
+    }
+    if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+#else
+    hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
 #endif
 }
 static uint64_t translit_displaced_blocks;
@@ -1192,7 +1236,19 @@ static int translit_jcc_ibtc_stub_init(void) {
     uint8_t *miss_body = hl_x64_jcc_rel32(&a, 4);
     hl_x64_store_gs(&a, HL_X64_RAX, TL_MM_ENTRY);
     uintptr_t hit_counter = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_HIT);
-    if (hit_counter != 0) hl_x64_atomic_inc_abs(&a, hit_counter);
+    if (hit_counter != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_JCC_IBTC_MISS);
+        uint8_t *not_jcc = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, hit_counter);
+        hl_x64_patch_rel32(&a, not_jcc, a.cursor);
+    }
+    uintptr_t call_hit_counter = translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_HIT);
+    if (call_hit_counter != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_DIRECT_CALL_IBTC_MISS);
+        uint8_t *not_call = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, call_hit_counter);
+        hl_x64_patch_rel32(&a, not_call, a.cursor);
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     uintptr_t shape_counter = hl_backend_tree_jcc_link_counter_address();
     if (shape_counter != 0) hl_x64_atomic_inc_abs(&a, shape_counter);
@@ -1204,12 +1260,36 @@ static int translit_jcc_ibtc_stub_init(void) {
     hl_x64_patch_rel32(&a, miss_key, a.cursor);
     hl_x64_patch_rel32(&a, miss_body, a.cursor);
     uintptr_t miss_counter = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_MISS);
-    if (miss_counter != 0) hl_x64_atomic_inc_abs(&a, miss_counter);
+    if (miss_counter != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_JCC_IBTC_MISS);
+        uint8_t *not_jcc = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, miss_counter);
+        hl_x64_patch_rel32(&a, not_jcc, a.cursor);
+    }
+    uintptr_t call_miss_counter = translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_MISS);
+    if (call_miss_counter != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_DIRECT_CALL_IBTC_MISS);
+        uint8_t *not_call = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, call_miss_counter);
+        hl_x64_patch_rel32(&a, not_call, a.cursor);
+    }
     translit_emit_return(&a, R_BRANCH); // cpu->rip already names the target
 
     hl_x64_patch_rel32(&a, irq, a.cursor);
     uintptr_t irq_counter = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_IRQ);
-    if (irq_counter != 0) hl_x64_atomic_inc_abs(&a, irq_counter);
+    if (irq_counter != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_JCC_IBTC_MISS);
+        uint8_t *not_jcc = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, irq_counter);
+        hl_x64_patch_rel32(&a, not_jcc, a.cursor);
+    }
+    uintptr_t call_irq_counter = translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_IRQ);
+    if (call_irq_counter != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_DIRECT_CALL_IBTC_MISS);
+        uint8_t *not_call = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, call_irq_counter);
+        hl_x64_patch_rel32(&a, not_call, a.cursor);
+    }
     hl_x64_store_gs_imm32(&a, 0, OFF_JCC_IBTC_MISS);
     translit_emit_return(&a, R_BRANCH);
     if (a.overflow) return 0;
@@ -1427,6 +1507,8 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code) {
         !jit_resolve_rw_code(block, &rx, &generation) || generation != g_cache_gen) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_INVALID_REFUSAL, 1);
+        else if (direct_call)
+            translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL, 1);
         else if (actual_miss && !direct_call)
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_INVALID_REFUSAL, 1);
 #if !defined(HL_NATIVE_TEST_HOOKS)
@@ -1441,6 +1523,8 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code) {
     if (entry_address < (uintptr_t)rx) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_INVALID_REFUSAL, 1);
+        else if (direct_call)
+            translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL, 1);
         else if (actual_miss && !direct_call)
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_INVALID_REFUSAL, 1);
 #if !defined(HL_NATIVE_TEST_HOOKS)
@@ -1467,6 +1551,8 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code) {
     ibtc_publish(entry, cpu->rip, (void *)entry_address);
     if (direct_jmp)
         translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_FILL, 1);
+    else if (direct_call)
+        translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_FILL, 1);
     else if (!direct_call)
         translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_FILL, 1);
 }
@@ -1488,6 +1574,8 @@ static void translit_jcc_ibtc_finalize_cpu(struct cpu *cpu) {
         cpu->jcc_ibtc_miss = 0;
         if (miss_kind == TL_DIRECT_JMP_IBTC_MISS)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_INVALID_REFUSAL, 1);
+        else if (miss_kind == TL_DIRECT_CALL_IBTC_MISS)
+            translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL, 1);
         else if (miss_kind != TL_DIRECT_CALL_IBTC_MISS)
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_INVALID_REFUSAL, 1);
     }
@@ -3556,6 +3644,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
             if (kind == TL_CALL && translit_jcc_ibtc_stub_entry != NULL) {
                 ibtc_site = translit_emit_direct_call_ibtc(a, next + (uint64_t)insn.imm);
+                translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_EMITTED, 1);
                 jcc_ibtc_sites++;
             } else if (kind == TL_CALL) {
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
