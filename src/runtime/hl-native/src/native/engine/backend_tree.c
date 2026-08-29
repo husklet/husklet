@@ -36,6 +36,8 @@ enum hl_backend_shape_translated_exit {
     HL_BACKEND_SHAPE_T_OTHER,
     HL_BACKEND_SHAPE_T_COUNT,
 };
+#define HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY HL_BACKEND_SHAPE_T_INDIRECT_BRANCH
+#define HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY HL_BACKEND_SHAPE_T_INDIRECT_CALL
 
 /* Why a completed transliterated descriptor used its sequential dispatcher exit.  These are execution
    facts, carried by the emitted terminal marker: counting them while building would include cold blocks
@@ -89,6 +91,8 @@ enum hl_backend_shape_interpreter_stop {
     HL_BACKEND_SHAPE_S_OTHER,
     HL_BACKEND_SHAPE_S_COUNT,
 };
+#define HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY HL_BACKEND_SHAPE_S_INDIRECT_BRANCH
+#define HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY HL_BACKEND_SHAPE_S_INDIRECT_CALL
 
 enum hl_backend_shape_edge_family {
     HL_BACKEND_SHAPE_EDGE_FALLTHROUGH,
@@ -219,6 +223,12 @@ struct hl_backend_tree_shared {
     /* One shared dynamic count: every admitted link has the same proven JCC disposition. Keeping it in
        the fork-shared record makes emitted increments independent of per-process slot reassignment. */
     _Atomic uint64_t jcc_links;
+    _Atomic uint64_t direct_call_ibtc_emitted;
+    _Atomic uint64_t direct_call_ibtc_hits;
+    _Atomic uint64_t direct_call_ibtc_misses;
+    _Atomic uint64_t direct_call_ibtc_irq;
+    _Atomic uint64_t direct_call_ibtc_fills;
+    _Atomic uint64_t direct_call_ibtc_invalid_refusals;
     struct hl_backend_tree_slot slots[HL_BACKEND_TREE_SLOTS];
 };
 
@@ -445,6 +455,8 @@ static inline void hl_backend_tree_run_begin(int translated, uint64_t steps) {
         atomic_fetch_add_explicit(&slot->interpreted_entries, 1, memory_order_relaxed);
     }
 }
+
+static inline int hl_backend_tree_steps_enabled(void) { return g_backend_tree_self != NULL; }
 
 static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     if (g_backend_tree_self != NULL)
@@ -933,7 +945,9 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "stop0_key=%llu stop0_count=%llu stop1_key=%llu stop1_count=%llu "
         "stop2_key=%llu stop2_count=%llu stop3_key=%llu stop3_count=%llu "
         "stop4_key=%llu stop4_count=%llu stop5_key=%llu stop5_count=%llu "
-        "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu\n",
+        "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu "
+        "direct_call_ibtc_emitted=%llu direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
+        "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu direct_call_ibtc_invalid_refusals=%llu\n",
         (unsigned long long)summary.translated_entries, (unsigned long long)translated_transfers,
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
@@ -1072,7 +1086,14 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.stop_top_key[4], (unsigned long long)summary.stop_top_count[4],
         (unsigned long long)summary.stop_top_key[5], (unsigned long long)summary.stop_top_count[5],
         (unsigned long long)summary.stop_top_key[6], (unsigned long long)summary.stop_top_count[6],
-        (unsigned long long)summary.stop_top_key[7], (unsigned long long)summary.stop_top_count[7]);
+        (unsigned long long)summary.stop_top_key[7], (unsigned long long)summary.stop_top_count[7],
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_emitted, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_hits, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_misses, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_irq, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_fills, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_invalid_refusals,
+                                                memory_order_relaxed));
 }
 
 static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
@@ -1393,6 +1414,38 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
 }
 #endif
 
+enum hl_backend_direct_call_ibtc_counter {
+    HL_BACKEND_DIRECT_CALL_IBTC_EMITTED,
+    HL_BACKEND_DIRECT_CALL_IBTC_HIT,
+    HL_BACKEND_DIRECT_CALL_IBTC_MISS,
+    HL_BACKEND_DIRECT_CALL_IBTC_IRQ,
+    HL_BACKEND_DIRECT_CALL_IBTC_FILL,
+    HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL,
+};
+static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
+    enum hl_backend_direct_call_ibtc_counter kind) {
+    struct hl_backend_tree_shared *tree = g_backend_tree;
+    if (tree == NULL) return NULL;
+    switch (kind) {
+    case HL_BACKEND_DIRECT_CALL_IBTC_EMITTED: return &tree->direct_call_ibtc_emitted;
+    case HL_BACKEND_DIRECT_CALL_IBTC_HIT: return &tree->direct_call_ibtc_hits;
+    case HL_BACKEND_DIRECT_CALL_IBTC_MISS: return &tree->direct_call_ibtc_misses;
+    case HL_BACKEND_DIRECT_CALL_IBTC_IRQ: return &tree->direct_call_ibtc_irq;
+    case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &tree->direct_call_ibtc_fills;
+    case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &tree->direct_call_ibtc_invalid_refusals;
+    }
+    return NULL;
+}
+static uintptr_t hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+    enum hl_backend_direct_call_ibtc_counter kind) {
+    return (uintptr_t)hl_backend_tree_direct_call_ibtc_counter(kind);
+}
+static void hl_backend_tree_direct_call_ibtc_add(enum hl_backend_direct_call_ibtc_counter kind,
+                                                 uint64_t count) {
+    _Atomic uint64_t *counter = hl_backend_tree_direct_call_ibtc_counter(kind);
+    if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+}
+
 HL_API int HL_BACKEND_TREE_TEST_NAME(uint32_t scenario) {
 #if defined(_WIN32)
     (void)scenario;
@@ -1419,7 +1472,31 @@ enum {
     HL_BACKEND_SHAPE_T_IRQ,
     HL_BACKEND_SHAPE_T_FAULT,
     HL_BACKEND_SHAPE_T_OTHER,
+    HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY,
+    HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY,
+    HL_BACKEND_SHAPE_T_COUNT,
 };
+
+enum {
+    HL_BACKEND_SHAPE_S_FALLTHROUGH,
+    HL_BACKEND_SHAPE_S_COND_TAKEN,
+    HL_BACKEND_SHAPE_S_COND_NOT_TAKEN,
+    HL_BACKEND_SHAPE_S_DIRECT_JUMP,
+    HL_BACKEND_SHAPE_S_DIRECT_CALL,
+    HL_BACKEND_SHAPE_S_RETURN,
+    HL_BACKEND_SHAPE_S_INDIRECT_BRANCH,
+    HL_BACKEND_SHAPE_S_INDIRECT_CALL,
+    HL_BACKEND_SHAPE_S_SYSCALL,
+    HL_BACKEND_SHAPE_S_IRQ,
+    HL_BACKEND_SHAPE_S_FAULT,
+    HL_BACKEND_SHAPE_S_SERVICE,
+    HL_BACKEND_SHAPE_S_OTHER,
+    HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY,
+    HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY,
+    HL_BACKEND_SHAPE_S_COUNT,
+};
+
+#define HL_BACKEND_TREE_REASON_COUNT 20u
 
 /* Product diagnostics retain the mixed-builder execution facts and the seven JCC-IBTC facts needed to
    authenticate untimed ON/OFF proofs.  The anonymous mapping is created by the launch lifecycle only when typed
@@ -1448,6 +1525,21 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t executed;
     _Atomic uint64_t executed_transitions;
     _Atomic uint64_t disabled_boundaries;
+    _Atomic uint64_t translated_entries;
+    _Atomic uint64_t interpreted_entries;
+    _Atomic uint64_t translated_steps;
+    _Atomic uint64_t interpreted_steps;
+    _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
+    _Atomic uint64_t reason_other;
+    _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    _Atomic uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
+    _Atomic uint64_t call_sim_eligible;
+    _Atomic uint64_t call_sim_hit;
+    _Atomic uint64_t call_sim_miss;
+    _Atomic uint64_t call_sim_fill;
+    _Atomic uint64_t call_sim_decline_irq;
+    _Atomic uint64_t call_sim_decline_stub;
+    _Atomic uint64_t call_sim_decline_authority;
     _Atomic uint64_t jcc_ibtc_emitted;
     _Atomic uint64_t jcc_ibtc_hits;
     _Atomic uint64_t jcc_ibtc_misses;
@@ -1462,6 +1554,12 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t direct_jmp_ibtc_fills;
     _Atomic uint64_t direct_jmp_ibtc_suppressed;
     _Atomic uint64_t direct_jmp_ibtc_invalid_refusals;
+    _Atomic uint64_t direct_call_ibtc_emitted;
+    _Atomic uint64_t direct_call_ibtc_hits;
+    _Atomic uint64_t direct_call_ibtc_misses;
+    _Atomic uint64_t direct_call_ibtc_irq;
+    _Atomic uint64_t direct_call_ibtc_fills;
+    _Atomic uint64_t direct_call_ibtc_invalid_refusals;
     /* Immutable after root initialization and before any guest fork. */
     uint32_t jcc_ibtc_enabled;
     uint32_t direct_jmp_ibtc_enabled;
@@ -1636,9 +1734,11 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    char record[1152];
+    char record[2048];
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=4 available=%d mixed_sse_executed=%llu "
+                             "[diag] backend-shape version=5 available=%d crossings=%llu "
+                             "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
+                             "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
                              "jcc_ibtc_enabled=%d jcc_ibtc_emitted=%llu jcc_ibtc_hits=%llu "
                              "jcc_ibtc_misses=%llu jcc_ibtc_irq=%llu jcc_ibtc_fills=%llu "
@@ -1646,8 +1746,23 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "direct_jmp_ibtc_enabled=%d direct_jmp_ibtc_emitted=%llu "
                              "direct_jmp_ibtc_hits=%llu direct_jmp_ibtc_misses=%llu direct_jmp_ibtc_irq=%llu "
                              "direct_jmp_ibtc_fills=%llu direct_jmp_ibtc_suppressed=%llu "
-                             "direct_jmp_ibtc_invalid_refusals=%llu\n",
+                             "direct_jmp_ibtc_invalid_refusals=%llu direct_call_ibtc_emitted=%llu "
+                             "direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
+                             "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu "
+                             "direct_call_ibtc_invalid_refusals=%llu",
                              available,
+                             (unsigned long long)(atomic_load_explicit(&census->translated_entries,
+                                                                      memory_order_relaxed) +
+                                                  atomic_load_explicit(&census->interpreted_entries,
+                                                                      memory_order_relaxed)),
+                             (unsigned long long)atomic_load_explicit(&census->translated_entries,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->interpreted_entries,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->translated_steps,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->interpreted_steps,
+                                                                     memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->executed, memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->executed_transitions,
                                                                      memory_order_relaxed),
@@ -1682,8 +1797,80 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)atomic_load_explicit(&census->direct_jmp_ibtc_suppressed,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->direct_jmp_ibtc_invalid_refusals,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_emitted,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_hits,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_misses,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_irq,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_fills,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_invalid_refusals,
                                                                      memory_order_relaxed));
     if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    for (unsigned reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason) {
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r%u=%llu", reason,
+                             (unsigned long long)atomic_load_explicit(&census->reason[reason],
+                                                                     memory_order_relaxed));
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        formatted += added;
+    }
+    {
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r_other=%llu",
+                             (unsigned long long)atomic_load_explicit(&census->reason_other,
+                                                                     memory_order_relaxed));
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        formatted += added;
+    }
+#define HL_APPEND_CROSSING(name, array, kind)                                                                          \
+    do {                                                                                                               \
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
+                             (unsigned long long)atomic_load_explicit(&(array)[kind], memory_order_relaxed));           \
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
+        formatted += added;                                                                                           \
+    } while (0)
+    HL_APPEND_CROSSING("t_direct_jmp", census->translated_exit, HL_BACKEND_SHAPE_T_DIRECT_JUMP);
+    HL_APPEND_CROSSING("t_direct_call", census->translated_exit, HL_BACKEND_SHAPE_T_DIRECT_CALL);
+    HL_APPEND_CROSSING("t_ret", census->translated_exit, HL_BACKEND_SHAPE_T_RETURN);
+    HL_APPEND_CROSSING("t_jmp_reg", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH);
+    HL_APPEND_CROSSING("t_jmp_mem", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY);
+    HL_APPEND_CROSSING("t_call_reg", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_CALL);
+    HL_APPEND_CROSSING("t_call_mem", census->translated_exit, HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY);
+    HL_APPEND_CROSSING("t_syscall", census->translated_exit, HL_BACKEND_SHAPE_T_SYSCALL);
+    HL_APPEND_CROSSING("t_irq", census->translated_exit, HL_BACKEND_SHAPE_T_IRQ);
+    HL_APPEND_CROSSING("t_fault", census->translated_exit, HL_BACKEND_SHAPE_T_FAULT);
+    HL_APPEND_CROSSING("i_direct_jmp", census->interpreter_stop, HL_BACKEND_SHAPE_S_DIRECT_JUMP);
+    HL_APPEND_CROSSING("i_direct_call", census->interpreter_stop, HL_BACKEND_SHAPE_S_DIRECT_CALL);
+    HL_APPEND_CROSSING("i_ret", census->interpreter_stop, HL_BACKEND_SHAPE_S_RETURN);
+    HL_APPEND_CROSSING("i_jmp_reg", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_BRANCH);
+    HL_APPEND_CROSSING("i_jmp_mem", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_BRANCH_MEMORY);
+    HL_APPEND_CROSSING("i_call_reg", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_CALL);
+    HL_APPEND_CROSSING("i_call_mem", census->interpreter_stop, HL_BACKEND_SHAPE_S_INDIRECT_CALL_MEMORY);
+    HL_APPEND_CROSSING("i_syscall", census->interpreter_stop, HL_BACKEND_SHAPE_S_SYSCALL);
+    HL_APPEND_CROSSING("i_service", census->interpreter_stop, HL_BACKEND_SHAPE_S_SERVICE);
+    HL_APPEND_CROSSING("i_irq", census->interpreter_stop, HL_BACKEND_SHAPE_S_IRQ);
+    HL_APPEND_CROSSING("i_fault", census->interpreter_stop, HL_BACKEND_SHAPE_S_FAULT);
+#define HL_APPEND_CALL_SIM(name, field)                                                                                \
+    do {                                                                                                               \
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
+                             (unsigned long long)atomic_load_explicit(&census->field, memory_order_relaxed));           \
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
+        formatted += added;                                                                                           \
+    } while (0)
+    HL_APPEND_CALL_SIM("call_sim_eligible", call_sim_eligible);
+    HL_APPEND_CALL_SIM("call_sim_hit", call_sim_hit);
+    HL_APPEND_CALL_SIM("call_sim_miss", call_sim_miss);
+    HL_APPEND_CALL_SIM("call_sim_fill", call_sim_fill);
+    HL_APPEND_CALL_SIM("call_sim_decline_irq", call_sim_decline_irq);
+    HL_APPEND_CALL_SIM("call_sim_decline_stub", call_sim_decline_stub);
+    HL_APPEND_CALL_SIM("call_sim_decline_authority", call_sim_decline_authority);
+#undef HL_APPEND_CALL_SIM
+#undef HL_APPEND_CROSSING
+    if ((size_t)formatted + 1 >= sizeof record) return;
+    record[formatted++] = '\n';
     size_t offset = 0;
     while (offset < (size_t)formatted) {
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
@@ -1703,10 +1890,65 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
 }
 
 #define hl_backend_tree_begin(enabled, host) ((void)0)
-#define hl_backend_tree_run_begin(translated, steps) ((void)0)
-#define hl_backend_tree_interpreted_steps(steps) ((void)0)
-#define hl_backend_tree_reason(reason) ((void)0)
+static inline void hl_backend_tree_run_begin(int translated, uint64_t steps) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    if (translated) {
+        atomic_fetch_add_explicit(&census->translated_entries, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&census->translated_steps, steps, memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&census->interpreted_entries, 1, memory_order_relaxed);
+    }
+}
+static inline int hl_backend_tree_steps_enabled(void) { return g_backend_mixed_sse != NULL; }
+static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
+}
+static inline void hl_backend_tree_reason(unsigned reason) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    if (reason < HL_BACKEND_TREE_REASON_COUNT)
+        atomic_fetch_add_explicit(&census->reason[reason], 1, memory_order_relaxed);
+    else
+        atomic_fetch_add_explicit(&census->reason_other, 1, memory_order_relaxed);
+}
+static inline void hl_backend_tree_translated_exit_count(unsigned kind) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL && kind < HL_BACKEND_SHAPE_T_COUNT)
+        atomic_fetch_add_explicit(&census->translated_exit[kind], 1, memory_order_relaxed);
+}
 #define hl_backend_tree_translated_exit(kind, stitched_jmp, stitched_cond_fall) ((void)0)
+static inline void hl_backend_tree_interpreter_stop(unsigned kind, uint64_t form) {
+    (void)form;
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL && kind < HL_BACKEND_SHAPE_S_COUNT)
+        atomic_fetch_add_explicit(&census->interpreter_stop[kind], 1, memory_order_relaxed);
+}
+enum hl_backend_call_sim_counter {
+    HL_BACKEND_CALL_SIM_ELIGIBLE,
+    HL_BACKEND_CALL_SIM_HIT,
+    HL_BACKEND_CALL_SIM_MISS,
+    HL_BACKEND_CALL_SIM_FILL,
+    HL_BACKEND_CALL_SIM_DECLINE_IRQ,
+    HL_BACKEND_CALL_SIM_DECLINE_STUB,
+    HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY,
+};
+static inline void hl_backend_tree_call_sim_count(enum hl_backend_call_sim_counter kind) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    _Atomic uint64_t *counter = NULL;
+    switch (kind) {
+    case HL_BACKEND_CALL_SIM_ELIGIBLE: counter = &census->call_sim_eligible; break;
+    case HL_BACKEND_CALL_SIM_HIT: counter = &census->call_sim_hit; break;
+    case HL_BACKEND_CALL_SIM_MISS: counter = &census->call_sim_miss; break;
+    case HL_BACKEND_CALL_SIM_FILL: counter = &census->call_sim_fill; break;
+    case HL_BACKEND_CALL_SIM_DECLINE_IRQ: counter = &census->call_sim_decline_irq; break;
+    case HL_BACKEND_CALL_SIM_DECLINE_STUB: counter = &census->call_sim_decline_stub; break;
+    case HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY: counter = &census->call_sim_decline_authority; break;
+    }
+    if (counter != NULL) atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+}
 #define hl_backend_tree_translated_fall_stop(reason) ((void)0)
 static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
@@ -1795,6 +2037,40 @@ static uintptr_t hl_backend_tree_direct_jmp_ibtc_dynamic_counter_address(
 static void hl_backend_tree_direct_jmp_ibtc_add(enum hl_backend_direct_jmp_ibtc_counter kind,
                                                 uint64_t count) {
     _Atomic uint64_t *counter = hl_backend_tree_direct_jmp_ibtc_counter(kind);
+    if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+}
+enum hl_backend_direct_call_ibtc_counter {
+    HL_BACKEND_DIRECT_CALL_IBTC_EMITTED,
+    HL_BACKEND_DIRECT_CALL_IBTC_HIT,
+    HL_BACKEND_DIRECT_CALL_IBTC_MISS,
+    HL_BACKEND_DIRECT_CALL_IBTC_IRQ,
+    HL_BACKEND_DIRECT_CALL_IBTC_FILL,
+    HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL,
+};
+static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
+    enum hl_backend_direct_call_ibtc_counter kind) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return NULL;
+    switch (kind) {
+    case HL_BACKEND_DIRECT_CALL_IBTC_EMITTED: return &census->direct_call_ibtc_emitted;
+    case HL_BACKEND_DIRECT_CALL_IBTC_HIT: return &census->direct_call_ibtc_hits;
+    case HL_BACKEND_DIRECT_CALL_IBTC_MISS: return &census->direct_call_ibtc_misses;
+    case HL_BACKEND_DIRECT_CALL_IBTC_IRQ: return &census->direct_call_ibtc_irq;
+    case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &census->direct_call_ibtc_fills;
+    case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &census->direct_call_ibtc_invalid_refusals;
+    }
+    return NULL;
+}
+static uintptr_t hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+    enum hl_backend_direct_call_ibtc_counter kind) {
+    if (kind != HL_BACKEND_DIRECT_CALL_IBTC_HIT && kind != HL_BACKEND_DIRECT_CALL_IBTC_MISS &&
+        kind != HL_BACKEND_DIRECT_CALL_IBTC_IRQ)
+        return 0;
+    return (uintptr_t)hl_backend_tree_direct_call_ibtc_counter(kind);
+}
+static void hl_backend_tree_direct_call_ibtc_add(enum hl_backend_direct_call_ibtc_counter kind,
+                                                 uint64_t count) {
+    _Atomic uint64_t *counter = hl_backend_tree_direct_call_ibtc_counter(kind);
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
 }
 #define hl_backend_tree_interpreter_entry(kind, fallback_form) ((void)0)

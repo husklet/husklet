@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -25,6 +26,8 @@ static volatile uintptr_t fault_pc;
 static volatile uintptr_t expected_rsp;
 static volatile uintptr_t stack_pointer;
 static volatile uintptr_t saved_rsp;
+static volatile sig_atomic_t low_half_committed;
+static volatile sig_atomic_t expect_low_half;
 
 __asm__(".pushsection .rip_indirect_boundary,\"aw\",@progbits\n"
         ".balign 4096\n"
@@ -39,6 +42,7 @@ extern char faulting_call_pc;
 extern char faulting_resume_pc;
 extern char stack_fault_pc;
 extern char stack_resume_pc;
+extern char stack_after_call;
 
 __attribute__((naked, noinline)) static uint64_t valid_call(uint64_t value) {
     (void)value;
@@ -64,7 +68,9 @@ __attribute__((naked, noinline, used, visibility("hidden"))) void faulting_stack
                      "jmp stack_call_entry\n\t"
                      ".global stack_fault_pc\n"
                      "stack_call_entry:\n"
-                     "stack_fault_pc: call *call_slot(%rip)\n\t"
+                     "stack_fault_pc: call target\n\t"
+                     ".global stack_after_call\n"
+                     "stack_after_call:\n"
                      "ret");
 }
 
@@ -83,6 +89,11 @@ static void fault(int signal, siginfo_t *info, void *context) {
         r11_preserved += (uint64_t)state->uc_mcontext.gregs[REG_R11] == UINT64_C(0x8877665544332211);
         rip_preserved += (uintptr_t)state->uc_mcontext.gregs[REG_RIP] == fault_pc;
         rsp_preserved += expected_rsp == 0 || (uintptr_t)state->uc_mcontext.gregs[REG_RSP] == expected_rsp;
+        if (expected_rsp != 0 && expect_low_half) {
+            uint32_t low = 0;
+            memcpy(&low, (const void *)(expected_rsp - 8), sizeof low);
+            low_half_committed += low == (uint32_t)(uintptr_t)&stack_after_call;
+        }
         if (expected_rsp != 0) state->uc_mcontext.gregs[REG_RSP] = (greg_t)saved_rsp;
         state->uc_mcontext.gregs[REG_RIP] = (greg_t)resume_pc;
     }
@@ -112,8 +123,14 @@ int main(int argc, char **argv) {
 
     if (argc > 1) {
         void *stack = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (stack == MAP_FAILED || mprotect(stack, (size_t)page, PROT_NONE) != 0) return 6;
-        stack_pointer = (uintptr_t)stack + (uintptr_t)page;
+        if (stack == MAP_FAILED) return 6;
+        int split = strcmp(argv[1], "split") == 0;
+        expect_low_half = split;
+        void *protected_page = split ? (uint8_t *)stack + page : stack;
+        if (mprotect(protected_page, (size_t)page, PROT_NONE) != 0) return 6;
+        // At page+2 the low 32-bit return-word store succeeds wholly in the
+        // first page and the high store crosses into the protected second page.
+        stack_pointer = (uintptr_t)stack + (uintptr_t)page + (split ? 2u : 0u);
         expected_rsp = stack_pointer;
         fault_pc = (uintptr_t)&stack_fault_pc;
         resume_pc = (uintptr_t)&stack_resume_pc;
@@ -122,8 +139,9 @@ int main(int argc, char **argv) {
     }
 
     int expected = 1;
-    printf("rip-indirect call=%llu jump=%llu faults=%d r11=%d rip=%d rsp=%d\n",
-           (unsigned long long)call, (unsigned long long)jump, faults, r11_preserved, rip_preserved, rsp_preserved);
+    printf("rip-indirect call=%llu jump=%llu faults=%d r11=%d rip=%d rsp=%d low=%d\n",
+           (unsigned long long)call, (unsigned long long)jump, faults, r11_preserved, rip_preserved, rsp_preserved,
+           low_half_committed);
     return call == 40 && jump == 46 && faults == expected && r11_preserved == expected && rip_preserved == expected &&
                    rsp_preserved == expected
                ? 0 : 8;

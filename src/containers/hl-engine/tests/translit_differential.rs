@@ -69,6 +69,12 @@ struct Backend {
     jcc_link_taken: u64,
     jcc_link_irq_fallback: u64,
     jcc_link_dispatcher: u64,
+    direct_call_ibtc_emitted: u64,
+    direct_call_ibtc_hits: u64,
+    direct_call_ibtc_misses: u64,
+    direct_call_ibtc_irq: u64,
+    direct_call_ibtc_fills: u64,
+    direct_call_ibtc_invalid_refusals: u64,
     operand_declined: u64,
     sse2_memory_declined: u64,
     riprel_lowered: u64,
@@ -447,6 +453,12 @@ fn backend(stderr: &[u8]) -> Backend {
         jcc_link_taken: counter("jcc_link_taken="),
         jcc_link_irq_fallback: counter("jcc_link_irq_fallback="),
         jcc_link_dispatcher: counter("jcc_link_dispatcher="),
+        direct_call_ibtc_emitted: shape_counter("direct_call_ibtc_emitted="),
+        direct_call_ibtc_hits: shape_counter("direct_call_ibtc_hits="),
+        direct_call_ibtc_misses: shape_counter("direct_call_ibtc_misses="),
+        direct_call_ibtc_irq: shape_counter("direct_call_ibtc_irq="),
+        direct_call_ibtc_fills: shape_counter("direct_call_ibtc_fills="),
+        direct_call_ibtc_invalid_refusals: shape_counter("direct_call_ibtc_invalid_refusals="),
         operand_declined: counter("operand_declined="),
         sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
@@ -1338,25 +1350,49 @@ fn transliterated_blocks_publish_perf_map_identities() {
 #[test]
 fn forked_translators_publish_process_owned_perf_files() {
     let work = TempDir::new().unwrap();
-    let executable = fixture(work.path(), "perf_map_fork");
-    let maps = work.path().join("maps");
-    std::fs::create_dir(&maps).unwrap();
-    let (output, status, _) = run_with_perf_map(&executable, &maps);
-    assert_eq!(status, 0);
-    assert_eq!(output, b"fork-map=42 child=0\n");
-    let names: Vec<_> = std::fs::read_dir(&maps)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(
-        names.iter().filter(|name| name.starts_with("perf-")).count(),
-        2,
-        "{names:?}"
-    );
-    assert_eq!(
-        names.iter().filter(|name| name.starts_with("jit-")).count(),
-        2,
-        "{names:?}"
+    let run = |name: &str| {
+        let executable = fixture(work.path(), name);
+        let maps = work.path().join(format!("maps-{name}"));
+        std::fs::create_dir(&maps).unwrap();
+        let (output, status, backend) = run_with_perf_map(&executable, &maps);
+        assert_eq!(status, 0);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.starts_with("fork-map=42 warm=10752 child=0 "), "{output}");
+        let field = |field_name: &str| {
+            output
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix(field_name))
+                .unwrap_or_else(|| panic!("missing {field_name} in {output}"))
+        };
+        let parent_pid = field("parent-pid=");
+        let child_pid = field("child-pid=");
+        let caller = field("caller=").trim_start_matches("0x");
+        let target = field("target=").trim_start_matches("0x");
+        let names: Vec<_> = std::fs::read_dir(&maps)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.iter().filter(|name| name.starts_with("perf-")).count(), 2, "{names:?}");
+        assert_eq!(names.iter().filter(|name| name.starts_with("jit-")).count(), 2, "{names:?}");
+        for pid in [parent_pid, child_pid] {
+            let map = maps.join(format!("perf-{pid}.map"));
+            let text =
+                std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
+            assert!(text.contains(caller), "caller {caller} absent from {}:\n{text}", map.display());
+            assert!(text.contains(target), "target {target} absent from {}:\n{text}", map.display());
+        }
+        backend
+    };
+    let one = run("perf_map_fork_one");
+    let two = run("perf_map_fork_two");
+    assert!(one.direct_call_ibtc_misses >= 2, "{}", one.shape_line);
+    assert_eq!(two.direct_call_ibtc_misses, one.direct_call_ibtc_misses);
+    assert_eq!(two.direct_call_ibtc_fills, one.direct_call_ibtc_fills);
+    assert!(
+        two.direct_call_ibtc_hits >= one.direct_call_ibtc_hits + 1,
+        "one={}\ntwo={}",
+        one.shape_line,
+        two.shape_line
     );
 }
 
@@ -1577,6 +1613,16 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
         tree.translated_entries + tree.interpreted_entries,
         tree.crossings,
         "{}",
+        tree.tree_line
+    );
+    assert!(
+        tree.translated_steps >= tree.translated_entries,
+        "every aggregated translated child entry must carry its immutable descriptor step count: {}",
+        tree.tree_line
+    );
+    assert!(
+        tree.translated_steps + tree.interpreted_steps >= tree.crossings,
+        "process-tree instruction residence must cover every aggregated crossing: {}",
         tree.tree_line
     );
     assert_eq!(tree.reason_total, tree.crossings, "{}", tree.tree_line);
@@ -1807,11 +1853,36 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         "differing-family linked ingress must count the executed target CALL:\n{}\n{}",
         selected_backend.would_link_line, disabled_backend.would_link_line
     );
-    assert!(
-        selected_backend.would_call_target_unmapped > 1000,
-        "the warmed target CALL must execute after its cold-target publication: {}",
-        selected_backend.would_link_line
-    );
+    // Settled external test engines predating backend-shape v5 remain valid
+    // semantic oracles.  A current engine must also prove the typed CALL path.
+    if selected_backend.shape_line.contains("direct_call_ibtc_emitted=") {
+        assert!(
+            selected_backend.direct_call_ibtc_emitted > 0,
+            "{}",
+            selected_backend.shape_line
+        );
+        assert!(
+            selected_backend.direct_call_ibtc_hits > 1000,
+            "the warmed direct CALL must execute through the shared target cache: {}",
+            selected_backend.shape_line
+        );
+        assert!(
+            selected_backend.direct_call_ibtc_misses > 0 && selected_backend.direct_call_ibtc_fills > 0,
+            "the cold direct CALL path must publish before it becomes hot: {}",
+            selected_backend.shape_line
+        );
+        assert_eq!(
+            selected_backend.direct_call_ibtc_misses,
+            selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals,
+            "{}",
+            selected_backend.shape_line
+        );
+        assert!(
+            selected_backend.direct_call_ibtc_irq <= selected_backend.direct_call_ibtc_emitted,
+            "{}",
+            selected_backend.shape_line
+        );
+    }
     assert_eq!(
         selected_backend.would_fall_candidate,
         selected_backend.shape_fallthrough
@@ -1942,6 +2013,23 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     assert_eq!(selected_stack_status, 0, "{}", String::from_utf8_lossy(&selected_stack));
     assert_eq!(native_stack.status.code(), Some(0));
     assert_eq!(selected_stack, native_stack.stdout);
+
+    // The low return-address half commits before the high half crosses into a
+    // protected page.  The architectural CALL itself has not committed: RIP
+    // and RSP must still identify the source instruction and original stack.
+    let (selected_split, selected_split_status, _) =
+        run_with_arguments(&executable, "1", &[b"split"], true, false, false, false);
+    let native_split = std::process::Command::new(&executable)
+        .arg("split")
+        .output()
+        .expect("native split stack-fault fixture");
+    assert_eq!(selected_split_status, 0, "{}", String::from_utf8_lossy(&selected_split));
+    assert_eq!(native_split.status.code(), Some(0));
+    assert!(selected_split.ends_with(b"faults=1 r11=1 rip=1 rsp=1 low=1\n"));
+    // A native CALL is one architectural eight-byte push and therefore leaves
+    // no partial word. The emitted lowering deliberately uses two no-clobber
+    // stores, so its first half is observable before the second faults.
+    assert!(native_split.stdout.ends_with(b"faults=1 r11=1 rip=1 rsp=1 low=0\n"));
 }
 
 /// The other refusal, and the one that decides whether this backend is worth anything to a developer.
