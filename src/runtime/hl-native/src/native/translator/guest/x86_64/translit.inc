@@ -4740,6 +4740,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
         if (context == NULL) return 122;
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+        if (source_block == NULL) return 136;
         if (scenario == 135) return translit_ret_signal_stage_test() ? 0 : 135;
         uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
         *stack = target;
