@@ -71,7 +71,7 @@ static int sentry_route_exit(struct cpu *c, uint64_t nr) {
         /* The sentry shutdown can terminate the worker before service_local reaches exit_group's
            ordinary cleanup.  Publish this process generation while its translation state and map
            descriptor are still owned by the exiting worker. */
-        translit_perf_map_flush();
+        translit_perf_map_flush_at_exit();
         if (getpid() != g_sentry_owner_pid) sentry_process_release();
         sentry_shutdown();
     } else if (t_ring >= 0) {

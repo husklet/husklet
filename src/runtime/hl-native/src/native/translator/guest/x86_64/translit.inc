@@ -631,6 +631,19 @@ static void translit_profile_stream_close(FILE **stream) {
     *stream = NULL;
 }
 
+/* A fork child owns neither its parent's buffered stream nor its unpublished
+   sampling records.  fclose would flush copied stdio bytes a second time, so
+   retire only the inherited descriptor and abandon the copied FILE object. */
+static void translit_profile_stream_discard_inherited(FILE **stream) {
+    if (*stream == NULL) return;
+    int descriptor = fileno(*stream);
+    if (descriptor >= 0) {
+        hl_host_process_fd_private_remove(descriptor);
+        (void)close(descriptor);
+    }
+    *stream = NULL;
+}
+
 static void translit_profile_output_failed(const char *what) {
     char message[256];
     int length = snprintf(message, sizeof message, "same-ISA profiling output %s failed: %s", what, strerror(errno));
@@ -645,10 +658,18 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
     if (translit_profile_active.pid == next.pid && translit_profile_active.generation == generation &&
         translit_profile_active.rw == rw && translit_profile_active.rx == rx && translit_profile_active.size == size)
         return;
-    translit_sampling_flush();
-    translit_profile_stream_close(&translit_perf_map_file);
+    int inherited = translit_profile_active.pid != 0 && translit_profile_active.pid != next.pid;
+    if (inherited) {
+        translit_sampling_record_count = 0;
+        translit_sampling_overflow = 0;
+        translit_profile_stream_discard_inherited(&translit_perf_map_file);
+        translit_profile_stream_discard_inherited(&translit_jitdump_file);
+    } else {
+        translit_sampling_flush();
+        translit_profile_stream_close(&translit_perf_map_file);
+        translit_profile_stream_close(&translit_jitdump_file);
+    }
     if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
-    translit_profile_stream_close(&translit_jitdump_file);
     translit_jitdump_marker = NULL;
     translit_perf_map_pid = 0;
     translit_jitdump_pid = 0;
@@ -879,6 +900,15 @@ static void translit_perf_map_flush(void) {
     translit_sampling_flush();
     if (translit_perf_map_file != NULL) (void)fflush(translit_perf_map_file);
     if (translit_jitdump_file != NULL) (void)fflush(translit_jitdump_file);
+}
+
+static void translit_perf_map_flush_at_exit(void) {
+    /* Every enqueue happens while translation owns g_jit_lock.  Exit may run
+       beside another guest translator, so join that serialization domain
+       before consuming/resetting the generation-owned record vector. */
+    pthread_mutex_lock(&g_jit_lock);
+    translit_perf_map_flush();
+    pthread_mutex_unlock(&g_jit_lock);
 }
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
