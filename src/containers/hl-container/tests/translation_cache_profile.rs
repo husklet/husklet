@@ -151,27 +151,70 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         archive.append_data(&mut header, relative, changed.as_slice())?;
     }
     if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
-        const SOURCE: &[u8] = br#"#include <dlfcn.h>
+        const SOURCE: &[u8] = br#"#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
 static int stop;
 static void *peer(void *unused) { (void)unused; while (!__atomic_load_n(&stop, __ATOMIC_ACQUIRE)) {} return 0; }
+extern int warm_source(int), warm_target(void);
+__asm__(".text\n.p2align 4\n.global warm_source,warm_target\n"
+        "warm_source: test %rdi,%rdi; jne warm_target; xor %eax,%eax; ret\n"
+        "warm_target: mov $1,%eax; ret\n");
 int main(void) {
+  if (warm_target() != 1 || warm_source(1) != 1) return 1;
   pthread_t thread;
   if (pthread_create(&thread, 0, peer, 0)) return 2;
-  void *library = dlopen("/usr/lib/libisl.so.23", RTLD_NOW | RTLD_LOCAL);
-  if (!library || !dlsym(library, "isl_ctx_alloc")) return 3;
+  int fd = open("/work/executable-page.bin", O_RDONLY);
+  if (fd < 0) return 3;
+  void *mapping = mmap(0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0);
+  if (mapping == MAP_FAILED) return 4;
   __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
-  if (pthread_join(thread, 0)) return 4;
-  puts("thread-dlopen-ok");
+  if (pthread_join(thread, 0)) return 5;
+  puts("thread-warm-ok");
   return 0;
 }
 "#;
+        let host_source = owned.path().join("thread_warm.c");
+        let host_binary = owned.path().join("thread_warm");
+        fs::write(&host_source, SOURCE)?;
+        let built = std::process::Command::new("cc")
+            .args(["-O2", "-pthread", "-Wl,--build-id=none", "-o"])
+            .arg(&host_binary)
+            .arg(&host_source)
+            .status()?;
+        require(built.success(), "pinned host compiler did not build the static pthread fixture")?;
+        let binary = fs::read(&host_binary)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o755);
+        header.set_size(binary.len() as u64);
+        header.set_cksum();
+        archive.append_data(&mut header, "work/thread_warm", binary.as_slice())?;
+        let linked = std::process::Command::new("ldd").arg(&host_binary).output()?;
+        require(linked.status.success(), "host linker census failed for pthread fixture")?;
+        let mut dependencies = String::from_utf8(linked.stdout)?
+            .split_whitespace()
+            .filter(|field| field.starts_with('/') && Path::new(field).is_file())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        dependencies.sort();
+        dependencies.dedup();
+        require(!dependencies.is_empty(), "pthread fixture reported no dynamic dependencies")?;
+        for dependency in dependencies {
+            let bytes = fs::read(&dependency)?;
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o755);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            archive.append_data(&mut header, dependency.trim_start_matches('/'), bytes.as_slice())?;
+        }
+        let page = [0u8; 4096];
         let mut header = tar::Header::new_gnu();
         header.set_mode(0o644);
-        header.set_size(SOURCE.len() as u64);
+        header.set_size(page.len() as u64);
         header.set_cksum();
-        archive.append_data(&mut header, "work/thread_dlopen.c", SOURCE)?;
+        archive.append_data(&mut header, "work/executable-page.bin", page.as_slice())?;
     }
     archive.finish()?;
     drop(archive);
@@ -401,10 +444,7 @@ int main(void) {
     } else if mode == Mode::ForkExec {
         Process::new("/bin/sh").args(["-c", "/bin/true & wait"])
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
-        Process::new("/bin/sh").args([
-            "-c",
-            "PATH=/usr/bin:/bin gcc -B/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/ -pthread /work/thread_dlopen.c -ldl -o /tmp/thread_dlopen && exec /tmp/thread_dlopen",
-        ])
+        Process::new("/work/thread_warm")
     } else {
         Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
             "-quiet",
@@ -456,7 +496,7 @@ int main(void) {
     if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
         require(logs.stdout.is_empty(), "fork lifecycle fixture produced output")?;
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
-        require(logs.stdout == b"thread-dlopen-ok\n", "threaded dlopen workload output changed")?;
+        require(logs.stdout == b"thread-warm-ok\n", "threaded executable-map workload output changed")?;
     } else {
         require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
     }
@@ -611,9 +651,14 @@ int main(void) {
                     entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")
                 }) && entries.iter().any(|entry| {
                     entry.file_name().as_encoded_bytes().windows(20).any(|part| part == b".thread-start-state-")
-                        && fs::read(entry.path()).is_ok_and(|state| state.len() == 24)
+                        && fs::read(entry.path()).is_ok_and(|state| {
+                            state.len() == 24 && u64::from_le_bytes(state[..8].try_into().unwrap()) == 1
+                        })
+                }) && entries.iter().any(|entry| {
+                    entry.file_name().as_encoded_bytes().windows(18).any(|part| part == b".thread-map-state-")
+                        && fs::read(entry.path()).is_ok_and(|state| state == [0u8; 16])
                 }),
-                "real pthread workload did not reach the pre-peer warm-authority seam",
+                "loaded warm authority survived real pthread start or remained patchable afterward",
             )?,
             Mode::CacheValid => require(
                 entries

@@ -2792,6 +2792,18 @@ static uint64_t pcache_mmap_hint(uint64_t len) {
 static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handle,
                                const hl_host_file_metadata *metadata) {
     if (!g_pcache) return;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_threaded) {
+        char cache_path[1024], receipt[1024];
+        uint64_t state[2] = {(uint64_t)g_pcache_loaded, g_x64_pc_chain_count};
+        if (x64_pc_file(cache_path, sizeof cache_path)) {
+            int length = snprintf(receipt, sizeof receipt, "%s.thread-map-state-%lld", cache_path,
+                                  (long long)getpid());
+            if (length > 0 && (size_t)length < sizeof receipt)
+                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+        }
+    }
+#endif
     uint64_t end;
     hl_identity_digest content;
     uint64_t file_id = hl_identity_file(metadata);
