@@ -4674,7 +4674,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (arena == MAP_FAILED) return 121;
-        static _Alignas(4096) uint8_t guest_bytes[4096];
+        static _Alignas(4096) uint8_t guest_bytes[8192];
         memset(guest_bytes, 0x0f, sizeof guest_bytes);
         guest_bytes[0] = scenario == 122 ? 0xc2 : 0xc3;
         if (scenario == 122) {
@@ -4682,12 +4682,13 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             guest_bytes[2] = 0;
         }
         const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
-        const uint64_t target = source + 0x40;
-        guest_bytes[0x40] = 0xb8;
-        guest_bytes[0x41] = 42;
-        memset(guest_bytes + 0x42, 0, 3);
-        guest_bytes[0x45] = 0x0f;
-        guest_bytes[0x46] = 0x0b;
+        const size_t target_offset = scenario == 127 ? 0x1040 : 0x40;
+        const uint64_t target = source + target_offset;
+        guest_bytes[target_offset] = 0xb8;
+        guest_bytes[target_offset + 1] = 42;
+        memset(guest_bytes + target_offset + 2, 0, 3);
+        guest_bytes[target_offset + 5] = 0x0f;
+        guest_bytes[target_offset + 6] = 0x0b;
         g_cache = arena;
         g_cp = arena;
         g_rw2rx = 0;
@@ -4732,7 +4733,6 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             if (map_invalidate_source_ranges(dirty, 1) != 1 ||
                 ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0)
                 return 128;
-            source_block = translit_jcc_ibtc_test_build(context, source);
             target_block = translit_jcc_ibtc_test_build(context, target);
             cpu.rip = target;
             cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
