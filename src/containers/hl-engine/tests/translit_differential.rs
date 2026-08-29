@@ -1580,8 +1580,20 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         );
         child_map_text.push_str(&text);
     }
-    assert!(child_map_text.contains(&format!("_g{caller}_")), "post-exec caller absent:\n{child_map_text}");
-    assert!(child_map_text.contains(&format!("_g{target}_")), "post-exec target absent:\n{child_map_text}");
+    let covers = |pc: &str| {
+        let pc = u64::from_str_radix(pc, 16).unwrap();
+        child_map_text.lines().any(|line| {
+            let Some((_, identity)) = line.split_once("_g") else { return false };
+            let Some((start, identity)) = identity.split_once("_gl") else { return false };
+            let Some((length, _)) = identity.split_once("_i") else { return false };
+            let (Ok(start), Ok(length)) = (u64::from_str_radix(start, 16), length.parse::<u64>()) else {
+                return false;
+            };
+            pc >= start && pc < start.saturating_add(length)
+        })
+    };
+    assert!(covers(caller), "post-exec caller absent:\n{child_map_text}");
+    assert!(covers(target), "post-exec target absent:\n{child_map_text}");
     let rx = child_maps
         .iter()
         .filter_map(|path| path.file_name().unwrap().to_string_lossy().split("-rx").nth(1).map(str::to_owned))
