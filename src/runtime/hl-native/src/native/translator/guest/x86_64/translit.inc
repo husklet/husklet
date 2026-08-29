@@ -416,6 +416,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario);
 static int translit_ret_ibtc_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
 static int translit_ret_signal_stage_test(void);
+static int translit_jmp_mem_signal_stage_test(void);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
 static uint64_t translit_fs_fixture_admitted;
@@ -1729,6 +1730,11 @@ typedef struct {
 static uint8_t *translit_test_ret_instruction_start;
 static translit_ret_sim_ranges translit_test_ret_site;
 static uint64_t translit_test_ret_source_guest;
+static uint8_t *translit_test_jmp_mem_instruction_start;
+static uint8_t *translit_test_jmp_mem_borrow_start;
+static uint8_t *translit_test_jmp_mem_rip_end;
+static uint8_t *translit_test_jmp_mem_r11_end;
+static uint64_t translit_test_jmp_mem_source_guest;
 #endif
 
 static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t pop) {
@@ -2167,6 +2173,13 @@ static int translit_owner_append_jmp_mem(jit_body_owner_range ranges[TL_MAX_OWNE
                                          const uint8_t *borrow_start, const uint8_t *rip_end,
                                          const uint8_t *r11_end, uint64_t guest) {
     const uint32_t preserve = 1u << HL_X64_R11;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_jmp_mem_instruction_start = (uint8_t *)instruction_start;
+    translit_test_jmp_mem_borrow_start = (uint8_t *)borrow_start;
+    translit_test_jmp_mem_rip_end = (uint8_t *)rip_end;
+    translit_test_jmp_mem_r11_end = (uint8_t *)r11_end;
+    translit_test_jmp_mem_source_guest = guest;
+#endif
     return translit_owner_append(ranges, count, instruction_start, borrow_start, guest, 0) &&
            translit_owner_append(ranges, count, borrow_start, rip_end, guest, preserve) &&
            translit_owner_append(ranges, count, rip_end, r11_end, JIT_BODY_OWNER_DYNAMIC_RIP, preserve) &&
@@ -2393,6 +2406,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         jump.mod = 3;
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
+    if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -6534,6 +6548,69 @@ static int translit_ret_signal_stage_test(void) {
     }
     translit_selected = saved_selected;
     return exact ? 0 : (int)failed_stage;
+}
+
+static int translit_jmp_mem_signal_stage_test(void) {
+    const size_t arena_size = 65536;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 0;
+    static _Alignas(4096) uint8_t guest_bytes[4096];
+    memset(guest_bytes, 0x0f, sizeof guest_bytes);
+    guest_bytes[0] = 0xff;
+    guest_bytes[1] = 0x20; /* jmp *(%rax) */
+    const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
+    g_cache = arena;
+    g_cp = arena;
+    g_rw2rx = 0;
+    g_dualmap = 1;
+    g_cache_gen = UINT64_C(0xf4f4f4f4);
+    map_clear();
+    translit_fall_fixture_bytes = guest_bytes;
+    translit_fall_fixture_guest = source;
+    translit_fall_fixture_length = sizeof guest_bytes;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    if (context == NULL || translit_jcc_ibtc_test_build(context, source) == NULL ||
+        translit_test_jmp_mem_instruction_start == NULL || translit_test_jmp_mem_borrow_start == NULL ||
+        translit_test_jmp_mem_rip_end == NULL || translit_test_jmp_mem_r11_end == NULL)
+        return 0;
+    const uint64_t target = UINT64_C(0x123456789abcdef0);
+    struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip; } stages[] = {
+        {translit_test_jmp_mem_instruction_start, 0, source, source},
+        {translit_test_jmp_mem_borrow_start, 1u << HL_X64_R11, source, source},
+        {translit_test_jmp_mem_rip_end, 1u << HL_X64_R11, target, target},
+        {translit_test_jmp_mem_r11_end, 0, target, target},
+    };
+    int saved_selected = translit_selected;
+    translit_selected = 1;
+    int exact = 1;
+    for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; ++stage) {
+        struct cpu cpu = {0}, expected_flags = {0};
+        ucontext_t native;
+        memset(&native, 0, sizeof native);
+        greg_t *gregs = HL_HOST_UC_GREGS(&native);
+        for (unsigned reg = 0; reg < 16; ++reg) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        cpu.rip = stages[stage].cpu_rip;
+        gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
+        HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)stages[stage].pc;
+        exact = translit_signal_capture(&cpu, &native) && cpu.rip == stages[stage].expected_rip &&
+                cpu.reason == R_BRANCH;
+        for (unsigned reg = 0; exact && reg < 16; ++reg) {
+            uint64_t expected = stages[stage].preserve & (1u << reg)
+                                    ? UINT64_C(0xc000000000000000) + reg
+                                    : UINT64_C(0xa000000000000000) + reg;
+            exact = cpu.r[reg] == expected;
+        }
+        translit_flags_out(&expected_flags, UINT64_C(0xad7));
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
+    }
+    translit_selected = saved_selected;
+    hl_x86_hot_context_destroy(context);
+    munmap(arena, arena_size);
+    return exact;
 }
 #endif
 
