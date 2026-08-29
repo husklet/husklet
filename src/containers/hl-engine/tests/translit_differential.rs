@@ -1414,7 +1414,7 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect::<Vec<_>>();
-    assert_eq!(files.len(), 2, "{files:?}");
+    assert_eq!(files.len(), 1, "sampling-only mode must not copy code into jitdump: {files:?}");
     let map = files
         .iter()
         .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("perf-"))
@@ -1422,11 +1422,7 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
     let text = std::fs::read_to_string(map).unwrap();
     assert!(text.contains(" hl_tl_helper_jcc_ibtc\n"), "{text}");
     assert!(text.lines().any(|line| line.contains(" hl_tl_") && line.contains("_gl")), "{text}");
-    let dump = files
-        .iter()
-        .find(|path| path.file_name().unwrap().to_string_lossy().starts_with("jit-"))
-        .unwrap();
-    assert!(std::fs::metadata(dump).unwrap().len() > 40);
+    assert!(files.iter().all(|path| !path.file_name().unwrap().to_string_lossy().starts_with("jit-")));
 }
 
 #[test]
@@ -1446,7 +1442,7 @@ fn sampling_symbols_follow_exec_fresh_arena_generations() {
     for generation in 0..=2 {
         let needle = format!("-g{generation}-rx");
         assert!(names.iter().any(|name| name.starts_with("perf-") && name.contains(&needle)), "{names:?}");
-        assert!(names.iter().any(|name| name.starts_with("jit-") && name.contains(&needle)), "{names:?}");
+        assert!(names.iter().all(|name| !name.starts_with("jit-")), "sampling mode copied code: {names:?}");
     }
 }
 

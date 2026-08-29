@@ -589,6 +589,16 @@ static FILE *translit_jitdump_file;
 static void *translit_jitdump_marker;
 static pid_t translit_jitdump_pid;
 static uint64_t translit_jitdump_index;
+enum { TRANSLIT_SAMPLING_RECORD_CAP = 131072 };
+typedef struct translit_sampling_record {
+    uint64_t address;
+    uint32_t length;
+    char name[256];
+} translit_sampling_record;
+static translit_sampling_record *translit_sampling_records;
+static uint32_t translit_sampling_record_count;
+static int translit_sampling_overflow;
+static void translit_sampling_flush(void);
 typedef struct translit_profile_generation {
     pid_t pid;
     uint64_t generation;
@@ -617,6 +627,7 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
     if (translit_profile_active.pid == next.pid && translit_profile_active.generation == generation &&
         translit_profile_active.rw == rw && translit_profile_active.rx == rx && translit_profile_active.size == size)
         return;
+    translit_sampling_flush();
     if (translit_perf_map_file != NULL) fclose(translit_perf_map_file);
     if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
     if (translit_jitdump_file != NULL) fclose(translit_jitdump_file);
@@ -626,6 +637,8 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
     translit_perf_map_pid = 0;
     translit_jitdump_pid = 0;
     translit_jitdump_index = 0;
+    translit_sampling_record_count = 0;
+    translit_sampling_overflow = 0;
     translit_profile_active = next;
     translit_profile_jcc_ibtc = (translit_profile_named_range){0};
     translit_profile_direct_jmp_ibtc = (translit_profile_named_range){0};
@@ -738,9 +751,21 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
     }
     size_t name_length = strlen(name);
     if (name_length == 0 || name_length >= 256) return;
-    (void)fprintf(translit_perf_map_file, "%llx %x %s\n",
-                  (unsigned long long)(uintptr_t)(translit_profile_active.rx + (start - translit_profile_active.rw)),
-                  host_len, name);
+    uint64_t address = (uint64_t)(uintptr_t)(translit_profile_active.rx + (start - translit_profile_active.rw));
+    if (symbolize && !g_prof) {
+        if (translit_sampling_records == NULL)
+            translit_sampling_records = calloc(TRANSLIT_SAMPLING_RECORD_CAP, sizeof *translit_sampling_records);
+        if (translit_sampling_records == NULL || translit_sampling_record_count == TRANSLIT_SAMPLING_RECORD_CAP) {
+            translit_sampling_overflow = 1;
+            return;
+        }
+        translit_sampling_record *record = &translit_sampling_records[translit_sampling_record_count++];
+        record->address = address;
+        record->length = host_len;
+        memcpy(record->name, name, name_length + 1u);
+        return;
+    }
+    (void)fprintf(translit_perf_map_file, "%llx %x %s\n", (unsigned long long)address, host_len, name);
     if (translit_jitdump_file == NULL || translit_jitdump_pid != pid) translit_jitdump_open(directory, pid);
     if (translit_jitdump_file == NULL) return;
     translit_jitdump_load load = {0,
@@ -782,7 +807,40 @@ static void translit_perf_map_publish(const struct interp_block *block, const ui
     translit_perf_map_publish_named(name, start, host_len);
 }
 
+static void translit_sampling_flush(void) {
+    if (translit_sampling_record_count == 0 || translit_perf_map_file == NULL) return;
+    if (translit_sampling_overflow) {
+        translit_profile_output_failed("sampling record overflow");
+        translit_sampling_record_count = 0;
+        return;
+    }
+    size_t capacity = (size_t)translit_sampling_record_count * 288u;
+    char *text = malloc(capacity);
+    if (text == NULL) {
+        translit_profile_output_failed("sampling map buffer");
+        translit_sampling_record_count = 0;
+        return;
+    }
+    size_t used = 0;
+    for (uint32_t index = 0; index < translit_sampling_record_count; index++) {
+        const translit_sampling_record *record = &translit_sampling_records[index];
+        int length = snprintf(text + used, capacity - used, "%llx %x %s\n",
+                              (unsigned long long)record->address, record->length, record->name);
+        if (length <= 0 || (size_t)length >= capacity - used) {
+            translit_profile_output_failed("sampling map format");
+            free(text);
+            translit_sampling_record_count = 0;
+            return;
+        }
+        used += (size_t)length;
+    }
+    if (fwrite(text, used, 1, translit_perf_map_file) != 1) translit_profile_output_failed("sampling map write");
+    free(text);
+    translit_sampling_record_count = 0;
+}
+
 static void translit_perf_map_flush(void) {
+    translit_sampling_flush();
     if (translit_perf_map_file != NULL) (void)fflush(translit_perf_map_file);
     if (translit_jitdump_file != NULL) (void)fflush(translit_jitdump_file);
 }
