@@ -936,6 +936,9 @@ fn copy_frozen(source: &Path, destination: &Path) -> Result<(), Error> {
     fs::create_dir_all(parent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     std::io::copy(&mut File::open(source)?, &mut temporary)?;
+    temporary
+        .as_file()
+        .set_permissions(fs::metadata(source)?.permissions())?;
     temporary.as_file().sync_all()?;
     temporary.persist(destination).map_err(|error| error.error)?;
     sync_directory(parent)
@@ -1096,6 +1099,25 @@ mod tests {
         assert_eq!(
             serde_json::from_reader::<_, serde_json::Value>(File::open(path).unwrap()).unwrap()["complete"],
             true
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn frozen_copy_preserves_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let destination = directory.path().join("frozen");
+        fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o751)).unwrap();
+        copy_frozen(&source, &destination).unwrap();
+        assert_eq!(fs::metadata(destination).unwrap().permissions().mode() & 0o777, 0o751);
+        assert!(
+            Command::new(directory.path().join("frozen"))
+                .status()
+                .unwrap()
+                .success()
         );
     }
 
