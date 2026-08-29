@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef HL_X64_NOTE_EXTERNAL_ABSOLUTE
+#define HL_X64_NOTE_EXTERNAL_ABSOLUTE(slot, address, kind) ((void)(slot), (void)(address), (void)(kind))
+#define HL_X64_NOTE_EXTERNAL_ABSOLUTE_DEFAULT 1
+#endif
+
 // x86-64 host instruction assembler -- the sibling of ../aarch64/asm.{c,h}, and the only thing this
 // directory ever legitimately holds (see README.md). It encodes the small fixed vocabulary the same-ISA
 // transliterator needs at block boundaries; the guest instructions themselves are copied verbatim and are
@@ -182,13 +187,24 @@ static inline void hl_x64_mov_imm64(hl_x64_asm *a, int reg, uint64_t value) {
 // lock incq *(uint64_t *)address. Diagnostic-only linked-edge counters emit this after a full spill, when
 // RAX and flags are canonical in the CPU image. The same-ISA backend has no persistent code cache, and its
 // fork hook discards inherited code, so the process-local absolute address never crosses an image epoch.
-static inline void hl_x64_atomic_inc_abs(hl_x64_asm *a, uintptr_t address) {
+static inline void hl_x64_atomic_inc_abs_kind(hl_x64_asm *a, uintptr_t address, uint32_t kind) {
+    uint8_t *start = a->cursor;
     hl_x64_mov_imm64(a, HL_X64_RAX, (uint64_t)address);
     hl_x64_u8(a, 0xF0);
     hl_x64_u8(a, 0x48);
     hl_x64_u8(a, 0xFF);
     hl_x64_u8(a, 0x00);
+    if (!a->overflow) HL_X64_NOTE_EXTERNAL_ABSOLUTE(start + 2, address, kind);
 }
+
+static inline void hl_x64_atomic_inc_abs(hl_x64_asm *a, uintptr_t address) {
+    hl_x64_atomic_inc_abs_kind(a, address, 1);
+}
+
+#if defined(HL_X64_NOTE_EXTERNAL_ABSOLUTE_DEFAULT)
+#undef HL_X64_NOTE_EXTERNAL_ABSOLUTE_DEFAULT
+#undef HL_X64_NOTE_EXTERNAL_ABSOLUTE
+#endif
 
 // mov (%base), %reg  (64-bit)
 static inline void hl_x64_load_ind(hl_x64_asm *a, int reg, int base) {

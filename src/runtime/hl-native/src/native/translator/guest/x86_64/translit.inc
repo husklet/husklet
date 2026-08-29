@@ -25,7 +25,10 @@
 // dereferences (whose disp32 can be re-aimed at storage), while LEA remains aimed at the low guest address.
 // Base/index, moffs, string, stack, call and return forms stay in the interpreter.
 
+static void translit_note_external_absolute(uint8_t *, uintptr_t, uint32_t);
+#define HL_X64_NOTE_EXTERNAL_ABSOLUTE(slot, address, kind) translit_note_external_absolute(slot, address, kind)
 #include "../../host/x86_asm.h"
+#undef HL_X64_NOTE_EXTERNAL_ABSOLUTE
 #include "cpu.h"
 #include "frame.h"
 
@@ -368,6 +371,89 @@ static void translit_direct_call_ibtc_count(enum translit_direct_call_ibtc_count
 #else
     hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
 #endif
+}
+
+/* Persistent-cache relocation census.  Kinds are stable schema values, not native
+ * addresses; the latter are deliberately checked only to classify an emission. */
+enum translit_external_absolute_kind {
+    TL_EXT_NONE,
+    TL_EXT_RET_HIT = 0x100, TL_EXT_RET_MISS, TL_EXT_RET_IRQ,
+    TL_EXT_JCC_HIT = 0x200, TL_EXT_JCC_MISS, TL_EXT_JCC_IRQ,
+    TL_EXT_JMP_HIT = 0x300, TL_EXT_JMP_MISS, TL_EXT_JMP_IRQ,
+    TL_EXT_CALL_HIT = 0x400, TL_EXT_CALL_MISS, TL_EXT_CALL_IRQ,
+    TL_EXT_HOOK_LINK_TAKEN = 0x500, TL_EXT_HOOK_LINK_IRQ, TL_EXT_HOOK_LINK_DISPATCH,
+    TL_EXT_HOOK_JCC_SHAPE, TL_EXT_HOOK_CALL_HIT, TL_EXT_HOOK_CALL_MISS,
+};
+typedef struct { uint32_t offset; uint32_t kind; } translit_external_absolute;
+#define TL_EXTERNAL_ABSOLUTE_N 65536u
+static translit_external_absolute translit_external_absolutes[TL_EXTERNAL_ABSOLUTE_N];
+static uint32_t translit_external_absolute_count;
+static uint32_t translit_external_absolute_emitted;
+static int translit_external_absolute_unclassified;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_test_drop_external_absolute;
+static int translit_test_dropped_external_absolute;
+#endif
+
+static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
+    static const enum translit_ret_fast_ibtc_counter ret[] = {
+        TL_RET_FAST_IBTC_HIT, TL_RET_FAST_IBTC_MISS, TL_RET_FAST_IBTC_IRQ};
+    for (uint32_t i = 0; i < 3; i++)
+        if (address == translit_ret_fast_ibtc_dynamic_counter(ret[i])) return TL_EXT_RET_HIT + i;
+    static const enum translit_jcc_ibtc_counter jcc[] = {
+        TL_JCC_IBTC_COUNT_HIT, TL_JCC_IBTC_COUNT_MISS, TL_JCC_IBTC_COUNT_IRQ};
+    for (uint32_t i = 0; i < 3; i++)
+        if (address == translit_jcc_ibtc_dynamic_counter(jcc[i])) return TL_EXT_JCC_HIT + i;
+    static const enum translit_direct_jmp_ibtc_counter jmp[] = {
+        TL_DIRECT_JMP_IBTC_COUNT_HIT, TL_DIRECT_JMP_IBTC_COUNT_MISS, TL_DIRECT_JMP_IBTC_COUNT_IRQ};
+    for (uint32_t i = 0; i < 3; i++)
+        if (address == translit_direct_jmp_ibtc_dynamic_counter(jmp[i])) return TL_EXT_JMP_HIT + i;
+    static const enum translit_direct_call_ibtc_counter call[] = {
+        TL_DIRECT_CALL_IBTC_COUNT_HIT, TL_DIRECT_CALL_IBTC_COUNT_MISS, TL_DIRECT_CALL_IBTC_COUNT_IRQ};
+    for (uint32_t i = 0; i < 3; i++)
+        if (address == translit_direct_call_ibtc_dynamic_counter(call[i])) return TL_EXT_CALL_HIT + i;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (address == (uintptr_t)&translit_jcc_link_taken) return TL_EXT_HOOK_LINK_TAKEN;
+    if (address == (uintptr_t)&translit_jcc_link_irq_fallback) return TL_EXT_HOOK_LINK_IRQ;
+    if (address == (uintptr_t)&translit_jcc_link_dispatcher) return TL_EXT_HOOK_LINK_DISPATCH;
+    if (address == hl_backend_tree_jcc_link_counter_address()) return TL_EXT_HOOK_JCC_SHAPE;
+    if (address == hl_backend_tree_direct_call_ibtc_dynamic_counter_address(HL_BACKEND_DIRECT_CALL_IBTC_HIT))
+        return TL_EXT_HOOK_CALL_HIT;
+    if (address == hl_backend_tree_direct_call_ibtc_dynamic_counter_address(HL_BACKEND_DIRECT_CALL_IBTC_MISS))
+        return TL_EXT_HOOK_CALL_MISS;
+#endif
+    return TL_EXT_NONE;
+}
+
+static int translit_external_absolute_kind_valid(uint32_t kind) {
+    return (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ) ||
+           (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ) ||
+           (kind >= TL_EXT_JMP_HIT && kind <= TL_EXT_JMP_IRQ) ||
+           (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ) ||
+           (kind >= TL_EXT_HOOK_LINK_TAKEN && kind <= TL_EXT_HOOK_CALL_MISS);
+}
+
+static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind) {
+    (void)emitter_kind;
+    uintptr_t base = (uintptr_t)g_cache, value = (uintptr_t)slot;
+    if (value < base || value - base > CACHE_SZ - sizeof(uint64_t)) return;
+    translit_external_absolute_emitted++;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if ((translit_test_drop_external_absolute ||
+         (hl_option_get("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST") != NULL &&
+          !translit_test_dropped_external_absolute))) {
+        translit_test_drop_external_absolute = 0;
+        translit_test_dropped_external_absolute = 1;
+        return;
+    }
+#endif
+    uint32_t kind = translit_external_absolute_kind_for(address);
+    if (kind == TL_EXT_NONE || translit_external_absolute_count == TL_EXTERNAL_ABSOLUTE_N) {
+        translit_external_absolute_unclassified = 1;
+        return;
+    }
+    translit_external_absolutes[translit_external_absolute_count++] =
+        (translit_external_absolute){(uint32_t)(value - base), kind};
 }
 static uint64_t translit_displaced_blocks;
 static uint64_t translit_rip_indirect_lowered;
@@ -1357,6 +1443,12 @@ static void translit_ret_ibtc_drop_target(uint64_t target) {
 static void translit_cache_rewind_in_place(void) {
     translit_shared_ibtc_stubs_reset();
     translit_ret_ibtc_reset();
+    translit_external_absolute_count = 0;
+    translit_external_absolute_emitted = 0;
+    translit_external_absolute_unclassified = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_dropped_external_absolute = 0;
+#endif
     jit_cache_rewind_in_place();
     translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
 }

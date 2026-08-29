@@ -19,6 +19,7 @@ enum Mode {
     CacheTruncated,
     ForkNoExec,
     ForkExec,
+    RelocationMissing,
 }
 
 impl Mode {
@@ -32,6 +33,7 @@ impl Mode {
             "cache-truncated" => Ok(Self::CacheTruncated),
             "fork-no-exec" => Ok(Self::ForkNoExec),
             "fork-exec" => Ok(Self::ForkExec),
+            "relocation-missing" => Ok(Self::RelocationMissing),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
@@ -66,7 +68,10 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         .ok_or("HL_PCACHE_PROFILE_CACHE must name the runner-owned persistent directory")?;
     let cache = Path::new(&cache);
     require(cache.is_absolute(), "profile cache is not absolute")?;
-    if matches!(mode, Mode::CacheCold | Mode::ForkNoExec | Mode::ForkExec) {
+    if matches!(
+        mode,
+        Mode::CacheCold | Mode::ForkNoExec | Mode::ForkExec | Mode::RelocationMissing
+    ) {
         require(
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
@@ -118,6 +123,12 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         config
     };
     let containers = Containers::builder(config).images(images.clone()).build().await?;
+    if mode == Mode::RelocationMissing {
+        require(
+            std::env::var_os("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST").is_some(),
+            "relocation mutation arm did not enable its native hook",
+        )?;
+    }
     if mode.cached() {
         let metadata = fs::symlink_metadata(cache)?;
         require(
@@ -139,8 +150,21 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         Process::new("/bin/sh").args(["-c", "/bin/true & wait"])
     } else {
         Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
-            "-quiet", "/work/src/unit_127.c", "-quiet", "-dumpdir", "/tmp/", "-dumpbase", "unit_127.c",
-            "-dumpbase-ext", ".c", "-mtune=generic", "-march=x86-64", "-g", "-O2", "-o", "-",
+            "-quiet",
+            "/work/src/unit_127.c",
+            "-quiet",
+            "-dumpdir",
+            "/tmp/",
+            "-dumpbase",
+            "unit_127.c",
+            "-dumpbase-ext",
+            ".c",
+            "-mtune=generic",
+            "-march=x86-64",
+            "-g",
+            "-O2",
+            "-o",
+            "-",
         ])
     };
     let spec = ContainerSpec::new(root, process)
@@ -192,24 +216,62 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         match mode {
             Mode::CacheCold => {}
             Mode::CacheValid => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
                 "valid same-ISA artifact did not reach the C validator's authenticated path",
             )?,
             Mode::CacheBitflip => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".checksum-invalid")),
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".checksum-invalid")),
                 "bit-flipped artifact did not reach the checksum refusal path",
             )?,
             Mode::CacheTruncated => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")),
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")),
                 "truncated artifact did not reach the structural-length refusal path",
             )?,
             Mode::ForkNoExec => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(14).any(|part| part == b".fork-refused-")),
+                entries.iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(14)
+                        .any(|part| part == b".fork-refused-")
+                }),
                 "fork child without exec did not refuse inherited cache publication",
             )?,
             Mode::ForkExec => require(
-                entries.iter().filter(|entry| entry.file_name().as_encoded_bytes().windows(11).any(|part| part == b".published-")).count() >= 2,
+                entries
+                    .iter()
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(11)
+                            .any(|part| part == b".published-")
+                    })
+                    .count()
+                    >= 2,
                 "fork+exec did not publish both parent and re-keyed child identities",
+            )?,
+            Mode::RelocationMissing => require(
+                entries.iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(20)
+                        .any(|part| part == b".relocation-refused-")
+                }) && !entries.iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(11)
+                        .any(|part| part == b".published-")
+                }),
+                "unrecorded emitted absolute did not refuse cache publication",
             )?,
             Mode::Interpreter | Mode::Translated => unreachable!(),
         }
@@ -229,5 +291,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    if condition { Ok(()) } else { Err(message.into()) }
+    if condition {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
 }

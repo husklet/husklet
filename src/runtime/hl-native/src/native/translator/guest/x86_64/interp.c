@@ -1881,13 +1881,20 @@ static uint64_t pcache_engine_id(void) {
     }
     hash ^= self;
     hash *= 1099511628211ull;
-    // No emitted-code mode bits to mix in; the host-ISA term is the load-bearing one.
-    return hl_identity_configuration(hash, 2, HL_HOST_CPU_ISA, 0);
+    uint64_t modes = (hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
+                     ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
+                     ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
+                     ((uint64_t)(g_prof != 0) << 3);
+    return hl_identity_configuration(hash, 2, HL_HOST_CPU_ISA, modes);
 }
 
 static hl_identity_digest pcache_translator_identity(void) {
     static const char tag[] = __DATE__ " " __TIME__;
-    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, 0);
+    uint64_t modes = (hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
+                     ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
+                     ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
+                     ((uint64_t)(g_prof != 0) << 3);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, modes);
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
@@ -1898,13 +1905,14 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 /* Same-ISA cold-publication format. Warm restore deliberately remains disabled until the relocation and
  * generation reconstruction review is complete. Every address in the payload is an arena-relative offset. */
 #define X64_PC_MAGIC UINT64_C(0x3143535034364c48) /* "HL64PSC1" */
-#define X64_PC_VERSION UINT64_C(1)
+#define X64_PC_VERSION UINT64_C(2)
 
 #define X64_PC_ENDIAN UINT64_C(0x0807060504030201)
-#define X64_PC_HEADER_SIZE 160u
+#define X64_PC_HEADER_SIZE 208u
 #define X64_PC_MAP_SIZE 84u
 #define X64_PC_OWNER_SIZE 24u
-#define X64_PC_CHECKSUM_OFFSET 152u
+#define X64_PC_RELOC_SIZE 8u
+#define X64_PC_CHECKSUM_OFFSET 200u
 
 static void x64_pc_put16(uint8_t **p, uint16_t v) { (*p)[0] = (uint8_t)v; (*p)[1] = (uint8_t)(v >> 8); *p += 2; }
 static void x64_pc_put32(uint8_t **p, uint32_t v) { for (unsigned i = 0; i < 4; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 4; }
@@ -1960,15 +1968,28 @@ static int pcache_load(uint64_t entry_jump) {
                 x64_pc_get64(bytes + 8) == X64_PC_VERSION && x64_pc_get64(bytes + 16) == X64_PC_ENDIAN &&
                 x64_pc_get64(bytes + 24) == HL_PCACHE_ABI_X86_64 && x64_pc_get64(bytes + 32) == sizeof(struct cpu) &&
                 x64_pc_get64(bytes + 40) == JIT_MAP_N &&
-                memcmp(bytes + 48, g_pc_binid.bytes, sizeof g_pc_binid.bytes) == 0;
+                memcmp(bytes + 48, g_pc_binid.bytes, sizeof g_pc_binid.bytes) == 0 &&
+                x64_pc_get64(bytes + 192) ==
+                    ((hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
+                     ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
+                     ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
+                     ((uint64_t)(g_prof != 0) << 3));
     if (valid) {
         uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
+        uint64_t relocs = x64_pc_get64(bytes + 184);
         uint64_t map_bytes = maps <= UINT64_MAX / X64_PC_MAP_SIZE ? maps * X64_PC_MAP_SIZE : UINT64_MAX;
         uint64_t owner_bytes = owners <= UINT64_MAX / X64_PC_OWNER_SIZE ? owners * X64_PC_OWNER_SIZE : UINT64_MAX;
-        valid = arena <= CACHE_SZ && maps <= JIT_MAP_N && owners <= JIT_BODY_OWNER_N && map_bytes != UINT64_MAX &&
+        uint64_t reloc_bytes = relocs <= UINT64_MAX / X64_PC_RELOC_SIZE ? relocs * X64_PC_RELOC_SIZE : UINT64_MAX;
+        valid = arena <= CACHE_SZ && maps <= JIT_MAP_N && owners <= JIT_BODY_OWNER_N &&
+                relocs <= TL_EXTERNAL_ABSOLUTE_N && map_bytes != UINT64_MAX && reloc_bytes != UINT64_MAX &&
                 owner_bytes != UINT64_MAX && X64_PC_HEADER_SIZE + map_bytes <= SIZE_MAX - owner_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes <= SIZE_MAX - arena &&
-                size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + arena;
+                X64_PC_HEADER_SIZE + map_bytes + owner_bytes <= SIZE_MAX - reloc_bytes &&
+                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes <= SIZE_MAX - arena &&
+                size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + arena;
+        for (unsigned offset = 120; valid && offset <= 176; offset += 8) {
+            uint64_t helper = x64_pc_get64(bytes + offset);
+            valid = helper == UINT64_MAX || helper <= arena;
+        }
     }
     if (valid) {
         static const uint8_t zero[8];
@@ -1982,6 +2003,7 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (valid) {
         uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
+        uint64_t relocs = x64_pc_get64(bytes + 184);
         const uint8_t *record = bytes + X64_PC_HEADER_SIZE;
         for (uint64_t i = 0; valid && i < maps; i++, record += X64_PC_MAP_SIZE) {
             uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
@@ -1994,6 +2016,16 @@ static int pcache_load(uint64_t entry_jump) {
         for (uint64_t i = 0; valid && i < owners; i++, record += X64_PC_OWNER_SIZE) {
             uint32_t start = x64_pc_get32(record), end = x64_pc_get32(record + 4);
             valid = start <= end && end <= arena;
+        }
+        record = bytes + X64_PC_HEADER_SIZE + maps * X64_PC_MAP_SIZE + owners * X64_PC_OWNER_SIZE;
+        const uint8_t *arena_bytes = record + relocs * X64_PC_RELOC_SIZE;
+        uint32_t prior = 0;
+        for (uint64_t i = 0; valid && i < relocs; i++, record += X64_PC_RELOC_SIZE) {
+            uint32_t offset = x64_pc_get32(record), kind = x64_pc_get32(record + 4);
+            valid = offset <= arena && arena - offset >= 8 && translit_external_absolute_kind_valid(kind) &&
+                    (i == 0 || offset > prior) && offset >= 2 && arena_bytes[offset - 2] == 0x48 &&
+                    arena_bytes[offset - 1] == 0xb8;
+            prior = offset;
         }
         if (!valid) validation = 2;
     }
@@ -2027,7 +2059,40 @@ static void pcache_save(void) {
 #else
     if (g_x64_pc_forked) return;
 #endif
+    if (translit_external_absolute_unclassified ||
+        translit_external_absolute_count != translit_external_absolute_emitted) {
+        HL_LOGF(&g_jit_log, HL_LOG_TAG_TRANSLATE,
+                "pcache=refused reason=external-absolute-census emitted=%u recorded=%u unclassified=%d",
+                translit_external_absolute_emitted, translit_external_absolute_count,
+                translit_external_absolute_unclassified);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        char base[1024], receipt[1024];
+        if (x64_pc_file(base, sizeof base)) {
+            int length = snprintf(receipt, sizeof receipt, "%s.relocation-refused-%lld", base, (long long)getpid());
+            static const unsigned refused = 1;
+            if (length > 0 && (size_t)length < sizeof receipt)
+                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &refused, sizeof refused);
+        }
+#endif
+        return;
+    }
     uint64_t used = (uint64_t)(g_cp - g_cache);
+    uint32_t prior_reloc = 0;
+    for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
+        uint32_t offset = translit_external_absolutes[i].offset;
+        uint64_t address = 0;
+        if (offset > used || used - offset < sizeof address || offset < 2 ||
+            (i != 0 && offset <= prior_reloc) || g_cache[offset - 2] != 0x48 || g_cache[offset - 1] != 0xb8) {
+            translit_external_absolute_unclassified = 1;
+            return;
+        }
+        memcpy(&address, g_cache + offset, sizeof address);
+        if (translit_external_absolute_kind_for((uintptr_t)address) != translit_external_absolutes[i].kind) {
+            translit_external_absolute_unclassified = 1;
+            return;
+        }
+        prior_reloc = offset;
+    }
     uint64_t map_count = 0;
     for (uint32_t i = 0; i < JIT_MAP_N; i++)
         if (map_live(i) && g_map_metadata[i].cache_generation == g_cache_gen) map_count++;
@@ -2036,12 +2101,13 @@ static void pcache_save(void) {
         owners == NULL ? NULL : atomic_load_explicit(&owners->entry, memory_order_acquire);
     uint32_t owner_count = owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
     if ((owner_count != 0 && owner_entries == NULL) || map_count > SIZE_MAX / X64_PC_MAP_SIZE ||
-        owner_count > SIZE_MAX / X64_PC_OWNER_SIZE)
+        owner_count > SIZE_MAX / X64_PC_OWNER_SIZE || translit_external_absolute_count > SIZE_MAX / X64_PC_RELOC_SIZE)
         return;
     size_t map_bytes = (size_t)map_count * X64_PC_MAP_SIZE;
     size_t owner_bytes = (size_t)owner_count * X64_PC_OWNER_SIZE;
-    if (used > SIZE_MAX - X64_PC_HEADER_SIZE - map_bytes - owner_bytes) return;
-    size_t total = X64_PC_HEADER_SIZE + map_bytes + owner_bytes + (size_t)used;
+    size_t reloc_bytes = (size_t)translit_external_absolute_count * X64_PC_RELOC_SIZE;
+    if (used > SIZE_MAX - X64_PC_HEADER_SIZE - map_bytes - owner_bytes - reloc_bytes) return;
+    size_t total = X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + (size_t)used;
     uint8_t *buffer = calloc(1, total);
     if (buffer == NULL) return;
     uint8_t *cursor = buffer;
@@ -2053,7 +2119,17 @@ static void pcache_save(void) {
     x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_entry, used));
     x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_rsp_canonical, used));
     x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_flags_canonical, used));
-    x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_end, used)); x64_pc_put64(&cursor, 0);
+    x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_end, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_entry, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_rsp_canonical, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_flags_canonical, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_end, used));
+    x64_pc_put64(&cursor, translit_external_absolute_count);
+    x64_pc_put64(&cursor, (hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
+                              ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
+                              ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
+                              ((uint64_t)(g_prof != 0) << 3));
+    x64_pc_put64(&cursor, 0);
     for (uint32_t i = 0; i < JIT_MAP_N; i++) {
         if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
         uint64_t host = x64_pc_offset(g_map[i].host, used), body = x64_pc_offset(g_map[i].body, used);
@@ -2072,6 +2148,10 @@ static void pcache_save(void) {
     for (uint32_t i = 0; i < owner_count; i++) {
         x64_pc_put32(&cursor, owner_entries[i].rw_start); x64_pc_put32(&cursor, owner_entries[i].rw_end);
         x64_pc_put32(&cursor, preserves[i]); x64_pc_put32(&cursor, 0); x64_pc_put64(&cursor, owner_entries[i].guest);
+    }
+    for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
+        x64_pc_put32(&cursor, translit_external_absolutes[i].offset);
+        x64_pc_put32(&cursor, translit_external_absolutes[i].kind);
     }
     memcpy(cursor, g_cache, (size_t)used);
     hl_digest digest;
