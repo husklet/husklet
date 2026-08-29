@@ -5759,16 +5759,17 @@ static int translit_ret_signal_stage_test(void) {
         translit_test_ret_site.rsp_end == NULL || translit_test_ret_site.marker_end == NULL)
         return 0;
     const uint64_t target = UINT64_C(0x123456789abcdef0);
-    struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip; int cpu_rax_live; } stages[] = {
-        {translit_test_ret_instruction_start, 0, target, translit_test_ret_source_guest, 0},
+    struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip;
+             int cpu_rax_live; int host_rax_live; } stages[] = {
+        {translit_test_ret_instruction_start, 0, target, translit_test_ret_source_guest, 0, 1},
         {translit_test_ret_site.load_end, 1u << HL_X64_RSP, translit_test_ret_source_guest,
-         translit_test_ret_source_guest, 0},
+         translit_test_ret_source_guest, 0, 0},
         {translit_test_ret_site.rsp_end, 1u << HL_X64_RSP, target,
-         translit_test_ret_source_guest, 0},
-        {translit_test_ret_site.rip_end, 0, target, target, 0},
-        {translit_test_ret_site.rax_end, 0, target, target, 1},
-        {translit_test_ret_site.marker_end, 0, target, target, 1},
-        {translit_jcc_ibtc_stub_entry, 1u << HL_X64_RAX, target, target, 1},
+         translit_test_ret_source_guest, 0, 0},
+        {translit_test_ret_site.rip_end, 0, target, target, 0, 0},
+        {translit_test_ret_site.rax_end, 0, target, target, 1, 1},
+        {translit_test_ret_site.marker_end, 0, target, target, 1, 1},
+        {translit_jcc_ibtc_stub_entry, 1u << HL_X64_RAX, target, target, 1, 1},
     };
     int saved_selected = translit_selected;
     translit_selected = 1;
@@ -5783,7 +5784,8 @@ static int translit_ret_signal_stage_test(void) {
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
         const uint64_t live_rax = 99;
-        gregs[g_translit_greg[HL_X64_RAX]] = (greg_t)live_rax;
+        gregs[g_translit_greg[HL_X64_RAX]] =
+            (greg_t)(stages[stage].host_rax_live ? live_rax : target);
         if (stages[stage].cpu_rax_live) cpu.r[HL_X64_RAX] = live_rax;
         cpu.rip = stages[stage].cpu_rip;
         cpu.mmscratch[1] = live_rax;
