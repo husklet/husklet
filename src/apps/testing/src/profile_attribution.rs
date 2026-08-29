@@ -339,6 +339,26 @@ fn verify_manifest(manifest: &Manifest, options: &RecordOptions) -> Result<(), E
 }
 
 fn validate_sealed_manifest(manifest: &Manifest) -> Result<(), Error> {
+    validate_measurement_contract(manifest)?;
+    validate_artifact_roles(&manifest.artifacts)?;
+    let executable = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "executable")
+        .unwrap();
+    if Path::new(&manifest.command[0]) != executable.original {
+        return Err("campaign command does not name its executable artifact".into());
+    }
+    for artifact in &manifest.artifacts {
+        validate_digest(&artifact.sha256)?;
+        if sha256(&artifact.frozen)? != artifact.sha256 || elf_build_id(&artifact.frozen)? != artifact.build_id {
+            return Err(format!("frozen {} identity changed", artifact.role).into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_measurement_contract(manifest: &Manifest) -> Result<(), Error> {
     if manifest.format != FORMAT
         || manifest.profiles != PROFILE_COUNT
         || manifest.event != "cpu-clock:u"
@@ -356,21 +376,6 @@ fn validate_sealed_manifest(manifest: &Manifest) -> Result<(), Error> {
     }
     if manifest.command.is_empty() {
         return Err("campaign command is empty".into());
-    }
-    validate_artifact_roles(&manifest.artifacts)?;
-    let executable = manifest
-        .artifacts
-        .iter()
-        .find(|artifact| artifact.role == "executable")
-        .unwrap();
-    if Path::new(&manifest.command[0]) != executable.original {
-        return Err("campaign command does not name its executable artifact".into());
-    }
-    for artifact in &manifest.artifacts {
-        validate_digest(&artifact.sha256)?;
-        if sha256(&artifact.frozen)? != artifact.sha256 || elf_build_id(&artifact.frozen)? != artifact.build_id {
-            return Err(format!("frozen {} identity changed", artifact.role).into());
-        }
     }
     Ok(())
 }
@@ -490,9 +495,7 @@ fn parse_campaign(results: &Path) -> Result<(), Error> {
         let receipt = &receipts[&slot];
         let script = results.join(format!("profile-{slot:02}.script.tsv"));
         let symbol_index = results.join(format!("profile-{slot:02}.symbols.tsv"));
-        if sha256(&symbol_index)? != receipt.symbol_index_sha256 {
-            return Err(format!("profile {slot} symbol index changed").into());
-        }
+        verify_bound_hash(&symbol_index, &receipt.symbol_index_sha256, "symbol index")?;
         let mut exact_dsos = artifact_dsos.clone();
         exact_dsos.extend(load_symbol_index(&symbol_index)?);
         let counts = parse_script(&script, &exact_dsos)?.verify()?;
@@ -650,6 +653,13 @@ fn sha256(path: &Path) -> Result<String, Error> {
     Ok(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn verify_bound_hash(path: &Path, expected: &str, label: &str) -> Result<(), Error> {
+    if sha256(path)? != expected {
+        return Err(format!("{label} changed").into());
+    }
+    Ok(())
+}
+
 fn validate_digest(value: &str) -> Result<(), Error> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("semantic SHA-256 must be 64 hexadecimal characters".into());
@@ -788,6 +798,32 @@ mod tests {
         assert!(ibtc_disabled(&valid).unwrap());
         fs::write(&valid, "not_direct_jmp_ibtc_enabled=0 direct_jmp_ibtc_enabled=00\n").unwrap();
         assert!(!ibtc_disabled(&valid).unwrap());
+    }
+
+    #[test]
+    fn sealed_symbol_index_rejects_a_post_receipt_edit() {
+        let (_directory, path) = script("build-id\tsha\toriginal\tfrozen\n");
+        let sealed = sha256(&path).unwrap();
+        verify_bound_hash(&path, &sealed, "symbol index").unwrap();
+        fs::write(&path, "spoofed\n").unwrap();
+        assert!(verify_bound_hash(&path, &sealed, "symbol index").is_err());
+    }
+
+    #[test]
+    fn manifest_contract_rejects_event_frequency_unwind_and_direct_jmp_changes() {
+        let mut manifest = test_manifest(vec![]);
+        validate_measurement_contract(&manifest).unwrap();
+        manifest.event = "cycles:u".into();
+        assert!(validate_measurement_contract(&manifest).is_err());
+        manifest.event = "cpu-clock:u".into();
+        manifest.frequency_hz = 10_000;
+        assert!(validate_measurement_contract(&manifest).is_err());
+        manifest.frequency_hz = 9_999;
+        manifest.call_graph = "fp".into();
+        assert!(validate_measurement_contract(&manifest).is_err());
+        manifest.call_graph = "dwarf,65528".into();
+        manifest.direct_jmp = "on".into();
+        assert!(validate_measurement_contract(&manifest).is_err());
     }
 
     #[test]
