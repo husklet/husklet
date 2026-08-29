@@ -824,15 +824,26 @@ static void translit_sampling_flush(void) {
     size_t used = 0;
     for (uint32_t index = 0; index < translit_sampling_record_count; index++) {
         const translit_sampling_record *record = &translit_sampling_records[index];
-        int length = snprintf(text + used, capacity - used, "%llx %x %s\n",
-                              (unsigned long long)record->address, record->length, record->name);
-        if (length <= 0 || (size_t)length >= capacity - used) {
-            translit_profile_output_failed("sampling map format");
-            free(text);
-            translit_sampling_record_count = 0;
-            return;
-        }
-        used += (size_t)length;
+        char digits[16];
+        uint32_t count = 0;
+        uint64_t value = record->address;
+        do {
+            digits[count++] = "0123456789abcdef"[value & 15u];
+            value >>= 4;
+        } while (value != 0);
+        while (count != 0) text[used++] = digits[--count];
+        text[used++] = ' ';
+        value = record->length;
+        do {
+            digits[count++] = "0123456789abcdef"[value & 15u];
+            value >>= 4;
+        } while (value != 0);
+        while (count != 0) text[used++] = digits[--count];
+        text[used++] = ' ';
+        size_t name_length = strlen(record->name);
+        memcpy(text + used, record->name, name_length);
+        used += name_length;
+        text[used++] = '\n';
     }
     if (fwrite(text, used, 1, translit_perf_map_file) != 1) translit_profile_output_failed("sampling map write");
     free(text);
