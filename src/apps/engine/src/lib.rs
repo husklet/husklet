@@ -119,6 +119,10 @@ struct LaunchArguments {
     #[cfg(feature = "native-test-hooks")]
     #[arg(long, value_name = "KEY=VALUE", hide = true, value_parser = parse_native_test_option)]
     native_test_option: Vec<NativeTestOption>,
+    /// Publish same-ISA block maps and jitdump code bytes for diagnostic profiling.
+    #[cfg(feature = "native-test-hooks")]
+    #[arg(long, value_name = "PATH", hide = true, requires_all = ["translit", "diagnostics"], value_parser = parse_translit_perf_map)]
+    translit_perf_map: Option<PathBuf>,
     /// Existing container root used to resolve the guest entry and `PT_INTERP`.
     #[arg(long)]
     rootfs: Option<PathBuf>,
@@ -146,6 +150,40 @@ fn parse_native_test_option(value: &str) -> Result<NativeTestOption, String> {
         _ if !value.contains('=') => Err("native test options use KEY=VALUE syntax".to_owned()),
         _ => Err("unsupported native test option; expected HL_TRANSLIT_FS_AUTHORITY_TEST=1".to_owned()),
     }
+}
+
+#[cfg(feature = "native-test-hooks")]
+fn parse_translit_perf_map(value: &str) -> Result<PathBuf, String> {
+    let requested = std::path::Path::new(value);
+    if !requested.is_absolute() {
+        return Err("--translit-perf-map requires an absolute path".to_owned());
+    }
+    let path = std::fs::canonicalize(requested)
+        .map_err(|error| format!("cannot resolve --translit-perf-map {}: {error}", requested.display()))?;
+    if !path.is_dir() {
+        return Err(format!("--translit-perf-map {} is not a directory", path.display()));
+    }
+    if std::fs::metadata(&path)
+        .map_err(|error| format!("cannot inspect --translit-perf-map {}: {error}", path.display()))?
+        .permissions()
+        .readonly()
+    {
+        return Err(format!("--translit-perf-map {} is not writable", path.display()));
+    }
+    let probe = path.join(format!(".husklet-perf-map-write-probe-{}", std::process::id()));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(|error| format!("--translit-perf-map {} is not writable: {error}", path.display()))?;
+    drop(file);
+    std::fs::remove_file(&probe).map_err(|error| {
+        format!(
+            "cannot remove --translit-perf-map write probe {}: {error}",
+            probe.display()
+        )
+    })?;
+    Ok(path)
 }
 
 /// Why a worker could not run the guest.
@@ -454,6 +492,12 @@ fn rootfs_plan(
         options
             .set(injected.name, injected.value, false)
             .map_err(|error| Failure::Request(format!("cannot set native test option {}: {error:?}", injected.name)))?;
+    }
+    #[cfg(feature = "native-test-hooks")]
+    if let Some(path) = &launch.translit_perf_map {
+        options
+            .set("HL_TRANSLIT_PERF_MAP", &path.to_string_lossy(), false)
+            .map_err(|error| Failure::Request(format!("cannot set --translit-perf-map: {error:?}")))?;
     }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
@@ -820,6 +864,79 @@ mod tests {
         }
     }
 
+    #[cfg(all(unix, feature = "native-test-hooks"))]
+    #[test]
+    fn translit_perf_map_requires_a_writable_absolute_directory_and_diagnostics() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_str().unwrap();
+        let selected = launch(&[
+            "--diagnostics",
+            "--translit",
+            "--translit-perf-map",
+            path,
+            "--rootfs",
+            "/image",
+            "bin/program",
+        ]);
+        assert_eq!(selected.translit_perf_map.as_deref(), Some(directory.path()));
+        assert!(
+            !directory
+                .path()
+                .join(format!(".husklet-perf-map-write-probe-{}", std::process::id()))
+                .exists()
+        );
+
+        for arguments in [
+            vec![
+                "--diagnostics",
+                "--translit",
+                "--translit-perf-map",
+                "relative",
+                "bin/program",
+            ],
+            vec![
+                "--diagnostics",
+                "--translit",
+                "--translit-perf-map",
+                "/does/not/exist",
+                "bin/program",
+            ],
+            vec!["--translit", "--translit-perf-map", path, "bin/program"],
+            vec!["--diagnostics", "--translit-perf-map", path, "bin/program"],
+        ] {
+            assert!(LaunchArguments::try_parse_from(std::iter::once("hl-x86_64").chain(arguments)).is_err());
+        }
+
+        let file = directory.path().join("file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        assert!(
+            LaunchArguments::try_parse_from([
+                "hl-x86_64",
+                "--diagnostics",
+                "--translit",
+                "--translit-perf-map",
+                file.to_str().unwrap(),
+                "bin/program"
+            ])
+            .is_err()
+        );
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        assert!(
+            LaunchArguments::try_parse_from([
+                "hl-x86_64",
+                "--diagnostics",
+                "--translit",
+                "--translit-perf-map",
+                path,
+                "bin/program"
+            ])
+            .is_err()
+        );
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn native_test_options_require_a_rootfs_instead_of_being_ignored() {
@@ -985,6 +1102,39 @@ mod tests {
         assert_eq!(
             reason(&duplicate),
             "native test option HL_TRANSLIT_FS_AUTHORITY_TEST may be specified only once"
+        );
+    }
+
+    #[cfg(all(unix, feature = "native-test-hooks"))]
+    #[test]
+    fn rootfs_plan_propagates_only_the_typed_perf_map_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let maps = tempfile::tempdir().unwrap();
+        let program = root.path().join("bin/program");
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plan = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--diagnostics",
+                "--translit",
+                "--translit-perf-map",
+                maps.path().to_str().unwrap(),
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(plan.options.get("HL_TRANSLIT_PERF_MAP"), maps.path().to_str());
+        assert_eq!(plan.options.get("HL_TRANSLIT_FS_AUTHORITY_TEST"), None);
+        assert!(
+            plan.environment
+                .iter()
+                .all(|entry| !entry.starts_with(b"HL_TRANSLIT_PERF_MAP="))
         );
     }
 
