@@ -688,7 +688,7 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
         translit_jitdump_file = NULL;
         return;
     }
-    (void)setvbuf(translit_jitdump_file, NULL, _IONBF, 0);
+    (void)setvbuf(translit_jitdump_file, NULL, _IOFBF, 64u * 1024u);
     translit_jitdump_pid = pid;
     translit_jitdump_index = 0;
 }
@@ -733,7 +733,7 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
             translit_profile_output_failed("perf-map stream");
             return;
         }
-        (void)setvbuf(translit_perf_map_file, NULL, _IONBF, 0);
+        (void)setvbuf(translit_perf_map_file, NULL, _IOFBF, 64u * 1024u);
         translit_perf_map_pid = pid;
     }
     size_t name_length = strlen(name);
@@ -781,8 +781,14 @@ static void translit_perf_map_publish(const struct interp_block *block, const ui
     if (length <= 0 || (size_t)length >= sizeof name) return;
     translit_perf_map_publish_named(name, start, host_len);
 }
+
+static void translit_perf_map_flush(void) {
+    if (translit_perf_map_file != NULL) (void)fflush(translit_perf_map_file);
+    if (translit_jitdump_file != NULL) (void)fflush(translit_jitdump_file);
+}
 #else
 #define translit_perf_map_publish_helper(name, start, end, published) ((void)0)
+#define translit_perf_map_flush() ((void)0)
 #endif
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
