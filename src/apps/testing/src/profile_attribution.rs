@@ -703,6 +703,7 @@ fn parse_export_loss(stderr: &str) -> Result<ExportLoss, Error> {
         return Err(format!("unexpected perf exporter diagnostic: {line}").into());
     }
     Ok(ExportLoss {
+        lost_records: 0,
         lost_chunks: chunks.ok_or("perf exporter omitted lost-chunk count")?,
         lost_sample_percent: percent.ok_or("perf exporter omitted lost-sample percentage")?,
     })
