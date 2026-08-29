@@ -98,6 +98,15 @@ fn executed_family_counts_aggregate_across_forks_and_ignore_top8_saturation() {
 }
 
 #[test]
+fn executed_form_publication_waits_for_same_and_colliding_keys() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 12)
+            .unwrap_or_else(|status| panic!("ISA {isa} concurrent executed-form scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn executed_fall_stop_reasons_reconcile_exactly_to_translated_fallthroughs() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {
@@ -196,6 +205,12 @@ fn product_executed_form_writers_remain_inside_the_existing_diagnostics_gate() {
         .map(|(_, body)| body)
         .expect("STEP_END branch");
     assert!(terminal.contains("if (census_steps && cpu->irq == 0)"));
+    let gate = source
+        .split_once("#define interp_executed_form_complete(cpu, reason)")
+        .and_then(|(_, tail)| tail.split_once("#if defined(HL_NATIVE_TEST_HOOKS)"))
+        .map(|(body, _)| body)
+        .expect("production deferred-completion gate");
+    assert!(gate.contains("if (g_dispatch_census_open == 2)"), "{gate}");
 
     let backend = include_str!("../src/native/engine/backend_tree.c");
     let writer = backend
@@ -204,4 +219,18 @@ fn product_executed_form_writers_remain_inside_the_existing_diagnostics_gate() {
         .map(|(body, _)| body)
         .expect("product executed-form writer");
     assert!(writer.contains("if (census == NULL || g_backend_mixed_sse_self == NULL) return;"));
+}
+
+#[test]
+fn product_smc_completion_is_ordered_after_commit_and_before_resume() {
+    let dispatcher = include_str!("../src/native/translator/guest/x86_64/interp_dispatch.h");
+    let arm = dispatcher
+        .split_once("if ((c)->reason == R_SMC)")
+        .and_then(|(_, tail)| tail.split_once("if ((c)->reason == R_SYSCALL)"))
+        .map(|(body, _)| body)
+        .expect("R_SMC dispatcher arm");
+    let commit = arm.find("jit86_smc_commit(c)").unwrap();
+    let census = arm.find("interp_executed_form_complete(c, R_SMC)").unwrap();
+    let resume = arm.find("(c)->reason = R_BRANCH").unwrap();
+    assert!(commit < census && census < resume, "{arm}");
 }

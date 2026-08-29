@@ -14,6 +14,66 @@
  * guest-visible state.
  */
 
+#define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
+#define HL_BACKEND_EXECUTED_FORM_TOP 16u
+
+struct hl_backend_executed_form {
+    _Atomic uint32_t state;
+    uint64_t key;
+    _Atomic uint64_t count;
+};
+
+static uint64_t hl_backend_executed_form_mix(uint64_t value) {
+    value ^= value >> 33;
+    value *= UINT64_C(0xff51afd7ed558ccd);
+    value ^= value >> 33;
+    value *= UINT64_C(0xc4ceb9fe1a85ec53);
+    return value ^ (value >> 33);
+}
+
+static void hl_backend_executed_form_record(
+    struct hl_backend_executed_form forms[HL_BACKEND_EXECUTED_FORM_SLOTS], _Atomic uint64_t *total,
+    _Atomic uint64_t *unique, _Atomic uint64_t *overflow, uint64_t key, _Atomic uint32_t *pause_ready,
+    _Atomic uint32_t *pause_release) {
+    atomic_fetch_add_explicit(total, 1, memory_order_relaxed);
+    unsigned start = (unsigned)hl_backend_executed_form_mix(key) & (HL_BACKEND_EXECUTED_FORM_SLOTS - 1u);
+    for (unsigned probe = 0; probe < HL_BACKEND_EXECUTED_FORM_SLOTS; ++probe) {
+        struct hl_backend_executed_form *form =
+            &forms[(start + probe) & (HL_BACKEND_EXECUTED_FORM_SLOTS - 1u)];
+    retry_slot:
+        uint32_t state = atomic_load_explicit(&form->state, memory_order_acquire);
+        if (state == 1) {
+            for (unsigned wait = 0; wait < 64 && state == 1; ++wait) {
+                sched_yield();
+                state = atomic_load_explicit(&form->state, memory_order_acquire);
+            }
+            if (state == 1) {
+                atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+                return;
+            }
+        }
+        if (state == 2 && form->key == key) {
+            atomic_fetch_add_explicit(&form->count, 1, memory_order_relaxed);
+            return;
+        }
+        if (state != 0) continue;
+        uint32_t expected = 0;
+        if (!atomic_compare_exchange_strong_explicit(&form->state, &expected, 1, memory_order_acquire,
+                                                     memory_order_relaxed))
+            goto retry_slot;
+        if (pause_ready != NULL && pause_release != NULL) {
+            atomic_store_explicit(pause_ready, 1, memory_order_release);
+            while (!atomic_load_explicit(pause_release, memory_order_acquire)) sched_yield();
+        }
+        form->key = key;
+        atomic_store_explicit(&form->count, 1, memory_order_relaxed);
+        atomic_store_explicit(&form->state, 2, memory_order_release);
+        atomic_fetch_add_explicit(unique, 1, memory_order_relaxed);
+        return;
+    }
+    atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+}
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 
 #define HL_BACKEND_TREE_SLOTS 4096u
@@ -1410,6 +1470,56 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                    ? 0
                    : 38;
     }
+    if (scenario == 12) {
+        struct concurrency_fixture {
+            _Atomic uint64_t total, unique, overflow;
+            _Atomic uint32_t pause_ready, pause_release, start, waiter_ready[2];
+            struct hl_backend_executed_form forms[HL_BACKEND_EXECUTED_FORM_SLOTS];
+        } *fixture = mmap(NULL, sizeof *fixture, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (fixture == MAP_FAILED) return 91;
+        pid_t winner = fork();
+        if (winner == 0) {
+            hl_backend_executed_form_record(fixture->forms, &fixture->total, &fixture->unique,
+                                            &fixture->overflow, 2307, &fixture->pause_ready,
+                                            &fixture->pause_release);
+            _exit(0);
+        }
+        while (!atomic_load_explicit(&fixture->pause_ready, memory_order_acquire)) sched_yield();
+        pid_t waiters[2];
+        const uint64_t keys[2] = {2307, 12547}; /* Same initial bucket, same and different keys. */
+        for (unsigned index = 0; index < 2; ++index) {
+            waiters[index] = fork();
+            if (waiters[index] == 0) {
+                atomic_store_explicit(&fixture->waiter_ready[index], 1, memory_order_release);
+                while (!atomic_load_explicit(&fixture->start, memory_order_acquire)) sched_yield();
+                hl_backend_executed_form_record(fixture->forms, &fixture->total, &fixture->unique,
+                                                &fixture->overflow, keys[index], NULL, NULL);
+                _exit(0);
+            }
+        }
+        while (!atomic_load_explicit(&fixture->waiter_ready[0], memory_order_acquire) ||
+               !atomic_load_explicit(&fixture->waiter_ready[1], memory_order_acquire))
+            sched_yield();
+        atomic_store_explicit(&fixture->start, 1, memory_order_release);
+        atomic_store_explicit(&fixture->pause_release, 1, memory_order_release);
+        int status = 0;
+        if (waitpid(winner, &status, 0) != winner || status != 0) return 92;
+        for (unsigned index = 0; index < 2; ++index)
+            if (waitpid(waiters[index], &status, 0) != waiters[index] || status != 0) return 93;
+        uint64_t first = 0, second = 0;
+        for (unsigned slot = 0; slot < HL_BACKEND_EXECUTED_FORM_SLOTS; ++slot) {
+            if (atomic_load_explicit(&fixture->forms[slot].state, memory_order_acquire) != 2) continue;
+            if (fixture->forms[slot].key == 2307)
+                first = atomic_load_explicit(&fixture->forms[slot].count, memory_order_relaxed);
+            if (fixture->forms[slot].key == 12547)
+                second = atomic_load_explicit(&fixture->forms[slot].count, memory_order_relaxed);
+        }
+        int ok = atomic_load_explicit(&fixture->total, memory_order_relaxed) == 3 &&
+                 atomic_load_explicit(&fixture->unique, memory_order_relaxed) == 2 &&
+                 atomic_load_explicit(&fixture->overflow, memory_order_relaxed) == 0 && first == 2 && second == 1;
+        (void)munmap(fixture, sizeof *fixture);
+        return ok ? 0 : 94;
+    }
     return 40;
 }
 #endif
@@ -1510,14 +1620,6 @@ enum hl_backend_mixed_sse_lifecycle {
 };
 
 #define HL_BACKEND_MIXED_SSE_SLOTS 4096u
-#define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
-#define HL_BACKEND_EXECUTED_FORM_TOP 16u
-
-struct hl_backend_executed_form {
-    _Atomic uint32_t state;
-    uint64_t key;
-    _Atomic uint64_t count;
-};
 
 struct hl_backend_tree_slot {
     _Atomic int pid;
@@ -1605,49 +1707,11 @@ _Static_assert(sizeof(struct hl_backend_tree_slot) == 24,
 static struct hl_backend_mixed_sse_shared *g_backend_mixed_sse;
 static struct hl_backend_tree_slot *g_backend_mixed_sse_self;
 
-static uint64_t hl_backend_executed_form_mix(uint64_t value) {
-    value ^= value >> 33;
-    value *= UINT64_C(0xff51afd7ed558ccd);
-    value ^= value >> 33;
-    value *= UINT64_C(0xc4ceb9fe1a85ec53);
-    return value ^ (value >> 33);
-}
-
 static inline void hl_backend_tree_executed_form(uint64_t key) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census == NULL || g_backend_mixed_sse_self == NULL) return;
-    atomic_fetch_add_explicit(&census->executed_form_total, 1, memory_order_relaxed);
-    unsigned start = (unsigned)hl_backend_executed_form_mix(key) & (HL_BACKEND_EXECUTED_FORM_SLOTS - 1u);
-    for (unsigned probe = 0; probe < HL_BACKEND_EXECUTED_FORM_SLOTS; ++probe) {
-        struct hl_backend_executed_form *form =
-            &census->executed_forms[(start + probe) & (HL_BACKEND_EXECUTED_FORM_SLOTS - 1u)];
-        uint32_t state = atomic_load_explicit(&form->state, memory_order_acquire);
-        if (state == 1) {
-            atomic_fetch_add_explicit(&census->executed_form_overflow, 1, memory_order_relaxed);
-            return;
-        }
-        if (state == 2 && form->key == key) {
-            atomic_fetch_add_explicit(&form->count, 1, memory_order_relaxed);
-            return;
-        }
-        if (state != 0) continue;
-        uint32_t expected = 0;
-        if (!atomic_compare_exchange_strong_explicit(&form->state, &expected, 1, memory_order_acquire,
-                                                     memory_order_relaxed)) {
-            if (expected == 1)
-                atomic_fetch_add_explicit(&census->executed_form_overflow, 1, memory_order_relaxed);
-            else
-                --probe;
-            if (expected == 1) return;
-            continue;
-        }
-        form->key = key;
-        atomic_store_explicit(&form->count, 1, memory_order_relaxed);
-        atomic_store_explicit(&form->state, 2, memory_order_release);
-        atomic_fetch_add_explicit(&census->executed_form_unique, 1, memory_order_relaxed);
-        return;
-    }
-    atomic_fetch_add_explicit(&census->executed_form_overflow, 1, memory_order_relaxed);
+    hl_backend_executed_form_record(census->executed_forms, &census->executed_form_total,
+                                    &census->executed_form_unique, &census->executed_form_overflow, key, NULL, NULL);
 }
 
 static void hl_backend_executed_form_top(struct hl_backend_mixed_sse_shared *census,

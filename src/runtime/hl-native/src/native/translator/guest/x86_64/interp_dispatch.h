@@ -236,6 +236,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     }                                                                                                                  \
     if ((c)->reason == R_SMC) {                                                                                        \
         jit86_smc_commit(c);                                                                                           \
+        interp_executed_form_complete(c, R_SMC);                                                                       \
         (c)->reason = R_BRANCH;                                                                                        \
         continue;                                                                                                      \
     }                                                                                                                  \

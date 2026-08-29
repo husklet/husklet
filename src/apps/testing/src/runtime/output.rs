@@ -27,7 +27,7 @@ const BACKEND_SHAPE_PRODUCT_FIELDS: &[&str] = &[
     "direct_jmp_ibtc_suppressed",
     "direct_jmp_ibtc_invalid_refusals",
 ];
-const BACKEND_SHAPE_PRODUCT_V6_EXTRA: &[&str] = &[
+const BACKEND_SHAPE_PRODUCT_V5_EXTRA: &[&str] = &[
     "crossings",
     "translated_entries",
     "interpreted_entries",
@@ -53,16 +53,21 @@ const BACKEND_SHAPE_PRODUCT_V6_EXTRA: &[&str] = &[
     "ret_fast_ibtc_irq",
     "ret_fast_ibtc_fills",
     "ret_fast_ibtc_invalid_refusals",
-    "executed_form_total",
-    "executed_form_unique",
-    "executed_form_overflow",
 ];
+const BACKEND_SHAPE_PRODUCT_V6_EXTRA: &[&str] =
+    &["executed_form_total", "executed_form_unique", "executed_form_overflow"];
 
-fn backend_shape_product_field(name: &str, schema6: bool) -> bool {
+fn backend_shape_product_field(name: &str, version: u64) -> bool {
     if BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
         return true;
     }
-    if !schema6 {
+    if version < 5 {
+        return false;
+    }
+    if BACKEND_SHAPE_PRODUCT_V5_EXTRA.contains(&name) {
+        return true;
+    }
+    if version < 6 {
         return false;
     }
     if BACKEND_SHAPE_PRODUCT_V6_EXTRA.contains(&name) {
@@ -605,13 +610,16 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
         )
         .into());
     }
-    let schema6 = records[0].split_whitespace().any(|field| field == "version=6");
+    let version = records[0]
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("version=")?.parse::<u64>().ok())
+        .unwrap_or(0);
     let mut fields = BTreeMap::new();
     for field in records[0].split_whitespace() {
         let Some((name, value)) = field.split_once('=') else {
             return Err(format!("backend-shape product diagnostic has malformed field {field:?}").into());
         };
-        if !backend_shape_product_field(name, schema6) {
+        if !backend_shape_product_field(name, version) {
             return Err(format!("backend-shape product diagnostic has unknown field {name:?}").into());
         }
         let value = value
@@ -626,7 +634,14 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
         }
     }
-    if schema6 {
+    if version >= 5 {
+        for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA {
+            if !fields.contains_key(name) {
+                return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+            }
+        }
+    }
+    if version >= 6 {
         for name in BACKEND_SHAPE_PRODUCT_V6_EXTRA {
             if !fields.contains_key(name) {
                 return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
@@ -641,7 +656,7 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             }
         }
     }
-    if fields["version"] != 4 && fields["version"] != 6 {
+    if fields["version"] != 4 && fields["version"] != 5 && fields["version"] != 6 {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
     if fields["available"] != 1 {
@@ -865,6 +880,18 @@ mod tests {
             .unwrap();
         assert_eq!(off["jcc_ibtc_misses"], 2);
         backend_shape_product(b"ordinary guest stderr\n", false).unwrap();
+
+        let mut v5 = PRODUCT_SHAPE_ON.trim_end().replace("version=4", "version=5");
+        for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA {
+            v5.push_str(&format!(" {name}=0"));
+        }
+        v5.push('\n');
+        let parsed = backend_shape_product(v5.as_bytes(), true).unwrap().unwrap();
+        assert_eq!(parsed.len(), 46);
+        let missing = v5.replacen(" ret_fast_ibtc_invalid_refusals=0", "", 1);
+        assert!(backend_shape_product(missing.as_bytes(), true).is_err());
+        let unknown = v5.replacen(" ret_fast_ibtc_invalid_refusals=0", " unknown_v5=0", 1);
+        assert!(backend_shape_product(unknown.as_bytes(), true).is_err());
 
         for (needle, replacement, message) in [
             (" jcc_ibtc_hits=1", "", "omitted field"),

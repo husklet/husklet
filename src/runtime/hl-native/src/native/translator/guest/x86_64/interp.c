@@ -141,21 +141,27 @@ static inline void interp_executed_form_commit(void) {
     hl_backend_tree_executed_form(g_dispatch_census_pending_form);
     g_dispatch_census_pending_form_valid = 0;
 }
-static inline void interp_executed_form_cancel(void) { g_dispatch_census_pending_form_valid = 0; }
-static inline void interp_executed_form_complete(struct cpu *cpu, unsigned successful_reason) {
+static inline void interp_executed_form_cancel(void) {
+    g_dispatch_census_pending_form_valid = 0;
+    g_dispatch_census_open = 0;
+}
+static inline void interp_executed_form_complete_enabled(struct cpu *cpu, unsigned successful_reason) {
     if ((unsigned)cpu->reason != successful_reason || signal_deliverable_for_cpu(cpu) || cpu->irq != 0) {
-        g_dispatch_census_pending_form_valid = 0;
+        interp_executed_form_cancel();
         return;
     }
     interp_executed_form_commit();
+    g_dispatch_census_open = 0;
 }
+#define interp_executed_form_complete(cpu, reason)                                                                    \
+    do {                                                                                                               \
+        if (g_dispatch_census_open == 2) interp_executed_form_complete_enabled((cpu), (reason));                      \
+    } while (0)
 #endif
 #if defined(HL_NATIVE_TEST_HOOKS)
 static inline void interp_executed_form_commit(void) {}
 static inline void interp_executed_form_cancel(void) {}
-static inline void interp_executed_form_complete(struct cpu *cpu, unsigned successful_reason) {
-    (void)cpu; (void)successful_reason;
-}
+#define interp_executed_form_complete(cpu, reason) ((void)(cpu), (void)(reason))
 static __thread unsigned g_backend_shape_open;
 static __thread unsigned g_backend_shape_interp_stop;
 static __thread uint64_t g_backend_shape_interp_stop_form;
@@ -797,7 +803,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         g_backend_shape_open = 0;
 #else
         hl_backend_tree_interpreter_stop(g_dispatch_census_interp_stop, 0);
-        g_dispatch_census_open = 0;
+        if (!g_dispatch_census_pending_form_valid) g_dispatch_census_open = 0;
 #endif
         hl_backend_tree_reason(cpu->reason);
     }
