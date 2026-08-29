@@ -1544,6 +1544,14 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         .split_whitespace()
         .find_map(|field| field.strip_prefix("child="))
         .expect("child pid");
+    let caller = output
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("caller=0x"))
+        .expect("post-exec caller pc");
+    let target = output
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("target=0x"))
+        .expect("post-exec target pc");
     let mut child_maps = std::fs::read_dir(&maps)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1561,6 +1569,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(identities.len(), child_maps.len(), "{child_maps:?}");
+    let mut child_map_text = String::new();
     for map in &child_maps {
         let text = std::fs::read_to_string(map).unwrap();
         assert!(text.contains(" hl_tl_helper_jcc_ibtc"), "{}:\n{text}", map.display());
@@ -1569,7 +1578,10 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
             "{}:\n{text}",
             map.display()
         );
+        child_map_text.push_str(&text);
     }
+    assert!(child_map_text.contains(&format!("_g{caller}_")), "post-exec caller absent:\n{child_map_text}");
+    assert!(child_map_text.contains(&format!("_g{target}_")), "post-exec target absent:\n{child_map_text}");
     let rx = child_maps
         .iter()
         .filter_map(|path| path.file_name().unwrap().to_string_lossy().split("-rx").nth(1).map(str::to_owned))
