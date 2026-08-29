@@ -15,7 +15,7 @@ use std::{
 type Error = Box<dyn std::error::Error>;
 const PROFILE_COUNT: usize = 6;
 const FORMAT: &str = "husklet-profile-attribution-v1";
-const PERF_RING_BUFFER: &str = "64M";
+const PERF_RING_BUFFER: &str = "32M";
 const MAX_LOST_SAMPLE_PERCENT: f64 = 1.0;
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
