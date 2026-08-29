@@ -23,7 +23,7 @@ __attribute__((naked, noinline, used, visibility("hidden"))) void faulting_ret_c
 __attribute__((naked, noinline)) static void drive_c3(void) {
     __asm__ volatile(
         "mov %rsp,saved_rsp(%rip)\n"
-        "push $0x8d7\n popfq\n"
+        "push $0xad7\n popfq\n"
         "mov $0x101,%rax\n mov $0x102,%rbx\n mov $0x103,%rcx\n mov $0x104,%rdx\n"
         "mov $0x105,%rsi\n mov $0x106,%rdi\n mov $0x107,%rbp\n"
         "mov $0x108,%r8\n mov $0x109,%r9\n mov $0x10a,%r10\n mov $0x10b,%r11\n"
@@ -35,7 +35,7 @@ __attribute__((naked, noinline)) static void drive_c3(void) {
 __attribute__((naked, noinline)) static void drive_c2(void) {
     __asm__ volatile(
         "mov %rsp,saved_rsp(%rip)\n"
-        "push $0x8d7\n popfq\n"
+        "push $0xad7\n popfq\n"
         "mov $0x101,%rax\n mov $0x102,%rbx\n mov $0x103,%rcx\n mov $0x104,%rdx\n"
         "mov $0x105,%rsi\n mov $0x106,%rdi\n mov $0x107,%rbp\n"
         "mov $0x108,%r8\n mov $0x109,%r9\n mov $0x10a,%r10\n mov $0x10b,%r11\n"
@@ -60,7 +60,7 @@ static void fault(int signal, siginfo_t *info, void *opaque) {
                (uint64_t)g[REG_R11] == 0x10b && (uint64_t)g[REG_R12] == 0x10c &&
                (uint64_t)g[REG_R13] == 0x10d && (uint64_t)g[REG_R14] == 0x10e &&
                (uint64_t)g[REG_R15] == 0x10f;
-    flags_ok += ((uint64_t)g[REG_EFL] & UINT64_C(0x8d7)) == UINT64_C(0x8d7);
+    flags_ok += ((uint64_t)g[REG_EFL] & UINT64_C(0xad7)) == UINT64_C(0xad7);
     g[REG_RSP] = (greg_t)saved_rsp;
     g[REG_RIP] = (greg_t)resume_pc;
 }
