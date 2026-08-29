@@ -423,6 +423,19 @@ mod tests {
     }
 
     #[test]
+    fn translation_cache_reaches_options_and_typed_engine_policy() {
+        let mut launch = launch();
+        launch.translation_cache = Some("/translation-cache".into());
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(
+            spec.plan.box_policy.translation_cache.as_deref(),
+            Some(b"/translation-cache".as_slice())
+        );
+        assert_eq!(spec.plan.options.get("HL_PCACHE"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_PCACHE_DIR"), Some("/translation-cache"));
+    }
+
+    #[test]
     fn overlay_and_ownership_reach_the_typed_engine_policy() {
         let mut launch = launch();
         launch.overlay = Some(crate::service::OverlayConfig {

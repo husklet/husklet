@@ -63,6 +63,10 @@ impl TryFrom<&ProcessConfig> for Spec {
             // option. Native execution relies on kernel VFS coherence; translated execution maps
             // this file to invalidate its user-space caches.
             filesystem_generation: Some(launch.filesystem_generation.as_os_str().as_encoded_bytes().to_vec()),
+            translation_cache: launch
+                .translation_cache
+                .as_ref()
+                .map(|cache| cache.as_os_str().as_encoded_bytes().to_vec()),
             lower_layers: launch
                 .overlay
                 .as_ref()
