@@ -1435,15 +1435,27 @@ fn sampling_symbols_follow_exec_fresh_arena_generations() {
     assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
     let stderr = String::from_utf8(stderr).unwrap();
     assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
-    let names = std::fs::read_dir(&maps)
+    let files = std::fs::read_dir(&maps)
         .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .map(|entry| entry.unwrap().path())
         .collect::<Vec<_>>();
     for generation in 0..=2 {
         let needle = format!("-g{generation}-rx");
-        assert!(names.iter().any(|name| name.starts_with("perf-") && name.contains(&needle)), "{names:?}");
-        assert!(names.iter().all(|name| !name.starts_with("jit-")), "sampling mode copied code: {names:?}");
+        let map = files
+            .iter()
+            .find(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with("perf-") && name.contains(&needle)
+            })
+            .unwrap_or_else(|| panic!("missing generation {generation}: {files:?}"));
+        let text = std::fs::read_to_string(map).unwrap();
+        assert!(text.contains(" hl_tl_helper_jcc_ibtc\n"), "{}:\n{text}", map.display());
+        assert!(text.lines().any(|line| line.contains(" hl_tl_") && line.contains("_gl")), "{}:\n{text}", map.display());
     }
+    assert!(
+        files.iter().all(|path| !path.file_name().unwrap().to_string_lossy().starts_with("jit-")),
+        "sampling mode copied code: {files:?}"
+    );
 }
 
 #[test]
