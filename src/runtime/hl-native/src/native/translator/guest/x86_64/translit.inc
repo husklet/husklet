@@ -5650,14 +5650,14 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     if (scenario == 115 || scenario == 116) {
         if (scenario == 115) target_block->generation--;
         else target_block->host_entry_off = 0;
-        translit_jcc_ibtc_fill(&cpu, target_block);
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
         result = __atomic_load_n(&translit_direct_call_ibtc_invalid_refusal, __ATOMIC_RELAXED) ==
                          invalid_before + 1
                      ? 0
                      : 163;
         goto done_call_ibtc;
     }
-    translit_jcc_ibtc_fill(&cpu, target_block);
+    translit_jcc_ibtc_fill(&cpu, target_block, 0);
     if (__atomic_load_n(&translit_direct_call_ibtc_fill_count, __ATOMIC_RELAXED) != fill_before + 1)
         goto done_call_ibtc;
 
@@ -5673,7 +5673,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         collision_block->host_len = 1;
         cpu.rip = collision_target;
         cpu.jcc_ibtc_miss = TL_DIRECT_CALL_IBTC_MISS;
-        translit_jcc_ibtc_fill(&cpu, collision_block);
+        translit_jcc_ibtc_fill(&cpu, collision_block, 0);
     }
     if (scenario == 119) {
         guest_bytes[target_offset + 1] = 43;
@@ -5688,7 +5688,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         cpu.ibtc_base = (uint64_t)g_ibtc;
         run_block(context, &cpu, source_block);
         if (cpu.jcc_ibtc_miss != TL_DIRECT_CALL_IBTC_MISS) goto done_call_ibtc;
-        translit_jcc_ibtc_fill(&cpu, replacement);
+        translit_jcc_ibtc_fill(&cpu, replacement, 0);
         ibtc_ent repaired = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
         if (replacement == NULL || repaired.body != (uint8_t *)replacement + replacement->host_entry_off)
             goto done_call_ibtc;
@@ -5719,7 +5719,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
             result = 173;
             goto done_call_ibtc;
         }
-        translit_jcc_ibtc_fill(&replacement_cpu, replacement_target);
+        translit_jcc_ibtc_fill(&replacement_cpu, replacement_target, 0);
         replacement_cpu = (struct cpu){0};
         replacement_cpu.rip = source;
         replacement_cpu.r[4] = stack;
