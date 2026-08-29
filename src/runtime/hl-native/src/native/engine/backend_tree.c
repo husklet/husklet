@@ -43,7 +43,7 @@ static void hl_backend_executed_form_record(
     retry_slot:
         uint32_t state = atomic_load_explicit(&form->state, memory_order_acquire);
         if (state == 1) {
-            for (unsigned wait = 0; wait < 64 && state == 1; ++wait) {
+            for (unsigned wait = 0; wait < 4096 && state == 1; ++wait) {
                 sched_yield();
                 state = atomic_load_explicit(&form->state, memory_order_acquire);
             }
@@ -1501,6 +1501,7 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                !atomic_load_explicit(&fixture->waiter_ready[1], memory_order_acquire))
             sched_yield();
         atomic_store_explicit(&fixture->start, 1, memory_order_release);
+        while (atomic_load_explicit(&fixture->total, memory_order_acquire) != 3) sched_yield();
         atomic_store_explicit(&fixture->pause_release, 1, memory_order_release);
         int status = 0;
         if (waitpid(winner, &status, 0) != winner || status != 0) return 92;
