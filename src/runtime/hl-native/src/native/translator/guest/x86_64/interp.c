@@ -1911,14 +1911,23 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 /* Same-ISA cold-publication format. Warm restore deliberately remains disabled until the relocation and
  * generation reconstruction review is complete. Every address in the payload is an arena-relative offset. */
 #define X64_PC_MAGIC UINT64_C(0x3143535034364c48) /* "HL64PSC1" */
-#define X64_PC_VERSION UINT64_C(3)
+#define X64_PC_VERSION UINT64_C(5)
 
 #define X64_PC_ENDIAN UINT64_C(0x0807060504030201)
-#define X64_PC_HEADER_SIZE 208u
+#define X64_PC_HEADER_SIZE 256u
 #define X64_PC_MAP_SIZE 84u
 #define X64_PC_OWNER_SIZE 24u
 #define X64_PC_RELOC_SIZE 8u
-#define X64_PC_CHECKSUM_OFFSET 200u
+#define X64_PC_LIB_SIZE 56u
+#define X64_PC_CHAIN_SIZE 24u
+#define X64_PC_CHECKSUM_OFFSET 248u
+#define X64_PC_LIB_BASE UINT64_C(0x0000050000000000)
+#define X64_PC_LIB_SPAN (UINT64_C(1) << 38)
+#define X64_PC_LIB_MAX 512u
+#define X64_PC_LIB_HASH_MAX (UINT64_C(512) << 20)
+#define PC_LIB_BASE X64_PC_LIB_BASE
+#define PC_LIB_SPAN X64_PC_LIB_SPAN
+#define PCACHE_MMAP_HINT 1
 
 static void x64_pc_put16(uint8_t **p, uint16_t v) { (*p)[0] = (uint8_t)v; (*p)[1] = (uint8_t)(v >> 8); *p += 2; }
 static void x64_pc_put32(uint8_t **p, uint32_t v) { for (unsigned i = 0; i < 4; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 4; }
@@ -1931,6 +1940,79 @@ static hl_persist_directory g_x64_pc_directory;
 static char g_x64_pc_directory_path[1024];
 static int g_x64_pc_forked;
 static uint64_t g_x64_pc_restored_maps;
+typedef struct x64_pc_lib {
+    uint64_t base, len, file_id;
+    hl_identity_digest content;
+} x64_pc_lib;
+static uint64_t g_x64_pc_image_lo, g_x64_pc_image_hi, g_x64_pc_interp_lo, g_x64_pc_interp_hi;
+static uint64_t g_x64_pc_lib_next = X64_PC_LIB_BASE;
+static x64_pc_lib g_x64_pc_libs[X64_PC_LIB_MAX];
+static uint32_t g_x64_pc_lib_count;
+static uint8_t *g_x64_pc_deferred;
+static uint64_t g_x64_pc_deferred_count;
+static int g_x64_pc_library_unsupported;
+static translit_chain_site *g_x64_pc_chains;
+static uint64_t g_x64_pc_chain_count;
+
+static void x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
+    uint8_t *site = g_cache + chain->site_offset;
+    uint8_t *target = g_cache + chain->fallback_offset;
+    if (direct) {
+        struct interp_block *block = map_host(chain->target);
+        if (block != NULL) target = (uint8_t *)block + block->host_entry_off;
+    }
+    int64_t delta = target - (site + 5);
+    if (site[0] == 0xe9 && delta >= INT32_MIN && delta <= INT32_MAX) {
+        int32_t encoded = (int32_t)delta;
+        memcpy(site + 1, &encoded, sizeof encoded);
+    }
+}
+
+static int x64_pc_span(uint64_t base, uint64_t len, uint64_t *end) {
+    if (len == 0 || base > UINT64_MAX - len) return 0;
+    *end = base + len;
+    return base < UINT64_C(0x0000800000000000) && *end <= UINT64_C(0x0000800000000000);
+}
+
+static int x64_pc_inside(uint64_t lo, uint64_t hi, uint64_t base, uint64_t len) {
+    uint64_t end;
+    return lo < hi && x64_pc_span(base, len, &end) && lo >= base && hi <= end;
+}
+
+static int x64_pc_fixed(uint64_t lo, uint64_t hi) {
+    return (lo >= g_x64_pc_image_lo && hi <= g_x64_pc_image_hi) ||
+           (lo >= g_x64_pc_interp_lo && hi <= g_x64_pc_interp_hi);
+}
+
+static int x64_pc_library_for(uint64_t lo, uint64_t hi) {
+    for (uint32_t i = 0; i < g_x64_pc_lib_count; i++)
+        if (x64_pc_inside(lo, hi, g_x64_pc_libs[i].base, g_x64_pc_libs[i].len)) return (int)i;
+    return -1;
+}
+
+static int x64_pc_file_digest(hl_host_handle handle, const hl_host_file_metadata *metadata,
+                              hl_identity_digest *digest) {
+    if (metadata == NULL || metadata->type != HL_HOST_FILE_TYPE_REGULAR || metadata->size == 0 ||
+        metadata->size > X64_PC_LIB_HASH_MAX || g_host_services == NULL || g_host_services->file == NULL ||
+        g_host_services->file->read_at == NULL || metadata->size > SIZE_MAX)
+        return 0;
+    uint8_t *image = malloc((size_t)metadata->size);
+    if (image == NULL) return 0;
+    uint64_t done = 0;
+    while (done < metadata->size) {
+        hl_host_result read = g_host_services->file->read_at(
+            g_host_services->context, handle, done,
+            (hl_host_bytes){image + done, (size_t)(metadata->size - done)});
+        if (read.status != HL_STATUS_OK || read.value == 0 || read.value > metadata->size - done) {
+            free(image);
+            return 0;
+        }
+        done += read.value;
+    }
+    *digest = hl_identity_image_digest(image, (size_t)metadata->size);
+    free(image);
+    return !hl_identity_digest_empty(digest);
+}
 
 static uint64_t x64_pc_offset(const void *pointer, uint64_t used) {
     uintptr_t value = (uintptr_t)pointer, base = (uintptr_t)g_cache;
@@ -1980,17 +2062,27 @@ static int pcache_load(uint64_t entry_jump) {
                 x64_pc_get64(bytes + 192) == x64_pcache_codegen_modes();
     if (valid) {
         uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
-        uint64_t relocs = x64_pc_get64(bytes + 184);
+        uint64_t relocs = x64_pc_get64(bytes + 184), libraries = x64_pc_get64(bytes + 232);
+        uint64_t chains = x64_pc_get64(bytes + 240);
         uint64_t map_bytes = maps <= UINT64_MAX / X64_PC_MAP_SIZE ? maps * X64_PC_MAP_SIZE : UINT64_MAX;
         uint64_t owner_bytes = owners <= UINT64_MAX / X64_PC_OWNER_SIZE ? owners * X64_PC_OWNER_SIZE : UINT64_MAX;
         uint64_t reloc_bytes = relocs <= UINT64_MAX / X64_PC_RELOC_SIZE ? relocs * X64_PC_RELOC_SIZE : UINT64_MAX;
+        uint64_t library_bytes = libraries <= UINT64_MAX / X64_PC_LIB_SIZE ? libraries * X64_PC_LIB_SIZE : UINT64_MAX;
+        uint64_t chain_bytes = chains <= UINT64_MAX / X64_PC_CHAIN_SIZE ? chains * X64_PC_CHAIN_SIZE : UINT64_MAX;
         valid = arena != 0 && arena <= CACHE_SZ && maps != 0 && maps <= JIT_MAP_N &&
                 owners <= JIT_BODY_OWNER_N && x64_pc_get64(bytes + 112) == 0 &&
-                relocs <= TL_EXTERNAL_ABSOLUTE_N && map_bytes != UINT64_MAX && reloc_bytes != UINT64_MAX &&
+                relocs <= TL_EXTERNAL_ABSOLUTE_N && libraries <= X64_PC_LIB_MAX && chains <= TL_CHAIN_SITE_N &&
+                map_bytes != UINT64_MAX && reloc_bytes != UINT64_MAX && library_bytes != UINT64_MAX &&
                 owner_bytes != UINT64_MAX && X64_PC_HEADER_SIZE + map_bytes <= SIZE_MAX - owner_bytes &&
                 X64_PC_HEADER_SIZE + map_bytes + owner_bytes <= SIZE_MAX - reloc_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes <= SIZE_MAX - arena &&
-                size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + arena;
+                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes <= SIZE_MAX - library_bytes &&
+                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + library_bytes <= SIZE_MAX - chain_bytes &&
+                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + library_bytes + chain_bytes <= SIZE_MAX - arena &&
+                size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + library_bytes + chain_bytes + arena;
+        uint64_t image_lo = x64_pc_get64(bytes + 200), image_hi = x64_pc_get64(bytes + 208);
+        uint64_t interp_lo = x64_pc_get64(bytes + 216), interp_hi = x64_pc_get64(bytes + 224);
+        valid = valid && image_lo < image_hi && interp_lo < interp_hi && image_hi <= interp_lo &&
+                image_hi <= UINT64_C(0x0000800000000000) && interp_hi <= UINT64_C(0x0000800000000000);
         for (unsigned group = 0; valid && group < 2; group++) {
             unsigned offset = 120 + group * 32;
             uint64_t entry = x64_pc_get64(bytes + offset), rsp = x64_pc_get64(bytes + offset + 8);
@@ -2011,8 +2103,12 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (valid) {
         uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
-        uint64_t relocs = x64_pc_get64(bytes + 184);
+        uint64_t relocs = x64_pc_get64(bytes + 184), libraries = x64_pc_get64(bytes + 232);
+        uint64_t chains = x64_pc_get64(bytes + 240);
         const uint8_t *record = bytes + X64_PC_HEADER_SIZE;
+        uint64_t *seen_gpc = calloc(JIT_MAP_N, sizeof *seen_gpc);
+        uint8_t *seen_used = calloc(JIT_MAP_N, 1);
+        if (seen_gpc == NULL || seen_used == NULL) valid = 0;
         for (uint64_t i = 0; valid && i < maps; i++, record += X64_PC_MAP_SIZE) {
             uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
             uint64_t block = x64_pc_get64(record + 40);
@@ -2022,7 +2118,14 @@ static int pcache_load(uint64_t entry_jump) {
                     x64_pc_get64(record + 48) == INTERP_BLOCK_MAGIC && x64_pc_get64(record + 56) == gpc &&
                     entry <= length && entry <= arena && host <= arena - entry && length <= arena - host &&
                     x64_pc_get16(record + 82) == 0;
+            uint64_t slot = (gpc ^ (gpc >> 32)) % JIT_MAP_N, probes = 0;
+            while (valid && seen_used[slot] && seen_gpc[slot] != gpc && ++probes < JIT_MAP_N)
+                slot = (slot + 1) % JIT_MAP_N;
+            if (valid && seen_used[slot]) valid = 0;
+            if (valid) { seen_used[slot] = 1; seen_gpc[slot] = gpc; }
         }
+        free(seen_gpc);
+        free(seen_used);
         record = bytes + X64_PC_HEADER_SIZE + maps * X64_PC_MAP_SIZE;
         for (uint64_t i = 0; valid && i < owners; i++, record += X64_PC_OWNER_SIZE) {
             uint32_t start = x64_pc_get32(record), end = x64_pc_get32(record + 4);
@@ -2032,7 +2135,9 @@ static int pcache_load(uint64_t entry_jump) {
             if (valid && i != 0) valid = x64_pc_get32(record - X64_PC_OWNER_SIZE + 4) <= start;
         }
         record = bytes + X64_PC_HEADER_SIZE + maps * X64_PC_MAP_SIZE + owners * X64_PC_OWNER_SIZE;
-        const uint8_t *arena_bytes = record + relocs * X64_PC_RELOC_SIZE;
+        const uint8_t *library_records = record + relocs * X64_PC_RELOC_SIZE;
+        const uint8_t *chain_records = library_records + libraries * X64_PC_LIB_SIZE;
+        const uint8_t *arena_bytes = chain_records + chains * X64_PC_CHAIN_SIZE;
         uint32_t prior = 0;
         for (uint64_t i = 0; valid && i < relocs; i++, record += X64_PC_RELOC_SIZE) {
             uint32_t offset = x64_pc_get32(record), kind = x64_pc_get32(record + 4);
@@ -2041,6 +2146,34 @@ static int pcache_load(uint64_t entry_jump) {
                     (i == 0 || offset > prior) && offset >= 2 && arena_bytes[offset - 2] == 0x48 &&
                     arena_bytes[offset - 1] == 0xb8;
             prior = offset;
+        }
+        for (uint64_t i = 0; valid && i < libraries; i++) {
+            const uint8_t *lib = library_records + i * X64_PC_LIB_SIZE;
+            uint64_t base = x64_pc_get64(lib), len = x64_pc_get64(lib + 8), end;
+            hl_identity_digest content;
+            memcpy(content.bytes, lib + 24, sizeof content.bytes);
+            valid = x64_pc_span(base, len, &end) && base >= X64_PC_LIB_BASE &&
+                    end <= X64_PC_LIB_BASE + X64_PC_LIB_SPAN && x64_pc_get64(lib + 16) != 0 &&
+                    !hl_identity_digest_empty(&content) && (i == 0 || x64_pc_get64(lib - X64_PC_LIB_SIZE) +
+                    x64_pc_get64(lib - X64_PC_LIB_SIZE + 8) <= base);
+        }
+        for (uint64_t i = 0; valid && i < chains; i++) {
+            const uint8_t *chain = chain_records + i * X64_PC_CHAIN_SIZE;
+            uint32_t site = x64_pc_get32(chain), fallback = x64_pc_get32(chain + 4);
+            uint64_t source = x64_pc_get64(chain + 8), target = x64_pc_get64(chain + 16);
+            valid = site <= arena && arena - site >= 5 && fallback < arena && arena_bytes[site] == 0xe9 &&
+                    (source & ~UINT64_C(0xfff)) == (target & ~UINT64_C(0xfff));
+        }
+        for (uint64_t i = 0; valid && i < maps; i++) {
+            const uint8_t *map = bytes + X64_PC_HEADER_SIZE + i * X64_PC_MAP_SIZE;
+            uint64_t lo = x64_pc_get64(map + 8), hi = x64_pc_get64(map + 16);
+            int authority = (lo >= x64_pc_get64(bytes + 200) && hi <= x64_pc_get64(bytes + 208)) ||
+                            (lo >= x64_pc_get64(bytes + 216) && hi <= x64_pc_get64(bytes + 224));
+            for (uint64_t j = 0; !authority && j < libraries; j++) {
+                const uint8_t *lib = library_records + j * X64_PC_LIB_SIZE;
+                authority = x64_pc_inside(lo, hi, x64_pc_get64(lib), x64_pc_get64(lib + 8));
+            }
+            valid = authority;
         }
         if (!valid) validation = 2;
     }
@@ -2057,26 +2190,63 @@ static int pcache_load(uint64_t entry_jump) {
     }
 
     uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
-    uint64_t relocs = x64_pc_get64(bytes + 184);
+    uint64_t relocs = x64_pc_get64(bytes + 184), libraries = x64_pc_get64(bytes + 232);
+    uint64_t chains = x64_pc_get64(bytes + 240);
     const uint8_t *map_records = bytes + X64_PC_HEADER_SIZE;
     const uint8_t *owner_records = map_records + maps * X64_PC_MAP_SIZE;
     const uint8_t *reloc_records = owner_records + owners * X64_PC_OWNER_SIZE;
-    const uint8_t *arena_bytes = reloc_records + relocs * X64_PC_RELOC_SIZE;
+    const uint8_t *library_records = reloc_records + relocs * X64_PC_RELOC_SIZE;
+    const uint8_t *chain_records = library_records + libraries * X64_PC_LIB_SIZE;
+    const uint8_t *arena_bytes = chain_records + chains * X64_PC_CHAIN_SIZE;
     int has_entry = 0;
     for (uint64_t i = 0; i < maps; i++)
-        if (x64_pc_get64(map_records + i * X64_PC_MAP_SIZE) == entry_jump) has_entry = 1;
-    if (!has_entry) {
+        if (x64_pc_get64(map_records + i * X64_PC_MAP_SIZE) == entry_jump &&
+            ((x64_pc_get64(map_records + i * X64_PC_MAP_SIZE + 8) >= g_x64_pc_image_lo &&
+              x64_pc_get64(map_records + i * X64_PC_MAP_SIZE + 16) <= g_x64_pc_image_hi) ||
+             (x64_pc_get64(map_records + i * X64_PC_MAP_SIZE + 8) >= g_x64_pc_interp_lo &&
+              x64_pc_get64(map_records + i * X64_PC_MAP_SIZE + 16) <= g_x64_pc_interp_hi))) has_entry = 1;
+    if (!has_entry || x64_pc_get64(bytes + 200) != g_x64_pc_image_lo ||
+        x64_pc_get64(bytes + 208) != g_x64_pc_image_hi || x64_pc_get64(bytes + 216) != g_x64_pc_interp_lo ||
+        x64_pc_get64(bytes + 224) != g_x64_pc_interp_hi) {
         free(allocation);
         return 0;
+    }
+
+    uint64_t deferred_count = 0;
+    for (uint64_t i = 0; i < maps; i++) {
+        const uint8_t *record = map_records + i * X64_PC_MAP_SIZE;
+        uint64_t lo = x64_pc_get64(record + 8), hi = x64_pc_get64(record + 16);
+        if (!x64_pc_fixed(lo, hi)) deferred_count++;
+    }
+    uint8_t *deferred = deferred_count == 0 ? NULL : malloc((size_t)deferred_count * X64_PC_MAP_SIZE);
+    translit_chain_site *loaded_chains = chains == 0 ? NULL : malloc((size_t)chains * sizeof *loaded_chains);
+    if ((deferred_count != 0 && deferred == NULL) || (chains != 0 && loaded_chains == NULL)) {
+        free(deferred);
+        free(loaded_chains);
+        free(allocation);
+        return 0;
+    }
+    for (uint64_t i = 0; i < chains; i++) {
+        const uint8_t *record = chain_records + i * X64_PC_CHAIN_SIZE;
+        loaded_chains[i] = (translit_chain_site){x64_pc_get32(record), x64_pc_get32(record + 4),
+                                                x64_pc_get64(record + 8), x64_pc_get64(record + 16)};
     }
 
     /* Validation above is read-only. From here on every failure rewinds to a pristine empty arena. */
     translit_cache_rewind_in_place();
     if (!jit_wprot(0)) {
+        free(deferred);
+        free(loaded_chains);
         free(allocation);
         return 0;
     }
     memcpy(g_cache, arena_bytes, (size_t)arena);
+    for (uint64_t i = 0; i < chains; i++) {
+        translit_chain_site *chain = &loaded_chains[i];
+        int32_t encoded = (int32_t)((g_cache + chain->fallback_offset) -
+                                    (g_cache + chain->site_offset + 5));
+        memcpy(g_cache + chain->site_offset + 1, &encoded, sizeof encoded);
+    }
     for (uint64_t i = 0; i < relocs; i++) {
         uint32_t offset = x64_pc_get32(reloc_records + i * X64_PC_RELOC_SIZE);
         uint32_t kind = x64_pc_get32(reloc_records + i * X64_PC_RELOC_SIZE + 4);
@@ -2085,27 +2255,59 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
         translit_cache_rewind_in_place();
+        free(deferred);
+        free(loaded_chains);
         free(allocation);
         return 0;
     }
 
+    uint64_t deferred_at = 0;
     for (uint64_t i = 0; i < maps; i++) {
         const uint8_t *record = map_records + i * X64_PC_MAP_SIZE;
         uint64_t gpc = x64_pc_get64(record), host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
         struct interp_block *block = (struct interp_block *)(g_cache + body);
         block->generation = g_cache_gen;
-        map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), g_cache + host, block);
+        if (x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16)))
+            map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), g_cache + host, block);
+        else {
+            memcpy(deferred + deferred_at * X64_PC_MAP_SIZE, record, X64_PC_MAP_SIZE);
+            deferred_at++;
+        }
     }
     if (g_source_index_overflow) {
         translit_cache_rewind_in_place();
+        free(deferred);
+        free(loaded_chains);
         free(allocation);
         return 0;
+    }
+    if (chains != 0) {
+        if (!jit_wprot(0)) {
+            translit_cache_rewind_in_place();
+            free(deferred);
+            free(loaded_chains);
+            free(allocation);
+            return 0;
+        }
+        for (uint64_t i = 0; i < chains; i++)
+            if (x64_pc_fixed(loaded_chains[i].source, loaded_chains[i].source + 1) &&
+                x64_pc_fixed(loaded_chains[i].target, loaded_chains[i].target + 1))
+                x64_pc_chain_patch(&loaded_chains[i], 1);
+        if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
+            translit_cache_rewind_in_place();
+            free(deferred);
+            free(loaded_chains);
+            free(allocation);
+            return 0;
+        }
     }
     if (owners != 0) {
         jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
         jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
         if (entries == NULL) {
             translit_cache_rewind_in_place();
+            free(deferred);
+            free(loaded_chains);
             free(allocation);
             return 0;
         }
@@ -2137,6 +2339,20 @@ static int pcache_load(uint64_t entry_jump) {
     translit_direct_jmp_ibtc_stub_end = X64_PC_PTR(helper[7]);
 #undef X64_PC_PTR
     g_cp = g_cache + arena;
+    free(g_x64_pc_deferred);
+    g_x64_pc_deferred = deferred;
+    g_x64_pc_deferred_count = deferred_count;
+    free(g_x64_pc_chains);
+    g_x64_pc_chains = loaded_chains;
+    g_x64_pc_chain_count = chains;
+    g_x64_pc_lib_count = (uint32_t)libraries;
+    for (uint32_t i = 0; i < g_x64_pc_lib_count; i++) {
+        const uint8_t *lib = library_records + i * X64_PC_LIB_SIZE;
+        g_x64_pc_libs[i].base = x64_pc_get64(lib);
+        g_x64_pc_libs[i].len = x64_pc_get64(lib + 8);
+        g_x64_pc_libs[i].file_id = x64_pc_get64(lib + 16);
+        memcpy(g_x64_pc_libs[i].content.bytes, lib + 24, sizeof g_x64_pc_libs[i].content.bytes);
+    }
     memset(g_ibtc, 0, sizeof g_ibtc);
     pend_reset();
     translit_ret_ibtc_reset();
@@ -2155,8 +2371,13 @@ static int pcache_load(uint64_t entry_jump) {
 
 static void pcache_save(void) {
     if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
-        !jit_guest_bus_active())
+        g_x64_pc_library_unsupported || g_x64_pc_image_lo == 0 || g_x64_pc_interp_lo == 0 ||
+        !jit_guest_bus_active()) {
+        if (g_coldprof) fprintf(stderr, "[pcache] save refused unsupported=%d image=%llx interp=%llx\n",
+                                g_x64_pc_library_unsupported, (unsigned long long)g_x64_pc_image_lo,
+                                (unsigned long long)g_x64_pc_interp_lo);
         return;
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_pcache_loaded) {
         uint64_t stats[3] = {g_x64_pc_restored_maps, g_live_map_count,
@@ -2228,6 +2449,19 @@ static void pcache_save(void) {
 #endif
         return;
     }
+    uint32_t live_chains = 0;
+    for (uint32_t i = 0; i < translit_chain_site_count; i++) {
+        translit_chain_site chain = translit_chain_sites[i];
+        if (chain.site_offset > used || used - chain.site_offset < 5 || chain.fallback_offset >= used ||
+            g_cache[chain.site_offset] != 0xe9 || map_host(chain.source) == NULL || map_host(chain.target) == NULL)
+            continue;
+        translit_chain_sites[live_chains++] = chain;
+    }
+    translit_chain_site_count = live_chains;
+    if (translit_chain_site_overflow) {
+        HL_LOGF(&g_jit_log, HL_LOG_TAG_TRANSLATE, "pcache=refused reason=chain-site-overflow");
+        return;
+    }
     uint32_t prior_reloc = 0;
     for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
         uint32_t offset = translit_external_absolutes[i].offset;
@@ -2245,20 +2479,33 @@ static void pcache_save(void) {
         prior_reloc = offset;
     }
     uint64_t map_count = 0;
-    for (uint32_t i = 0; i < JIT_MAP_N; i++)
-        if (map_live(i) && g_map_metadata[i].cache_generation == g_cache_gen) map_count++;
+    for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
+        uint64_t lo = g_map_metadata[i].guest_start, hi = g_map_metadata[i].guest_end;
+        if (!x64_pc_fixed(lo, hi) && x64_pc_library_for(lo, hi) < 0) {
+            HL_LOGF(&g_jit_log, HL_LOG_TAG_TRANSLATE,
+                    "pcache=refused reason=unowned-guest-span lo=%llx hi=%llx",
+                    (unsigned long long)lo, (unsigned long long)hi);
+            return;
+        }
+        map_count++;
+    }
     jit_body_owner_set *owners = jit_body_owner_set_for(g_cache_gen, 0);
     jit_body_owner_entry *owner_entries =
         owners == NULL ? NULL : atomic_load_explicit(&owners->entry, memory_order_acquire);
     uint32_t owner_count = owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
     if ((owner_count != 0 && owner_entries == NULL) || map_count > SIZE_MAX / X64_PC_MAP_SIZE ||
-        owner_count > SIZE_MAX / X64_PC_OWNER_SIZE || translit_external_absolute_count > SIZE_MAX / X64_PC_RELOC_SIZE)
+        owner_count > SIZE_MAX / X64_PC_OWNER_SIZE || translit_external_absolute_count > SIZE_MAX / X64_PC_RELOC_SIZE ||
+        g_x64_pc_lib_count > SIZE_MAX / X64_PC_LIB_SIZE ||
+        translit_chain_site_count > SIZE_MAX / X64_PC_CHAIN_SIZE)
         return;
     size_t map_bytes = (size_t)map_count * X64_PC_MAP_SIZE;
     size_t owner_bytes = (size_t)owner_count * X64_PC_OWNER_SIZE;
     size_t reloc_bytes = (size_t)translit_external_absolute_count * X64_PC_RELOC_SIZE;
-    if (used > SIZE_MAX - X64_PC_HEADER_SIZE - map_bytes - owner_bytes - reloc_bytes) return;
-    size_t total = X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + (size_t)used;
+    size_t library_bytes = (size_t)g_x64_pc_lib_count * X64_PC_LIB_SIZE;
+    size_t chain_bytes = (size_t)translit_chain_site_count * X64_PC_CHAIN_SIZE;
+    if (used > SIZE_MAX - X64_PC_HEADER_SIZE - map_bytes - owner_bytes - reloc_bytes - library_bytes - chain_bytes) return;
+    size_t total = X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + library_bytes + chain_bytes + (size_t)used;
     uint8_t *buffer = calloc(1, total);
     if (buffer == NULL) return;
     uint8_t *cursor = buffer;
@@ -2277,6 +2524,10 @@ static void pcache_save(void) {
     x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_end, used));
     x64_pc_put64(&cursor, translit_external_absolute_count);
     x64_pc_put64(&cursor, x64_pcache_codegen_modes());
+    x64_pc_put64(&cursor, g_x64_pc_image_lo); x64_pc_put64(&cursor, g_x64_pc_image_hi);
+    x64_pc_put64(&cursor, g_x64_pc_interp_lo); x64_pc_put64(&cursor, g_x64_pc_interp_hi);
+    x64_pc_put64(&cursor, g_x64_pc_lib_count);
+    x64_pc_put64(&cursor, translit_chain_site_count);
     x64_pc_put64(&cursor, 0);
     for (uint32_t i = 0; i < JIT_MAP_N; i++) {
         if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
@@ -2300,6 +2551,19 @@ static void pcache_save(void) {
     for (uint32_t i = 0; i < translit_external_absolute_count; i++) {
         x64_pc_put32(&cursor, translit_external_absolutes[i].offset);
         x64_pc_put32(&cursor, translit_external_absolutes[i].kind);
+    }
+    for (uint32_t i = 0; i < g_x64_pc_lib_count; i++) {
+        x64_pc_put64(&cursor, g_x64_pc_libs[i].base);
+        x64_pc_put64(&cursor, g_x64_pc_libs[i].len);
+        x64_pc_put64(&cursor, g_x64_pc_libs[i].file_id);
+        memcpy(cursor, g_x64_pc_libs[i].content.bytes, sizeof g_x64_pc_libs[i].content.bytes);
+        cursor += sizeof g_x64_pc_libs[i].content.bytes;
+    }
+    for (uint32_t i = 0; i < translit_chain_site_count; i++) {
+        x64_pc_put32(&cursor, translit_chain_sites[i].site_offset);
+        x64_pc_put32(&cursor, translit_chain_sites[i].fallback_offset);
+        x64_pc_put64(&cursor, translit_chain_sites[i].source);
+        x64_pc_put64(&cursor, translit_chain_sites[i].target);
     }
     memcpy(cursor, g_cache, (size_t)used);
     hl_digest digest;
@@ -2336,6 +2600,14 @@ static void pcache_save(void) {
 
 static void x64_pc_after_fork(void) {
     g_x64_pc_forked = 1;
+    free(g_x64_pc_deferred);
+    free(g_x64_pc_chains);
+    g_x64_pc_deferred = NULL;
+    g_x64_pc_chains = NULL;
+    g_x64_pc_deferred_count = 0;
+    g_x64_pc_chain_count = 0;
+    g_x64_pc_lib_count = 0;
+    g_x64_pc_lib_next = X64_PC_LIB_BASE;
 }
 
 static void pcache_exec_force_main(void) {
@@ -2355,6 +2627,15 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_pc_entry = jump;
     g_x64_pc_forked = 0;
     g_pcache_loaded = 0;
+    free(g_x64_pc_deferred);
+    free(g_x64_pc_chains);
+    g_x64_pc_deferred = NULL;
+    g_x64_pc_chains = NULL;
+    g_x64_pc_deferred_count = 0;
+    g_x64_pc_chain_count = 0;
+    g_x64_pc_lib_count = 0;
+    g_x64_pc_lib_next = X64_PC_LIB_BASE;
+    g_x64_pc_library_unsupported = 0;
     (void)pcache_load(jump);
 }
 
@@ -2369,7 +2650,92 @@ static void pcache_directory_close(void) {
 }
 
 static void pcache_note_fixed_img(uint64_t base, uint64_t span) {
-    // Nothing is revivable here, so no spans to record.
-    (void)base;
-    (void)span;
+    uint64_t end;
+    if (!x64_pc_span(base, span, &end)) {
+        g_force_base_failed = 1;
+        return;
+    }
+    if (base >= UINT64_C(0x0000048000000000)) {
+        g_x64_pc_interp_lo = base;
+        g_x64_pc_interp_hi = end;
+    } else {
+        g_x64_pc_image_lo = base;
+        g_x64_pc_image_hi = end;
+    }
+}
+
+static uint64_t pcache_mmap_hint(uint64_t len) {
+    if (!g_pcache || len == 0 || len > UINT64_MAX - UINT64_C(0x3fffff)) return 0;
+    uint64_t span = ((len + UINT64_C(0x1fffff)) & ~UINT64_C(0x1fffff)) + UINT64_C(0x200000);
+    uint64_t base = __atomic_fetch_add(&g_x64_pc_lib_next, span, __ATOMIC_RELAXED);
+    if (base < X64_PC_LIB_BASE || span > X64_PC_LIB_SPAN || base > X64_PC_LIB_BASE + X64_PC_LIB_SPAN - span)
+        return 0;
+    return base;
+}
+
+static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handle,
+                               const hl_host_file_metadata *metadata) {
+    if (!g_pcache) return;
+    uint64_t end;
+    hl_identity_digest content;
+    uint64_t file_id = hl_identity_file(metadata);
+    if (!x64_pc_span(base, len, &end) || base < X64_PC_LIB_BASE ||
+        end > X64_PC_LIB_BASE + X64_PC_LIB_SPAN || file_id == 0 ||
+        !x64_pc_file_digest(handle, metadata, &content)) {
+        if (g_coldprof) fprintf(stderr, "[pcache] library unsupported base=%llx len=%llu file=%llu\n",
+                                (unsigned long long)base, (unsigned long long)len,
+                                (unsigned long long)(metadata == NULL ? 0 : metadata->size));
+        g_x64_pc_library_unsupported = 1;
+        return;
+    }
+    if (!g_pcache_loaded) {
+        uint32_t at = 0;
+        while (at < g_x64_pc_lib_count && g_x64_pc_libs[at].base < base) at++;
+        if (at != 0 && g_x64_pc_libs[at - 1].base + g_x64_pc_libs[at - 1].len > base) {
+            g_x64_pc_library_unsupported = 1;
+            return;
+        }
+        if (at < g_x64_pc_lib_count && end > g_x64_pc_libs[at].base) {
+            if (base == g_x64_pc_libs[at].base && len == g_x64_pc_libs[at].len &&
+                file_id == g_x64_pc_libs[at].file_id &&
+                hl_identity_digest_equal(&content, &g_x64_pc_libs[at].content))
+                return;
+            g_x64_pc_library_unsupported = 1;
+            return;
+        }
+        if (g_x64_pc_lib_count >= X64_PC_LIB_MAX) {
+            g_x64_pc_library_unsupported = 1;
+            return;
+        }
+        memmove(&g_x64_pc_libs[at + 1], &g_x64_pc_libs[at],
+                (g_x64_pc_lib_count - at) * sizeof g_x64_pc_libs[0]);
+        g_x64_pc_libs[at] = (x64_pc_lib){base, len, file_id, content};
+        g_x64_pc_lib_count++;
+        return;
+    }
+    for (uint32_t i = 0; i < g_x64_pc_lib_count; i++) {
+        x64_pc_lib *library = &g_x64_pc_libs[i];
+        if (library->base != base) continue;
+        if (library->len != len || library->file_id != file_id ||
+            !hl_identity_digest_equal(&library->content, &content))
+            return;
+        if (g_threaded) pthread_mutex_lock(&g_jit_lock);
+        for (uint64_t j = 0; j < g_x64_pc_deferred_count; j++) {
+            uint8_t *record = g_x64_pc_deferred + j * X64_PC_MAP_SIZE;
+            uint64_t lo = x64_pc_get64(record + 8), hi = x64_pc_get64(record + 16);
+            if (!x64_pc_inside(lo, hi, base, len) || x64_pc_get64(record + 24) == UINT64_MAX) continue;
+            uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
+            map_put(x64_pc_get64(record), lo, hi, g_cache + host, g_cache + body);
+            memset(record + 24, 0xff, 8);
+        }
+        if (g_x64_pc_chain_count != 0 && jit_wprot(0)) {
+            for (uint64_t j = 0; j < g_x64_pc_chain_count; j++)
+                if (x64_pc_inside(g_x64_pc_chains[j].source, g_x64_pc_chains[j].source + 1, base, len) &&
+                    x64_pc_inside(g_x64_pc_chains[j].target, g_x64_pc_chains[j].target + 1, base, len))
+                    x64_pc_chain_patch(&g_x64_pc_chains[j], 1);
+            if (jit_wprot(1)) (void)jit_publish_code(J_RX(g_cache), (size_t)(g_cp - g_cache));
+        }
+        if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
+        return;
+    }
 }

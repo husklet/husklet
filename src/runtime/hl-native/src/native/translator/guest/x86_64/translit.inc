@@ -390,6 +390,14 @@ static translit_external_absolute translit_external_absolutes[TL_EXTERNAL_ABSOLU
 static uint32_t translit_external_absolute_count;
 static uint32_t translit_external_absolute_emitted;
 static int translit_external_absolute_unclassified;
+typedef struct {
+    uint32_t site_offset, fallback_offset;
+    uint64_t source, target;
+} translit_chain_site;
+#define TL_CHAIN_SITE_N 65536u
+static translit_chain_site translit_chain_sites[TL_CHAIN_SITE_N];
+static uint32_t translit_chain_site_count;
+static int translit_chain_site_overflow;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int translit_test_drop_external_absolute;
 static int translit_test_dropped_external_absolute;
@@ -405,9 +413,22 @@ static void translit_external_absolute_generation_reset(void) {
     translit_external_absolute_count = 0;
     translit_external_absolute_emitted = 0;
     translit_external_absolute_unclassified = 0;
+    translit_chain_site_count = 0;
+    translit_chain_site_overflow = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     translit_test_dropped_external_absolute = 0;
 #endif
+}
+
+static void translit_chain_site_note(uint8_t *site, uint8_t *fallback, uint64_t source, uint64_t target) {
+    uintptr_t base = (uintptr_t)g_cache, s = (uintptr_t)site, f = (uintptr_t)fallback;
+    if (s < base || f < base || s - base > UINT32_MAX || f - base > UINT32_MAX ||
+        translit_chain_site_count >= TL_CHAIN_SITE_N) {
+        translit_chain_site_overflow = 1;
+        return;
+    }
+    translit_chain_sites[translit_chain_site_count++] = (translit_chain_site){
+        (uint32_t)(s - base), (uint32_t)(f - base), source, target};
 }
 
 static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
@@ -1525,7 +1546,8 @@ static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *
 // returns through the ordinary dispatcher boundary. The clear path reloads the exact image and jumps to
 // an already-published block; cpu->rip is deliberately NOT changed on that path, so a signal/fault uses
 // the target code's instruction provenance rather than a premature architectural store.
-static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_block, uint64_t target) {
+static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_block, uint64_t source,
+                                   uint64_t target) {
     translit_emit_spill(a);
     hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(a, 5); // JNE: dispatcher fallback
@@ -1535,8 +1557,11 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     if (shape_counter != 0) hl_x64_atomic_inc_abs(a, shape_counter);
 #endif
     translit_emit_reload(a);
+    uint8_t *chain = a->cursor;
     hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
     hl_x64_patch_rel32(a, irq, a->cursor);
+    uint8_t *fallback = a->cursor;
+    translit_chain_site_note(chain, fallback, source, target);
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_irq_fallback);
 #endif
@@ -4259,7 +4284,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                         (unsigned)jcc_fall_stitched, source_page_delta);
                     if (target_block != NULL) {
-                        translit_emit_jcc_link(a, target_block, target);
+                        translit_emit_jcc_link(a, target_block, pc, target);
                         translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                         jcc_link_admitted++;
                     } else if (translit_jcc_ibtc_candidate(pc, target)) {
@@ -4393,7 +4418,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             if (target_block != NULL) {
-                translit_emit_jcc_link(a, target_block, target);
+                translit_emit_jcc_link(a, target_block, pc, target);
                 translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                 jcc_link_admitted++;
             } else if (translit_jcc_ibtc_candidate(pc, target)) {

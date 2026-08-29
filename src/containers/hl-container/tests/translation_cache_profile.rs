@@ -18,6 +18,8 @@ enum Mode {
     CacheSemanticMap,
     CacheSemanticHelper,
     CacheSemanticRelocation,
+    CacheSemanticLibrary,
+    CacheSemanticChain,
     CacheValid,
     CacheBitflip,
     CacheTruncated,
@@ -36,6 +38,8 @@ impl Mode {
             "cache-semantic-map" => Ok(Self::CacheSemanticMap),
             "cache-semantic-helper" => Ok(Self::CacheSemanticHelper),
             "cache-semantic-relocation" => Ok(Self::CacheSemanticRelocation),
+            "cache-semantic-library" => Ok(Self::CacheSemanticLibrary),
+            "cache-semantic-chain" => Ok(Self::CacheSemanticChain),
             "cache-valid" => Ok(Self::CacheValid),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
@@ -85,7 +89,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "cold arm did not begin with an empty cache",
         )?;
     } else if matches!(mode, Mode::CacheValid | Mode::CacheBitflip | Mode::CacheTruncated |
-                       Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation) {
+                       Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation |
+                       Mode::CacheSemanticLibrary | Mode::CacheSemanticChain) {
         require(
             cache.read_dir()?.next().is_some(),
             "warm arm began without a published cache",
@@ -144,32 +149,45 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "fresh-rollover arm did not enable its native hook",
         )?;
     }
-    if matches!(mode, Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation) {
+    if matches!(mode, Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation |
+                      Mode::CacheSemanticLibrary | Mode::CacheSemanticChain) {
         let artifact = cache.read_dir()?.find_map(|entry| {
             let entry = entry.ok()?;
             entry.file_name().as_encoded_bytes().ends_with(b".x64pcache").then_some(entry.path())
         }).ok_or("semantic corruption arm found no cache artifact")?;
         let mut bytes = fs::read(&artifact)?;
-        require(bytes.len() >= 208, "semantic corruption artifact is truncated")?;
+        require(bytes.len() >= 256, "semantic corruption artifact is truncated")?;
         let get = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
         let maps = get(96) as usize;
         let owners = get(104) as usize;
         let relocations = get(184) as usize;
+        let libraries = get(232) as usize;
+        let chains = get(240) as usize;
         let arena = get(88);
         match mode {
             Mode::CacheSemanticMap => {
                 require(maps != 0, "semantic map corruption has no map record")?;
-                bytes[208 + 8..208 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+                bytes[256 + 8..256 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
             }
             Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
             Mode::CacheSemanticRelocation => {
                 require(relocations != 0, "semantic relocation corruption has no relocation record")?;
-                let offset = 208 + maps * 84 + owners * 24 + 4;
+                let offset = 256 + maps * 84 + owners * 24 + 4;
                 bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+            }
+            Mode::CacheSemanticLibrary => {
+                require(libraries != 0, "semantic library corruption has no manifest record")?;
+                let offset = 256 + maps * 84 + owners * 24 + relocations * 8;
+                bytes[offset..offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+            }
+            Mode::CacheSemanticChain => {
+                require(chains != 0, "semantic chain corruption has no chain record")?;
+                let offset = 256 + maps * 84 + owners * 24 + relocations * 8 + libraries * 56 + 4;
+                bytes[offset..offset + 4].copy_from_slice(&(arena as u32).to_le_bytes());
             }
             _ => unreachable!(),
         }
-        bytes[200..208].fill(0);
+        bytes[248..256].fill(0);
         let mut digest = 1_469_598_103_934_665_603u64;
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
@@ -180,7 +198,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             digest ^= u64::from(*byte);
             digest = digest.wrapping_mul(1_099_511_628_211);
         }
-        bytes[200..208].copy_from_slice(&digest.to_le_bytes());
+        bytes[248..256].copy_from_slice(&digest.to_le_bytes());
         fs::write(artifact, bytes)?;
     }
     if mode.cached() {
@@ -268,7 +286,11 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "cache contains a non-private or non-regular entry",
         )?;
         match mode {
-            Mode::CacheCold => {}
+            Mode::CacheCold => require(
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache")) &&
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(11).any(|part| part == b".published-")),
+                "cold arm did not publish a cache artifact and receipt",
+            )?,
             Mode::CacheFreshRollover => require(
                 entries.iter().any(|entry| {
                     entry
@@ -279,7 +301,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
                 }),
                 "fresh generation did not publish an exact relocation-ledger receipt",
             )?,
-            Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation => require(
+            Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation |
+            Mode::CacheSemanticLibrary | Mode::CacheSemanticChain => require(
                 entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")) &&
                 !entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")),
                 "rechecksummed semantic corruption did not remain a pristine MISS",

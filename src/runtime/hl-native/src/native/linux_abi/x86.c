@@ -232,6 +232,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     // base becomes out->base, deriving all guest PCs/addresses identically each run. One-shot per image.
     if (base != NULL) {
         g_force_base = 0; // one-shot, consumed by the link-address placement
+        pcache_note_fixed_img((uint64_t)base, span);
     } else if (g_force_base) {
         void *want = (void *)(g_force_base + basepage);
         int fixed_failed;
