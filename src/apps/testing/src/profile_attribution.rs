@@ -1132,6 +1132,7 @@ mod tests {
         );
         assert!(parse_export_loss(&warning.replace("8.14%", "unknown")).is_err());
         assert!(parse_export_loss(&warning.replace("30 chunks!", "")).is_err());
+        assert!(parse_export_loss(&(warning.to_owned() + "spoofed diagnostic\n")).is_err());
     }
 
     #[test]
