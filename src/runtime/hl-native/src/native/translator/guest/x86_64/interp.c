@@ -1959,10 +1959,10 @@ static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
 static int x64_pc_file(char *path, size_t size);
 
-/* Thread start retires the current arena before the first peer exists. Deferred maps and chain sites
-   name that arena, so they must not survive into a later library mapping callback. Refuse publication
-   for the replacement cold generation because already-mapped libraries cannot be reconstructed into a
-   complete manifest after this boundary. */
+/* Before the first peer exists, abandon restored deferred maps and chain sites so a later library
+   mapping callback cannot patch their arena-relative locations while guest threads execute. Refuse
+   publication for this generation because already-mapped libraries cannot be reconstructed into a
+   complete manifest after the thread-start boundary. */
 static void x64_pc_thread_start_abandon(void) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     char cache_path[1024], receipt[1024];
