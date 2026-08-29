@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 static _Atomic int worker_stop;
+static _Atomic int worker_ready;
 
 __attribute__((noinline)) static int worker_tick(int value) {
     return value + 1;
@@ -17,6 +18,7 @@ static void *worker(void *unused) {
     volatile int value = 0;
     while (!atomic_load_explicit(&worker_stop, memory_order_acquire)) {
         value = worker_tick(value);
+        atomic_store_explicit(&worker_ready, 1, memory_order_release);
         sched_yield();
     }
     return NULL;
@@ -43,6 +45,7 @@ int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "post-exec") == 0) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, worker, NULL) != 0) return 7;
+        while (!atomic_load_explicit(&worker_ready, memory_order_acquire)) sched_yield();
         int answer = profiled_caller(seed);
         int after = post_rollover_caller(seed);
         atomic_store_explicit(&worker_stop, 1, memory_order_release);

@@ -1525,7 +1525,7 @@ fn forked_translators_publish_process_owned_perf_files() {
 
 #[test]
 fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
-    // A live post-exec peer makes the test hook enter the production fresh-arena STW path.
+    // A synchronized live post-exec peer makes the test hook enter the production fresh-arena STW path.
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "perf_map_fork_exec");
     let maps = work.path().join("maps-fork-exec");
