@@ -119,8 +119,7 @@ struct LaunchArguments {
     #[cfg(feature = "native-test-hooks")]
     #[arg(long, value_name = "KEY=VALUE", hide = true, value_parser = parse_native_test_option)]
     native_test_option: Vec<NativeTestOption>,
-    /// Publish same-ISA block maps and jitdump code bytes for sampling-only profiling.
-    #[cfg(feature = "native-test-hooks")]
+    /// Publish same-ISA block maps for sampling-only profiling.
     #[arg(long, value_name = "PATH", hide = true, requires = "translit", value_parser = parse_translit_perf_map)]
     translit_perf_map: Option<PathBuf>,
     /// Existing container root used to resolve the guest entry and `PT_INTERP`.
@@ -152,7 +151,6 @@ fn parse_native_test_option(value: &str) -> Result<NativeTestOption, String> {
     }
 }
 
-#[cfg(feature = "native-test-hooks")]
 fn parse_translit_perf_map(value: &str) -> Result<PathBuf, String> {
     let requested = std::path::Path::new(value);
     if !requested.is_absolute() {
@@ -500,7 +498,6 @@ fn rootfs_plan(
             .set(injected.name, injected.value, false)
             .map_err(|error| Failure::Request(format!("cannot set native test option {}: {error:?}", injected.name)))?;
     }
-    #[cfg(feature = "native-test-hooks")]
     if let Some(path) = &launch.translit_perf_map {
         options
             .set("HL_TRANSLIT_SYMBOLIZE", "1", false)

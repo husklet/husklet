@@ -582,7 +582,6 @@ static uint64_t translit_displaced_riprel_unreachable;
 static uint64_t translit_displaced_riprel_lowered;
 static uint64_t translit_displaced_scratch_lowered;
 
-#if defined(HL_NATIVE_TEST_HOOKS)
 static FILE *translit_perf_map_file;
 static pid_t translit_perf_map_pid;
 static FILE *translit_jitdump_file;
@@ -855,10 +854,6 @@ static void translit_perf_map_flush(void) {
     if (translit_perf_map_file != NULL) (void)fflush(translit_perf_map_file);
     if (translit_jitdump_file != NULL) (void)fflush(translit_jitdump_file);
 }
-#else
-#define translit_perf_map_publish_helper(name, start, end, published) ((void)0)
-#define translit_perf_map_flush() ((void)0)
-#endif
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
 static uint64_t translit_natural_lea_lowered;
