@@ -5135,6 +5135,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
     if (scenario == 119) {
         guest_bytes[target_offset + 1] = 43;
+        smc_inplace_drop();
         ibtc_ent cleared = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
         if (cleared.target != 0 || cleared.body != NULL) goto done_call_ibtc;
         struct interp_block *replacement = translit_jcc_ibtc_test_build(context, target);
@@ -5155,7 +5156,6 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
             result = 176;
             goto done_call_ibtc;
         }
-        smc_inplace_drop();
         ibtc_ent cleared = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
         if (cleared.target != 0 || cleared.body != NULL) {
             result = 171;
