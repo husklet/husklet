@@ -27,7 +27,9 @@
 #endif
 
 #include "../../cache_abi.h"
+#include "../../digest.h"
 #include "../../identity.h"
+#include "../../persist.h"
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "decoder.h"
 #include "guest_data.h"
@@ -1893,6 +1895,65 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
     return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
+/* Same-ISA cold-publication format. Warm restore deliberately remains disabled until the relocation and
+ * generation reconstruction review is complete. Every address in the payload is an arena-relative offset. */
+#define X64_PC_MAGIC UINT64_C(0x3143535034364c48) /* "HL64PSC1" */
+#define X64_PC_VERSION UINT64_C(1)
+
+struct x64_pc_header {
+    uint64_t magic, version, translator_abi, cpu_size, map_capacity;
+    hl_identity_digest identity;
+    uint64_t entry, arena_used, map_count, owner_count, source_index_overflow;
+    uint64_t stub_entry, stub_rsp, stub_flags, stub_end;
+    uint64_t payload_checksum;
+};
+
+struct x64_pc_map {
+    uint64_t gpc, guest_start, guest_end, host_offset, body_offset;
+    uint64_t block_offset, block_magic, block_gpc, block_generation;
+    uint32_t host_entry_offset, host_length;
+    uint16_t profile_instructions;
+    uint16_t reserved;
+};
+
+struct x64_pc_owner {
+    uint32_t start, end, preserve, reserved;
+    uint64_t guest;
+};
+
+static hl_persist_directory g_x64_pc_directory;
+static char g_x64_pc_directory_path[1024];
+static int g_x64_pc_forked;
+
+static uint64_t x64_pc_offset(const void *pointer, uint64_t used) {
+    uintptr_t value = (uintptr_t)pointer, base = (uintptr_t)g_cache;
+    return pointer != NULL && value >= base && value - base <= used ? (uint64_t)(value - base) : UINT64_MAX;
+}
+
+static int x64_pc_file(char *path, size_t size) {
+    const char *directory = hl_option_get("HL_PCACHE_DIR");
+    if (directory == NULL || directory[0] == 0) return 0;
+    if (g_x64_pc_directory.handle != HL_HOST_HANDLE_INVALID && strcmp(g_x64_pc_directory_path, directory) != 0) {
+        (void)hl_persist_directory_close(&g_x64_pc_directory);
+        g_x64_pc_directory_path[0] = 0;
+    }
+    if (g_x64_pc_directory.handle == HL_HOST_HANDLE_INVALID &&
+        !hl_persist_directory_open(&g_x64_pc_directory, &g_jit_services, directory, 1))
+        return 0;
+    if (!g_x64_pc_directory_path[0]) {
+        int copied = snprintf(g_x64_pc_directory_path, sizeof g_x64_pc_directory_path, "%s", directory);
+        if (copied <= 0 || (size_t)copied >= sizeof g_x64_pc_directory_path) return 0;
+    }
+    if (size < 76) return 0;
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof g_pc_binid.bytes; i++) {
+        path[i * 2] = hex[g_pc_binid.bytes[i] >> 4];
+        path[i * 2 + 1] = hex[g_pc_binid.bytes[i] & 15];
+    }
+    memcpy(path + 64, ".x64pcache", 11);
+    return 1;
+}
+
 static int pcache_load(uint64_t entry_jump) {
     (void)entry_jump;
     g_pcache_loaded = 0;
@@ -1900,10 +1961,76 @@ static int pcache_load(uint64_t entry_jump) {
 }
 
 static void pcache_save(void) {
-    // Empty: nothing could load what this would write.
+    if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache ||
+        g_force_base_failed || g_x64_pc_forked || !jit_guest_bus_active())
+        return;
+    uint64_t used = (uint64_t)(g_cp - g_cache);
+    uint64_t map_count = 0;
+    for (uint32_t i = 0; i < JIT_MAP_N; i++)
+        if (map_live(i) && g_map_metadata[i].cache_generation == g_cache_gen) map_count++;
+    jit_body_owner_set *owners = jit_body_owner_set_for(g_cache_gen, 0);
+    jit_body_owner_entry *owner_entries =
+        owners == NULL ? NULL : atomic_load_explicit(&owners->entry, memory_order_acquire);
+    uint32_t owner_count = owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
+    if ((owner_count != 0 && owner_entries == NULL) || map_count > SIZE_MAX / sizeof(struct x64_pc_map) ||
+        owner_count > SIZE_MAX / sizeof(struct x64_pc_owner))
+        return;
+    size_t map_bytes = (size_t)map_count * sizeof(struct x64_pc_map);
+    size_t owner_bytes = (size_t)owner_count * sizeof(struct x64_pc_owner);
+    if (used > SIZE_MAX - sizeof(struct x64_pc_header) - map_bytes - owner_bytes) return;
+    size_t total = sizeof(struct x64_pc_header) + map_bytes + owner_bytes + (size_t)used;
+    uint8_t *buffer = malloc(total);
+    if (buffer == NULL) return;
+    struct x64_pc_header *header = (struct x64_pc_header *)buffer;
+    *header = (struct x64_pc_header){X64_PC_MAGIC, X64_PC_VERSION, HL_PCACHE_ABI_X86_64,
+                                     sizeof(struct cpu), JIT_MAP_N, g_pc_binid, g_pc_entry, used,
+                                     map_count, owner_count, g_source_index_overflow,
+                                     x64_pc_offset(translit_jcc_ibtc_stub_entry, used),
+                                     x64_pc_offset(translit_jcc_ibtc_stub_rsp_canonical, used),
+                                     x64_pc_offset(translit_jcc_ibtc_stub_flags_canonical, used),
+                                     x64_pc_offset(translit_jcc_ibtc_stub_end, used), 0};
+    struct x64_pc_map *maps = (struct x64_pc_map *)(header + 1);
+    uint64_t next = 0;
+    for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
+        uint64_t host = x64_pc_offset(g_map[i].host, used), body = x64_pc_offset(g_map[i].body, used);
+        if (host == UINT64_MAX || body == UINT64_MAX) {
+            free(buffer);
+            return;
+        }
+        struct interp_block *block = (struct interp_block *)(g_cache + body);
+        maps[next++] = (struct x64_pc_map){g_map[i].gpc, g_map_metadata[i].guest_start,
+                                          g_map_metadata[i].guest_end, host, body, body, block->magic,
+                                          block->gpc, block->generation, block->host_entry_off,
+                                          block->host_len, block->profile_insns, 0};
+    }
+    struct x64_pc_owner *owner_records = (struct x64_pc_owner *)((uint8_t *)maps + map_bytes);
+    jit_body_owner_preserve *preserves = owner_entries == NULL ? NULL : jit_body_owner_preserves(owner_entries);
+    for (uint32_t i = 0; i < owner_count; i++)
+        owner_records[i] = (struct x64_pc_owner){owner_entries[i].rw_start, owner_entries[i].rw_end,
+                                                preserves[i], 0, owner_entries[i].guest};
+    uint8_t *arena = (uint8_t *)owner_records + owner_bytes;
+    memcpy(arena, g_cache, (size_t)used);
+    hl_digest digest;
+    hl_digest_init(&digest, HL_DIGEST_SEED);
+    hl_digest_update(&digest, buffer + sizeof *header, total - sizeof *header);
+    header->payload_checksum = hl_digest_value(&digest);
+    char path[1024];
+    if (x64_pc_file(path, sizeof path)) (void)hl_persist_store_at(&g_x64_pc_directory, path, buffer, total);
+    free(buffer);
 }
 
+static void x64_pc_after_fork(void) {
+    g_x64_pc_forked = 1;
+}
+
+#define PCACHE_SAVE_HOOK pcache_save()
+#define PCACHE_FORK_HOOK x64_pc_after_fork()
+
 static void pcache_directory_close(void) {
+    if (g_x64_pc_directory.handle != HL_HOST_HANDLE_INVALID)
+        (void)hl_persist_directory_close(&g_x64_pc_directory);
+    g_x64_pc_directory_path[0] = 0;
 }
 
 static void pcache_note_fixed_img(uint64_t base, uint64_t span) {
