@@ -134,7 +134,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
     // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
     let process = if mode == Mode::ForkNoExec {
-        Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done)"])
+        Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done) & wait"])
     } else if mode == Mode::ForkExec {
         Process::new("/bin/sh").args(["-c", "/bin/true"])
     } else {
