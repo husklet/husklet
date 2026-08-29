@@ -1519,6 +1519,54 @@ fn forked_translators_publish_process_owned_perf_files() {
 }
 
 #[test]
+fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "perf_map_fork_exec");
+    let maps = work.path().join("maps-fork-exec");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, status, _backend) = run_with_perf_map(&executable, &maps, false);
+    assert_eq!(status, 0);
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("post-exec pid="), "{output}");
+    assert!(output.contains("parent pid="), "{output}");
+    let child = output
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("child="))
+        .expect("child pid");
+    let mut child_maps = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!("perf-{child}-"))
+        })
+        .collect::<Vec<_>>();
+    child_maps.sort();
+    assert!(child_maps.len() >= 2, "child={child} maps={child_maps:?}\n{output}");
+    let identities = child_maps
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(identities.len(), child_maps.len(), "{child_maps:?}");
+    for map in &child_maps {
+        let text = std::fs::read_to_string(map).unwrap();
+        assert!(text.contains(" hl_tl_helper_jcc_ibtc"), "{}:\n{text}", map.display());
+        assert!(
+            text.lines().any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
+            "{}:\n{text}",
+            map.display()
+        );
+    }
+    let rx = child_maps
+        .iter()
+        .filter_map(|path| path.file_name().unwrap().to_string_lossy().split("-rx").nth(1).map(str::to_owned))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(rx.len() >= 2, "exec retained only stale RX identity: {child_maps:?}");
+}
+
+#[test]
 #[ignore = "requires HL_PROFILE_TRANSLIT_EXECUTABLE and a host perf recording"]
 fn a_host_profiler_resolves_transliterated_block_identities() {
     let executable =

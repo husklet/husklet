@@ -588,6 +588,14 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
 static void translit_perf_map_publish_named(const char *name, const uint8_t *start, uint32_t host_len) {
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
     if (!g_prof || directory == NULL || directory[0] == '\0' || host_len == 0) return;
+    /* Guest exec and the threaded fresh-arena path can replace the arena between
+       publications.  Bind the lifecycle identity before validating or naming the
+       first record in that arena; otherwise a same-pid child keeps writing (or,
+       after O_EXCL, stops writing) under the pre-exec RX generation. */
+    if (translit_profile_active.pid != getpid() || translit_profile_active.generation != g_cache_gen ||
+        translit_profile_active.rw != g_cache || translit_profile_active.rx != J_RX(g_cache) ||
+        translit_profile_active.size != CACHE_SZ)
+        translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
     pid_t pid = getpid();
     const uint8_t *end = start + host_len;
     if (translit_profile_active.pid != pid || translit_profile_active.rw == NULL ||
