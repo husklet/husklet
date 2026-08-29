@@ -136,7 +136,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     let process = if mode == Mode::ForkNoExec {
         Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done) & wait"])
     } else if mode == Mode::ForkExec {
-        Process::new("/bin/sh").args(["-c", "/bin/true"])
+        Process::new("/bin/sh").args(["-c", "/bin/true & wait"])
     } else {
         Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
             "-quiet", "/work/src/unit_127.c", "-quiet", "-dumpdir", "/tmp/", "-dumpbase", "unit_127.c",
