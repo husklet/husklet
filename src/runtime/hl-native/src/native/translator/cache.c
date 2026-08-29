@@ -312,7 +312,6 @@ static uint32_t g_map_epoch = 1;
 static uint64_t g_map_host_generation = 1;
 static uint64_t g_cache_gen; /* generation of the current immutable code arena */
 static uint32_t g_live_map_indices[JIT_MAP_N];
-static uint32_t g_live_map_positions[JIT_MAP_N];
 static uint32_t g_live_map_count;
 #if HL_NATIVE_TEST_HOOKS
 static _Thread_local uint64_t g_map_host_probe_count;
@@ -384,6 +383,10 @@ static hl_translation_map_metadata g_map_metadata[JIT_MAP_N];
 #define JIT_SOURCE_NODE_N JIT_MAP_N
 #define JIT_SOURCE_PAGE_SHIFT 12u
 #define JIT_SOURCE_NONE UINT32_MAX
+#define JIT_SOURCE_PAGE_INITIAL (1u << 10)
+#define JIT_SOURCE_CHUNK_SHIFT 10u
+#define JIT_SOURCE_CHUNK_N (1u << JIT_SOURCE_CHUNK_SHIFT)
+#define JIT_SOURCE_CHUNKS (JIT_MAP_N / JIT_SOURCE_CHUNK_N)
 
 typedef struct {
     uint64_t page;
@@ -399,8 +402,14 @@ typedef struct {
 _Static_assert(sizeof(jit_source_page_entry) == 16, "source page entry gained padding");
 _Static_assert(sizeof(jit_source_node) == 8, "source index node must remain compact");
 
-static jit_source_page_entry g_source_pages[JIT_SOURCE_PAGE_N];
-static jit_source_node g_source_nodes[JIT_SOURCE_NODE_N];
+/* Only the active target allocates these.  The page table is demand-zero, while nodes and live positions
+   grow in page-sized chunks up to their compile-time caps.  The dual-ISA library therefore carries only
+   pointer vectors twice, not two permanently reserved 10 MiB backing arrays. */
+static jit_source_page_entry *g_source_pages;
+static uint32_t g_source_page_capacity;
+static uint32_t g_source_page_count;
+static jit_source_node *g_source_node_chunks[JIT_SOURCE_CHUNKS];
+static uint32_t *g_live_position_chunks[JIT_SOURCE_CHUNKS];
 static uint32_t g_source_node_count;
 static int g_source_index_overflow;
 #if HL_NATIVE_TEST_HOOKS
@@ -486,15 +495,70 @@ static uint32_t source_page_hash(uint64_t page) {
     return (uint32_t)page & (JIT_SOURCE_PAGE_N - 1u);
 }
 
+static jit_source_node *source_node(uint32_t index) {
+    return &g_source_node_chunks[index >> JIT_SOURCE_CHUNK_SHIFT][index & (JIT_SOURCE_CHUNK_N - 1u)];
+}
+
+static uint32_t *live_position(uint32_t map_index) {
+    return &g_live_position_chunks[map_index >> JIT_SOURCE_CHUNK_SHIFT][map_index & (JIT_SOURCE_CHUNK_N - 1u)];
+}
+
+static int source_pages_grow(void) {
+    uint32_t capacity = g_source_page_capacity == 0 ? JIT_SOURCE_PAGE_INITIAL : g_source_page_capacity << 1;
+    if (capacity > JIT_SOURCE_PAGE_N) return 0;
+    jit_source_page_entry *replacement = calloc(capacity, sizeof(*replacement));
+    if (replacement == NULL) return 0;
+    for (uint32_t old = 0; old < g_source_page_capacity; old++) {
+        if (g_source_pages[old].epoch != g_map_epoch) continue;
+        uint32_t hash = source_page_hash(g_source_pages[old].page) & (capacity - 1u);
+        for (uint32_t probe = 0;; probe++) {
+            jit_source_page_entry *entry = &replacement[(hash + probe) & (capacity - 1u)];
+            if (entry->epoch == g_map_epoch) continue;
+            *entry = g_source_pages[old];
+            break;
+        }
+    }
+    free(g_source_pages);
+    g_source_pages = replacement;
+    g_source_page_capacity = capacity;
+    return 1;
+}
+
+static int source_index_reserve(uint32_t map_index, uint64_t nodes) {
+    if (g_source_index_overflow || nodes > JIT_SOURCE_NODE_N - g_source_node_count) return 0;
+    if (g_source_pages == NULL && !source_pages_grow()) goto overflow;
+    uint32_t position_chunk = map_index >> JIT_SOURCE_CHUNK_SHIFT;
+    if (g_live_position_chunks[position_chunk] == NULL) {
+        g_live_position_chunks[position_chunk] = calloc(JIT_SOURCE_CHUNK_N, sizeof(uint32_t));
+        if (g_live_position_chunks[position_chunk] == NULL) goto overflow;
+    }
+    if (nodes != 0) {
+        uint32_t first = g_source_node_count >> JIT_SOURCE_CHUNK_SHIFT;
+        uint32_t last = (uint32_t)(g_source_node_count + nodes - 1u) >> JIT_SOURCE_CHUNK_SHIFT;
+        for (uint32_t chunk = first; chunk <= last; chunk++) {
+            if (g_source_node_chunks[chunk] != NULL) continue;
+            g_source_node_chunks[chunk] = calloc(JIT_SOURCE_CHUNK_N, sizeof(jit_source_node));
+            if (g_source_node_chunks[chunk] == NULL) goto overflow;
+        }
+    }
+    return 1;
+overflow:
+    g_source_index_overflow = 1;
+    return 0;
+}
+
 static jit_source_page_entry *source_page_find(uint64_t page, int create) {
+    if (g_source_pages == NULL) return NULL;
+    if (create && g_source_page_count + 1u > g_source_page_capacity * 3u / 4u && !source_pages_grow()) return NULL;
     uint32_t hash = source_page_hash(page);
-    for (uint32_t probe = 0; probe < JIT_SOURCE_PAGE_N; probe++) {
-        jit_source_page_entry *entry = &g_source_pages[(hash + probe) & (JIT_SOURCE_PAGE_N - 1u)];
+    for (uint32_t probe = 0; probe < g_source_page_capacity; probe++) {
+        jit_source_page_entry *entry = &g_source_pages[(hash + probe) & (g_source_page_capacity - 1u)];
         if (entry->epoch != g_map_epoch) {
             if (!create) return NULL;
             entry->page = page;
             entry->head = JIT_SOURCE_NONE;
             entry->epoch = g_map_epoch;
+            g_source_page_count++;
             return entry;
         }
         if (entry->page == page) return entry;
@@ -507,7 +571,7 @@ static void source_index_put(uint32_t map_index, uint64_t guest_start, uint64_t 
     uint64_t first = guest_start >> JIT_SOURCE_PAGE_SHIFT;
     uint64_t last = (guest_end - 1u) >> JIT_SOURCE_PAGE_SHIFT;
     uint64_t pages = last - first + 1u;
-    if (pages > JIT_SOURCE_NODE_N - g_source_node_count) {
+    if (!source_index_reserve(map_index, pages)) {
         g_source_index_overflow = 1;
         return;
     }
@@ -518,7 +582,7 @@ static void source_index_put(uint32_t map_index, uint64_t guest_start, uint64_t 
             return;
         }
         uint32_t node = g_source_node_count++;
-        g_source_nodes[node] = (jit_source_node){.map_index = map_index, .next = entry->head};
+        *source_node(node) = (jit_source_node){.map_index = map_index, .next = entry->head};
         entry->head = node;
         if (page == last) break;
     }
@@ -527,6 +591,7 @@ static void source_index_put(uint32_t map_index, uint64_t guest_start, uint64_t 
 static void map_clear(void) {
     g_live_map_count = 0;
     g_source_node_count = 0;
+    g_source_page_count = 0;
     g_source_index_overflow = 0;
     g_map_epoch++;
     if (g_map_epoch == 0) {
@@ -538,7 +603,8 @@ static void map_clear(void) {
         }
         for (uint32_t i = 0; i < JIT_INSN_MAP_N; i++)
             __atomic_store_n(&g_instruction_map[i].epoch, 0, __ATOMIC_RELAXED);
-        for (uint32_t i = 0; i < JIT_SOURCE_PAGE_N; i++) g_source_pages[i].epoch = 0;
+        if (g_source_pages != NULL)
+            for (uint32_t i = 0; i < g_source_page_capacity; i++) g_source_pages[i].epoch = 0;
         g_map_epoch = 1;
     }
     map_host_cache_invalidate();
@@ -930,15 +996,15 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
         g_map_metadata[destination].cache_generation = g_cache_gen;
         g_map[destination].tombstone_epoch = 0;
         source_index_put(destination, guest_start, source_end);
-        g_live_map_positions[destination] = g_live_map_count;
+        if (!g_source_index_overflow) *live_position(destination) = g_live_map_count;
         g_live_map_indices[g_live_map_count++] = destination;
 #if HL_NATIVE_TEST_HOOKS
         if (g_source_index_publish_probe) {
             jit_source_page_entry *page = source_page_find(guest_start >> JIT_SOURCE_PAGE_SHIFT, 0);
             int indexed = 0;
             if (page != NULL)
-                for (uint32_t node = page->head; node != JIT_SOURCE_NONE; node = g_source_nodes[node].next)
-                    if (g_source_nodes[node].map_index == destination) {
+                for (uint32_t node = page->head; node != JIT_SOURCE_NONE; node = source_node(node)->next)
+                    if (source_node(node)->map_index == destination) {
                         indexed = 1;
                         break;
                     }
@@ -957,10 +1023,10 @@ static int map_source_overlaps(uint32_t index, uint64_t lo, uint64_t hi) {
 }
 
 static void map_remove_live(uint32_t index) {
-    uint32_t position = g_live_map_positions[index];
+    uint32_t position = *live_position(index);
     uint32_t last = g_live_map_indices[--g_live_map_count];
     g_live_map_indices[position] = last;
-    g_live_map_positions[last] = position;
+    *live_position(last) = position;
     ibtc_drop_target(g_map[index].gpc);
     g_map[index].generation = 0;
     g_map[index].tombstone_epoch = g_map_epoch;
@@ -979,7 +1045,7 @@ static uint32_t map_invalidate_source_ranges_full(const uint64_t ranges[][2], ui
             }
         }
         if (!overlap) {
-            g_live_map_positions[index] = retained;
+            if (!g_source_index_overflow) *live_position(index) = retained;
             g_live_map_indices[retained++] = index;
             continue;
         }
@@ -1022,8 +1088,8 @@ static uint32_t map_invalidate_source_ranges(const uint64_t ranges[][2], uint32_
             for (;;) {
                 jit_source_page_entry *entry = source_page_find(page, 0);
                 if (entry != NULL) {
-                    for (uint32_t node = entry->head; node != JIT_SOURCE_NONE; node = g_source_nodes[node].next) {
-                        uint32_t index = g_source_nodes[node].map_index;
+                    for (uint32_t node = entry->head; node != JIT_SOURCE_NONE; node = source_node(node)->next) {
+                        uint32_t index = source_node(node)->map_index;
                         if (!map_live(index)) continue;
                         int overlap = 0;
                         for (uint32_t candidate = 0; candidate < count; candidate++)
@@ -1140,6 +1206,17 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
                 verdict = -EIO;
             *result = test.removed;
         }
+    } else if (scenario == 51) {
+        uint64_t end = first + ((uint64_t)JIT_SOURCE_CHUNK_N << JIT_SOURCE_PAGE_SHIFT) + 1u;
+        map_put(first, first, end, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
+        int slot = map_idx(first);
+        if (slot < 0 || g_source_node_count != JIT_SOURCE_CHUNK_N + 1u || g_source_node_chunks[0] == NULL ||
+            g_source_node_chunks[1] == NULL ||
+            g_live_position_chunks[(uint32_t)slot >> JIT_SOURCE_CHUNK_SHIFT] == NULL)
+            verdict = -EIO;
+        uint64_t dirty[][2] = {{end - 1u, end}};
+        *result = map_invalidate_source_ranges(dirty, 1);
+        if (*result != 1 || map_body(first) != NULL) verdict = -EIO;
     } else {
         verdict = -EINVAL;
     }
@@ -1154,7 +1231,7 @@ static uint32_t map_invalidate_cache_generation(uint64_t generation) {
         uint32_t index = g_live_map_indices[n];
         if (!map_live(index)) continue;
         if (g_map_metadata[index].cache_generation != generation) {
-            g_live_map_positions[index] = retained;
+            if (!g_source_index_overflow) *live_position(index) = retained;
             g_live_map_indices[retained++] = index;
             continue;
         }

@@ -193,3 +193,10 @@ fn source_page_index_publication_precedes_concurrent_invalidation() {
         assert_eq!(exec_page_cache_test(isa, 50), Ok(1), "isa={isa}");
     }
 }
+
+#[test]
+fn source_page_index_grows_nodes_across_chunk_boundaries() {
+    for isa in [1, 2] {
+        assert_eq!(exec_page_cache_test(isa, 51), Ok(1), "isa={isa}");
+    }
+}
