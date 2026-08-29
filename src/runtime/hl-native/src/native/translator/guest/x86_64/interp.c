@@ -2010,9 +2010,23 @@ static int pcache_load(uint64_t entry_jump) {
 }
 
 static void pcache_save(void) {
-    if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache ||
-        g_force_base_failed || g_x64_pc_forked || !jit_guest_bus_active())
+    if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
+        !jit_guest_bus_active())
         return;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_x64_pc_forked) {
+        char base[1024], receipt[1024];
+        if (x64_pc_file(base, sizeof base)) {
+            int length = snprintf(receipt, sizeof receipt, "%s.fork-refused-%lld", base, (long long)getpid());
+            static const unsigned refused = 1;
+            if (length > 0 && (size_t)length < sizeof receipt)
+                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &refused, sizeof refused);
+        }
+        return;
+    }
+#else
+    if (g_x64_pc_forked) return;
+#endif
     uint64_t used = (uint64_t)(g_cp - g_cache);
     uint64_t map_count = 0;
     for (uint32_t i = 0; i < JIT_MAP_N; i++)
@@ -2066,7 +2080,17 @@ static void pcache_save(void) {
     cursor = buffer + X64_PC_CHECKSUM_OFFSET;
     x64_pc_put64(&cursor, hl_digest_value(&digest));
     char path[1024];
-    if (x64_pc_file(path, sizeof path)) (void)hl_persist_store_at(&g_x64_pc_directory, path, buffer, total);
+    if (x64_pc_file(path, sizeof path)) {
+        int stored = hl_persist_store_at(&g_x64_pc_directory, path, buffer, total);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (stored) {
+            char receipt[1024];
+            int length = snprintf(receipt, sizeof receipt, "%s.published-%lld", path, (long long)getpid());
+            if (length > 0 && (size_t)length < sizeof receipt)
+                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &stored, sizeof stored);
+        }
+#endif
+    }
     free(buffer);
 }
 

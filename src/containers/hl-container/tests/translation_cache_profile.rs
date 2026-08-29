@@ -17,6 +17,8 @@ enum Mode {
     CacheValid,
     CacheBitflip,
     CacheTruncated,
+    ForkNoExec,
+    ForkExec,
 }
 
 impl Mode {
@@ -28,12 +30,14 @@ impl Mode {
             "cache-valid" => Ok(Self::CacheValid),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
+            "fork-no-exec" => Ok(Self::ForkNoExec),
+            "fork-exec" => Ok(Self::ForkExec),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
 
     const fn cached(self) -> bool {
-        matches!(self, Self::CacheCold | Self::CacheValid | Self::CacheBitflip | Self::CacheTruncated)
+        !matches!(self, Self::Interpreter | Self::Translated)
     }
 
     const fn translated(self) -> bool {
@@ -62,7 +66,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         .ok_or("HL_PCACHE_PROFILE_CACHE must name the runner-owned persistent directory")?;
     let cache = Path::new(&cache);
     require(cache.is_absolute(), "profile cache is not absolute")?;
-    if mode == Mode::CacheCold {
+    if matches!(mode, Mode::CacheCold | Mode::ForkNoExec | Mode::ForkExec) {
         require(
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
@@ -129,10 +133,16 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     let root = images.roots().fork_overlay(unpacked.snapshot())?;
     // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
     // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
-    let process = Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
-        "-quiet", "/work/src/unit_127.c", "-quiet", "-dumpdir", "/tmp/", "-dumpbase", "unit_127.c",
-        "-dumpbase-ext", ".c", "-mtune=generic", "-march=x86-64", "-g", "-O2", "-o", "-",
-    ]);
+    let process = if mode == Mode::ForkNoExec {
+        Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done)"])
+    } else if mode == Mode::ForkExec {
+        Process::new("/bin/sh").args(["-c", "/bin/true"])
+    } else {
+        Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
+            "-quiet", "/work/src/unit_127.c", "-quiet", "-dumpdir", "/tmp/", "-dumpbase", "unit_127.c",
+            "-dumpbase-ext", ".c", "-mtune=generic", "-march=x86-64", "-g", "-O2", "-o", "-",
+        ])
+    };
     let spec = ContainerSpec::new(root, process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
@@ -162,7 +172,11 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         .into());
     }
     let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
-    require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
+    if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
+        require(logs.stdout.is_empty(), "fork lifecycle fixture produced output")?;
+    } else {
+        require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
+    }
     if mode.cached() {
         let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
         require(!entries.is_empty(), "cache arm published no entries")?;
@@ -188,6 +202,14 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             Mode::CacheTruncated => require(
                 entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")),
                 "truncated artifact did not reach the structural-length refusal path",
+            )?,
+            Mode::ForkNoExec => require(
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(14).any(|part| part == b".fork-refused-")),
+                "fork child without exec did not refuse inherited cache publication",
+            )?,
+            Mode::ForkExec => require(
+                entries.iter().filter(|entry| entry.file_name().as_encoded_bytes().windows(11).any(|part| part == b".published-")).count() >= 2,
+                "fork+exec did not publish both parent and re-keyed child identities",
             )?,
             Mode::Interpreter | Mode::Translated => unreachable!(),
         }
