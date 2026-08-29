@@ -4793,7 +4793,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
-        if (scenario >= 123)
+        if (scenario == 123 || scenario == 124)
             return architecture_exact && cpu.rip == target && cpu.r[4] == expected_rsp &&
                            cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
                            atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
