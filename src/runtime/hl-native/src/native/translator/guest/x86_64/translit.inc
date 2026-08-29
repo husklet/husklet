@@ -1452,16 +1452,16 @@ static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t po
     hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
     hl_x64_load_rsp_ind(a, HL_X64_RAX);
     ranges.load_end = a->cursor;
-    if (translit_jcc_ibtc_stub_entry != NULL || translit_ret_ibtc_enabled())
-        hl_x64_store_gs_imm32(a, TL_RET_IBTC_MISS, OFF_JCC_IBTC_MISS);
-    ranges.marker_end = a->cursor;
+    hl_x64_lea_rsp(a, (int32_t)pop);
+    ranges.rsp_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
     hl_x64_load_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
     ranges.rax_end = a->cursor;
-    hl_x64_lea_rsp(a, (int32_t)pop);
-    ranges.rsp_end = a->cursor;
-    if (translit_jcc_ibtc_stub_entry != NULL) hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    if (translit_jcc_ibtc_stub_entry != NULL || translit_ret_ibtc_enabled())
+        hl_x64_store_gs_imm32(a, TL_RET_IBTC_MISS, OFF_JCC_IBTC_MISS);
+    ranges.marker_end = a->cursor;
     return ranges;
 }
 
@@ -1817,9 +1817,11 @@ static int translit_owner_append_ret(jit_body_owner_range ranges[TL_MAX_OWNER_RA
     translit_test_ret_source_guest = guest;
 #endif
     return translit_owner_append(ranges, count, instruction_start, site->load_end, guest, 0) &&
-           translit_owner_append(ranges, count, site->load_end, site->rsp_end, guest,
+           translit_owner_append(ranges, count, site->load_end, site->rip_end, guest,
                                  JIT_BODY_OWNER_PRESERVE_RET_RAX | (1u << HL_X64_RSP)) &&
-           translit_owner_append(ranges, count, site->rsp_end, instruction_end,
+           translit_owner_append(ranges, count, site->rip_end, site->rax_end,
+                                 JIT_BODY_OWNER_DYNAMIC_RIP, JIT_BODY_OWNER_PRESERVE_RET_RAX) &&
+           translit_owner_append(ranges, count, site->rax_end, instruction_end,
                                  JIT_BODY_OWNER_DYNAMIC_RIP, 0);
 }
 
@@ -4868,8 +4870,8 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         uint8_t bytes[128] = {0};
         hl_x64_asm output = {bytes, bytes + sizeof bytes, 0};
         translit_ret_sim_ranges ranges = translit_emit_ret_exit(&output, 8);
-        return !output.overflow && ranges.load_end < ranges.marker_end && ranges.marker_end < ranges.rip_end &&
-                       ranges.rip_end < ranges.rsp_end
+        return !output.overflow && ranges.load_end < ranges.rsp_end && ranges.rsp_end < ranges.rip_end &&
+                       ranges.rip_end < ranges.rax_end && ranges.rax_end < ranges.marker_end
                    ? 0
                    : 118;
     }
@@ -5751,11 +5753,11 @@ static int translit_ret_signal_stage_test(void) {
         {translit_test_ret_instruction_start, 0, target, translit_test_ret_source_guest, 0},
         {translit_test_ret_site.load_end, 1u << HL_X64_RSP, translit_test_ret_source_guest,
          translit_test_ret_source_guest, 1},
-        {translit_test_ret_site.rip_end, 1u << HL_X64_RSP, target,
+        {translit_test_ret_site.rsp_end, 1u << HL_X64_RSP, target,
          translit_test_ret_source_guest, 1},
-        {translit_test_ret_site.rax_end, 1u << HL_X64_RSP, target,
-         translit_test_ret_source_guest, 1},
-        {translit_test_ret_site.rsp_end, 0, target, target, 0},
+        {translit_test_ret_site.rip_end, 0, target, target, 1},
+        {translit_test_ret_site.rax_end, 0, target, target, 0},
+        {translit_test_ret_site.marker_end, 0, target, target, 0},
         {translit_jcc_ibtc_stub_entry, 1u << HL_X64_RAX, target, target, 0},
     };
     int saved_selected = translit_selected;
