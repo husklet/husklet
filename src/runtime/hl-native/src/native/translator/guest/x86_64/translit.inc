@@ -598,6 +598,13 @@ static translit_sampling_record *translit_sampling_records;
 static uint32_t translit_sampling_record_count;
 static int translit_sampling_overflow;
 static void translit_sampling_flush(void);
+typedef struct translit_profile_generation {
+    pid_t pid;
+    uint64_t generation;
+    const uint8_t *rw, *rx;
+    uint64_t size;
+} translit_profile_generation;
+static translit_profile_generation translit_profile_active;
 static void translit_sampling_receipt(const char *stage) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (hl_option_get("HL_TRANSLIT_SYMBOL_RECEIPT") != NULL)
@@ -609,13 +616,6 @@ static void translit_sampling_receipt(const char *stage) {
     (void)stage;
 #endif
 }
-typedef struct translit_profile_generation {
-    pid_t pid;
-    uint64_t generation;
-    const uint8_t *rw, *rx;
-    uint64_t size;
-} translit_profile_generation;
-static translit_profile_generation translit_profile_active;
 typedef struct translit_profile_named_range {
     pid_t pid;
     const uint8_t *start, *end;
