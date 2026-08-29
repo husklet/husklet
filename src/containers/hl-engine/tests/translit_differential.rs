@@ -1343,10 +1343,9 @@ fn run_with_perf_map(
     options
         .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
         .unwrap();
+    options.set("HL_TRANSLIT_SYMBOLIZE", "1", true).unwrap();
     if force_fresh_rollover {
-        options
-            .set("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST", "1", true)
-            .unwrap();
+        options.set("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST", "1", true).unwrap();
     }
     if force_two_rotations {
         options.set("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST", "1", true).unwrap();
@@ -1480,7 +1479,10 @@ fn forked_translators_publish_process_owned_perf_files() {
                     .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
                     .collect::<Vec<_>>();
                 let rx = names[0].split("-rx").nth(1).unwrap();
-                assert!(names.iter().all(|name| name.ends_with(rx)), "in-place generations changed RX: {names:?}");
+                assert!(
+                    names.iter().all(|name| name.ends_with(rx)),
+                    "in-place generations changed RX: {names:?}"
+                );
             }
             let mut all = String::new();
             for map in process_maps {
@@ -1555,7 +1557,11 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         })
         .collect::<Vec<_>>();
     child_maps.sort();
-    assert!(child_maps.len() >= 2, "child={child} maps={child_maps:?}\n{output}\n{}", backend.line);
+    assert!(
+        child_maps.len() >= 2,
+        "child={child} maps={child_maps:?}\n{output}\n{}",
+        backend.line
+    );
     let identities = child_maps
         .iter()
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
@@ -1565,14 +1571,22 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         let text = std::fs::read_to_string(map).unwrap();
         assert!(text.contains(" hl_tl_helper_jcc_ibtc"), "{}:\n{text}", map.display());
         assert!(
-            text.lines().any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
+            text.lines()
+                .any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
             "{}:\n{text}",
             map.display()
         );
     }
     let rx = child_maps
         .iter()
-        .filter_map(|path| path.file_name().unwrap().to_string_lossy().split("-rx").nth(1).map(str::to_owned))
+        .filter_map(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .split("-rx")
+                .nth(1)
+                .map(str::to_owned)
+        })
         .collect::<std::collections::BTreeSet<_>>();
     assert!(rx.len() >= 2, "exec retained only stale RX identity: {child_maps:?}");
     let generations = child_maps
@@ -1596,7 +1610,9 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     assert!(
-        all_names.iter().any(|name| name.starts_with("perf-") && name.contains("-g0-rx")),
+        all_names
+            .iter()
+            .any(|name| name.starts_with("perf-") && name.contains("-g0-rx")),
         "launch generation g0 was not published before the child g1/g2 rollover: {all_names:?}"
     );
 }
@@ -2241,12 +2257,19 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
 fn ret_stack_faults_preserve_architecture_before_commit() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "ret_stack_fault");
-    for arguments in [&[][..], &[b"2".as_slice()][..], &[b"3".as_slice(), b"u".as_slice()][..],
-                      &[b"2".as_slice(), b"u".as_slice()][..]] {
+    for arguments in [
+        &[][..],
+        &[b"2".as_slice()][..],
+        &[b"3".as_slice(), b"u".as_slice()][..],
+        &[b"2".as_slice(), b"u".as_slice()][..],
+    ] {
         let (selected, status, _) = run_with_arguments(&executable, "1", arguments, true, false, false, false);
         assert_eq!(status, 0, "{}", String::from_utf8_lossy(&selected));
-        assert!(selected.ends_with(b"faults=1 rip=1 rsp=1 regs=1 flags=1\n"),
-                "{}", String::from_utf8_lossy(&selected));
+        assert!(
+            selected.ends_with(b"faults=1 rip=1 rsp=1 regs=1 flags=1\n"),
+            "{}",
+            String::from_utf8_lossy(&selected)
+        );
     }
 }
 
@@ -2460,6 +2483,7 @@ fn captured_cc1_profile(root: &Path, argv_path: &Path, selected: &str, perf_map:
     options.set("HL_TRANSLIT", selected, true).unwrap();
     options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     if let Some(directory) = perf_map {
+        options.set("HL_TRANSLIT_SYMBOLIZE", "1", true).unwrap();
         options
             .set_bytes("HL_TRANSLIT_PERF_MAP", directory.as_os_str().as_encoded_bytes(), true)
             .expect("HL_TRANSLIT_PERF_MAP");
@@ -2519,23 +2543,51 @@ fn canonical_cc1_profile_hands_off_caller_owned_perf_map_directory() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert_eq!(files.len(), 4, "two RX generations must each publish a map and jitdump: {files:?}");
+    assert_eq!(
+        files.len(),
+        4,
+        "two RX generations must each publish a map and jitdump: {files:?}"
+    );
     for prefix in ["perf-", "jit-"] {
         let selected = files
             .iter()
             .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(prefix))
             .collect::<Vec<_>>();
-        assert_eq!(selected.len(), 2, "missing generation-owned {prefix} files in {files:?}");
+        assert_eq!(
+            selected.len(),
+            2,
+            "missing generation-owned {prefix} files in {files:?}"
+        );
         for file in selected {
-            assert!(std::fs::metadata(file).unwrap().len() > 0, "{} is empty", file.display());
+            assert!(
+                std::fs::metadata(file).unwrap().len() > 0,
+                "{} is empty",
+                file.display()
+            );
             if prefix == "perf-" {
                 let text = std::fs::read_to_string(file).unwrap();
-                assert_eq!(text.lines().filter(|line| line.ends_with(" hl_tl_helper_jcc_ibtc")).count(), 1,
-                           "{}:\n{text}", file.display());
-                assert_eq!(text.lines().filter(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc")).count(), 1,
-                           "{}:\n{text}", file.display());
-                assert!(text.lines().any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
-                        "ordinary block absent from {}:\n{text}", file.display());
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.ends_with(" hl_tl_helper_jcc_ibtc"))
+                        .count(),
+                    1,
+                    "{}:\n{text}",
+                    file.display()
+                );
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc"))
+                        .count(),
+                    1,
+                    "{}:\n{text}",
+                    file.display()
+                );
+                assert!(
+                    text.lines()
+                        .any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
+                    "ordinary block absent from {}:\n{text}",
+                    file.display()
+                );
             }
         }
     }

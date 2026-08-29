@@ -117,6 +117,8 @@ static const hl_option_definition hl_option_definitions[] = {
        an unrelated launch still starts from an explicit, empty option store. */
     HL_INTERNAL_OPTION("HL_TRANSLIT_PERF_MAP",
                        "test-only directory for same-ISA perf map publication", HL_OPTION_PATH),
+    HL_INTERNAL_OPTION("HL_TRANSLIT_SYMBOLIZE",
+                       "publish same-ISA perf symbols without enabling execution diagnostics", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",

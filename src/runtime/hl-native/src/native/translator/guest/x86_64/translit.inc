@@ -695,7 +695,8 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
 
 static void translit_perf_map_publish_named(const char *name, const uint8_t *start, uint32_t host_len) {
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
-    if (!g_prof || directory == NULL || directory[0] == '\0' || host_len == 0) return;
+    const int symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
+    if ((!g_prof && !symbolize) || directory == NULL || directory[0] == '\0' || host_len == 0) return;
     /* Guest exec and the threaded fresh-arena path can replace the arena between
        publications.  Bind the lifecycle identity before validating or naming the
        first record in that arena; otherwise a same-pid child keeps writing (or,

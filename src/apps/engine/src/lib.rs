@@ -503,6 +503,9 @@ fn rootfs_plan(
     #[cfg(feature = "native-test-hooks")]
     if let Some(path) = &launch.translit_perf_map {
         options
+            .set("HL_TRANSLIT_SYMBOLIZE", "1", false)
+            .map_err(|error| Failure::Request(format!("cannot set sampling symbolization: {error:?}")))?;
+        options
             .set("HL_TRANSLIT_PERF_MAP", &path.to_string_lossy(), false)
             .map_err(|error| Failure::Request(format!("cannot set --translit-perf-map: {error:?}")))?;
     }
@@ -1150,6 +1153,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.options.get("HL_TRANSLIT_PERF_MAP"), maps.path().to_str());
+        assert_eq!(plan.options.get("HL_TRANSLIT_SYMBOLIZE"), Some("1"));
         assert_eq!(plan.options.get("HL_TRANSLIT_FS_AUTHORITY_TEST"), None);
         assert!(
             plan.environment

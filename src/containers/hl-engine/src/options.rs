@@ -186,6 +186,11 @@ const DEFINITIONS: &[Definition] = &[
         Path
     ),
     internal!(
+        "HL_TRANSLIT_SYMBOLIZE",
+        "publish same-ISA perf symbols without enabling execution diagnostics",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",
         Flag
@@ -578,6 +583,8 @@ mod tests {
             "guest exec must retain the caller-owned profiler directory"
         );
         assert!(!C_REGISTRY.contains("HL_INJECTION_OPTION(\"HL_TRANSLIT_PERF_MAP\""));
+        assert!(C_REGISTRY.contains("HL_INTERNAL_OPTION(\"HL_TRANSLIT_SYMBOLIZE\""));
+        assert!(!C_REGISTRY.contains("HL_INJECTION_OPTION(\"HL_TRANSLIT_SYMBOLIZE\""));
     }
 
     #[test]
