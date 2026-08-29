@@ -77,8 +77,13 @@ pub(crate) fn digest(stderr: &[u8]) -> String {
         .filter_map(|name| counters.get(name).map(|value| format!("{name}={value}")))
         .collect();
     let tree = super::super::output::backend_tree_digest(stderr);
+    let forms = super::super::output::executed_form_digest(stderr);
     if fields.is_empty() {
-        return tree;
+        return [tree, forms]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ");
     }
     fields.extend(histograms(stderr));
     let backend = if String::from_utf8_lossy(stderr).lines().any(|line| {
@@ -90,11 +95,11 @@ pub(crate) fn digest(stderr: &[u8]) -> String {
         "native"
     };
     let local = format!("{backend} {}", fields.join(" "));
-    if tree.is_empty() {
-        local
-    } else {
-        format!("{local}; {tree}")
-    }
+    [local, tree, forms]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Collapses the per-pc lines into one field each, hottest first.

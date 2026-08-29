@@ -27,6 +27,55 @@ const BACKEND_SHAPE_PRODUCT_FIELDS: &[&str] = &[
     "direct_jmp_ibtc_suppressed",
     "direct_jmp_ibtc_invalid_refusals",
 ];
+const BACKEND_SHAPE_PRODUCT_V6_EXTRA: &[&str] = &[
+    "crossings",
+    "translated_entries",
+    "interpreted_entries",
+    "translated_steps",
+    "interpreted_steps",
+    "direct_call_ibtc_emitted",
+    "direct_call_ibtc_hits",
+    "direct_call_ibtc_misses",
+    "direct_call_ibtc_irq",
+    "direct_call_ibtc_fills",
+    "direct_call_ibtc_invalid_refusals",
+    "ret_ibtc_attempts",
+    "ret_ibtc_hits",
+    "ret_ibtc_key_misses",
+    "ret_ibtc_null_misses",
+    "ret_ibtc_irq",
+    "ret_ibtc_fills",
+    "ret_ibtc_collisions",
+    "ret_ibtc_unmapped",
+    "ret_ibtc_invalid_refusals",
+    "ret_fast_ibtc_hits",
+    "ret_fast_ibtc_misses",
+    "ret_fast_ibtc_irq",
+    "ret_fast_ibtc_fills",
+    "ret_fast_ibtc_invalid_refusals",
+    "executed_form_total",
+    "executed_form_unique",
+    "executed_form_overflow",
+];
+
+fn backend_shape_product_field(name: &str, schema6: bool) -> bool {
+    if BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
+        return true;
+    }
+    if !schema6 {
+        return false;
+    }
+    if BACKEND_SHAPE_PRODUCT_V6_EXTRA.contains(&name) {
+        return true;
+    }
+    let Some(suffix) = name.strip_prefix("executed_form") else {
+        return false;
+    };
+    let Some((rank, kind)) = suffix.split_once('_') else {
+        return false;
+    };
+    rank.parse::<u8>().is_ok_and(|rank| rank < 16) && matches!(kind, "key" | "count")
+}
 const BACKEND_TREE_FIELDS: [&str; 33] = [
     "version",
     "root_pid",
@@ -556,12 +605,13 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
         )
         .into());
     }
+    let schema6 = records[0].split_whitespace().any(|field| field == "version=6");
     let mut fields = BTreeMap::new();
     for field in records[0].split_whitespace() {
         let Some((name, value)) = field.split_once('=') else {
             return Err(format!("backend-shape product diagnostic has malformed field {field:?}").into());
         };
-        if !BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
+        if !backend_shape_product_field(name, schema6) {
             return Err(format!("backend-shape product diagnostic has unknown field {name:?}").into());
         }
         let value = value
@@ -576,7 +626,22 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
         }
     }
-    if fields["version"] != 4 {
+    if schema6 {
+        for name in BACKEND_SHAPE_PRODUCT_V6_EXTRA {
+            if !fields.contains_key(name) {
+                return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+            }
+        }
+        for rank in 0..16 {
+            for kind in ["key", "count"] {
+                let name = format!("executed_form{rank}_{kind}");
+                if !fields.contains_key(name.as_str()) {
+                    return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+                }
+            }
+        }
+    }
+    if fields["version"] != 4 && fields["version"] != 6 {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
     if fields["available"] != 1 {
@@ -657,6 +722,31 @@ pub(crate) fn backend_tree_digest(stderr: &[u8]) -> String {
         fields["translated_steps"],
         fields["interpreted_steps"]
     )
+}
+
+/// Durable copy of the backend-owned executed-form census. Keep the packed keys intact: the runner is
+/// transport, while decoding and ranking belong to the offline census consumer.
+pub(crate) fn executed_form_digest(stderr: &[u8]) -> String {
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return String::new();
+    };
+    let Some(record) = text.lines().find_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX)) else {
+        return String::new();
+    };
+    let fields = record
+        .split_whitespace()
+        .filter(|field| {
+            field.starts_with("executed_form_total=")
+                || field.starts_with("executed_form_unique=")
+                || field.starts_with("executed_form_overflow=")
+                || (field.starts_with("executed_form") && (field.contains("_key=") || field.contains("_count=")))
+        })
+        .collect::<Vec<_>>();
+    if fields.is_empty() {
+        String::new()
+    } else {
+        format!("executed-forms {}", fields.join(" "))
+    }
 }
 
 pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::Result<()> {
@@ -824,6 +914,18 @@ mod tests {
                 .contains("expected 0")
         );
         assert!(validate_backend_tree(format!("{TREE}{PRODUCT_SHAPE_ON}").as_bytes(), true).is_err());
+    }
+
+    #[test]
+    fn executed_form_census_is_exported_as_packed_backend_record() {
+        let record = "noise\n[diag] backend-shape version=6 available=1 executed_form_total=9 \
+                      executed_form_unique=2 executed_form_overflow=0 executed_form0_key=17 \
+                      executed_form0_count=7 executed_form1_key=23 executed_form1_count=2\n";
+        assert_eq!(
+            executed_form_digest(record.as_bytes()),
+            "executed-forms executed_form_total=9 executed_form_unique=2 executed_form_overflow=0 \
+             executed_form0_key=17 executed_form0_count=7 executed_form1_key=23 executed_form1_count=2"
+        );
     }
 
     #[test]

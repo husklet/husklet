@@ -176,3 +176,32 @@ fn executed_family_hooks_follow_interpreter_and_dispatcher_commit_boundaries() {
         );
     }
 }
+
+#[test]
+fn product_executed_form_writers_remain_inside_the_existing_diagnostics_gate() {
+    let source = include_str!("../src/native/translator/guest/x86_64/interp.c");
+    let execute = source
+        .split_once("static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n// run_block"))
+        .map(|(body, _)| body)
+        .expect("interp_execute body");
+    let committed = execute
+        .split_once("if (census_steps && step != STEP_END) {")
+        .and_then(|(_, tail)| tail.split_once("\n        }"))
+        .map(|(body, _)| body)
+        .expect("committed STEP_NEXT diagnostics branch");
+    assert!(committed.contains("hl_backend_tree_executed_form(translit_unsupported_key(&insn))"));
+    let terminal = execute
+        .split_once("if (step == STEP_END) {")
+        .map(|(_, body)| body)
+        .expect("STEP_END branch");
+    assert!(terminal.contains("if (census_steps && cpu->irq == 0)"));
+
+    let backend = include_str!("../src/native/engine/backend_tree.c");
+    let writer = backend
+        .split_once("static inline void hl_backend_tree_executed_form(uint64_t key) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void hl_backend_executed_form_top"))
+        .map(|(body, _)| body)
+        .expect("product executed-form writer");
+    assert!(writer.contains("if (census == NULL || g_backend_mixed_sse_self == NULL) return;"));
+}

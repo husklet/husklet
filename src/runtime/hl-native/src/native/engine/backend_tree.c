@@ -1510,6 +1510,14 @@ enum hl_backend_mixed_sse_lifecycle {
 };
 
 #define HL_BACKEND_MIXED_SSE_SLOTS 4096u
+#define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
+#define HL_BACKEND_EXECUTED_FORM_TOP 16u
+
+struct hl_backend_executed_form {
+    _Atomic uint32_t state;
+    uint64_t key;
+    _Atomic uint64_t count;
+};
 
 struct hl_backend_tree_slot {
     _Atomic int pid;
@@ -1529,6 +1537,10 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t interpreted_entries;
     _Atomic uint64_t translated_steps;
     _Atomic uint64_t interpreted_steps;
+    _Atomic uint64_t executed_form_total;
+    _Atomic uint64_t executed_form_unique;
+    _Atomic uint64_t executed_form_overflow;
+    struct hl_backend_executed_form executed_forms[HL_BACKEND_EXECUTED_FORM_SLOTS];
     _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
@@ -1592,6 +1604,73 @@ _Static_assert(sizeof(struct hl_backend_tree_slot) == 24,
 
 static struct hl_backend_mixed_sse_shared *g_backend_mixed_sse;
 static struct hl_backend_tree_slot *g_backend_mixed_sse_self;
+
+static uint64_t hl_backend_executed_form_mix(uint64_t value) {
+    value ^= value >> 33;
+    value *= UINT64_C(0xff51afd7ed558ccd);
+    value ^= value >> 33;
+    value *= UINT64_C(0xc4ceb9fe1a85ec53);
+    return value ^ (value >> 33);
+}
+
+static inline void hl_backend_tree_executed_form(uint64_t key) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL || g_backend_mixed_sse_self == NULL) return;
+    atomic_fetch_add_explicit(&census->executed_form_total, 1, memory_order_relaxed);
+    unsigned start = (unsigned)hl_backend_executed_form_mix(key) & (HL_BACKEND_EXECUTED_FORM_SLOTS - 1u);
+    for (unsigned probe = 0; probe < HL_BACKEND_EXECUTED_FORM_SLOTS; ++probe) {
+        struct hl_backend_executed_form *form =
+            &census->executed_forms[(start + probe) & (HL_BACKEND_EXECUTED_FORM_SLOTS - 1u)];
+        uint32_t state = atomic_load_explicit(&form->state, memory_order_acquire);
+        if (state == 1) {
+            atomic_fetch_add_explicit(&census->executed_form_overflow, 1, memory_order_relaxed);
+            return;
+        }
+        if (state == 2 && form->key == key) {
+            atomic_fetch_add_explicit(&form->count, 1, memory_order_relaxed);
+            return;
+        }
+        if (state != 0) continue;
+        uint32_t expected = 0;
+        if (!atomic_compare_exchange_strong_explicit(&form->state, &expected, 1, memory_order_acquire,
+                                                     memory_order_relaxed)) {
+            if (expected == 1)
+                atomic_fetch_add_explicit(&census->executed_form_overflow, 1, memory_order_relaxed);
+            else
+                --probe;
+            if (expected == 1) return;
+            continue;
+        }
+        form->key = key;
+        atomic_store_explicit(&form->count, 1, memory_order_relaxed);
+        atomic_store_explicit(&form->state, 2, memory_order_release);
+        atomic_fetch_add_explicit(&census->executed_form_unique, 1, memory_order_relaxed);
+        return;
+    }
+    atomic_fetch_add_explicit(&census->executed_form_overflow, 1, memory_order_relaxed);
+}
+
+static void hl_backend_executed_form_top(struct hl_backend_mixed_sse_shared *census,
+                                         uint64_t keys[HL_BACKEND_EXECUTED_FORM_TOP],
+                                         uint64_t counts[HL_BACKEND_EXECUTED_FORM_TOP]) {
+    for (unsigned slot = 0; slot < HL_BACKEND_EXECUTED_FORM_SLOTS; ++slot) {
+        struct hl_backend_executed_form *form = &census->executed_forms[slot];
+        if (atomic_load_explicit(&form->state, memory_order_acquire) != 2) continue;
+        uint64_t key = form->key;
+        uint64_t count = atomic_load_explicit(&form->count, memory_order_relaxed);
+        unsigned rank = 0;
+        while (rank < HL_BACKEND_EXECUTED_FORM_TOP &&
+               (counts[rank] > count || (counts[rank] == count && keys[rank] <= key)))
+            ++rank;
+        if (rank == HL_BACKEND_EXECUTED_FORM_TOP) continue;
+        for (unsigned move = HL_BACKEND_EXECUTED_FORM_TOP - 1; move > rank; --move) {
+            keys[move] = keys[move - 1];
+            counts[move] = counts[move - 1];
+        }
+        keys[rank] = key;
+        counts[rank] = count;
+    }
+}
 
 static struct hl_backend_tree_slot *hl_backend_mixed_sse_reserve(void) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
@@ -1748,9 +1827,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    char record[2048];
+    char record[4096];
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=5 available=%d crossings=%llu "
+                             "[diag] backend-shape version=6 available=%d crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
                              "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
@@ -1858,6 +1937,32 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_invalid_refusals,
                                                                      memory_order_relaxed));
     if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    --formatted;
+    uint64_t form_keys[HL_BACKEND_EXECUTED_FORM_TOP] = {0};
+    uint64_t form_counts[HL_BACKEND_EXECUTED_FORM_TOP] = {0};
+    hl_backend_executed_form_top(census, form_keys, form_counts);
+    {
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                             " executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu",
+                             (unsigned long long)atomic_load_explicit(&census->executed_form_total,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->executed_form_unique,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->executed_form_overflow,
+                                                                     memory_order_relaxed));
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        formatted += added;
+    }
+    for (unsigned rank = 0; rank < HL_BACKEND_EXECUTED_FORM_TOP; ++rank) {
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                             " executed_form%u_key=%llu executed_form%u_count=%llu", rank,
+                             (unsigned long long)form_keys[rank], rank,
+                             (unsigned long long)form_counts[rank]);
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        formatted += added;
+    }
+    if ((size_t)formatted + 1 >= sizeof record) return;
+    record[formatted++] = '\n';
     for (unsigned reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason) {
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r%u=%llu", reason,
                              (unsigned long long)atomic_load_explicit(&census->reason[reason],

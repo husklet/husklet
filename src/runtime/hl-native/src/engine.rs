@@ -942,16 +942,25 @@ mod tests {
     }
 
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
-    fn run_product_jcc_ibtc_diagnostic(disabled: bool) -> std::collections::BTreeMap<String, u64> {
+    fn product_jcc_ibtc_image() -> Vec<u8> {
         let mut bytes = image();
         put16(&mut bytes, 18, 0x3e);
         // The first execution misses because the taken target is not published. The target
         // returns to the already-published source once, so ON subsequently hits while OFF
         // consumes and suppresses a second miss. Both arms execute identical probe bytes.
         bytes[0x100..0x106].copy_from_slice(&[0x31, 0xc0, 0x74, 0x0c, 0x0f, 0x0b]);
-        bytes[0x110..0x120].copy_from_slice(&[
-            0xff, 0xc1, 0x83, 0xf9, 0x02, 0x7c, 0xe9, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
+        bytes[0x110..0x122].copy_from_slice(&[
+            0xff, 0xc1, 0x83, 0xf9, 0x02, 0x7c, 0xe9, 0x0f, 0xa2, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
         ]);
+        bytes
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    fn run_product_diagnostic(
+        bytes: Vec<u8>,
+        disabled: bool,
+        translit: bool,
+    ) -> std::collections::BTreeMap<String, u64> {
         let mut executable = tempfile::tempfile().unwrap();
         executable.write_all(&bytes).unwrap();
         executable.seek(SeekFrom::Start(0)).unwrap();
@@ -965,12 +974,18 @@ mod tests {
             CString::new("HL_TRANSLIT_JCC_IBTC_DISABLE").unwrap(),
         ];
         let one = CString::new("1").unwrap();
+        let zero = CString::new("0").unwrap();
         let pcache_path = CString::new(pcache.path().to_str().unwrap()).unwrap();
         let option_names = names[..if disabled { 5 } else { 4 }]
             .iter()
             .map(|name| name.as_ptr())
             .collect::<Vec<_>>();
-        let mut option_values = vec![one.as_ptr(), one.as_ptr(), one.as_ptr(), pcache_path.as_ptr()];
+        let mut option_values = vec![
+            if translit { one.as_ptr() } else { zero.as_ptr() },
+            one.as_ptr(),
+            one.as_ptr(),
+            pcache_path.as_ptr(),
+        ];
         if disabled {
             option_values.push(one.as_ptr());
         }
@@ -1004,7 +1019,7 @@ mod tests {
             .filter_map(|line| line.strip_prefix("[diag] backend-shape "))
             .collect::<Vec<_>>();
         assert_eq!(records.len(), 1, "unexpected diagnostic output: {stderr}");
-        let expected = [
+        let mut expected = vec![
             "version",
             "available",
             "crossings",
@@ -1051,7 +1066,14 @@ mod tests {
             "ret_fast_ibtc_irq",
             "ret_fast_ibtc_fills",
             "ret_fast_ibtc_invalid_refusals",
+            "executed_form_total",
+            "executed_form_unique",
+            "executed_form_overflow",
         ];
+        for rank in 0..16 {
+            expected.push(Box::leak(format!("executed_form{rank}_key").into_boxed_str()));
+            expected.push(Box::leak(format!("executed_form{rank}_count").into_boxed_str()));
+        }
         let mut fields = std::collections::BTreeMap::new();
         for token in records[0].split_whitespace() {
             let (name, value) = token.split_once('=').expect("well-formed diagnostic token");
@@ -1062,8 +1084,8 @@ mod tests {
                 "duplicate {name}: {stderr}"
             );
         }
-        for name in expected {
-            assert!(fields.contains_key(name), "missing {name}: {stderr}");
+        for name in &expected {
+            assert!(fields.contains_key(*name), "missing {name}: {stderr}");
         }
         assert_eq!(fields.len(), expected.len());
         fields
@@ -1072,8 +1094,8 @@ mod tests {
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
-        let on = run_product_jcc_ibtc_diagnostic(false);
-        assert_eq!(on["version"], 5);
+        let on = run_product_diagnostic(product_jcc_ibtc_image(), false, true);
+        assert_eq!(on["version"], 6);
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
@@ -1083,9 +1105,13 @@ mod tests {
         assert_eq!(on["jcc_ibtc_fills"], 1);
         assert_eq!(on["jcc_ibtc_suppressed"], 0);
         assert_eq!(on["jcc_ibtc_invalid_refusals"], 0);
+        assert_eq!(on["executed_form_overflow"], 0);
+        assert!(on["executed_form_total"] > 0);
+        assert!(on["executed_form_unique"] > 0);
+        assert!(on["executed_form_total"] >= on["executed_form_unique"]);
 
-        let off = run_product_jcc_ibtc_diagnostic(true);
-        assert_eq!(off["version"], 5);
+        let off = run_product_diagnostic(product_jcc_ibtc_image(), true, true);
+        assert_eq!(off["version"], 6);
         assert_eq!(off["available"], 1);
         assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
         assert_eq!(off["jcc_ibtc_emitted"], 1);
@@ -1095,6 +1121,176 @@ mod tests {
         assert_eq!(off["jcc_ibtc_fills"], 0);
         assert_eq!(off["jcc_ibtc_suppressed"], 2);
         assert_eq!(off["jcc_ibtc_invalid_refusals"], 0);
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_nohooks_executed_forms_aggregate_across_guest_fork() {
+        let mut bytes = image();
+        put16(&mut bytes, 18, 0x3e);
+        bytes[0x100..0x126].copy_from_slice(&[
+            0xb8, 0x39, 0, 0, 0, 0x0f, 0x05, 0x85, 0xc0, 0x74, 0x10, 0x89, 0xc7, 0x31, 0xf6, 0x31, 0xd2, 0x45, 0x31,
+            0xd2, 0xb8, 0x3d, 0, 0, 0, 0x0f, 0x05, 0x0f, 0xa2, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
+        ]);
+        let fields = run_product_diagnostic(bytes, false, true);
+        assert_eq!(fields["available"], 1);
+        assert_eq!(fields["executed_form_overflow"], 0);
+        assert!(fields["executed_form_total"] >= 2, "{fields:?}");
+        assert!(fields["executed_form_unique"] >= 1, "{fields:?}");
+        assert_eq!(fields["executed_form0_count"], 2, "{fields:?}");
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_nohooks_deferred_fault_does_not_publish_executed_form() {
+        let mut bytes = image();
+        put16(&mut bytes, 18, 0x3e);
+        bytes[0x100..0x134].copy_from_slice(&[
+            0xb8, 0x39, 0, 0, 0, 0x0f, 0x05, 0x85, 0xc0, 0x74, 0x1b, 0x89, 0xc7, 0x31, 0xf6, 0x31, 0xd2, 0x45, 0x31,
+            0xd2, 0xb8, 0x3d, 0, 0, 0, 0x0f, 0x05, 0x0f, 0xa2, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05, 0x31, 0xc0,
+            0x0f, 0xae, 0x00, 0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05,
+        ]);
+        let fields = run_product_diagnostic(bytes, false, true);
+        assert_eq!(fields["executed_form_total"], 1, "{fields:?}");
+        assert_eq!(fields["executed_form_unique"], 1, "{fields:?}");
+        assert_eq!(fields["executed_form0_count"], 1, "{fields:?}");
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_nohooks_executed_form_table_probes_collisions_then_overflows() {
+        let mut bytes = image();
+        bytes.resize(0x1_0000, 0);
+        put16(&mut bytes, 18, 0x3e);
+        let image_size = bytes.len() as u64;
+        put64(&mut bytes, 96, image_size);
+        put64(&mut bytes, 104, image_size);
+        let mut cursor = 0x100;
+        for form in 0..4097_u32 {
+            if form & 1 != 0 {
+                bytes[cursor] = 0x66;
+                cursor += 1;
+            }
+            if form & 2 != 0 {
+                bytes[cursor] = 0xf3;
+                cursor += 1;
+            }
+            if form & 4 != 0 {
+                bytes[cursor] = 0xf2;
+                cursor += 1;
+            }
+            bytes[cursor] = 0x40 | ((form >> 3) & 15) as u8;
+            bytes[cursor + 1] = 0x0f;
+            bytes[cursor + 2] = 0x1f;
+            bytes[cursor + 3] = 0xc0 | ((form >> 7) & 63) as u8;
+            cursor += 4;
+        }
+        bytes[cursor..cursor + 9].copy_from_slice(&[0xb8, 0x3c, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05]);
+        let fields = run_product_diagnostic(bytes, false, false);
+        assert_eq!(fields["executed_form_total"], 4100, "{fields:?}");
+        assert_eq!(fields["executed_form_unique"], 4096, "{fields:?}");
+        assert_eq!(fields["executed_form_overflow"], 4, "{fields:?}");
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_nohooks_async_irq_excludes_staged_rep_completion() {
+        const SOURCE: &str = r#"
+.global _start
+.text
+_start:
+    lea action(%rip), %rsi
+    mov $10, %edi
+    xor %edx, %edx
+    mov $8, %r10d
+    mov $13, %eax
+    syscall
+    mov $39, %eax
+    syscall
+    mov %rax, %r12
+    mov $57, %eax
+    syscall
+    test %eax, %eax
+    jz child
+    mov %eax, %r13d
+    lea left(%rip), %rsi
+    lea right(%rip), %rdi
+    mov $134217728, %ecx
+    cld
+    repe cmpsb
+    mov %r13d, %edi
+    xor %esi, %esi
+    xor %edx, %edx
+    xor %r10d, %r10d
+    mov $61, %eax
+    syscall
+    xor %eax, %eax
+    cpuid
+    mov $60, %eax
+    xor %edi, %edi
+    syscall
+child:
+    lea delay(%rip), %rdi
+    xor %esi, %esi
+    mov $35, %eax
+    syscall
+    mov %r12d, %edi
+    mov $SIGNAL, %esi
+    mov $62, %eax
+    syscall
+    mov $60, %eax
+    xor %edi, %edi
+    syscall
+handler:
+    ret
+restorer:
+    mov $15, %eax
+    syscall
+.data
+.align 8
+action:
+    .quad handler
+    .quad 0x04000000
+    .quad restorer
+    .quad 0
+delay:
+    .quad 0
+    .quad 1000000
+.bss
+.align 16
+left: .skip 134217728
+right: .skip 134217728
+"#;
+        if !guest_compiler_present(
+            "x86_64-linux-gnu-gcc",
+            "production_nohooks_async_irq_excludes_staged_rep_completion",
+            2,
+        ) {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("irq.S");
+        std::fs::write(&source, SOURCE).unwrap();
+        let run = |signal: u8| {
+            let output = root.path().join(format!("irq-{signal}"));
+            let compile = guest_compiler("x86_64-linux-gnu-gcc")
+                .args(["-static", "-nostdlib", "-no-pie"])
+                .arg(format!("-DSIGNAL={signal}"))
+                .arg(&source)
+                .arg("-o")
+                .arg(&output)
+                .output()
+                .unwrap();
+            assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+            run_product_diagnostic(std::fs::read(output).unwrap(), false, false)
+        };
+        let control = run(0);
+        let interrupted = run(10);
+        assert_eq!(
+            control["executed_form_total"],
+            interrupted["executed_form_total"] + 1,
+            "control={control:?} interrupted={interrupted:?}"
+        );
     }
 
     fn x86_tcsetsf_image(termios: &[u8; 36]) -> Vec<u8> {

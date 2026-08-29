@@ -792,7 +792,6 @@ static int translit_classify(const struct insn *insn) {
     return TL_NO;
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
 static unsigned translit_unsupported_width(const struct insn *insn) {
     return insn->opsize == 1 ? 0u : insn->opsize == 2 ? 1u : insn->opsize == 4 ? 2u : insn->opsize == 8 ? 3u : 4u;
 }
@@ -815,6 +814,7 @@ static uint64_t translit_unsupported_key(const struct insn *insn) {
            (uint64_t)(insn->evex_z != 0) << 58 | (uint64_t)(insn->evex_b != 0) << 59;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_unsupported_mix(uint64_t value) {
     value ^= value >> 33;
     value *= UINT64_C(0xff51afd7ed558ccd);

@@ -106,17 +106,19 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
        emulated #UD) that the arms below have to see. rip = the insn; the callee advances it. */                       \
     if ((c)->reason == R_AVX) {                                                                                        \
         hl_x86_avx_run(&g_avx_state, (c));                                                                             \
-        if ((c)->reason == R_AVX) continue;                                                                            \
+        if ((c)->reason == R_AVX) { interp_executed_form_complete(c, R_AVX); continue; }                               \
     }                                                                                                                  \
     if ((c)->reason == R_SSE3B) {                                                                                      \
         hl_x86_sse_run(&g_avx_state, (c));                                                                             \
-        if ((c)->reason == R_SSE3B) continue;                                                                          \
+        if ((c)->reason == R_SSE3B) { interp_executed_form_complete(c, R_SSE3B); continue; }                           \
     }                                                                                                                  \
     if ((c)->reason == R_SOFTMISS) {                                                                                   \
+        interp_executed_form_cancel();                                                                                 \
         if (soft_tlb_miss(c)) maybe_deliver_signal(c);                                                                 \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_SOFTSPAN) { /* retry the restartable string op */                                             \
+        interp_executed_form_cancel();                                                                                 \
         (c)->reason = R_BRANCH;                                                                                        \
         continue;                                                                                                      \
     }                                                                                                                  \
@@ -126,38 +128,47 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     }                                                                                                                  \
     if ((c)->reason == R_CPUID) {                                                                                      \
         hl_x86_cpuid(c);                                                                                               \
+        interp_executed_form_complete(c, R_CPUID);                                                                     \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_REPSTR) { /* rep cmps/scas */                                                                 \
         hl_x86_rep_compare(c, g_nonpie_lo, g_nonpie_hi, g_nonpie_bias);                                                \
+        interp_executed_form_complete(c, R_REPSTR);                                                                    \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_X87FLD) {                                                                                     \
         hl_x86_x87_load_ext80(c);                                                                                      \
+        interp_executed_form_complete(c, R_X87FLD);                                                                    \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_X87FSTP) {                                                                                    \
         hl_x86_x87_store_ext80_pop(c);                                                                                 \
+        interp_executed_form_complete(c, R_X87FSTP);                                                                   \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_X87FUNC) {                                                                                    \
         hl_x86_x87_math(c);                                                                                            \
+        interp_executed_form_complete(c, R_X87FUNC);                                                                   \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_RCL) { /* RCL/RCR by CL */                                                                    \
         hl_x86_rotate_carry(c);                                                                                        \
+        interp_executed_form_complete(c, R_RCL);                                                                       \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_CMPXCHG16) {                                                                                  \
         hl_x86_cmpxchg16(c);                                                                                           \
+        interp_executed_form_complete(c, R_CMPXCHG16);                                                                 \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_FXSAVE) { /* x87-register DATA + FSW tail */                                                  \
         hl_x86_fxsave(c);                                                                                              \
+        interp_executed_form_complete(c, R_FXSAVE);                                                                    \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_FXRSTOR) { /* x87-register DATA + FSW tail */                                                 \
         hl_x86_fxrstor(c);                                                                                             \
+        interp_executed_form_complete(c, R_FXRSTOR);                                                                   \
         continue;                                                                                                      \
     }                                                                                                                  \
     /* #DE si_code is FPE_INTDIV(1) for a quotient overflow too -- Linux classifies the trap, not its                  \
@@ -177,6 +188,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
         (c)->r[RAX] = (uint64_t)(num / d);                                                                             \
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
         hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_UNSIGNED);                               \
+        interp_executed_form_complete(c, R_DIV);                                                                       \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_IDIV) { /* 128/64 signed idiv */                                                              \
@@ -201,9 +213,11 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
         (c)->r[RAX] = (uint64_t)(num / d);                                                                             \
         (c)->r[RDX] = (uint64_t)(num % d);                                                                             \
         hl_backend_tree_family_div_service64_completed(HL_BACKEND_FAMILY_DIV_SIGNED);                                 \
+        interp_executed_form_complete(c, R_IDIV);                                                                      \
         continue;                                                                                                      \
     }                                                                                                                  \
     if ((c)->reason == R_TRAP) { /* int3/UD2; cpu->divop = signo|code<<8 */                                            \
+        interp_executed_form_cancel();                                                                                 \
         if (raise_guest_trap(c)) {                                                                                     \
             maybe_deliver_signal(c);                                                                                   \
             continue;                                                                                                  \
@@ -213,6 +227,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
         break;                                                                                                         \
     }                                                                                                                  \
     if ((c)->reason == R_BUS) {                                                                                        \
+        interp_executed_form_cancel();                                                                                 \
         if (raise_guest_bus(c)) {                                                                                      \
             maybe_deliver_signal(c);                                                                                   \
             continue;                                                                                                  \
@@ -228,7 +243,10 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
         /* Publish emulated MAP_SHARED stores before a write/socket/futex syscall can notify a peer. */                \
         if ((c)->smc_range_count || (c)->smc_range_overflow) jit86_smc_commit(c);                                      \
         service(c);                                                                                                    \
-        if ((c)->exited) break;                                                                                        \
+        interp_executed_form_complete(c, R_SYSCALL);                                                                   \
+        if ((c)->exited) {                                                                                             \
+            break;                                                                                                     \
+        }                                                                                                              \
         /* And after: the syscall's own copyout (G_SMC_COPYOUT) may have written an executable alias. */               \
         if ((c)->smc_range_count || (c)->smc_range_overflow) jit86_smc_commit(c);                                      \
         if ((c)->redirect) (c)->redirect = 0; /* else rip already = next */                                            \

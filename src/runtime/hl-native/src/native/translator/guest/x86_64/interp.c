@@ -132,8 +132,30 @@ static __thread uint64_t g_dispatch_census_interp_steps;
 static __thread unsigned g_dispatch_census_interp_stop;
 #if !defined(HL_NATIVE_TEST_HOOKS)
 static __thread unsigned g_dispatch_census_open;
+static __thread uint64_t g_dispatch_census_pending_form;
+static __thread unsigned g_dispatch_census_pending_form_valid;
+static int signal_deliverable_for_cpu(const struct cpu *cpu);
+
+static inline void interp_executed_form_commit(void) {
+    if (!g_dispatch_census_pending_form_valid) return;
+    hl_backend_tree_executed_form(g_dispatch_census_pending_form);
+    g_dispatch_census_pending_form_valid = 0;
+}
+static inline void interp_executed_form_cancel(void) { g_dispatch_census_pending_form_valid = 0; }
+static inline void interp_executed_form_complete(struct cpu *cpu, unsigned successful_reason) {
+    if ((unsigned)cpu->reason != successful_reason || signal_deliverable_for_cpu(cpu) || cpu->irq != 0) {
+        g_dispatch_census_pending_form_valid = 0;
+        return;
+    }
+    interp_executed_form_commit();
+}
 #endif
 #if defined(HL_NATIVE_TEST_HOOKS)
+static inline void interp_executed_form_commit(void) {}
+static inline void interp_executed_form_cancel(void) {}
+static inline void interp_executed_form_complete(struct cpu *cpu, unsigned successful_reason) {
+    (void)cpu; (void)successful_reason;
+}
 static __thread unsigned g_backend_shape_open;
 static __thread unsigned g_backend_shape_interp_stop;
 static __thread uint64_t g_backend_shape_interp_stop_form;
@@ -571,6 +593,9 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         if (hl_x86_decode_context(context, pc, &insn) < 0) {
             // Fetch failed the executable-mapping check: a guest fault, not an engine crash.
             (void)interp_guest_trap(cpu, pc, 11, 2);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+            g_dispatch_census_pending_form_valid = 0;
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
             g_backend_shape_interp_stop = HL_BACKEND_SHAPE_S_FAULT;
             g_backend_shape_interp_stop_form = 0;
@@ -578,7 +603,12 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
             return;
         }
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
-        if (census_steps && step != STEP_END) g_dispatch_census_interp_steps++;
+        if (census_steps && step != STEP_END) {
+            g_dispatch_census_interp_steps++;
+#if !defined(HL_NATIVE_TEST_HOOKS)
+            hl_backend_tree_executed_form(translit_unsupported_key(&insn));
+#endif
+        }
 #if defined(HL_NATIVE_TEST_HOOKS)
         interp_backend_family_completed(cpu, &insn, step);
         // This is an execution census, not an admission/attempt census. STEP_END hands deferred work to
@@ -588,6 +618,12 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
         if (step == STEP_END) {
             if (census_steps)
                 g_dispatch_census_interp_stop = interp_backend_shape_stop(cpu, &insn, pc + (uint64_t)insn.len);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+            if (census_steps && cpu->irq == 0) {
+                g_dispatch_census_pending_form = translit_unsupported_key(&insn);
+                g_dispatch_census_pending_form_valid = 1;
+            }
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
             g_backend_shape_interp_stop = interp_backend_shape_stop(cpu, &insn, pc + (uint64_t)insn.len);
             g_backend_shape_interp_stop_form = translit_unsupported_key(&insn);
@@ -626,6 +662,9 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         // A guest access was abandoned; both routes already set cpu->reason and left cpu->rip on it.
         g_interp_guest_access = 0;
         interp_data_release_abandoned();
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        g_dispatch_census_pending_form_valid = 0;
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
         if (g_backend_shape_open == 1) {
             unsigned packed = cpu->backend_shape;
@@ -748,6 +787,9 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         g_backend_shape_open = 2;
 #endif
         interp_execute(context, cpu);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        if (cpu->reason == R_BRANCH) interp_executed_form_complete(cpu, R_BRANCH);
+#endif
         hl_backend_tree_interpreted_steps(g_dispatch_census_interp_steps);
 #if defined(HL_NATIVE_TEST_HOOKS)
         unsigned stop = cpu->irq != 0 ? HL_BACKEND_SHAPE_S_IRQ : g_backend_shape_interp_stop;
