@@ -572,6 +572,15 @@ mod tests {
     }
 
     #[test]
+    fn perf_map_directory_is_exec_cloned_internal_authority() {
+        assert!(
+            C_REGISTRY.contains("HL_INTERNAL_OPTION(\"HL_TRANSLIT_PERF_MAP\""),
+            "guest exec must retain the caller-owned profiler directory"
+        );
+        assert!(!C_REGISTRY.contains("HL_INJECTION_OPTION(\"HL_TRANSLIT_PERF_MAP\""));
+    }
+
+    #[test]
     fn retired_native_executor_options_are_not_registered() {
         // The Rust native executor these named was deleted; the C engine's authoritative registry
         // (src/runtime/hl-native/src/native/engine/options.c) never defined them, so accepting them
