@@ -540,6 +540,18 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn ret_target_cache_simulation_is_observational_and_exact() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in 112..=118 {
+            // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
+            assert_eq!(unsafe { hook(scenario) }, 0, "RET IBTC simulation scenario {scenario}");
+        }
+    }
+
     #[cfg(feature = "native-test-hooks")]
     struct IsolatedTestChild(Option<std::process::Child>);
 
@@ -992,6 +1004,15 @@ mod tests {
             "direct_jmp_ibtc_fills",
             "direct_jmp_ibtc_suppressed",
             "direct_jmp_ibtc_invalid_refusals",
+            "ret_ibtc_attempts",
+            "ret_ibtc_hits",
+            "ret_ibtc_key_misses",
+            "ret_ibtc_null_misses",
+            "ret_ibtc_irq",
+            "ret_ibtc_fills",
+            "ret_ibtc_collisions",
+            "ret_ibtc_unmapped",
+            "ret_ibtc_invalid_refusals",
         ];
         let mut fields = std::collections::BTreeMap::new();
         for token in records[0].split_whitespace() {

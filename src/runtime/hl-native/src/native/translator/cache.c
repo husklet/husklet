@@ -1348,6 +1348,9 @@ static inline ibtc_ent ibtc_snapshot(const ibtc_ent *e) {
 }
 
 static void ibtc_drop_target(uint64_t target) {
+#ifdef G_IBTC_DROP_TARGET
+    G_IBTC_DROP_TARGET(target);
+#endif
     ibtc_ent *entry = &g_ibtc[ibtc_index(target)];
     if (ibtc_snapshot(entry).target != target) return;
     /* Mapping invalidation owns the same STW/quiescent gate as tombstoning. Keep the pair atomic too so a
