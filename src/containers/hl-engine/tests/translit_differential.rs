@@ -1387,12 +1387,12 @@ fn forked_translators_publish_process_owned_perf_files() {
             .collect();
         assert_eq!(
             names.iter().filter(|name| name.starts_with("perf-")).count(),
-            2,
+            4,
             "{names:?}"
         );
         assert_eq!(
             names.iter().filter(|name| name.starts_with("jit-")).count(),
-            2,
+            4,
             "{names:?}"
         );
         for pid in [parent_pid, child_pid] {
@@ -1407,7 +1407,16 @@ fn forked_translators_publish_process_owned_perf_files() {
                 })
                 .collect::<Vec<_>>();
             process_maps.sort();
-            assert_eq!(process_maps.len(), 1, "pid={pid} maps={process_maps:?}");
+            let expected = if pid == parent_pid { 3 } else { 1 };
+            assert_eq!(process_maps.len(), expected, "pid={pid} maps={process_maps:?}");
+            if expected == 3 {
+                let names = process_maps
+                    .iter()
+                    .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let rx = names[0].split("-rx").nth(1).unwrap();
+                assert!(names.iter().all(|name| name.ends_with(rx)), "in-place generations changed RX: {names:?}");
+            }
             let mut all = String::new();
             for map in process_maps {
                 let text = std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));

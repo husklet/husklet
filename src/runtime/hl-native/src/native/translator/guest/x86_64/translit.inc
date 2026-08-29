@@ -518,6 +518,8 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
     translit_jitdump_pid = 0;
     translit_jitdump_index = 0;
     translit_profile_active = next;
+    translit_profile_jcc_ibtc = (translit_profile_named_range){0};
+    translit_profile_direct_jmp_ibtc = (translit_profile_named_range){0};
 }
 
 typedef struct __attribute__((packed)) translit_jitdump_header {
@@ -1321,6 +1323,7 @@ static void translit_cache_rewind_in_place(void) {
     translit_shared_ibtc_stubs_reset();
     translit_ret_ibtc_reset();
     jit_cache_rewind_in_place();
+    translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
 }
 
 typedef struct {

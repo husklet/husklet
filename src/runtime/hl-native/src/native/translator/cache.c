@@ -1823,6 +1823,7 @@ static uint64_t g_body_owner_low_test_retranslations;
 static int g_body_owner_low_test_seeded;
 static int g_body_owner_low_test_rotated;
 static int g_body_owner_low_test_armed;
+static uint64_t g_body_owner_low_test_generation_translations;
 #endif
 
 static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
@@ -1913,6 +1914,7 @@ static void jit_body_owner_low_test_after_rotation(void) {
     if (jit_body_owner_set_for(g_body_owner_low_test_generation, 0) != NULL) return;
     g_body_owner_low_test_rotations++;
     g_body_owner_low_test_rotated = 1;
+    g_body_owner_low_test_generation_translations = 0;
 }
 
 static void jit_body_owner_low_test_after_translation(void) {
@@ -1921,10 +1923,13 @@ static void jit_body_owner_low_test_after_translation(void) {
         g_body_owner_low_test_armed = 1;
         return;
     }
-    if (!g_body_owner_low_test_rotated) return;
+    if (g_body_owner_low_test_rotations >= 2 && !g_body_owner_low_test_rotated) return;
+    if (!g_body_owner_low_test_rotated && g_body_owner_low_test_generation_translations == 0) return;
     g_body_owner_low_test_retranslations++;
     g_body_owner_low_test_rotated = 0;
-    if (g_body_owner_low_test_rotations < 2) g_body_owner_low_test_seeded = 0;
+    g_body_owner_low_test_generation_translations++;
+    if (g_body_owner_low_test_rotations < 2 && g_body_owner_low_test_generation_translations >= 2)
+        g_body_owner_low_test_seeded = 0;
 }
 #endif
 
