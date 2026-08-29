@@ -16,6 +16,7 @@ enum Mode {
     Translated,
     CacheCold,
     CacheWarm,
+    CacheInvalid,
 }
 
 impl Mode {
@@ -25,12 +26,13 @@ impl Mode {
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
             "cache-warm" => Ok(Self::CacheWarm),
+            "cache-invalid" => Ok(Self::CacheInvalid),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
 
     const fn cached(self) -> bool {
-        matches!(self, Self::CacheCold | Self::CacheWarm)
+        matches!(self, Self::CacheCold | Self::CacheWarm | Self::CacheInvalid)
     }
 
     const fn translated(self) -> bool {
@@ -64,7 +66,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
         )?;
-    } else if mode == Mode::CacheWarm {
+    } else if matches!(mode, Mode::CacheWarm | Mode::CacheInvalid) {
         require(
             cache.read_dir()?.next().is_some(),
             "warm arm began without a published cache",
@@ -183,6 +185,10 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             Mode::CacheWarm => require(
                 warm_receipt_after > warm_receipt_before,
                 "independent warm process did not publish a fresh cache-load receipt",
+            )?,
+            Mode::CacheInvalid => require(
+                warm_receipt_after.is_none(),
+                "cold-only same-ISA cache unexpectedly accepted invalid input",
             )?,
             Mode::Interpreter | Mode::Translated => unreachable!(),
         }
