@@ -1207,16 +1207,17 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
             *result = test.removed;
         }
     } else if (scenario == 51) {
-        uint64_t end = first + ((uint64_t)JIT_SOURCE_CHUNK_N << JIT_SOURCE_PAGE_SHIFT) + 1u;
-        map_put(first, first, end, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
-        int slot = map_idx(first);
+        uint64_t end = second + ((uint64_t)JIT_SOURCE_CHUNK_N << JIT_SOURCE_PAGE_SHIFT);
+        map_put(first, first, first + 1u, (void *)(uintptr_t)0x1010, (void *)(uintptr_t)0x1011);
+        map_put(second, second, end, (void *)(uintptr_t)0x2020, (void *)(uintptr_t)0x2021);
+        int slot = map_idx(second);
         if (slot < 0 || g_source_node_count != JIT_SOURCE_CHUNK_N + 1u || g_source_node_chunks[0] == NULL ||
             g_source_node_chunks[1] == NULL ||
             g_live_position_chunks[(uint32_t)slot >> JIT_SOURCE_CHUNK_SHIFT] == NULL)
             verdict = -EIO;
         uint64_t dirty[][2] = {{first, first + 1u}};
         *result = map_invalidate_source_ranges(dirty, 1);
-        if (*result != 1 || map_body(first) != NULL) verdict = -EIO;
+        if (*result != 1 || map_body(first) != NULL || map_body(second) == NULL) verdict = -EIO;
     } else {
         verdict = -EINVAL;
     }
