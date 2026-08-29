@@ -479,12 +479,14 @@ int main(void) {
             seccomp_baseline: hl_container::SeccompBaseline::Container,
         });
     containers.create(spec).await?;
+    benchmark_barrier("ready", "release")?;
     let started = Instant::now();
     containers.start("pcache-profile").await?;
     let status = containers.wait("pcache-profile").await?;
     let elapsed = started.elapsed();
     let logs = containers.logs("pcache-profile").await?;
     containers.remove("pcache-profile").await?;
+    benchmark_barrier("done", "finish")?;
     if status != ExitStatus::Code(0) {
         return Err(format!(
             "compiler workload exited {status:?}; stderr:\n{}",
@@ -761,6 +763,28 @@ int main(void) {
         0,
         hex(&output)
     );
+    Ok(())
+}
+
+/// Optional benchmark-only handshake. Image import, overlay creation, and process construction finish
+/// before `ready`; the runner releases exactly one container start/wait/log/remove interval, stops its
+/// counter at `done`, then acknowledges with `finish`. Ordinary tests set no directory and pay no cost.
+fn benchmark_barrier(announce: &str, await_name: &str) -> Result<(), Error> {
+    let Some(directory) = std::env::var_os("HL_PCACHE_PROFILE_BARRIER_DIR") else {
+        return Ok(());
+    };
+    let directory = Path::new(&directory);
+    require(directory.is_absolute(), "benchmark barrier directory is not absolute")?;
+    require(directory.is_dir(), "benchmark barrier directory does not exist")?;
+    fs::write(directory.join(announce), [])?;
+    let awaited = directory.join(await_name);
+    let deadline = Instant::now() + std::time::Duration::from_secs(120);
+    while !awaited.is_file() {
+        if Instant::now() >= deadline {
+            return Err(format!("benchmark barrier timed out waiting for {}", awaited.display()).into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     Ok(())
 }
 
