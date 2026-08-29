@@ -1330,7 +1330,12 @@ fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
     run_with_jcc_controls(executable, true)
 }
 
-fn run_with_perf_map(executable: &Path, directory: &Path, force_two_rotations: bool) -> (Vec<u8>, i32, Backend) {
+fn run_with_perf_map(
+    executable: &Path,
+    directory: &Path,
+    force_two_rotations: bool,
+    force_fresh_rollover: bool,
+) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
@@ -1338,7 +1343,7 @@ fn run_with_perf_map(executable: &Path, directory: &Path, force_two_rotations: b
     options
         .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
         .unwrap();
-    if executable.file_stem().and_then(|name| name.to_str()) == Some("perf_map_fork_exec") {
+    if force_fresh_rollover {
         options
             .set("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST", "1", true)
             .unwrap();
@@ -1371,7 +1376,7 @@ fn transliterated_blocks_publish_perf_map_identities() {
     let executable = fixture(work.path(), "forward_jump");
     let maps = work.path().join("maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, status, backend) = run_with_perf_map(&executable, &maps, false);
+    let (output, status, backend) = run_with_perf_map(&executable, &maps, false, false);
     assert_eq!(status, 0);
     assert_eq!(output, b"42\n");
     let files: Vec<_> = std::fs::read_dir(&maps)
@@ -1427,7 +1432,7 @@ fn forked_translators_publish_process_owned_perf_files() {
         let executable = fixture(work.path(), name);
         let maps = work.path().join(format!("maps-{name}"));
         std::fs::create_dir(&maps).unwrap();
-        let (output, status, backend) = run_with_perf_map(&executable, &maps, true);
+        let (output, status, backend) = run_with_perf_map(&executable, &maps, true, false);
         assert_eq!(status, 0);
         let output = String::from_utf8(output).unwrap();
         assert!(output.starts_with("fork-map=42 warm=10752 child=0 "), "{output}");
@@ -1530,7 +1535,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
     let executable = fixture(work.path(), "perf_map_fork_exec");
     let maps = work.path().join("maps-fork-exec");
     std::fs::create_dir(&maps).unwrap();
-    let (output, status, backend) = run_with_perf_map(&executable, &maps, false);
+    let (output, status, backend) = run_with_perf_map(&executable, &maps, false, true);
     assert_eq!(status, 0);
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("post-exec pid="), "{output}");
@@ -1577,7 +1582,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
 fn a_host_profiler_resolves_transliterated_block_identities() {
     let executable =
         PathBuf::from(std::env::var_os("HL_PROFILE_TRANSLIT_EXECUTABLE").expect("HL_PROFILE_TRANSLIT_EXECUTABLE"));
-    let (output, status, backend) = run_with_perf_map(&executable, Path::new("/tmp"), false);
+    let (output, status, backend) = run_with_perf_map(&executable, Path::new("/tmp"), false, false);
     assert_eq!(status, 0);
     assert!(output.is_empty());
     assert!(backend.entries > 0, "{}", backend.line);
