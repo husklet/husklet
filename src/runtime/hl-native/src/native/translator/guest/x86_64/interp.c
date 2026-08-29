@@ -2191,6 +2191,18 @@ static void pcache_save(void) {
             int length = snprintf(receipt, sizeof receipt, "%s.published-%lld", path, (long long)getpid());
             if (length > 0 && (size_t)length < sizeof receipt)
                 (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &stored, sizeof stored);
+            const char *fresh = hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST");
+            if (fresh != NULL && fresh[0] != '0' && fresh[0] != 0 &&
+                translit_test_external_absolute_nonempty_resets != 0 &&
+                translit_external_absolute_count == translit_external_absolute_emitted &&
+                !translit_external_absolute_unclassified) {
+                length = snprintf(receipt, sizeof receipt, "%s.relocation-rollover-exact-%lld", path,
+                                  (long long)getpid());
+                if (length > 0 && (size_t)length < sizeof receipt)
+                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt,
+                                              &translit_external_absolute_count,
+                                              sizeof translit_external_absolute_count);
+            }
         }
 #endif
     }

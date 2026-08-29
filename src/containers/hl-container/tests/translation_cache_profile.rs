@@ -14,6 +14,7 @@ enum Mode {
     Interpreter,
     Translated,
     CacheCold,
+    CacheFreshRollover,
     CacheValid,
     CacheBitflip,
     CacheTruncated,
@@ -28,6 +29,7 @@ impl Mode {
             "interpreter" => Ok(Self::Interpreter),
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
+            "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
             "cache-valid" => Ok(Self::CacheValid),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
@@ -70,7 +72,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     require(cache.is_absolute(), "profile cache is not absolute")?;
     if matches!(
         mode,
-        Mode::CacheCold | Mode::ForkNoExec | Mode::ForkExec | Mode::RelocationMissing
+        Mode::CacheCold | Mode::CacheFreshRollover | Mode::ForkNoExec | Mode::ForkExec | Mode::RelocationMissing
     ) {
         require(
             !cache.exists() || cache.read_dir()?.next().is_none(),
@@ -127,6 +129,12 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         require(
             std::env::var_os("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST").is_some(),
             "relocation mutation arm did not enable its native hook",
+        )?;
+    }
+    if mode == Mode::CacheFreshRollover {
+        require(
+            std::env::var_os("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST").is_some(),
+            "fresh-rollover arm did not enable its native hook",
         )?;
     }
     if mode.cached() {
@@ -215,6 +223,16 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         )?;
         match mode {
             Mode::CacheCold => {}
+            Mode::CacheFreshRollover => require(
+                entries.iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(27)
+                        .any(|part| part == b".relocation-rollover-exact-")
+                }),
+                "fresh generation did not publish an exact relocation-ledger receipt",
+            )?,
             Mode::CacheValid => require(
                 entries
                     .iter()

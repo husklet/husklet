@@ -140,6 +140,12 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
 #define translit_perf_map_generation_bind(generation, rw, rx, size) ((void)0)
 #endif
 
+#if G_GPC_HASH_SHIFT == 0
+static void translit_external_absolute_generation_reset(void);
+#else
+#define translit_external_absolute_generation_reset() ((void)0)
+#endif
+
 #if HL_NATIVE_TEST_HOOKS
 typedef struct {
     int attempts;
@@ -198,6 +204,7 @@ static int jit_cache_init(void) {
     }
 #endif
     hl_arena_bind(&g_emit, &g_code_mapping);
+    translit_external_absolute_generation_reset();
     translit_perf_map_generation_bind(0, g_cache, J_RX(g_cache), CACHE_SZ);
     HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT, "cache reserve rw=%p rx=%p bytes=%u dual=%d", (void *)g_cache, J_RX(g_cache),
             CACHE_SZ, g_dualmap);
@@ -2692,6 +2699,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
             (unsigned long long)(g_cache_gen + 1), (void *)g_cache, J_RX(g_cache), old_used, old_blocks, evicted,
             g_live_map_count);
     g_cache_gen++; // peers still on the just-retired generation pin it until they round-trip
+    translit_external_absolute_generation_reset();
     if (!retain_generations) map_clear();
     if (!retain_generations) memset(g_ibtc, 0, sizeof g_ibtc);
     pend_reset();
@@ -2915,6 +2923,7 @@ static int jit_after_fork(void) {
         g_fork_preserved = 0;
         return 0;
     }
+    if (!preserve) translit_external_absolute_generation_reset();
     translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
     if (preserve) {
         for (int i = 0; i < g_nretired; i++) {

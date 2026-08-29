@@ -393,7 +393,22 @@ static int translit_external_absolute_unclassified;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int translit_test_drop_external_absolute;
 static int translit_test_dropped_external_absolute;
+static uint32_t translit_test_external_absolute_nonempty_resets;
 #endif
+
+static void translit_external_absolute_generation_reset(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_external_absolute_count != 0 || translit_external_absolute_emitted != 0 ||
+        translit_external_absolute_unclassified)
+        translit_test_external_absolute_nonempty_resets++;
+#endif
+    translit_external_absolute_count = 0;
+    translit_external_absolute_emitted = 0;
+    translit_external_absolute_unclassified = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_dropped_external_absolute = 0;
+#endif
+}
 
 static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
     static const enum translit_ret_fast_ibtc_counter ret[] = {
@@ -1449,12 +1464,7 @@ static void translit_ret_ibtc_drop_target(uint64_t target) {
 static void translit_cache_rewind_in_place(void) {
     translit_shared_ibtc_stubs_reset();
     translit_ret_ibtc_reset();
-    translit_external_absolute_count = 0;
-    translit_external_absolute_emitted = 0;
-    translit_external_absolute_unclassified = 0;
-#if defined(HL_NATIVE_TEST_HOOKS)
-    translit_test_dropped_external_absolute = 0;
-#endif
+    translit_external_absolute_generation_reset();
     jit_cache_rewind_in_place();
     translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
 }
