@@ -69,6 +69,12 @@ struct Backend {
     jcc_link_taken: u64,
     jcc_link_irq_fallback: u64,
     jcc_link_dispatcher: u64,
+    direct_call_ibtc_emitted: u64,
+    direct_call_ibtc_hits: u64,
+    direct_call_ibtc_misses: u64,
+    direct_call_ibtc_irq: u64,
+    direct_call_ibtc_fills: u64,
+    direct_call_ibtc_invalid_refusals: u64,
     operand_declined: u64,
     sse2_memory_declined: u64,
     riprel_lowered: u64,
@@ -447,6 +453,12 @@ fn backend(stderr: &[u8]) -> Backend {
         jcc_link_taken: counter("jcc_link_taken="),
         jcc_link_irq_fallback: counter("jcc_link_irq_fallback="),
         jcc_link_dispatcher: counter("jcc_link_dispatcher="),
+        direct_call_ibtc_emitted: mixed_counter("direct_call_ibtc_emitted="),
+        direct_call_ibtc_hits: mixed_counter("direct_call_ibtc_hits="),
+        direct_call_ibtc_misses: mixed_counter("direct_call_ibtc_misses="),
+        direct_call_ibtc_irq: mixed_counter("direct_call_ibtc_irq="),
+        direct_call_ibtc_fills: mixed_counter("direct_call_ibtc_fills="),
+        direct_call_ibtc_invalid_refusals: mixed_counter("direct_call_ibtc_invalid_refusals="),
         operand_declined: counter("operand_declined="),
         sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
@@ -1818,9 +1830,24 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         selected_backend.would_link_line, disabled_backend.would_link_line
     );
     assert!(
-        selected_backend.would_call_target_unmapped > 1000,
-        "the warmed target CALL must execute after its cold-target publication: {}",
-        selected_backend.would_link_line
+        selected_backend.direct_call_ibtc_emitted > 0,
+        "{}",
+        selected_backend.line
+    );
+    assert!(
+        selected_backend.direct_call_ibtc_hits > 1000,
+        "the warmed direct CALL must execute through the shared target cache: {}",
+        selected_backend.line
+    );
+    assert!(
+        selected_backend.direct_call_ibtc_misses > 0 && selected_backend.direct_call_ibtc_fills > 0,
+        "the cold direct CALL path must publish before it becomes hot: {}",
+        selected_backend.line
+    );
+    assert_eq!(
+        selected_backend.direct_call_ibtc_invalid_refusals, 0,
+        "{}",
+        selected_backend.line
     );
     assert_eq!(
         selected_backend.would_fall_candidate,
