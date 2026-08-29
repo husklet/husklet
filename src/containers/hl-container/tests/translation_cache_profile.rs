@@ -7,7 +7,8 @@ use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt as _, path::Pa
 
 type Error = Box<dyn std::error::Error>;
 
-const UNIT_127_ASSEMBLY: &str = "a1d41926570d6ddfee050116a5698a9e5f7d2b7accf0dcfce685e46c707a7265";
+const UNIT_127_OBJECT: &str =
+    "e1b634483ab1ed701be7f4004b3981d3e56c6d228763efe2496514b667c74f44  /tmp/unit_127.o\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -125,11 +126,9 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     }
 
     let root = images.roots().fork_overlay(unpacked.snapshot())?;
-    // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
-    // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
-    let process = Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
-        "-quiet", "/work/src/unit_127.c", "-quiet", "-dumpdir", "/tmp/", "-dumpbase", "unit_127.c",
-        "-dumpbase-ext", ".c", "-mtune=generic", "-march=x86-64", "-g", "-O2", "-o", "-",
+    let process = Process::new("/bin/sh").args([
+        "-c",
+        "/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1 -quiet /work/src/unit_127.c -quiet -dumpdir /tmp/ -dumpbase unit_127.c -dumpbase-ext .c -mtune=generic -march=x86-64 -g -O2 -o /tmp/unit_127.s && /usr/bin/as --gdwarf-5 --64 -o /tmp/unit_127.o /tmp/unit_127.s && sha256sum /tmp/unit_127.o",
     ]);
     let spec = ContainerSpec::new(root, process)
         .name("pcache-profile")
@@ -159,8 +158,10 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         )
         .into());
     }
-    let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
-    require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
+    require(
+        logs.stdout == UNIT_127_OBJECT.as_bytes(),
+        "compiler workload did not produce the exact unit_127 object",
+    )?;
     let warm_receipt_after = warm_receipt_mtime(cache)?;
     if mode.cached() {
         let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
@@ -186,6 +187,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             Mode::Interpreter | Mode::Translated => unreachable!(),
         }
     }
+    let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
     eprintln!(
         "pcache-profile mode={} elapsed_us={} warm_hit={} output={}",
         std::env::var("HL_PCACHE_PROFILE_MODE")?,
