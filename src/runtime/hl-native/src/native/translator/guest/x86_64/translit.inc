@@ -4564,9 +4564,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     block->guest_start = linked_page_lo < gpc ? linked_page_lo : gpc;
     block->guest_end = linked_page_hi > pc ? linked_page_hi : pc;
     block->profile_insns = (uint16_t)count;
-#if defined(HL_NATIVE_TEST_HOOKS)
     translit_perf_map_publish(block, start, block->host_len, (uint32_t)count);
-#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
 #endif
