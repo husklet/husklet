@@ -119,7 +119,7 @@ static const hl_option_definition hl_option_definitions[] = {
                        "test-only directory for same-ISA perf map publication", HL_OPTION_PATH),
     HL_INTERNAL_OPTION("HL_TRANSLIT_SYMBOLIZE",
                        "publish same-ISA perf symbols without enabling execution diagnostics", HL_OPTION_FLAG),
-    HL_INJECTION_OPTION("HL_TRANSLIT_SYMBOL_RECEIPT",
+    HL_INTERNAL_OPTION("HL_TRANSLIT_SYMBOL_RECEIPT",
                         "test-only sampling symbol enqueue and teardown receipts", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
