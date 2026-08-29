@@ -480,6 +480,13 @@ static FILE *translit_jitdump_file;
 static void *translit_jitdump_marker;
 static pid_t translit_jitdump_pid;
 static uint64_t translit_jitdump_index;
+typedef struct translit_profile_generation {
+    pid_t pid;
+    uint64_t generation;
+    const uint8_t *rw, *rx;
+    uint64_t size;
+} translit_profile_generation;
+static translit_profile_generation translit_profile_active;
 typedef struct translit_profile_named_range {
     pid_t pid;
     const uint8_t *start, *end;
@@ -493,6 +500,24 @@ static void translit_profile_output_failed(const char *what) {
     if (length < 0) length = 0;
     if ((size_t)length >= sizeof message) length = (int)sizeof message - 1;
     (void)jit_fail(HL_STATUS_PLATFORM_FAILURE, message, (size_t)length);
+}
+
+static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
+                                               uint64_t size) {
+    translit_profile_generation next = {getpid(), generation, rw, rx, size};
+    if (translit_profile_active.pid == next.pid && translit_profile_active.generation == generation &&
+        translit_profile_active.rw == rw && translit_profile_active.rx == rx && translit_profile_active.size == size)
+        return;
+    if (translit_perf_map_file != NULL) fclose(translit_perf_map_file);
+    if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
+    if (translit_jitdump_file != NULL) fclose(translit_jitdump_file);
+    translit_perf_map_file = NULL;
+    translit_jitdump_file = NULL;
+    translit_jitdump_marker = NULL;
+    translit_perf_map_pid = 0;
+    translit_jitdump_pid = 0;
+    translit_jitdump_index = 0;
+    translit_profile_active = next;
 }
 
 typedef struct __attribute__((packed)) translit_jitdump_header {
@@ -520,7 +545,9 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
     translit_jitdump_file = NULL;
     translit_jitdump_marker = NULL;
     char path[PATH_MAX];
-    int length = snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)pid);
+    int length = snprintf(path, sizeof path, "%s/jit-%lld-g%llu-rx%llx.dump", directory, (long long)pid,
+                          (unsigned long long)translit_profile_active.generation,
+                          (unsigned long long)(uintptr_t)translit_profile_active.rx);
     if (length <= 0 || (size_t)length >= sizeof path) return;
     int descriptor = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (descriptor < 0) {
@@ -559,10 +586,19 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
     if (!g_prof || directory == NULL || directory[0] == '\0' || host_len == 0) return;
     pid_t pid = getpid();
+    const uint8_t *end = start + host_len;
+    if (translit_profile_active.pid != pid || translit_profile_active.rw == NULL ||
+        start < translit_profile_active.rw || end < start ||
+        (uint64_t)(end - translit_profile_active.rw) > translit_profile_active.size) {
+        translit_profile_output_failed("generation identity");
+        return;
+    }
     if (translit_perf_map_file == NULL || translit_perf_map_pid != pid) {
         if (translit_perf_map_file != NULL) fclose(translit_perf_map_file);
         char path[PATH_MAX];
-        int length = snprintf(path, sizeof path, "%s/perf-%lld.map", directory, (long long)pid);
+        int length = snprintf(path, sizeof path, "%s/perf-%lld-g%llu-rx%llx.map", directory, (long long)pid,
+                              (unsigned long long)translit_profile_active.generation,
+                              (unsigned long long)(uintptr_t)translit_profile_active.rx);
         if (length <= 0 || (size_t)length >= sizeof path) return;
         int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
         if (descriptor < 0) {
@@ -583,7 +619,8 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
     size_t name_length = strlen(name);
     if (name_length == 0 || name_length >= 256) return;
     (void)fprintf(translit_perf_map_file, "%llx %x %s\n",
-                  (unsigned long long)(uintptr_t)J_RX(start), host_len, name);
+                  (unsigned long long)(uintptr_t)(translit_profile_active.rx + (start - translit_profile_active.rw)),
+                  host_len, name);
     if (translit_jitdump_file == NULL || translit_jitdump_pid != pid) translit_jitdump_open(directory, pid);
     if (translit_jitdump_file == NULL) return;
     translit_jitdump_load load = {0,
@@ -591,8 +628,10 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
                                   translit_jitdump_now(),
                                   (uint32_t)pid,
                                   (uint32_t)syscall(SYS_gettid),
-                                  (uint64_t)(uintptr_t)J_RX(start),
-                                  (uint64_t)(uintptr_t)J_RX(start),
+                                  (uint64_t)(uintptr_t)(translit_profile_active.rx +
+                                                        (start - translit_profile_active.rw)),
+                                  (uint64_t)(uintptr_t)(translit_profile_active.rx +
+                                                        (start - translit_profile_active.rw)),
                                   host_len,
                                   ++translit_jitdump_index};
     (void)fwrite(&load, sizeof load, 1, translit_jitdump_file);

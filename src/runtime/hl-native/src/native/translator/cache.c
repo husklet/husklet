@@ -133,6 +133,13 @@ static int code_mapping_reserve_preferred(hl_host_code_mapping *mapping, int dua
     return code_mapping_reserve_preferred_with(mapping, dual_alias, code_mapping_reserve_adapter, NULL);
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS) && G_GPC_HASH_SHIFT == 0
+static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
+                                               uint64_t size);
+#else
+#define translit_perf_map_generation_bind(generation, rw, rx, size) ((void)0)
+#endif
+
 #if HL_NATIVE_TEST_HOOKS
 typedef struct {
     int attempts;
@@ -191,6 +198,7 @@ static int jit_cache_init(void) {
     }
 #endif
     hl_arena_bind(&g_emit, &g_code_mapping);
+    translit_perf_map_generation_bind(0, g_cache, J_RX(g_cache), CACHE_SZ);
     HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT, "cache reserve rw=%p rx=%p bytes=%u dual=%d", (void *)g_cache, J_RX(g_cache),
             CACHE_SZ, g_dualmap);
     return 0;
@@ -1814,6 +1822,7 @@ static uint64_t g_body_owner_low_test_rotations;
 static uint64_t g_body_owner_low_test_retranslations;
 static int g_body_owner_low_test_seeded;
 static int g_body_owner_low_test_rotated;
+static int g_body_owner_low_test_armed;
 #endif
 
 static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
@@ -1887,7 +1896,10 @@ static int jit_cache_needs_rotation(void) {
 // generation and the end-to-end hook reports neither a rotation nor a replacement publication.
 static void jit_body_owner_low_test_seed(void) {
     const char *enabled = hl_option_get("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
-    if (g_body_owner_low_test_seeded || enabled == NULL || enabled[0] == '0' || enabled[0] == 0) return;
+    if (g_body_owner_low_test_seeded || g_body_owner_low_test_rotations >= 2 || enabled == NULL ||
+        enabled[0] == '0' || enabled[0] == 0)
+        return;
+    if (!g_body_owner_low_test_armed) return;
     jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
     if (set == NULL) return;
     atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (JIT_BODY_OWNER_BLOCK_HEADROOM - 1),
@@ -1904,9 +1916,15 @@ static void jit_body_owner_low_test_after_rotation(void) {
 }
 
 static void jit_body_owner_low_test_after_translation(void) {
+    const char *enabled = hl_option_get("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
+    if (!g_body_owner_low_test_armed && enabled != NULL && enabled[0] != '0' && enabled[0] != 0) {
+        g_body_owner_low_test_armed = 1;
+        return;
+    }
     if (!g_body_owner_low_test_rotated) return;
     g_body_owner_low_test_retranslations++;
     g_body_owner_low_test_rotated = 0;
+    if (g_body_owner_low_test_rotations < 2) g_body_owner_low_test_seeded = 0;
 }
 #endif
 
@@ -2654,6 +2672,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
         return 0;
     }
     hl_arena_bind(&g_emit, &mapping);
+    translit_perf_map_generation_bind(g_cache_gen + 1, g_cache, J_RX(g_cache), CACHE_SZ);
     HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT,
             "cache rotate generation=%llu rw=%p rx=%p used=%zu blocks=%u evicted=%u retained=%u",
             (unsigned long long)(g_cache_gen + 1), (void *)g_cache, J_RX(g_cache), old_used, old_blocks, evicted,
@@ -2879,6 +2898,7 @@ static int jit_after_fork(void) {
         g_fork_preserved = 0;
         return 0;
     }
+    translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
     if (preserve) {
         for (int i = 0; i < g_nretired; i++) {
             jit_body_owner_drop_generation(g_retired[i].gen);

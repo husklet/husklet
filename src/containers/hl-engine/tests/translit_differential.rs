@@ -793,8 +793,8 @@ fn body_owner_low_watermark_rotates_through_the_single_thread_dispatcher() {
     let (interpreted, interpreted_status, _) = run(&executable, "0");
     let (selected, selected_status, report) = run_with_body_owner_rotation(&executable);
     assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
-    assert_eq!(report.body_owner_low_rotations, 1, "{}", report.line);
-    assert!(report.body_owner_low_retranslations > 0, "{}", report.line);
+    assert_eq!(report.body_owner_low_rotations, 2, "{}", report.line);
+    assert!(report.body_owner_low_retranslations >= 2, "{}", report.line);
     assert!(report.mixed_sse_admitted > 0, "{}", report.line);
     assert!(report.mixed_sse_executed > 0, "{}", report.shape_line);
 }
@@ -1275,7 +1275,7 @@ fn run_with_jcc_link_disabled(executable: &Path) -> (Vec<u8>, i32, Backend) {
     run_with_jcc_controls(executable, true)
 }
 
-fn run_with_perf_map(executable: &Path, directory: &Path) -> (Vec<u8>, i32, Backend) {
+fn run_with_perf_map(executable: &Path, directory: &Path, force_two_rotations: bool) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
@@ -1283,6 +1283,9 @@ fn run_with_perf_map(executable: &Path, directory: &Path) -> (Vec<u8>, i32, Back
     options
         .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
         .unwrap();
+    if force_two_rotations {
+        options.set("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST", "1", true).unwrap();
+    }
     let plan = RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
@@ -1308,7 +1311,7 @@ fn transliterated_blocks_publish_perf_map_identities() {
     let executable = fixture(work.path(), "forward_jump");
     let maps = work.path().join("maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, status, backend) = run_with_perf_map(&executable, &maps);
+    let (output, status, backend) = run_with_perf_map(&executable, &maps, false);
     assert_eq!(status, 0);
     assert_eq!(output, b"42\n");
     let files: Vec<_> = std::fs::read_dir(&maps)
@@ -1364,7 +1367,7 @@ fn forked_translators_publish_process_owned_perf_files() {
         let executable = fixture(work.path(), name);
         let maps = work.path().join(format!("maps-{name}"));
         std::fs::create_dir(&maps).unwrap();
-        let (output, status, backend) = run_with_perf_map(&executable, &maps);
+        let (output, status, backend) = run_with_perf_map(&executable, &maps, true);
         assert_eq!(status, 0);
         let output = String::from_utf8(output).unwrap();
         assert!(output.starts_with("fork-map=42 warm=10752 child=0 "), "{output}");
@@ -1393,35 +1396,49 @@ fn forked_translators_publish_process_owned_perf_files() {
             "{names:?}"
         );
         for pid in [parent_pid, child_pid] {
-            let map = maps.join(format!("perf-{pid}.map"));
-            let text = std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
-            assert!(
-                text.contains(caller),
-                "caller {caller} absent from {}:\n{text}",
-                map.display()
-            );
-            assert!(
-                text.contains(target),
-                "target {target} absent from {}:\n{text}",
-                map.display()
-            );
-            assert_eq!(
-                text.lines()
-                    .filter(|line| line.ends_with(" hl_tl_helper_jcc_ibtc"))
-                    .count(),
-                1,
-                "helper must rebind once, without duplicates, in {}:\n{text}",
-                map.display()
-            );
-            assert_eq!(
-                text.lines()
-                    .filter(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc"))
-                    .count(),
-                1,
-                "direct-JMP helper must rebind once, without duplicates, in {}:\n{text}",
-                map.display()
-            );
+            let mut process_maps = std::fs::read_dir(&maps)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(&format!("perf-{pid}-"))
+                })
+                .collect::<Vec<_>>();
+            process_maps.sort();
+            assert_eq!(process_maps.len(), 1, "pid={pid} maps={process_maps:?}");
+            let mut all = String::new();
+            for map in process_maps {
+                let text = std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.ends_with(" hl_tl_helper_jcc_ibtc"))
+                        .count(),
+                    1,
+                    "{}:\n{text}",
+                    map.display()
+                );
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc"))
+                        .count(),
+                    1,
+                    "{}:\n{text}",
+                    map.display()
+                );
+                assert!(
+                    text.lines()
+                        .any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
+                    "ordinary block absent from {}:\n{text}",
+                    map.display()
+                );
+                all.push_str(&text);
+            }
+            assert!(all.contains(caller), "caller {caller} absent for pid {pid}:\n{all}");
+            assert!(all.contains(target), "target {target} absent for pid {pid}:\n{all}");
         }
+        assert_eq!(backend.body_owner_low_rotations, 2, "{}", backend.line);
         backend
     };
     let one = run("perf_map_fork_one");
@@ -1442,7 +1459,7 @@ fn forked_translators_publish_process_owned_perf_files() {
 fn a_host_profiler_resolves_transliterated_block_identities() {
     let executable =
         PathBuf::from(std::env::var_os("HL_PROFILE_TRANSLIT_EXECUTABLE").expect("HL_PROFILE_TRANSLIT_EXECUTABLE"));
-    let (output, status, backend) = run_with_perf_map(&executable, Path::new("/tmp"));
+    let (output, status, backend) = run_with_perf_map(&executable, Path::new("/tmp"), false);
     assert_eq!(status, 0);
     assert!(output.is_empty());
     assert!(backend.entries > 0, "{}", backend.line);
@@ -2355,17 +2372,25 @@ fn canonical_cc1_profile_hands_off_caller_owned_perf_map_directory() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert_eq!(files.len(), 2, "{files:?}");
+    assert_eq!(files.len(), 4, "two RX generations must each publish a map and jitdump: {files:?}");
     for prefix in ["perf-", "jit-"] {
-        let file = files
+        let selected = files
             .iter()
-            .find(|path| path.file_name().unwrap().to_string_lossy().starts_with(prefix))
-            .unwrap_or_else(|| panic!("missing {prefix} file in {files:?}"));
-        assert!(
-            std::fs::metadata(file).unwrap().len() > 0,
-            "{} is empty",
-            file.display()
-        );
+            .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(prefix))
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 2, "missing generation-owned {prefix} files in {files:?}");
+        for file in selected {
+            assert!(std::fs::metadata(file).unwrap().len() > 0, "{} is empty", file.display());
+            if prefix == "perf-" {
+                let text = std::fs::read_to_string(file).unwrap();
+                assert_eq!(text.lines().filter(|line| line.ends_with(" hl_tl_helper_jcc_ibtc")).count(), 1,
+                           "{}:\n{text}", file.display());
+                assert_eq!(text.lines().filter(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc")).count(), 1,
+                           "{}:\n{text}", file.display());
+                assert!(text.lines().any(|line| line.contains("_g") && line.contains("_gl") && line.contains("_i")),
+                        "ordinary block absent from {}:\n{text}", file.display());
+            }
+        }
     }
 }
 
