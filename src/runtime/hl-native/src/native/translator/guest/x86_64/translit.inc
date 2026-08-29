@@ -4732,6 +4732,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             if (map_invalidate_source_ranges(dirty, 1) != 1 ||
                 ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0)
                 return 128;
+            source_block = translit_jcc_ibtc_test_build(context, source);
             target_block = translit_jcc_ibtc_test_build(context, target);
             cpu.rip = target;
             cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
