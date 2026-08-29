@@ -534,10 +534,20 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 101..=112 {
+        for scenario in 101..=111 {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "direct JMP IBTC scenario {scenario}");
         }
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn persistent_cache_codegen_modes_are_canonical() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: scenario 150 mutates only the child-local option table and restores every entry.
+        assert_eq!(unsafe { hook(150) }, 0, "persistent-cache codegen-mode scenario 150");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]

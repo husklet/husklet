@@ -2513,7 +2513,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
     if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
-    if (scenario == 112) {
+    if (scenario == 150) {
         static const struct { const char *name; int missing; unsigned bit; } modes[] = {
             {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
@@ -3684,7 +3684,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int direct_data_authority =
         g_nonpie_lo || hl_guest_memory_indirect() || jit_guest_soft_active() || jit_guest_bus_active();
 #if defined(HL_NATIVE_TEST_HOOKS)
-    direct_data_authority = direct_data_authority || hl_option_get("HL_TRANSLIT_FS_AUTHORITY_TEST") != NULL;
+    direct_data_authority = direct_data_authority || hl_option_flag_value("HL_TRANSLIT_FS_AUTHORITY_TEST", 0);
 #endif
     if ((fs_run || first_kind == TL_JMP_MEM) && direct_data_authority) {
 #if defined(HL_NATIVE_TEST_HOOKS)
