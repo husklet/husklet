@@ -552,6 +552,7 @@ mod tests {
             .chain(std::iter::once(130))
             .chain(128..=129)
             .chain(std::iter::once(127))
+            .chain(std::iter::once(135))
         {
             // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
             let status = unsafe { hook(scenario) };

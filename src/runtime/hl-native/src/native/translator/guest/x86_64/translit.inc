@@ -368,6 +368,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
 static int translit_ret_ibtc_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
+static int translit_ret_signal_stage_test(void);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
 static uint64_t translit_fs_fixture_admitted;
@@ -1437,8 +1438,14 @@ typedef struct {
     uint8_t *load_end;
     uint8_t *marker_end;
     uint8_t *rip_end;
+    uint8_t *rax_end;
     uint8_t *rsp_end;
 } translit_ret_sim_ranges;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint8_t *translit_test_ret_instruction_start;
+static translit_ret_sim_ranges translit_test_ret_site;
+static uint64_t translit_test_ret_source_guest;
+#endif
 
 static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t pop) {
     translit_ret_sim_ranges ranges = {0};
@@ -1451,6 +1458,7 @@ static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t po
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
     hl_x64_load_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+    ranges.rax_end = a->cursor;
     hl_x64_lea_rsp(a, (int32_t)pop);
     ranges.rsp_end = a->cursor;
     if (translit_jcc_ibtc_stub_entry != NULL) hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
@@ -1798,6 +1806,23 @@ static int translit_owner_append_ibtc(jit_body_owner_range ranges[TL_MAX_OWNER_R
            translit_owner_append(ranges, count, site->rip_end, site->end,
                                  JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
            translit_owner_append(ranges, count, site->end, instruction_end, guest, 0);
+}
+
+static int translit_owner_append_ret(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
+                                     const uint8_t *instruction_start, const uint8_t *instruction_end,
+                                     const translit_ret_sim_ranges *site, uint64_t guest) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_ret_instruction_start = (uint8_t *)instruction_start;
+    translit_test_ret_site = *site;
+    translit_test_ret_source_guest = guest;
+#endif
+    return translit_owner_append(ranges, count, instruction_start, site->load_end, guest, 0) &&
+           translit_owner_append(ranges, count, site->load_end, site->rip_end, guest,
+                                 1u << HL_X64_RAX) &&
+           translit_owner_append(ranges, count, site->rip_end, site->rax_end,
+                                 JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
+           translit_owner_append(ranges, count, site->rax_end, instruction_end,
+                                 JIT_BODY_OWNER_DYNAMIC_RIP, 0);
 }
 
 static void translit_instruction_ranges_publish(const jit_body_owner_range *ranges, uint32_t count) {
@@ -3011,7 +3036,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 112 && scenario <= 134) {
+    if (scenario >= 112 && scenario <= 135) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
@@ -3264,6 +3289,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
         uint8_t *instruction_start = a->cursor;
         translit_jcc_ibtc_site_ranges ibtc_site = {0};
+        translit_ret_sim_ranges ret_site = {0};
         int preserve_register = -1;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
 
@@ -3686,7 +3712,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             // Save rax through %gs (never through the stack: the red zone is the guest's), read the return
             // address while every guest register is still live, then pop. A fault on the load leaves the
             // guest register file untouched, so the RET restarts.
-            (void)translit_emit_ret_exit(a, insn.op == 0xC2 ? 8u + (uint16_t)insn.imm : 8u);
+            ret_site = translit_emit_ret_exit(a, insn.op == 0xC2 ? 8u + (uint16_t)insn.imm : 8u);
             translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0);
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
@@ -3719,6 +3745,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                                   a->cursor, &ibtc_site, pc) &&
                        translit_owner_append_ibtc(instruction_ranges, &instruction_range_count,
                                                   instruction_start, a->cursor, &ibtc_site, pc);
+        } else if (ret_site.rsp_end != NULL) {
+            owner_ok = translit_owner_append_ret(owners, &owner_count, instruction_start,
+                                                 a->cursor, &ret_site, pc) &&
+                       translit_owner_append_ret(instruction_ranges, &instruction_range_count,
+                                                 instruction_start, a->cursor, &ret_site, pc);
         } else {
             owner_ok = translit_owner_append(owners, &owner_count, instruction_start, a->cursor, pc, 0) &&
                        translit_owner_append(instruction_ranges, &instruction_range_count,
@@ -4642,11 +4673,13 @@ typedef struct {
     uint64_t target;
     uint64_t other;
     void *body;
+    _Atomic int start;
     _Atomic int ready;
 } translit_ret_publish_test;
 
 static void *translit_ret_publish_worker(void *opaque) {
     translit_ret_publish_test *test = opaque;
+    while (!atomic_load_explicit(&test->start, memory_order_acquire)) sched_yield();
     for (unsigned i = 0; i < 10000; ++i) {
         ibtc_publish(test->cell, test->other, (void *)(uintptr_t)1);
         ibtc_publish(test->cell, test->target, test->body);
@@ -4669,7 +4702,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                    ? 0
                    : 127;
     }
-    if (scenario >= 121 && scenario <= 134) {
+    if (scenario >= 121 && scenario <= 135) {
         const size_t arena_size = 65536;
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -4701,6 +4734,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
         if (context == NULL) return 122;
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+        if (scenario == 135) return translit_ret_signal_stage_test() ? 0 : 135;
         uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
         *stack = target;
         struct cpu cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc};
@@ -4738,7 +4772,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             cpu.rip = target;
             cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
             translit_jcc_ibtc_fill(&cpu, target_block, 0);
-            if (scenario == 133 || scenario == 134) return 0;
+            if (scenario == 133) return 0;
         }
         if (scenario == 128 || scenario == 129) {
             pid_t child = fork();
@@ -4771,13 +4805,19 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                 .cell = &g_ibtc[ibtc_index(target)], .target = target, .other = other, .body = body};
             pthread_t publisher;
             if (pthread_create(&publisher, NULL, translit_ret_publish_worker, &test) != 0) return 130;
+            atomic_store_explicit(&test.start, 1, memory_order_release);
+            uint64_t probes = 0;
+            unsigned seen = 0;
             while (!atomic_load_explicit(&test.ready, memory_order_acquire)) {
                 ibtc_ent pair = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+                probes++;
                 if (!((pair.target == target && pair.body == body) ||
                       (pair.target == other && pair.body == (void *)(uintptr_t)1)))
                     return 130;
+                if (pair.target == target) seen |= 1;
+                if (pair.target == other) seen |= 2;
             }
-            if (pthread_join(publisher, NULL) != 0) return 130;
+            if (pthread_join(publisher, NULL) != 0 || probes == 0 || seen != 3) return 130;
         }
         if (scenario == 123)
             ibtc_publish(&g_ibtc[ibtc_index(target)], target + ((uint64_t)IBTC_N << 2),
@@ -5688,6 +5728,47 @@ static int translit_jcc_ibtc_signal_stage_test(int direct_jmp) {
         }
         translit_flags_out(&expected_flags_cpu, stages[stage].flags_from_cpu ? canonical_flags : context_flags);
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
+    }
+    translit_selected = saved_selected;
+    return exact;
+}
+
+static int translit_ret_signal_stage_test(void) {
+    if (translit_test_ret_instruction_start == NULL || translit_test_ret_site.load_end == NULL ||
+        translit_test_ret_site.rip_end == NULL || translit_test_ret_site.rax_end == NULL ||
+        translit_test_ret_site.rsp_end == NULL)
+        return 0;
+    const uint64_t target = UINT64_C(0x123456789abcdef0);
+    struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip; } stages[] = {
+        {translit_test_ret_instruction_start, 0, target, translit_test_ret_source_guest},
+        {translit_test_ret_site.load_end, 1u << HL_X64_RAX, translit_test_ret_source_guest,
+         translit_test_ret_source_guest},
+        {translit_test_ret_site.rip_end, 1u << HL_X64_RAX, target, target},
+        {translit_test_ret_site.rax_end, 0, target, target},
+        {translit_test_ret_site.rsp_end, 0, target, target},
+    };
+    int saved_selected = translit_selected;
+    translit_selected = 1;
+    int exact = 1;
+    for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; ++stage) {
+        struct cpu cpu = {0};
+        ucontext_t context;
+        memset(&context, 0, sizeof context);
+        greg_t *gregs = HL_HOST_UC_GREGS(&context);
+        for (unsigned reg = 0; reg < 16; ++reg) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        cpu.rip = stages[stage].cpu_rip;
+        gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
+        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == stages[stage].expected_rip;
+        for (unsigned reg = 0; exact && reg < 16; ++reg) {
+            uint64_t expected = stages[stage].preserve & (1u << reg)
+                                    ? UINT64_C(0xc000000000000000) + reg
+                                    : UINT64_C(0xa000000000000000) + reg;
+            exact = cpu.r[reg] == expected;
+        }
     }
     translit_selected = saved_selected;
     return exact;
