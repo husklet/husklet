@@ -1063,6 +1063,34 @@ static uint8_t *translit_direct_jmp_ibtc_stub_entry;
 static uint8_t *translit_direct_jmp_ibtc_stub_rsp_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_flags_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_end;
+#if !defined(HL_NATIVE_TEST_HOOKS)
+static ibtc_ent translit_call_sim_ibtc[IBTC_N];
+static _Atomic uint64_t translit_call_sim_generation[IBTC_N];
+static __thread uint64_t translit_call_sim_pending;
+
+static void translit_call_sim_probe(uint64_t target) {
+    if (translit_jcc_ibtc_stub_entry == NULL) {
+        hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_STUB);
+        return;
+    }
+    hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_ELIGIBLE);
+    size_t index = ibtc_index(target);
+    uint64_t generation = atomic_load_explicit(&translit_call_sim_generation[index], memory_order_acquire);
+    ibtc_ent entry = ibtc_snapshot(&translit_call_sim_ibtc[index]);
+    if (generation == g_cache_gen && entry.target == target && entry.body != NULL)
+        hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_HIT);
+    else
+        hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_MISS);
+    translit_call_sim_pending = target;
+}
+
+static void translit_call_sim_publish(uint64_t target, void *body, int call_publication) {
+    size_t index = ibtc_index(target);
+    ibtc_publish(&translit_call_sim_ibtc[index], target, body);
+    atomic_store_explicit(&translit_call_sim_generation[index], g_cache_gen, memory_order_release);
+    if (call_publication) hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_FILL);
+}
+#endif
 
 /* Cursor rewinds can be followed by an ordinary interpreter descriptor when
    transliteration is disabled.  Withdraw every process-local entry before the
@@ -1348,19 +1376,28 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_jmp_ibtc(hl_x64_asm *a
 // the current descriptor and generation, never from a persisted or inherited heap/code pointer.
 static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code) {
     uint32_t miss_kind = cpu->jcc_ibtc_miss;
-    if (miss_kind != TL_JCC_IBTC_MISS && miss_kind != TL_DIRECT_JMP_IBTC_MISS) {
+#if !defined(HL_NATIVE_TEST_HOOKS)
+    int call_sim = translit_call_sim_pending != 0 && translit_call_sim_pending == cpu->rip;
+#else
+    int call_sim = 0;
+#endif
+    int actual_miss = miss_kind == TL_JCC_IBTC_MISS || miss_kind == TL_DIRECT_JMP_IBTC_MISS;
+    if (!actual_miss && !call_sim) {
         cpu->jcc_ibtc_miss = 0;
         return;
     }
     cpu->jcc_ibtc_miss = 0;
     int direct_jmp = miss_kind == TL_DIRECT_JMP_IBTC_MISS;
-    int disabled = direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)
-                              : hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL;
+    int disabled = actual_miss && (direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)
+                                             : hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL);
     if (disabled) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_SUPPRESSED, 1);
         else
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_SUPPRESSED, 1);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        if (call_sim) translit_call_sim_pending = 0;
+#endif
         return;
     }
     struct interp_block *block = code;
@@ -1371,18 +1408,35 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code) {
         !jit_resolve_rw_code(block, &rx, &generation) || generation != g_cache_gen) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_INVALID_REFUSAL, 1);
-        else
+        else if (actual_miss)
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_INVALID_REFUSAL, 1);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        if (call_sim) {
+            translit_call_sim_pending = 0;
+            hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY);
+        }
+#endif
         return;
     }
     uintptr_t entry_address = (uintptr_t)rx + block->host_entry_off;
     if (entry_address < (uintptr_t)rx) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_INVALID_REFUSAL, 1);
-        else
+        else if (actual_miss)
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_INVALID_REFUSAL, 1);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        if (call_sim) {
+            translit_call_sim_pending = 0;
+            hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY);
+        }
+#endif
         return;
     }
+#if !defined(HL_NATIVE_TEST_HOOKS)
+    translit_call_sim_publish(cpu->rip, (void *)entry_address, call_sim);
+    if (call_sim) translit_call_sim_pending = 0;
+#endif
+    if (!actual_miss) return;
     ibtc_ent *entry = &g_ibtc[ibtc_index(cpu->rip)];
 #if defined(HL_NATIVE_TEST_HOOKS)
     ibtc_ent previous = ibtc_snapshot(entry);
@@ -1402,6 +1456,12 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code) {
 // between the emitted miss and the dispatcher seam; classify that still-typed miss as an invalid refusal
 // before the process publishes its final lifecycle state, preserving misses=fills+suppressed+refusals.
 static void translit_jcc_ibtc_finalize_cpu(struct cpu *cpu) {
+#if !defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_call_sim_pending != 0) {
+        translit_call_sim_pending = 0;
+        hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY);
+    }
+#endif
     if (cpu != NULL && (cpu->jcc_ibtc_miss == TL_JCC_IBTC_MISS ||
                         cpu->jcc_ibtc_miss == TL_DIRECT_JMP_IBTC_MISS)) {
         uint32_t miss_kind = cpu->jcc_ibtc_miss;

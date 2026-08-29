@@ -1486,6 +1486,13 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
     _Atomic uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
+    _Atomic uint64_t call_sim_eligible;
+    _Atomic uint64_t call_sim_hit;
+    _Atomic uint64_t call_sim_miss;
+    _Atomic uint64_t call_sim_fill;
+    _Atomic uint64_t call_sim_decline_irq;
+    _Atomic uint64_t call_sim_decline_stub;
+    _Atomic uint64_t call_sim_decline_authority;
     _Atomic uint64_t jcc_ibtc_emitted;
     _Atomic uint64_t jcc_ibtc_hits;
     _Atomic uint64_t jcc_ibtc_misses;
@@ -1778,6 +1785,21 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CROSSING("i_service", census->interpreter_stop, HL_BACKEND_SHAPE_S_SERVICE);
     HL_APPEND_CROSSING("i_irq", census->interpreter_stop, HL_BACKEND_SHAPE_S_IRQ);
     HL_APPEND_CROSSING("i_fault", census->interpreter_stop, HL_BACKEND_SHAPE_S_FAULT);
+#define HL_APPEND_CALL_SIM(name, field)                                                                                \
+    do {                                                                                                               \
+        int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
+                             (unsigned long long)atomic_load_explicit(&census->field, memory_order_relaxed));           \
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
+        formatted += added;                                                                                           \
+    } while (0)
+    HL_APPEND_CALL_SIM("call_sim_eligible", call_sim_eligible);
+    HL_APPEND_CALL_SIM("call_sim_hit", call_sim_hit);
+    HL_APPEND_CALL_SIM("call_sim_miss", call_sim_miss);
+    HL_APPEND_CALL_SIM("call_sim_fill", call_sim_fill);
+    HL_APPEND_CALL_SIM("call_sim_decline_irq", call_sim_decline_irq);
+    HL_APPEND_CALL_SIM("call_sim_decline_stub", call_sim_decline_stub);
+    HL_APPEND_CALL_SIM("call_sim_decline_authority", call_sim_decline_authority);
+#undef HL_APPEND_CALL_SIM
 #undef HL_APPEND_CROSSING
     if ((size_t)formatted + 1 >= sizeof record) return;
     record[formatted++] = '\n';
@@ -1834,6 +1856,30 @@ static inline void hl_backend_tree_interpreter_stop(unsigned kind, uint64_t form
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census != NULL && kind < HL_BACKEND_SHAPE_S_COUNT)
         atomic_fetch_add_explicit(&census->interpreter_stop[kind], 1, memory_order_relaxed);
+}
+enum hl_backend_call_sim_counter {
+    HL_BACKEND_CALL_SIM_ELIGIBLE,
+    HL_BACKEND_CALL_SIM_HIT,
+    HL_BACKEND_CALL_SIM_MISS,
+    HL_BACKEND_CALL_SIM_FILL,
+    HL_BACKEND_CALL_SIM_DECLINE_IRQ,
+    HL_BACKEND_CALL_SIM_DECLINE_STUB,
+    HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY,
+};
+static inline void hl_backend_tree_call_sim_count(enum hl_backend_call_sim_counter kind) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    _Atomic uint64_t *counter = NULL;
+    switch (kind) {
+    case HL_BACKEND_CALL_SIM_ELIGIBLE: counter = &census->call_sim_eligible; break;
+    case HL_BACKEND_CALL_SIM_HIT: counter = &census->call_sim_hit; break;
+    case HL_BACKEND_CALL_SIM_MISS: counter = &census->call_sim_miss; break;
+    case HL_BACKEND_CALL_SIM_FILL: counter = &census->call_sim_fill; break;
+    case HL_BACKEND_CALL_SIM_DECLINE_IRQ: counter = &census->call_sim_decline_irq; break;
+    case HL_BACKEND_CALL_SIM_DECLINE_STUB: counter = &census->call_sim_decline_stub; break;
+    case HL_BACKEND_CALL_SIM_DECLINE_AUTHORITY: counter = &census->call_sim_decline_authority; break;
+    }
+    if (counter != NULL) atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
 #define hl_backend_tree_translated_fall_stop(reason) ((void)0)
 static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {

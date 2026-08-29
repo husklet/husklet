@@ -716,7 +716,18 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         // A fault leaves through the siglongjmp arm above and never reaches this completion seam. IRQ is
         // likewise not a completed terminal. Only a validated marker written by the terminal that actually
         // ran may advance the production execution proof.
-        if (g_prof && cpu->irq == 0) translit_mixed_profile_completed(G_MIXED_PROFILE_VALUE(cpu));
+        if (g_prof) {
+            uint32_t marker = G_MIXED_PROFILE_VALUE(cpu);
+            unsigned marker_kind = (marker >> TL_MIXED_PROFILE_KIND_SHIFT) & TL_MIXED_PROFILE_KIND_MASK;
+            int marker_valid = (marker & TL_MIXED_PROFILE_MAGIC_MASK) == TL_MIXED_PROFILE_MAGIC;
+            if (cpu->irq == 0) {
+                translit_mixed_profile_completed(marker);
+                if (marker_valid && marker_kind == HL_BACKEND_SHAPE_T_DIRECT_CALL)
+                    translit_call_sim_probe(cpu->rip);
+            } else if (marker_valid && marker_kind == HL_BACKEND_SHAPE_T_DIRECT_CALL) {
+                hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_IRQ);
+            }
+        }
         g_dispatch_census_open = 0;
 #endif
         hl_backend_tree_reason(cpu->reason);
