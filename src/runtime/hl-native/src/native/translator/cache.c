@@ -1322,6 +1322,9 @@ _Static_assert(IBTC_ALIGN % 16u == 0u, "the ibtc table's alignment must keep eve
    -- the same all-empty result in ~5us, and it never touches the parent's
    pages.  Other kernels (and any failure) fall back to the exact memset. */
 static void ibtc_clear_lazy(void) {
+#ifdef G_IBTC_CLEAR
+    G_IBTC_CLEAR();
+#endif
 #if defined(__linux__)
     if (madvise(g_ibtc, sizeof g_ibtc, MADV_DONTNEED) == 0) return;
 #endif
@@ -1348,6 +1351,9 @@ static inline ibtc_ent ibtc_snapshot(const ibtc_ent *e) {
 }
 
 static void ibtc_drop_target(uint64_t target) {
+#ifdef G_IBTC_DROP_TARGET
+    G_IBTC_DROP_TARGET(target);
+#endif
     ibtc_ent *entry = &g_ibtc[ibtc_index(target)];
     if (ibtc_snapshot(entry).target != target) return;
     /* Mapping invalidation owns the same STW/quiescent gate as tombstoning. Keep the pair atomic too so a
@@ -1786,7 +1792,8 @@ typedef struct {
     uint64_t guest;
 } jit_body_owner_entry;
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
-typedef uint16_t jit_body_owner_preserve;
+typedef uint32_t jit_body_owner_preserve;
+#define JIT_BODY_OWNER_PRESERVE_RET_RAX (1u << 16)
 typedef struct {
     uint64_t generation;
     uint8_t *rw;
@@ -1941,7 +1948,7 @@ static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
     uint32_t previous_end = token == 0 ? 0 : entries[token - 1].rw_end;
     for (uint32_t i = 0; i < wanted; i++) {
         if (range[i].hi <= range[i].lo || range[i].lo < base || range[i].hi > base + CACHE_SZ ||
-            range[i].preserve_registers > UINT16_MAX)
+            (range[i].preserve_registers & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) != 0)
             return 0;
         uint32_t start = (uint32_t)(range[i].lo - base), end = (uint32_t)(range[i].hi - base);
         if ((token != 0 || i != 0) && previous_end > start) return 0;

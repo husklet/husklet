@@ -2032,6 +2032,19 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     assert!(native_split.stdout.ends_with(b"faults=1 r11=1 rip=1 rsp=1 low=0\n"));
 }
 
+#[test]
+fn ret_stack_faults_preserve_architecture_before_commit() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "ret_stack_fault");
+    for arguments in [&[][..], &[b"2".as_slice()][..], &[b"3".as_slice(), b"u".as_slice()][..],
+                      &[b"2".as_slice(), b"u".as_slice()][..]] {
+        let (selected, status, _) = run_with_arguments(&executable, "1", arguments, true, false, false, false);
+        assert_eq!(status, 0, "{}", String::from_utf8_lossy(&selected));
+        assert!(selected.ends_with(b"faults=1 rip=1 rsp=1 regs=1 flags=1\n"),
+                "{}", String::from_utf8_lossy(&selected));
+    }
+}
+
 /// The other refusal, and the one that decides whether this backend is worth anything to a developer.
 ///
 /// A single anonymous `PROT_EXEC` mapping latches `g_rwx_guest`, and nothing clears it -- not a later

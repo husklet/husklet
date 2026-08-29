@@ -542,11 +542,33 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn ret_target_cache_simulation_is_observational_and_exact() {
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        let mut failures = Vec::new();
+        for scenario in (112..=126)
+            .chain(131..=134)
+            .chain(std::iter::once(130))
+            .chain(128..=129)
+            .chain(std::iter::once(127))
+            .chain(std::iter::once(135))
+            .chain(std::iter::once(136))
+        {
+            // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
+            let status = unsafe { hook(scenario) };
+            if status != 0 { failures.push((scenario, status)); }
+        }
+        assert!(failures.is_empty(), "RET IBTC scenarios failed: {failures:?}");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn unresolved_direct_call_ibtc_lifecycle_is_exact() {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 112..=122 {
+        for scenario in 137..=147 {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "direct CALL IBTC scenario {scenario}");
         }
@@ -1004,6 +1026,26 @@ mod tests {
             "direct_jmp_ibtc_fills",
             "direct_jmp_ibtc_suppressed",
             "direct_jmp_ibtc_invalid_refusals",
+            "direct_call_ibtc_emitted",
+            "direct_call_ibtc_hits",
+            "direct_call_ibtc_misses",
+            "direct_call_ibtc_irq",
+            "direct_call_ibtc_fills",
+            "direct_call_ibtc_invalid_refusals",
+            "ret_ibtc_attempts",
+            "ret_ibtc_hits",
+            "ret_ibtc_key_misses",
+            "ret_ibtc_null_misses",
+            "ret_ibtc_irq",
+            "ret_ibtc_fills",
+            "ret_ibtc_collisions",
+            "ret_ibtc_unmapped",
+            "ret_ibtc_invalid_refusals",
+            "ret_fast_ibtc_hits",
+            "ret_fast_ibtc_misses",
+            "ret_fast_ibtc_irq",
+            "ret_fast_ibtc_fills",
+            "ret_fast_ibtc_invalid_refusals",
         ];
         let mut fields = std::collections::BTreeMap::new();
         for token in records[0].split_whitespace() {

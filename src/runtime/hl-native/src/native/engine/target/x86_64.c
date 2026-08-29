@@ -176,7 +176,13 @@ static const hl_x86_avx_state g_avx_state = {&g_nonpie_lo, &g_nonpie_hi, &g_nonp
 #include "../../translator/guest_fetch.h"
 #include "../../translator/guest/x86_64/rep_runtime.h" // string-op helpers + the hooks engine_global_init sets
 #define G_STW_CPU_SLOT 1
+static void translit_ret_ibtc_drop_target(uint64_t target);
+static void translit_ret_ibtc_reset(void);
+#define G_IBTC_DROP_TARGET(target) translit_ret_ibtc_drop_target(target)
+#define G_IBTC_CLEAR() translit_ret_ibtc_reset()
 #include "../../translator/cache.c"                    // SHARED translator: code cache + block map
+#undef G_IBTC_DROP_TARGET
+#undef G_IBTC_CLEAR
 
 uint64_t hl_x86_guest_pointer(uint64_t address) {
     return g_nonpie_lo && address >= g_nonpie_lo && address < g_nonpie_hi ? address + g_nonpie_bias : address;
