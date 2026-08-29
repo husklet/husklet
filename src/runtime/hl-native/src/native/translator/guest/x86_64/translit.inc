@@ -4729,10 +4729,11 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         translit_jcc_ibtc_fill(&cpu, target_block, 0);
         if (scenario == 127) {
-            const uint64_t dirty[1][2] = {{target, target + 1}};
-            if (map_invalidate_source_ranges(dirty, 1) != 1 ||
-                ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0)
+            smc_inplace_drop();
+            if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0 ||
+                ibtc_snapshot(&translit_ret_ibtc[ibtc_index(target)]).target != 0)
                 return 128;
+            source_block = translit_jcc_ibtc_test_build(context, source);
             target_block = translit_jcc_ibtc_test_build(context, target);
             cpu.rip = target;
             cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
