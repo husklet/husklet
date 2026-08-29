@@ -1824,6 +1824,7 @@ static int g_body_owner_low_test_seeded;
 static int g_body_owner_low_test_rotated;
 static int g_body_owner_low_test_armed;
 static uint64_t g_body_owner_low_test_generation_translations;
+static int g_perf_map_fresh_rollover_test_armed;
 #endif
 
 static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int create) {
@@ -1918,6 +1919,14 @@ static void jit_body_owner_low_test_after_rotation(void) {
 }
 
 static void jit_body_owner_low_test_after_translation(void) {
+    const char *fresh = hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST");
+    if (!g_perf_map_fresh_rollover_test_armed && g_threaded && fresh != NULL && fresh[0] != '0' && fresh[0] != 0) {
+        /* Leave the next real map miss exactly one byte beyond the production
+           capacity threshold. With a live peer, dispatch takes stw_flush() and
+           jit_flush_to_fresh(); the hook does not allocate or publish a file. */
+        g_cp = g_cache + CACHE_SZ - CACHE_EMIT_HEADROOM + 1;
+        g_perf_map_fresh_rollover_test_armed = 1;
+    }
     const char *enabled = hl_option_get("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
     if (!g_body_owner_low_test_armed && enabled != NULL && enabled[0] != '0' && enabled[0] != 0) {
         g_body_owner_low_test_armed = 1;

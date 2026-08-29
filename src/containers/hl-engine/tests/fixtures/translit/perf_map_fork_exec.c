@@ -22,18 +22,26 @@ __attribute__((noinline)) static int profiled_caller(int value) {
     return profiled_target(value);
 }
 
+__attribute__((noinline)) static int post_rollover_target(int value) {
+    return value * 6;
+}
+
+__attribute__((noinline)) static int post_rollover_caller(int value) {
+    return post_rollover_target(value);
+}
+
 int main(int argc, char **argv) {
     volatile int seed = 7;
     if (argc == 2 && strcmp(argv[1], "post-exec") == 0) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, worker, NULL) != 0) return 7;
-        int answer = 0;
-        for (int i = 0; i < 64; i++) answer = profiled_caller(seed);
+        int answer = profiled_caller(seed);
+        int after = post_rollover_caller(seed);
         atomic_store_explicit(&worker_stop, 1, memory_order_release);
         if (pthread_join(thread, NULL) != 0) return 9;
-        printf("post-exec pid=%d answer=%d caller=%p target=%p\n", (int)getpid(), answer,
-               (void *)profiled_caller, (void *)profiled_target);
-        return answer == 42 ? 0 : 8;
+        printf("post-exec pid=%d answer=%d after=%d caller=%p target=%p\n", (int)getpid(), answer, after,
+               (void *)profiled_caller, (void *)post_rollover_caller);
+        return answer == 42 && after == 42 ? 0 : 8;
     }
 
     pid_t child = fork();
