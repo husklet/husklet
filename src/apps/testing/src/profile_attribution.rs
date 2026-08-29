@@ -435,8 +435,7 @@ fn run_mode_proof(manifest: &Manifest, results: &Path) -> Result<ModeProof, Erro
     }
     let stdout = results.join("mode-proof.stdout");
     let stderr = results.join("mode-proof.stderr");
-    let mut command = manifest.command.clone();
-    command[0] = executable.frozen.to_string_lossy().into_owned();
+    let command = mode_proof_command(manifest, &executable.frozen);
     let status = Command::new(&command[0])
         .args(&command[1..])
         .env("HL_C_DIAGNOSTICS", "1")
@@ -459,6 +458,13 @@ fn run_mode_proof(manifest: &Manifest, results: &Path) -> Result<ModeProof, Erro
         stdout_sha256: sha256(&stdout)?,
         semantic_output_sha256,
     })
+}
+
+fn mode_proof_command(manifest: &Manifest, executable: &Path) -> Vec<String> {
+    let mut command = manifest.command.clone();
+    command[0] = executable.to_string_lossy().into_owned();
+    command.insert(1, "--diagnostics".into());
+    command
 }
 
 fn verify_mode_diagnostic(mode: ExecutionMode, stderr: &str) -> Result<(), Error> {
@@ -1062,6 +1068,14 @@ mod tests {
             "[prof] translit: blocks=2\n[diag] direct_jmp_ibtc_enabled=0\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn mode_proof_argv_enables_diagnostics_without_changing_measured_argv() {
+        let manifest = test_manifest(vec![]);
+        let proof = mode_proof_command(&manifest, Path::new("/frozen/hl"));
+        assert_eq!(proof, ["/frozen/hl", "--diagnostics"]);
+        assert_eq!(manifest.command, ["x"]);
     }
 
     #[test]
