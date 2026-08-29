@@ -4733,8 +4733,10 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0 ||
                 ibtc_snapshot(&translit_ret_ibtc[ibtc_index(target)]).target != 0)
                 return 128;
-            source_block = translit_jcc_ibtc_test_build(context, source);
-            target_block = translit_jcc_ibtc_test_build(context, target);
+            map_put(source, source, source + 1, source_block,
+                    (uint8_t *)source_block + source_block->host_entry_off);
+            map_put(target, target, target + 1, target_block,
+                    (uint8_t *)target_block + target_block->host_entry_off);
             cpu.rip = target;
             cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
             translit_jcc_ibtc_fill(&cpu, target_block, 0);
