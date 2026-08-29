@@ -1214,7 +1214,7 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
             g_source_node_chunks[1] == NULL ||
             g_live_position_chunks[(uint32_t)slot >> JIT_SOURCE_CHUNK_SHIFT] == NULL)
             verdict = -EIO;
-        uint64_t dirty[][2] = {{end - 1u, end}};
+        uint64_t dirty[][2] = {{first, first + 1u}};
         *result = map_invalidate_source_ranges(dirty, 1);
         if (*result != 1 || map_body(first) != NULL) verdict = -EIO;
     } else {
