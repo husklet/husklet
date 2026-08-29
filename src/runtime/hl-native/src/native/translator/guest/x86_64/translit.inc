@@ -4750,7 +4750,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                        ? 0
                        : 137;
         }
-        if (scenario == 135) return translit_ret_signal_stage_test() ? 0 : 135;
+        if (scenario == 135) return translit_ret_signal_stage_test();
         uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
         *stack = target;
         struct cpu cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc};
@@ -5774,6 +5774,7 @@ static int translit_ret_signal_stage_test(void) {
     int saved_selected = translit_selected;
     translit_selected = 1;
     int exact = 1;
+    unsigned failed_stage = 0;
     for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; ++stage) {
         struct cpu cpu = {0};
         ucontext_t context;
@@ -5803,9 +5804,10 @@ static int translit_ret_signal_stage_test(void) {
         struct cpu expected_flags = {0};
         translit_flags_out(&expected_flags, UINT64_C(0xad7));
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
+        if (!exact) failed_stage = stage + 1;
     }
     translit_selected = saved_selected;
-    return exact;
+    return exact ? 0 : (int)failed_stage;
 }
 #endif
 
