@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
         let on = run_product_jcc_ibtc_diagnostic(false);
-        assert_eq!(on["version"], 4);
+        assert_eq!(on["version"], 5);
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
@@ -1080,7 +1080,7 @@ mod tests {
         assert_eq!(on["jcc_ibtc_invalid_refusals"], 0);
 
         let off = run_product_jcc_ibtc_diagnostic(true);
-        assert_eq!(off["version"], 4);
+        assert_eq!(off["version"], 5);
         assert_eq!(off["available"], 1);
         assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
         assert_eq!(off["jcc_ibtc_emitted"], 1);
