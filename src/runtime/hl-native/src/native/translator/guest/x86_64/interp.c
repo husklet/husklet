@@ -1900,26 +1900,16 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 #define X64_PC_MAGIC UINT64_C(0x3143535034364c48) /* "HL64PSC1" */
 #define X64_PC_VERSION UINT64_C(1)
 
-struct x64_pc_header {
-    uint64_t magic, version, translator_abi, cpu_size, map_capacity;
-    hl_identity_digest identity;
-    uint64_t entry, arena_used, map_count, owner_count, source_index_overflow;
-    uint64_t stub_entry, stub_rsp, stub_flags, stub_end;
-    uint64_t payload_checksum;
-};
+#define X64_PC_ENDIAN UINT64_C(0x0807060504030201)
+#define X64_PC_HEADER_SIZE 160u
+#define X64_PC_MAP_SIZE 84u
+#define X64_PC_OWNER_SIZE 24u
+#define X64_PC_CHECKSUM_OFFSET 152u
 
-struct x64_pc_map {
-    uint64_t gpc, guest_start, guest_end, host_offset, body_offset;
-    uint64_t block_offset, block_magic, block_gpc, block_generation;
-    uint32_t host_entry_offset, host_length;
-    uint16_t profile_instructions;
-    uint16_t reserved;
-};
-
-struct x64_pc_owner {
-    uint32_t start, end, preserve, reserved;
-    uint64_t guest;
-};
+static void x64_pc_put16(uint8_t **p, uint16_t v) { (*p)[0] = (uint8_t)v; (*p)[1] = (uint8_t)(v >> 8); *p += 2; }
+static void x64_pc_put32(uint8_t **p, uint32_t v) { for (unsigned i = 0; i < 4; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 4; }
+static void x64_pc_put64(uint8_t **p, uint64_t v) { for (unsigned i = 0; i < 8; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 8; }
+static uint64_t x64_pc_get64(const uint8_t *p) { uint64_t v = 0; for (unsigned i = 0; i < 8; i++) v |= (uint64_t)p[i] << (8*i); return v; }
 
 static hl_persist_directory g_x64_pc_directory;
 static char g_x64_pc_directory_path[1024];
@@ -1957,6 +1947,38 @@ static int x64_pc_file(char *path, size_t size) {
 static int pcache_load(uint64_t entry_jump) {
     (void)entry_jump;
     g_pcache_loaded = 0;
+    char path[1024];
+    void *allocation = NULL;
+    size_t size = 0;
+    if (!x64_pc_file(path, sizeof path) ||
+        !hl_persist_load_at(&g_x64_pc_directory, path, CACHE_SZ + UINT64_C(134217728), &allocation, &size))
+        return 0;
+    const uint8_t *bytes = allocation;
+    int valid = size >= X64_PC_HEADER_SIZE && x64_pc_get64(bytes) == X64_PC_MAGIC &&
+                x64_pc_get64(bytes + 8) == X64_PC_VERSION && x64_pc_get64(bytes + 16) == X64_PC_ENDIAN &&
+                x64_pc_get64(bytes + 24) == HL_PCACHE_ABI_X86_64 && x64_pc_get64(bytes + 32) == sizeof(struct cpu) &&
+                x64_pc_get64(bytes + 40) == JIT_MAP_N &&
+                memcmp(bytes + 48, g_pc_binid.bytes, sizeof g_pc_binid.bytes) == 0;
+    if (valid) {
+        uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
+        uint64_t map_bytes = maps <= UINT64_MAX / X64_PC_MAP_SIZE ? maps * X64_PC_MAP_SIZE : UINT64_MAX;
+        uint64_t owner_bytes = owners <= UINT64_MAX / X64_PC_OWNER_SIZE ? owners * X64_PC_OWNER_SIZE : UINT64_MAX;
+        valid = arena <= CACHE_SZ && maps <= JIT_MAP_N && owners <= JIT_BODY_OWNER_N && map_bytes != UINT64_MAX &&
+                owner_bytes != UINT64_MAX && X64_PC_HEADER_SIZE + map_bytes <= SIZE_MAX - owner_bytes &&
+                X64_PC_HEADER_SIZE + map_bytes + owner_bytes <= SIZE_MAX - arena &&
+                size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + arena;
+    }
+    if (valid) {
+        static const uint8_t zero[8];
+        hl_digest digest;
+        hl_digest_init(&digest, HL_DIGEST_SEED);
+        hl_digest_update(&digest, bytes, X64_PC_CHECKSUM_OFFSET);
+        hl_digest_update(&digest, zero, sizeof zero);
+        hl_digest_update(&digest, bytes + X64_PC_HEADER_SIZE, size - X64_PC_HEADER_SIZE);
+        valid = x64_pc_get64(bytes + X64_PC_CHECKSUM_OFFSET) == hl_digest_value(&digest);
+    }
+    free(allocation);
+    (void)valid; /* Validating is deliberately not restoring. */
     return 0; // MISS: the dispatcher translates fresh
 }
 
@@ -1972,25 +1994,25 @@ static void pcache_save(void) {
     jit_body_owner_entry *owner_entries =
         owners == NULL ? NULL : atomic_load_explicit(&owners->entry, memory_order_acquire);
     uint32_t owner_count = owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
-    if ((owner_count != 0 && owner_entries == NULL) || map_count > SIZE_MAX / sizeof(struct x64_pc_map) ||
-        owner_count > SIZE_MAX / sizeof(struct x64_pc_owner))
+    if ((owner_count != 0 && owner_entries == NULL) || map_count > SIZE_MAX / X64_PC_MAP_SIZE ||
+        owner_count > SIZE_MAX / X64_PC_OWNER_SIZE)
         return;
-    size_t map_bytes = (size_t)map_count * sizeof(struct x64_pc_map);
-    size_t owner_bytes = (size_t)owner_count * sizeof(struct x64_pc_owner);
-    if (used > SIZE_MAX - sizeof(struct x64_pc_header) - map_bytes - owner_bytes) return;
-    size_t total = sizeof(struct x64_pc_header) + map_bytes + owner_bytes + (size_t)used;
-    uint8_t *buffer = malloc(total);
+    size_t map_bytes = (size_t)map_count * X64_PC_MAP_SIZE;
+    size_t owner_bytes = (size_t)owner_count * X64_PC_OWNER_SIZE;
+    if (used > SIZE_MAX - X64_PC_HEADER_SIZE - map_bytes - owner_bytes) return;
+    size_t total = X64_PC_HEADER_SIZE + map_bytes + owner_bytes + (size_t)used;
+    uint8_t *buffer = calloc(1, total);
     if (buffer == NULL) return;
-    struct x64_pc_header *header = (struct x64_pc_header *)buffer;
-    *header = (struct x64_pc_header){X64_PC_MAGIC, X64_PC_VERSION, HL_PCACHE_ABI_X86_64,
-                                     sizeof(struct cpu), JIT_MAP_N, g_pc_binid, g_pc_entry, used,
-                                     map_count, owner_count, g_source_index_overflow,
-                                     x64_pc_offset(translit_jcc_ibtc_stub_entry, used),
-                                     x64_pc_offset(translit_jcc_ibtc_stub_rsp_canonical, used),
-                                     x64_pc_offset(translit_jcc_ibtc_stub_flags_canonical, used),
-                                     x64_pc_offset(translit_jcc_ibtc_stub_end, used), 0};
-    struct x64_pc_map *maps = (struct x64_pc_map *)(header + 1);
-    uint64_t next = 0;
+    uint8_t *cursor = buffer;
+    x64_pc_put64(&cursor, X64_PC_MAGIC); x64_pc_put64(&cursor, X64_PC_VERSION); x64_pc_put64(&cursor, X64_PC_ENDIAN);
+    x64_pc_put64(&cursor, HL_PCACHE_ABI_X86_64); x64_pc_put64(&cursor, sizeof(struct cpu)); x64_pc_put64(&cursor, JIT_MAP_N);
+    memcpy(cursor, g_pc_binid.bytes, sizeof g_pc_binid.bytes); cursor += sizeof g_pc_binid.bytes;
+    x64_pc_put64(&cursor, g_pc_entry); x64_pc_put64(&cursor, used); x64_pc_put64(&cursor, map_count);
+    x64_pc_put64(&cursor, owner_count); x64_pc_put64(&cursor, g_source_index_overflow);
+    x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_entry, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_rsp_canonical, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_flags_canonical, used));
+    x64_pc_put64(&cursor, x64_pc_offset(translit_jcc_ibtc_stub_end, used)); x64_pc_put64(&cursor, 0);
     for (uint32_t i = 0; i < JIT_MAP_N; i++) {
         if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
         uint64_t host = x64_pc_offset(g_map[i].host, used), body = x64_pc_offset(g_map[i].body, used);
@@ -1999,22 +2021,23 @@ static void pcache_save(void) {
             return;
         }
         struct interp_block *block = (struct interp_block *)(g_cache + body);
-        maps[next++] = (struct x64_pc_map){g_map[i].gpc, g_map_metadata[i].guest_start,
-                                          g_map_metadata[i].guest_end, host, body, body, block->magic,
-                                          block->gpc, block->generation, block->host_entry_off,
-                                          block->host_len, block->profile_insns, 0};
+        x64_pc_put64(&cursor, g_map[i].gpc); x64_pc_put64(&cursor, g_map_metadata[i].guest_start);
+        x64_pc_put64(&cursor, g_map_metadata[i].guest_end); x64_pc_put64(&cursor, host); x64_pc_put64(&cursor, body);
+        x64_pc_put64(&cursor, body); x64_pc_put64(&cursor, block->magic); x64_pc_put64(&cursor, block->gpc);
+        x64_pc_put64(&cursor, block->generation); x64_pc_put32(&cursor, block->host_entry_off);
+        x64_pc_put32(&cursor, block->host_len); x64_pc_put16(&cursor, block->profile_insns); x64_pc_put16(&cursor, 0);
     }
-    struct x64_pc_owner *owner_records = (struct x64_pc_owner *)((uint8_t *)maps + map_bytes);
     jit_body_owner_preserve *preserves = owner_entries == NULL ? NULL : jit_body_owner_preserves(owner_entries);
-    for (uint32_t i = 0; i < owner_count; i++)
-        owner_records[i] = (struct x64_pc_owner){owner_entries[i].rw_start, owner_entries[i].rw_end,
-                                                preserves[i], 0, owner_entries[i].guest};
-    uint8_t *arena = (uint8_t *)owner_records + owner_bytes;
-    memcpy(arena, g_cache, (size_t)used);
+    for (uint32_t i = 0; i < owner_count; i++) {
+        x64_pc_put32(&cursor, owner_entries[i].rw_start); x64_pc_put32(&cursor, owner_entries[i].rw_end);
+        x64_pc_put32(&cursor, preserves[i]); x64_pc_put32(&cursor, 0); x64_pc_put64(&cursor, owner_entries[i].guest);
+    }
+    memcpy(cursor, g_cache, (size_t)used);
     hl_digest digest;
     hl_digest_init(&digest, HL_DIGEST_SEED);
-    hl_digest_update(&digest, buffer + sizeof *header, total - sizeof *header);
-    header->payload_checksum = hl_digest_value(&digest);
+    hl_digest_update(&digest, buffer, total);
+    cursor = buffer + X64_PC_CHECKSUM_OFFSET;
+    x64_pc_put64(&cursor, hl_digest_value(&digest));
     char path[1024];
     if (x64_pc_file(path, sizeof path)) (void)hl_persist_store_at(&g_x64_pc_directory, path, buffer, total);
     free(buffer);
@@ -2024,8 +2047,29 @@ static void x64_pc_after_fork(void) {
     g_x64_pc_forked = 1;
 }
 
+static void pcache_exec_force_main(void) {
+    if (g_pcache) g_force_base = PC_IMG_BASE;
+}
+
+static void pcache_exec_force_interp(void) {
+    if (g_pcache) g_force_base = PC_INTERP_BASE;
+}
+
+/* proc.c invokes this only after the exec path has flushed the inherited arena and loaded the new image.
+ * That ordering is what makes clearing the fork refusal safe: the new identity cannot describe parent code. */
+static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
+                               uint64_t jump) {
+    if (!g_pcache) return;
+    g_pc_binid = pcache_make_id(program, interpreter, argv0);
+    g_pc_entry = jump;
+    g_x64_pc_forked = 0;
+    g_pcache_loaded = 0;
+    (void)pcache_load(jump);
+}
+
 #define PCACHE_SAVE_HOOK pcache_save()
 #define PCACHE_FORK_HOOK x64_pc_after_fork()
+#define PCACHE_EXEC_HOOKS 1
 
 static void pcache_directory_close(void) {
     if (g_x64_pc_directory.handle != HL_HOST_HANDLE_INVALID)
