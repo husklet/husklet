@@ -1575,6 +1575,30 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         .filter_map(|path| path.file_name().unwrap().to_string_lossy().split("-rx").nth(1).map(str::to_owned))
         .collect::<std::collections::BTreeSet<_>>();
     assert!(rx.len() >= 2, "exec retained only stale RX identity: {child_maps:?}");
+    let generations = child_maps
+        .iter()
+        .filter_map(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .split("-g")
+                .nth(1)
+                .and_then(|tail| tail.split("-rx").next())
+                .and_then(|generation| generation.parse::<u64>().ok())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        [1, 2].into_iter().all(|generation| generations.contains(&generation)),
+        "child did not publish both post-exec bus generations: {child_maps:?}"
+    );
+    let all_names = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        all_names.iter().any(|name| name.starts_with("perf-") && name.contains("-g0-rx")),
+        "launch generation g0 was not published before the child g1/g2 rollover: {all_names:?}"
+    );
 }
 
 #[test]

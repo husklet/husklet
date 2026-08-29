@@ -110,8 +110,13 @@ static const hl_option_definition hl_option_definitions[] = {
                      "disable late publication for same-ISA direct JMP targets", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",
                         "test-only render every same-ISA profile counter at UINT64 width", HL_OPTION_FLAG),
-    HL_INJECTION_OPTION("HL_TRANSLIT_PERF_MAP",
-                        "test-only directory for same-ISA perf map publication", HL_OPTION_PATH),
+    /* This is launch-owned diagnostic authority, not a one-shot fault injection.  Guest exec clones the
+       process option store before the replacement image's bus activation/arena rotations; classifying the
+       directory as TEST_INJECTION dropped it at that clone boundary and left later translated bodies without
+       generation maps.  INTERNAL_STATE keeps the caller-owned directory across that same process tree while
+       an unrelated launch still starts from an explicit, empty option store. */
+    HL_INTERNAL_OPTION("HL_TRANSLIT_PERF_MAP",
+                       "test-only directory for same-ISA perf map publication", HL_OPTION_PATH),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",
