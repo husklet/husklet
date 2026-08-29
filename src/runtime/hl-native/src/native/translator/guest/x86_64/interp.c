@@ -45,6 +45,7 @@
 // still EXIST; core/target/x86_64.c reports them at exit.
 static int g_fastsys;
 static uint64_t g_fast_count;
+static uint64_t x64_pcache_codegen_modes(void);
 
 static void s1_calibrate(void) {
     // Nothing to measure; clock syscalls take the R_SYSCALL exit, as after a failure.
@@ -1872,6 +1873,17 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
 
 static int g_force_base_failed; // latched by the ELF loader on fixed-VA map fallback
 
+static uint64_t x64_pcache_codegen_modes(void) {
+    return (uint64_t)hl_option_flag_value("HL_TRANSLIT_JCC_LINK_DISABLE", 0) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0) << 1) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0) << 2) |
+           ((uint64_t)(g_prof != 0) << 3) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1) << 4) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_FS_AUTHORITY_TEST", 0) << 5) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_PROVENANCE_FALLBACK", 0) << 6) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_BODY_OWNER_EXHAUST", 0) << 7);
+}
+
 static uint64_t pcache_engine_id(void) {
     uint64_t hash = 1469598103934665603ull;
     uint64_t self = hl_identity_source(&g_jit_services, g_self_path);
@@ -1881,19 +1893,13 @@ static uint64_t pcache_engine_id(void) {
     }
     hash ^= self;
     hash *= 1099511628211ull;
-    uint64_t modes = (hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
-                     ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
-                     ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
-                     ((uint64_t)(g_prof != 0) << 3);
+    uint64_t modes = x64_pcache_codegen_modes();
     return hl_identity_configuration(hash, 2, HL_HOST_CPU_ISA, modes);
 }
 
 static hl_identity_digest pcache_translator_identity(void) {
     static const char tag[] = __DATE__ " " __TIME__;
-    uint64_t modes = (hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
-                     ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
-                     ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
-                     ((uint64_t)(g_prof != 0) << 3);
+    uint64_t modes = x64_pcache_codegen_modes();
     return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, modes);
 }
 
@@ -1969,11 +1975,7 @@ static int pcache_load(uint64_t entry_jump) {
                 x64_pc_get64(bytes + 24) == HL_PCACHE_ABI_X86_64 && x64_pc_get64(bytes + 32) == sizeof(struct cpu) &&
                 x64_pc_get64(bytes + 40) == JIT_MAP_N &&
                 memcmp(bytes + 48, g_pc_binid.bytes, sizeof g_pc_binid.bytes) == 0 &&
-                x64_pc_get64(bytes + 192) ==
-                    ((hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
-                     ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
-                     ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
-                     ((uint64_t)(g_prof != 0) << 3));
+                x64_pc_get64(bytes + 192) == x64_pcache_codegen_modes();
     if (valid) {
         uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
         uint64_t relocs = x64_pc_get64(bytes + 184);
@@ -2149,10 +2151,7 @@ static void pcache_save(void) {
     x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_flags_canonical, used));
     x64_pc_put64(&cursor, x64_pc_offset(translit_direct_jmp_ibtc_stub_end, used));
     x64_pc_put64(&cursor, translit_external_absolute_count);
-    x64_pc_put64(&cursor, (hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE") != NULL) |
-                              ((uint64_t)(hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL) << 1) |
-                              ((uint64_t)(hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") != NULL) << 2) |
-                              ((uint64_t)(g_prof != 0) << 3));
+    x64_pc_put64(&cursor, x64_pcache_codegen_modes());
     x64_pc_put64(&cursor, 0);
     for (uint32_t i = 0; i < JIT_MAP_N; i++) {
         if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;

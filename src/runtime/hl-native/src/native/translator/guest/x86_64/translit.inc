@@ -1255,8 +1255,7 @@ static void translit_emit_reload(hl_x64_asm *a) {
 // so any SMC/invalidation that can stale the bypassed target also removes the source link.
 static struct interp_block *translit_jcc_link_target(uint64_t source, uint64_t target) {
 #if defined(HL_NATIVE_TEST_HOOKS)
-    const char *disabled = hl_option_get("HL_TRANSLIT_JCC_LINK_DISABLE");
-    if (disabled != NULL && disabled[0] != '0' && disabled[0] != 0) return NULL;
+    if (hl_option_flag_value("HL_TRANSLIT_JCC_LINK_DISABLE", 0)) return NULL;
 #endif
     uint64_t page = source & ~UINT64_C(0xfff);
     if (page > UINT64_MAX - UINT64_C(0x1000) || (target & ~UINT64_C(0xfff)) != page) return NULL;
@@ -1941,7 +1940,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
     int disabled = actual_miss && (direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)
                                              : direct_call ? 0
-                                                           : hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") != NULL);
+                                                           : hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0));
     if (disabled) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_SUPPRESSED, 1);
@@ -2514,6 +2513,27 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
     if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
+    if (scenario == 112) {
+        static const struct { const char *name; int missing; unsigned bit; } modes[] = {
+            {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
+            {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
+            {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
+            {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
+        };
+        for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
+        uint64_t baseline = x64_pcache_codegen_modes();
+        for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) {
+            if (hl_option_set(modes[i].name, modes[i].missing ? "1" : "0", 1) != 0 ||
+                x64_pcache_codegen_modes() != baseline)
+                return 212;
+            (void)hl_option_unset(modes[i].name);
+            if (hl_option_set(modes[i].name, modes[i].missing ? "0" : "1", 1) != 0 ||
+                x64_pcache_codegen_modes() != (baseline ^ (UINT64_C(1) << modes[i].bit)))
+                return 213;
+            (void)hl_option_unset(modes[i].name);
+        }
+        return x64_pcache_codegen_modes() == baseline ? 0 : 214;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -3658,7 +3678,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
 #endif
     int fs_run = first_kind == TL_FS_MEM;
-    int mixed_sse_enabled = hl_option_get("HL_TRANSLIT_MIXED_SSE_DISABLE") == NULL;
+    int mixed_sse_enabled = !hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0);
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
     // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
     int direct_data_authority =

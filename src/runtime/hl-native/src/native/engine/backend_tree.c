@@ -1791,7 +1791,7 @@ void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
     /* The anonymous mapping is already zeroed. Publish the root before any guest instruction or fork. */
     int self = (int)getpid();
     atomic_store_explicit(&g_backend_mixed_sse->root_pid, self, memory_order_release);
-    g_backend_mixed_sse->jcc_ibtc_enabled = hl_option_get("HL_TRANSLIT_JCC_IBTC_DISABLE") == NULL;
+    g_backend_mixed_sse->jcc_ibtc_enabled = !hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
     g_backend_mixed_sse->direct_jmp_ibtc_enabled =
         !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1);
     g_backend_mixed_sse_self = hl_backend_mixed_sse_claim(self);

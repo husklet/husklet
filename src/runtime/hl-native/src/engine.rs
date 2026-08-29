@@ -534,7 +534,7 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 101..=111 {
+        for scenario in 101..=112 {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "direct JMP IBTC scenario {scenario}");
         }
