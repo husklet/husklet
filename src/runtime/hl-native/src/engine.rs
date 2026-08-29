@@ -546,7 +546,7 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 112..=118 {
+        for scenario in 112..=120 {
             // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
             assert_eq!(unsafe { hook(scenario) }, 0, "RET IBTC simulation scenario {scenario}");
         }
@@ -1013,6 +1013,11 @@ mod tests {
             "ret_ibtc_collisions",
             "ret_ibtc_unmapped",
             "ret_ibtc_invalid_refusals",
+            "ret_fast_ibtc_hits",
+            "ret_fast_ibtc_misses",
+            "ret_fast_ibtc_irq",
+            "ret_fast_ibtc_fills",
+            "ret_fast_ibtc_invalid_refusals",
         ];
         let mut fields = std::collections::BTreeMap::new();
         for token in records[0].split_whitespace() {

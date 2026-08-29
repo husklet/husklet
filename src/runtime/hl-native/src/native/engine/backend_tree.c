@@ -1471,6 +1471,11 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t ret_ibtc_collisions;
     _Atomic uint64_t ret_ibtc_unmapped;
     _Atomic uint64_t ret_ibtc_invalid_refusals;
+    _Atomic uint64_t ret_fast_ibtc_hits;
+    _Atomic uint64_t ret_fast_ibtc_misses;
+    _Atomic uint64_t ret_fast_ibtc_irq;
+    _Atomic uint64_t ret_fast_ibtc_fills;
+    _Atomic uint64_t ret_fast_ibtc_invalid_refusals;
     /* Immutable after root initialization and before any guest fork. */
     uint32_t jcc_ibtc_enabled;
     uint32_t direct_jmp_ibtc_enabled;
@@ -1658,7 +1663,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "direct_jmp_ibtc_invalid_refusals=%llu ret_ibtc_attempts=%llu "
                              "ret_ibtc_hits=%llu ret_ibtc_key_misses=%llu ret_ibtc_null_misses=%llu "
                              "ret_ibtc_irq=%llu ret_ibtc_fills=%llu ret_ibtc_collisions=%llu "
-                             "ret_ibtc_unmapped=%llu ret_ibtc_invalid_refusals=%llu\n",
+                             "ret_ibtc_unmapped=%llu ret_ibtc_invalid_refusals=%llu "
+                             "ret_fast_ibtc_hits=%llu ret_fast_ibtc_misses=%llu ret_fast_ibtc_irq=%llu "
+                             "ret_fast_ibtc_fills=%llu ret_fast_ibtc_invalid_refusals=%llu\n",
                              available,
                              (unsigned long long)atomic_load_explicit(&census->executed, memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->executed_transitions,
@@ -1712,6 +1719,16 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)atomic_load_explicit(&census->ret_ibtc_unmapped,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->ret_ibtc_invalid_refusals,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_hits,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_misses,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_irq,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_fills,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_invalid_refusals,
                                                                      memory_order_relaxed));
     if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
     size_t offset = 0;
@@ -1863,6 +1880,37 @@ static int hl_backend_tree_ret_ibtc_enabled(void) {
 
 static void hl_backend_tree_ret_ibtc_add(enum hl_backend_ret_ibtc_counter kind, uint64_t count) {
     _Atomic uint64_t *counter = hl_backend_tree_ret_ibtc_counter(kind);
+    if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+}
+
+enum hl_backend_ret_fast_ibtc_counter {
+    HL_BACKEND_RET_FAST_IBTC_HIT,
+    HL_BACKEND_RET_FAST_IBTC_MISS,
+    HL_BACKEND_RET_FAST_IBTC_IRQ,
+    HL_BACKEND_RET_FAST_IBTC_FILL,
+    HL_BACKEND_RET_FAST_IBTC_INVALID_REFUSAL,
+};
+
+static _Atomic uint64_t *hl_backend_tree_ret_fast_ibtc_counter(enum hl_backend_ret_fast_ibtc_counter kind) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return NULL;
+    switch (kind) {
+    case HL_BACKEND_RET_FAST_IBTC_HIT: return &census->ret_fast_ibtc_hits;
+    case HL_BACKEND_RET_FAST_IBTC_MISS: return &census->ret_fast_ibtc_misses;
+    case HL_BACKEND_RET_FAST_IBTC_IRQ: return &census->ret_fast_ibtc_irq;
+    case HL_BACKEND_RET_FAST_IBTC_FILL: return &census->ret_fast_ibtc_fills;
+    case HL_BACKEND_RET_FAST_IBTC_INVALID_REFUSAL: return &census->ret_fast_ibtc_invalid_refusals;
+    }
+    return NULL;
+}
+
+static uintptr_t hl_backend_tree_ret_fast_ibtc_dynamic_counter_address(
+    enum hl_backend_ret_fast_ibtc_counter kind) {
+    return (uintptr_t)hl_backend_tree_ret_fast_ibtc_counter(kind);
+}
+
+static void hl_backend_tree_ret_fast_ibtc_add(enum hl_backend_ret_fast_ibtc_counter kind, uint64_t count) {
+    _Atomic uint64_t *counter = hl_backend_tree_ret_fast_ibtc_counter(kind);
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
 }
 #define hl_backend_tree_interpreter_entry(kind, fallback_form) ((void)0)
