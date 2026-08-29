@@ -3036,7 +3036,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 112 && scenario <= 135) {
+    if (scenario >= 112 && scenario <= 136) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
@@ -4702,7 +4702,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                    ? 0
                    : 127;
     }
-    if (scenario >= 121 && scenario <= 135) {
+    if (scenario >= 121 && scenario <= 136) {
         const size_t arena_size = 65536;
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -4741,6 +4741,15 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         if (context == NULL) return 122;
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
         if (source_block == NULL) return 136;
+        if (scenario == 136) {
+            uint32_t token;
+            jit_body_owner_range invalid = {
+                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 17};
+            return jit_body_owner_reserve_n(g_cache_gen, 1, &token) &&
+                           !jit_body_owner_publish_n(g_cache_gen, token, &invalid, 1)
+                       ? 0
+                       : 137;
+        }
         if (scenario == 135) return translit_ret_signal_stage_test() ? 0 : 135;
         uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
         *stack = target;
