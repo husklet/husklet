@@ -27,6 +27,12 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
         Self::flag(&mut options, "HL_C_DIAGNOSTICS", launch.execution.diagnostics())?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST",
+            std::env::var_os("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST").is_some(),
+        )?;
         Self::flag(&mut options, "HL_CHECKPOINT", launch.checkpoint.is_some())?;
         Self::flag(
             &mut options,
