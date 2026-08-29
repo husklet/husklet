@@ -16,10 +16,15 @@ enum Mode {
     CacheCold,
     CacheFreshRollover,
     CacheSemanticMap,
+    CacheSemanticDuplicate,
     CacheSemanticHelper,
     CacheSemanticRelocation,
     CacheSemanticLibrary,
+    CacheSemanticOverlap,
     CacheSemanticChain,
+    CacheChangedLibrary,
+    CacheAbsentLibrary,
+    CacheStageFailure,
     CacheValid,
     CacheBitflip,
     CacheTruncated,
@@ -36,10 +41,15 @@ impl Mode {
             "cache-cold" => Ok(Self::CacheCold),
             "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
             "cache-semantic-map" => Ok(Self::CacheSemanticMap),
+            "cache-semantic-duplicate" => Ok(Self::CacheSemanticDuplicate),
             "cache-semantic-helper" => Ok(Self::CacheSemanticHelper),
             "cache-semantic-relocation" => Ok(Self::CacheSemanticRelocation),
             "cache-semantic-library" => Ok(Self::CacheSemanticLibrary),
+            "cache-semantic-overlap" => Ok(Self::CacheSemanticOverlap),
             "cache-semantic-chain" => Ok(Self::CacheSemanticChain),
+            "cache-changed-library" => Ok(Self::CacheChangedLibrary),
+            "cache-absent-library" => Ok(Self::CacheAbsentLibrary),
+            "cache-stage-failure" => Ok(Self::CacheStageFailure),
             "cache-valid" => Ok(Self::CacheValid),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
@@ -88,9 +98,22 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             !cache.exists() || cache.read_dir()?.next().is_none(),
             "cold arm did not begin with an empty cache",
         )?;
-    } else if matches!(mode, Mode::CacheValid | Mode::CacheBitflip | Mode::CacheTruncated |
-                       Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation |
-                       Mode::CacheSemanticLibrary | Mode::CacheSemanticChain) {
+    } else if matches!(
+        mode,
+        Mode::CacheValid
+            | Mode::CacheBitflip
+            | Mode::CacheTruncated
+            | Mode::CacheSemanticMap
+            | Mode::CacheSemanticDuplicate
+            | Mode::CacheSemanticHelper
+            | Mode::CacheSemanticRelocation
+            | Mode::CacheSemanticLibrary
+            | Mode::CacheSemanticOverlap
+            | Mode::CacheSemanticChain
+            | Mode::CacheChangedLibrary
+            | Mode::CacheAbsentLibrary
+            | Mode::CacheStageFailure
+    ) {
         require(
             cache.read_dir()?.next().is_some(),
             "warm arm began without a published cache",
@@ -108,6 +131,19 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             source.display()
         )
     })?;
+    if mode == Mode::CacheChangedLibrary {
+        // A trailing byte leaves the ELF load image and compiler behavior unchanged while changing the
+        // complete-content authority. Append the replacement last so the imported image contains the
+        // changed library rather than merely corrupting the persisted manifest.
+        let relative = "usr/lib/libisl.so.23.3.0";
+        let mut changed = fs::read(source.join(relative))?;
+        changed.push(0);
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o755);
+        header.set_size(changed.len() as u64);
+        header.set_cksum();
+        archive.append_data(&mut header, relative, changed.as_slice())?;
+    }
     archive.finish()?;
     drop(archive);
     let input = fs::read(source.join("work/src/unit_127.c"))?;
@@ -149,12 +185,44 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "fresh-rollover arm did not enable its native hook",
         )?;
     }
-    if matches!(mode, Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation |
-                      Mode::CacheSemanticLibrary | Mode::CacheSemanticChain) {
-        let artifact = cache.read_dir()?.find_map(|entry| {
-            let entry = entry.ok()?;
-            entry.file_name().as_encoded_bytes().ends_with(b".x64pcache").then_some(entry.path())
-        }).ok_or("semantic corruption arm found no cache artifact")?;
+    if mode == Mode::CacheStageFailure {
+        let stage = std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE")?;
+        require(
+            [
+                "arena-copy",
+                "relocation",
+                "map-build",
+                "owner-build",
+                "source-build",
+                "chain-fallback",
+                "manifest-activation",
+            ]
+            .contains(&stage.as_str()),
+            "unknown warm failure stage",
+        )?;
+    }
+    if matches!(
+        mode,
+        Mode::CacheSemanticMap
+            | Mode::CacheSemanticDuplicate
+            | Mode::CacheSemanticHelper
+            | Mode::CacheSemanticRelocation
+            | Mode::CacheSemanticLibrary
+            | Mode::CacheSemanticOverlap
+            | Mode::CacheSemanticChain
+            | Mode::CacheAbsentLibrary
+    ) {
+        let artifact = cache
+            .read_dir()?
+            .find_map(|entry| {
+                let entry = entry.ok()?;
+                entry
+                    .file_name()
+                    .as_encoded_bytes()
+                    .ends_with(b".x64pcache")
+                    .then_some(entry.path())
+            })
+            .ok_or("semantic corruption arm found no cache artifact")?;
         let mut bytes = fs::read(&artifact)?;
         require(bytes.len() >= 256, "semantic corruption artifact is truncated")?;
         let get = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
@@ -169,9 +237,20 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
                 require(maps != 0, "semantic map corruption has no map record")?;
                 bytes[256 + 8..256 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
             }
+            Mode::CacheSemanticDuplicate => {
+                require(
+                    maps >= 2,
+                    "semantic duplicate corruption has fewer than two map records",
+                )?;
+                let first = bytes[256..256 + 84].to_vec();
+                bytes[256 + 84..256 + 168].copy_from_slice(&first);
+            }
             Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
             Mode::CacheSemanticRelocation => {
-                require(relocations != 0, "semantic relocation corruption has no relocation record")?;
+                require(
+                    relocations != 0,
+                    "semantic relocation corruption has no relocation record",
+                )?;
                 let offset = 256 + maps * 84 + owners * 24 + 4;
                 bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
             }
@@ -180,10 +259,78 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
                 let offset = 256 + maps * 84 + owners * 24 + relocations * 8;
                 bytes[offset..offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
             }
+            Mode::CacheSemanticOverlap => {
+                require(
+                    libraries >= 2,
+                    "semantic overlap corruption has fewer than two libraries",
+                )?;
+                let libraries_at = 256 + maps * 84 + owners * 24 + relocations * 8;
+                let first_base = get(libraries_at);
+                let first_len = get(libraries_at + 8);
+                require(first_len > 1, "first manifest span is too short to overlap")?;
+                let second = libraries_at + 56;
+                bytes[second..second + 8].copy_from_slice(&(first_base + first_len - 1).to_le_bytes());
+            }
             Mode::CacheSemanticChain => {
                 require(chains != 0, "semantic chain corruption has no chain record")?;
                 let offset = 256 + maps * 84 + owners * 24 + relocations * 8 + libraries * 56 + 4;
                 bytes[offset..offset + 4].copy_from_slice(&(arena as u32).to_le_bytes());
+            }
+            Mode::CacheAbsentLibrary => {
+                require(libraries != 0, "absent-library arm has no manifest record")?;
+                let maps_at = 256;
+                let owners_at = maps_at + maps * 84;
+                let relocations_at = owners_at + owners * 24;
+                let libraries_at = relocations_at + relocations * 8;
+                let chains_at = libraries_at + libraries * 56;
+                let arena_at = chains_at + chains * 24;
+                let selected = (0..libraries)
+                    .find(|library| {
+                        let at = libraries_at + library * 56;
+                        let base = get(at);
+                        let end = base.saturating_add(get(at + 8));
+                        bytes[maps_at..owners_at].chunks_exact(84).any(|record| {
+                            let start = u64::from_le_bytes(record[8..16].try_into().unwrap());
+                            let finish = u64::from_le_bytes(record[16..24].try_into().unwrap());
+                            start >= base && finish <= end
+                        })
+                    })
+                    .ok_or("absent-library arm found no manifest-owned block")?;
+                let selected_at = libraries_at + selected * 56;
+                let lib_base = get(selected_at);
+                let lib_len = get(selected_at + 8);
+                let lib_end = lib_base.checked_add(lib_len).ok_or("library span overflow")?;
+                let mut kept_maps = Vec::new();
+                let mut removed_maps = 0usize;
+                for record in bytes[maps_at..owners_at].chunks_exact(84) {
+                    let start = u64::from_le_bytes(record[8..16].try_into().unwrap());
+                    let end = u64::from_le_bytes(record[16..24].try_into().unwrap());
+                    if start >= lib_base && end <= lib_end {
+                        removed_maps += 1;
+                    } else {
+                        kept_maps.extend_from_slice(record);
+                    }
+                }
+                require(removed_maps != 0, "selected absent library owned no cached blocks")?;
+                let mut kept_chains = Vec::new();
+                for record in bytes[chains_at..arena_at].chunks_exact(24) {
+                    let source = u64::from_le_bytes(record[8..16].try_into().unwrap());
+                    let target = u64::from_le_bytes(record[16..24].try_into().unwrap());
+                    if !((source >= lib_base && source < lib_end) || (target >= lib_base && target < lib_end)) {
+                        kept_chains.extend_from_slice(record);
+                    }
+                }
+                let mut rebuilt = bytes[..256].to_vec();
+                rebuilt[96..104].copy_from_slice(&(maps - removed_maps).to_le_bytes());
+                rebuilt[232..240].copy_from_slice(&(libraries - 1).to_le_bytes());
+                rebuilt[240..248].copy_from_slice(&(kept_chains.len() / 24).to_le_bytes());
+                rebuilt.extend_from_slice(&kept_maps);
+                rebuilt.extend_from_slice(&bytes[owners_at..libraries_at]);
+                rebuilt.extend_from_slice(&bytes[libraries_at..selected_at]);
+                rebuilt.extend_from_slice(&bytes[selected_at + 56..chains_at]);
+                rebuilt.extend_from_slice(&kept_chains);
+                rebuilt.extend_from_slice(&bytes[arena_at..]);
+                bytes = rebuilt;
             }
             _ => unreachable!(),
         }
@@ -287,8 +434,16 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         )?;
         match mode {
             Mode::CacheCold => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache")) &&
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(11).any(|part| part == b".published-")),
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                    && entries.iter().any(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(11)
+                            .any(|part| part == b".published-")
+                    }),
                 "cold arm did not publish a cache artifact and receipt",
             )?,
             Mode::CacheFreshRollover => require(
@@ -301,35 +456,154 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
                 }),
                 "fresh generation did not publish an exact relocation-ledger receipt",
             )?,
-            Mode::CacheSemanticMap | Mode::CacheSemanticHelper | Mode::CacheSemanticRelocation |
-            Mode::CacheSemanticLibrary | Mode::CacheSemanticChain => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid")) &&
-                !entries.iter().any(|entry| entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")),
+            Mode::CacheSemanticMap
+            | Mode::CacheSemanticDuplicate
+            | Mode::CacheSemanticHelper
+            | Mode::CacheSemanticRelocation
+            | Mode::CacheSemanticLibrary
+            | Mode::CacheSemanticOverlap
+            | Mode::CacheSemanticChain => require(
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid"))
+                    && !entries.iter().any(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(5)
+                            .any(|part| part == b".hit-")
+                    }),
                 "rechecksummed semantic corruption did not remain a pristine MISS",
             )?,
+            Mode::CacheChangedLibrary => {
+                require(
+                    entries
+                        .iter()
+                        .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid"))
+                        && entries.iter().any(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(5)
+                                .any(|part| part == b".hit-")
+                        })
+                        && entries.iter().any(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(18)
+                                .any(|part| part == b".library-mismatch-")
+                        }),
+                    "changed library did not authenticate structure and defer on content mismatch",
+                )?;
+                let stats = entries
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(12)
+                            .any(|part| part == b".warm-stats-")
+                    })
+                    .ok_or("changed library emitted no translation-count receipt")?;
+                let bytes = fs::read(stats.path())?;
+                require(bytes.len() == 24, "changed-library translation receipt has wrong size")?;
+                let translated = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+                require(
+                    translated != 0,
+                    "changed library executed restored blocks instead of translating",
+                )?;
+            }
+            Mode::CacheAbsentLibrary => {
+                require(
+                    entries
+                        .iter()
+                        .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid"))
+                        && entries.iter().any(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(5)
+                                .any(|part| part == b".hit-")
+                        })
+                        && entries.iter().any(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(16)
+                                .any(|part| part == b".library-absent-")
+                        }),
+                    "absent library did not remain deferred and unpublished",
+                )?;
+                let stats = entries
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(12)
+                            .any(|part| part == b".warm-stats-")
+                    })
+                    .ok_or("absent library emitted no translation-count receipt")?;
+                let bytes = fs::read(stats.path())?;
+                require(
+                    bytes.len() == 24 && u64::from_le_bytes(bytes[16..24].try_into().unwrap()) != 0,
+                    "absent library did not force fresh translation",
+                )?;
+            }
+            Mode::CacheStageFailure => {
+                let stage = std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE")?;
+                let needle = format!(".stage-{stage}-rollback-");
+                let receipt = entries
+                    .iter()
+                    .find(|entry| String::from_utf8_lossy(entry.file_name().as_encoded_bytes()).contains(&needle))
+                    .ok_or("warm failure stage emitted no rollback receipt")?;
+                let state = fs::read(receipt.path())?;
+                require(state.len() == 32, "rollback receipt has wrong size")?;
+                let word = |offset| u64::from_le_bytes(state[offset..offset + 8].try_into().unwrap());
+                require(
+                    word(0) == 1 && word(1) == 0 && word(2) == 0 && word(3) == 0,
+                    "warm failure did not leave a pristine empty generation",
+                )?;
+            }
             Mode::CacheValid => require(
                 entries
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
                 "valid same-ISA artifact did not reach the C validator's authenticated path",
-            ).and_then(|()| {
+            )
+            .and_then(|()| {
                 require(
                     entries.iter().any(|entry| {
-                        entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(5)
+                            .any(|part| part == b".hit-")
                     }),
                     "authenticated cache was not restored as a warm HIT",
                 )
-            }).and_then(|()| {
-                let stats = entries.iter().find(|entry| {
-                    entry.file_name().as_encoded_bytes().windows(12).any(|part| part == b".warm-stats-")
-                }).ok_or("warm HIT emitted no translation-count receipt")?;
+            })
+            .and_then(|()| {
+                let stats = entries
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(12)
+                            .any(|part| part == b".warm-stats-")
+                    })
+                    .ok_or("warm HIT emitted no translation-count receipt")?;
                 let bytes = fs::read(stats.path())?;
                 require(bytes.len() == 24, "warm translation-count receipt has wrong size")?;
                 let word = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
                 let restored = word(0);
                 let translated = word(16);
-                require(restored != 0 && translated < restored / 2,
-                        "warm HIT did not reduce translation count by at least one half")
+                require(
+                    restored != 0 && translated < restored / 2,
+                    "warm HIT did not reduce translation count by at least one half",
+                )
             })?,
             Mode::CacheBitflip => require(
                 entries
@@ -401,9 +675,5 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    if condition {
-        Ok(())
-    } else {
-        Err(message.into())
-    }
+    if condition { Ok(()) } else { Err(message.into()) }
 }

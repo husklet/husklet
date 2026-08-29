@@ -155,6 +155,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only omit one same-ISA pcache external relocation",
         Flag
     ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE",
+        "test-only fail one same-ISA warm-cache reconstruction stage",
+        Text
+    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",

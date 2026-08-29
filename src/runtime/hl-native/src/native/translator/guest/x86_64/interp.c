@@ -1940,6 +1940,8 @@ static hl_persist_directory g_x64_pc_directory;
 static char g_x64_pc_directory_path[1024];
 static int g_x64_pc_forked;
 static uint64_t g_x64_pc_restored_maps;
+static uint64_t g_x64_pc_restored_live;
+static uint64_t g_x64_pc_activated_maps;
 typedef struct x64_pc_lib {
     uint64_t base, len, file_id;
     hl_identity_digest content;
@@ -1953,6 +1955,32 @@ static uint64_t g_x64_pc_deferred_count;
 static int g_x64_pc_library_unsupported;
 static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
+static int x64_pc_file(char *path, size_t size);
+
+static int x64_pc_fail_stage(const char *stage) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *selected = hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE");
+    return selected != NULL && strcmp(selected, stage) == 0;
+#else
+    (void)stage;
+    return 0;
+#endif
+}
+
+static void x64_pc_stage_receipt(const char *stage) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    char cache_path[1024], receipt[1024];
+    uint64_t rolled_back[4] = {1, g_live_map_count, (uint64_t)(g_cp - g_cache), g_source_index_overflow};
+    if (x64_pc_file(cache_path, sizeof cache_path)) {
+        int length = snprintf(receipt, sizeof receipt, "%s.stage-%s-rollback-%lld", cache_path, stage,
+                              (long long)getpid());
+        if (length > 0 && (size_t)length < sizeof receipt)
+            (void)hl_persist_store_at(&g_x64_pc_directory, receipt, rolled_back, sizeof rolled_back);
+    }
+#else
+    (void)stage;
+#endif
+}
 
 static void x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
     uint8_t *site = g_cache + chain->site_offset;
@@ -1966,6 +1994,14 @@ static void x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
         int32_t encoded = (int32_t)delta;
         memcpy(site + 1, &encoded, sizeof encoded);
     }
+}
+
+static void x64_pc_pristine_rewind(void) {
+    translit_cache_rewind_in_place();
+    map_clear();
+    pend_reset();
+    memset(g_ibtc, 0, sizeof g_ibtc);
+    memset(g_xibtc, 0, sizeof g_xibtc);
 }
 
 static int x64_pc_span(uint64_t base, uint64_t len, uint64_t *end) {
@@ -2233,7 +2269,7 @@ static int pcache_load(uint64_t entry_jump) {
     }
 
     /* Validation above is read-only. From here on every failure rewinds to a pristine empty arena. */
-    translit_cache_rewind_in_place();
+    x64_pc_pristine_rewind();
     if (!jit_wprot(0)) {
         free(deferred);
         free(loaded_chains);
@@ -2241,6 +2277,12 @@ static int pcache_load(uint64_t entry_jump) {
         return 0;
     }
     memcpy(g_cache, arena_bytes, (size_t)arena);
+    if (x64_pc_fail_stage("arena-copy")) {
+        x64_pc_pristine_rewind();
+        x64_pc_stage_receipt("arena-copy");
+        free(deferred); free(loaded_chains); free(allocation);
+        return 0;
+    }
     for (uint64_t i = 0; i < chains; i++) {
         translit_chain_site *chain = &loaded_chains[i];
         int32_t encoded = (int32_t)((g_cache + chain->fallback_offset) -
@@ -2253,8 +2295,20 @@ static int pcache_load(uint64_t entry_jump) {
         uintptr_t address = translit_external_absolute_address_for(kind);
         memcpy(g_cache + offset, &address, sizeof address);
     }
+    if (x64_pc_fail_stage("relocation")) {
+        x64_pc_pristine_rewind();
+        x64_pc_stage_receipt("relocation");
+        free(deferred); free(loaded_chains); free(allocation);
+        return 0;
+    }
+    if (x64_pc_fail_stage("chain-fallback")) {
+        x64_pc_pristine_rewind();
+        x64_pc_stage_receipt("chain-fallback");
+        free(deferred); free(loaded_chains); free(allocation);
+        return 0;
+    }
     if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
-        translit_cache_rewind_in_place();
+        x64_pc_pristine_rewind();
         free(deferred);
         free(loaded_chains);
         free(allocation);
@@ -2274,8 +2328,18 @@ static int pcache_load(uint64_t entry_jump) {
             deferred_at++;
         }
     }
+    if (x64_pc_fail_stage("map-build")) {
+        x64_pc_pristine_rewind();
+        x64_pc_stage_receipt("map-build");
+        free(deferred); free(loaded_chains); free(allocation);
+        return 0;
+    }
+    if (x64_pc_fail_stage("source-build")) {
+        g_source_index_overflow = 1;
+    }
     if (g_source_index_overflow) {
-        translit_cache_rewind_in_place();
+        x64_pc_pristine_rewind();
+        if (x64_pc_fail_stage("source-build")) x64_pc_stage_receipt("source-build");
         free(deferred);
         free(loaded_chains);
         free(allocation);
@@ -2283,7 +2347,7 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (chains != 0) {
         if (!jit_wprot(0)) {
-            translit_cache_rewind_in_place();
+            x64_pc_pristine_rewind();
             free(deferred);
             free(loaded_chains);
             free(allocation);
@@ -2294,7 +2358,7 @@ static int pcache_load(uint64_t entry_jump) {
                 x64_pc_fixed(loaded_chains[i].target, loaded_chains[i].target + 1))
                 x64_pc_chain_patch(&loaded_chains[i], 1);
         if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
-            translit_cache_rewind_in_place();
+            x64_pc_pristine_rewind();
             free(deferred);
             free(loaded_chains);
             free(allocation);
@@ -2305,7 +2369,7 @@ static int pcache_load(uint64_t entry_jump) {
         jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
         jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
         if (entries == NULL) {
-            translit_cache_rewind_in_place();
+            x64_pc_pristine_rewind();
             free(deferred);
             free(loaded_chains);
             free(allocation);
@@ -2319,6 +2383,12 @@ static int pcache_load(uint64_t entry_jump) {
             preserves[i] = x64_pc_get32(record + 8);
         }
         atomic_store_explicit(&set->count, (uint32_t)owners, memory_order_release);
+    }
+    if (x64_pc_fail_stage("owner-build")) {
+        x64_pc_pristine_rewind();
+        x64_pc_stage_receipt("owner-build");
+        free(deferred); free(loaded_chains); free(allocation);
+        return 0;
     }
     translit_external_absolute_count = (uint32_t)relocs;
     translit_external_absolute_emitted = (uint32_t)relocs;
@@ -2342,6 +2412,8 @@ static int pcache_load(uint64_t entry_jump) {
     free(g_x64_pc_deferred);
     g_x64_pc_deferred = deferred;
     g_x64_pc_deferred_count = deferred_count;
+    g_x64_pc_restored_live = maps - deferred_count;
+    g_x64_pc_activated_maps = 0;
     free(g_x64_pc_chains);
     g_x64_pc_chains = loaded_chains;
     g_x64_pc_chain_count = chains;
@@ -2380,8 +2452,9 @@ static void pcache_save(void) {
     }
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_pcache_loaded) {
+        uint64_t restored_live = g_x64_pc_restored_live + g_x64_pc_activated_maps;
         uint64_t stats[3] = {g_x64_pc_restored_maps, g_live_map_count,
-                             g_live_map_count > g_x64_pc_restored_maps ? g_live_map_count - g_x64_pc_restored_maps : 0};
+                             g_live_map_count > restored_live ? g_live_map_count - restored_live : 0};
         char base[1024], receipt[1024];
         if (x64_pc_file(base, sizeof base)) {
             int length = snprintf(receipt, sizeof receipt, "%s.warm-stats-%lld", base, (long long)getpid());
@@ -2606,6 +2679,8 @@ static void x64_pc_after_fork(void) {
     g_x64_pc_chains = NULL;
     g_x64_pc_deferred_count = 0;
     g_x64_pc_chain_count = 0;
+    g_x64_pc_restored_live = 0;
+    g_x64_pc_activated_maps = 0;
     g_x64_pc_lib_count = 0;
     g_x64_pc_lib_next = X64_PC_LIB_BASE;
 }
@@ -2633,6 +2708,8 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_x64_pc_chains = NULL;
     g_x64_pc_deferred_count = 0;
     g_x64_pc_chain_count = 0;
+    g_x64_pc_restored_live = 0;
+    g_x64_pc_activated_maps = 0;
     g_x64_pc_lib_count = 0;
     g_x64_pc_lib_next = X64_PC_LIB_BASE;
     g_x64_pc_library_unsupported = 0;
@@ -2697,7 +2774,6 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
         }
         if (at < g_x64_pc_lib_count && end > g_x64_pc_libs[at].base) {
             if (base == g_x64_pc_libs[at].base && len == g_x64_pc_libs[at].len &&
-                file_id == g_x64_pc_libs[at].file_id &&
                 hl_identity_digest_equal(&content, &g_x64_pc_libs[at].content))
                 return;
             g_x64_pc_library_unsupported = 1;
@@ -2716,9 +2792,32 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
     for (uint32_t i = 0; i < g_x64_pc_lib_count; i++) {
         x64_pc_lib *library = &g_x64_pc_libs[i];
         if (library->base != base) continue;
-        if (library->len != len || library->file_id != file_id ||
-            !hl_identity_digest_equal(&library->content, &content))
+        if (library->len != len ||
+            !hl_identity_digest_equal(&library->content, &content)) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+            char cache_path[1024], receipt[1024];
+            static const uint32_t mismatch = 1;
+            if (x64_pc_file(cache_path, sizeof cache_path)) {
+                int length = snprintf(receipt, sizeof receipt, "%s.library-mismatch-%lld", cache_path,
+                                      (long long)getpid());
+                if (length > 0 && (size_t)length < sizeof receipt)
+                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &mismatch, sizeof mismatch);
+            }
+#endif
             return;
+        }
+        if (x64_pc_fail_stage("manifest-activation")) {
+            x64_pc_pristine_rewind();
+            x64_pc_stage_receipt("manifest-activation");
+            free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
+            free(g_x64_pc_chains); g_x64_pc_chains = NULL; g_x64_pc_chain_count = 0;
+            g_x64_pc_lib_count = 0;
+            g_pcache_loaded = 0;
+            g_x64_pc_restored_maps = 0;
+            g_x64_pc_restored_live = 0;
+            g_x64_pc_activated_maps = 0;
+            return;
+        }
         if (g_threaded) pthread_mutex_lock(&g_jit_lock);
         for (uint64_t j = 0; j < g_x64_pc_deferred_count; j++) {
             uint8_t *record = g_x64_pc_deferred + j * X64_PC_MAP_SIZE;
@@ -2727,6 +2826,7 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
             uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
             map_put(x64_pc_get64(record), lo, hi, g_cache + host, g_cache + body);
             memset(record + 24, 0xff, 8);
+            g_x64_pc_activated_maps++;
         }
         if (g_x64_pc_chain_count != 0 && jit_wprot(0)) {
             for (uint64_t j = 0; j < g_x64_pc_chain_count; j++)
@@ -2738,4 +2838,14 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
         return;
     }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    char cache_path[1024], receipt[1024];
+    static const uint32_t absent = 1;
+    if (x64_pc_file(cache_path, sizeof cache_path)) {
+        int length = snprintf(receipt, sizeof receipt, "%s.library-absent-%lld", cache_path,
+                              (long long)getpid());
+        if (length > 0 && (size_t)length < sizeof receipt)
+            (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &absent, sizeof absent);
+    }
+#endif
 }

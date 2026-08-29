@@ -39,6 +39,14 @@ impl TryFrom<&ProcessConfig> for Spec {
             "HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST",
             std::env::var_os("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST").is_some(),
         )?;
+        #[cfg(feature = "native-test-hooks")]
+        if let Some(stage) = std::env::var_os("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE") {
+            Self::set(
+                &mut options,
+                "HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE",
+                stage.as_encoded_bytes(),
+            )?;
+        }
         Self::flag(&mut options, "HL_CHECKPOINT", launch.checkpoint.is_some())?;
         Self::flag(
             &mut options,
