@@ -72,6 +72,10 @@ name = "x86_store_preflight"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "memory_indirect_jump"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "restore_collision"
 required-features = ["native-test-hooks"]
 

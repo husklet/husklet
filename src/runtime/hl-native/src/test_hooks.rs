@@ -9,6 +9,13 @@ pub(super) fn test_api() -> &'static crate::loader::TestApi {
     crate::loader::tests().unwrap_or_else(|error| panic!("native test bridge unavailable: {error}"))
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn x86_64_translit_displaced_test(scenario: u32) -> i32 {
+    // SAFETY: the feature-gated hook accepts one bounded scalar selector, owns its fixture,
+    // and returns a scalar status without unwinding across the native boundary.
+    unsafe { (test_api().x86_64_translit_displaced)(scenario) }
+}
+
 /// Defines one call into a feature-gated native test hook.
 ///
 /// These share a safety argument distinct from `engine_entry!`: `test_api()` resolves the hook

@@ -574,34 +574,6 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
-    #[test]
-    fn memory_indirect_jump_classifier_and_signal_stages_are_exact() {
-        const CHILD: &str = "HL_NATIVE_JMP_MEM_SIGNAL_CHILD";
-        let hook = crate::loader::tests()
-            .expect("native test bridge")
-            .x86_64_translit_displaced;
-        if std::env::var_os(CHILD).is_some() {
-            // SAFETY: this process was freshly re-executed solely for scenario 149; the hook owns
-            // its arena and validates the complete staged signal state before returning.
-            assert_eq!(unsafe { hook(149) }, 0);
-            return;
-        }
-        // SAFETY: the hook accepts one bounded scalar selector and mutates no process state.
-        assert_eq!(unsafe { hook(148) }, 0);
-        let status = std::process::Command::new(std::env::current_exe().expect("current test executable"))
-            .args([
-                "--exact",
-                "engine::tests::memory_indirect_jump_classifier_and_signal_stages_are_exact",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .status()
-            .expect("re-execute memory-indirect jump signal fixture");
-        assert!(status.success(), "memory-indirect jump signal child failed: {status}");
-    }
-
     #[cfg(feature = "native-test-hooks")]
     struct IsolatedTestChild(Option<std::process::Child>);
 
