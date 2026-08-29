@@ -12,11 +12,11 @@ static volatile unsigned faults, rip_ok, rsp_ok, regs_ok, flags_ok;
 
 extern char ret_c3_pc, ret_c2_pc, resume_c3, resume_c2;
 
-__attribute__((naked, noinline)) static void faulting_ret_c3(void) {
+__attribute__((naked, noinline, used, visibility("hidden"))) void faulting_ret_c3(void) {
     __asm__ volatile(".global ret_c3_pc\nret_c3_pc: ret");
 }
 
-__attribute__((naked, noinline)) static void faulting_ret_c2(void) {
+__attribute__((naked, noinline, used, visibility("hidden"))) void faulting_ret_c2(void) {
     __asm__ volatile(".global ret_c2_pc\nret_c2_pc: ret $16");
 }
 
