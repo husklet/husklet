@@ -4637,6 +4637,24 @@ done_direct_ibtc:
     return result;
 }
 
+typedef struct {
+    ibtc_ent *cell;
+    uint64_t target;
+    uint64_t other;
+    void *body;
+    _Atomic int ready;
+} translit_ret_publish_test;
+
+static void *translit_ret_publish_worker(void *opaque) {
+    translit_ret_publish_test *test = opaque;
+    for (unsigned i = 0; i < 10000; ++i) {
+        ibtc_publish(test->cell, test->other, (void *)(uintptr_t)1);
+        ibtc_publish(test->cell, test->target, test->body);
+    }
+    atomic_store_explicit(&test->ready, 1, memory_order_release);
+    return NULL;
+}
+
 static int translit_ret_ibtc_fixture_test(unsigned scenario) {
     if (scenario == 126) {
         uint64_t target = UINT64_C(0x510004);
@@ -4651,7 +4669,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                    ? 0
                    : 127;
     }
-    if (scenario >= 121 && scenario <= 125) {
+    if (scenario >= 121 && scenario <= 130) {
         const size_t arena_size = 65536;
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -4709,6 +4727,55 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             return 123;
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        if (scenario == 127) {
+            const uint64_t dirty[1][2] = {{target, target + 1}};
+            if (map_invalidate_source_ranges(dirty, 1) != 1 ||
+                ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0)
+                return 128;
+            target_block = translit_jcc_ibtc_test_build(context, target);
+            cpu.rip = target;
+            cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
+            translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        }
+        if (scenario == 128 || scenario == 129) {
+            pid_t child = fork();
+            if (child == 0) {
+                if (scenario == 129) {
+                    map_clear();
+                    if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) _exit(2);
+                    target_block = translit_jcc_ibtc_test_build(context, target);
+                    cpu.rip = target;
+                    cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
+                    translit_jcc_ibtc_fill(&cpu, target_block, 0);
+                }
+                *stack = target;
+                cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+                cpu.r[4] = (uint64_t)(uintptr_t)stack;
+                run_block(context, &cpu, source_block);
+                _exit(cpu.r[0] == 42 && cpu.jcc_ibtc_miss == 0 ? 0 : 3);
+            }
+            int status = 0;
+            ibtc_ent parent = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+            return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                           WEXITSTATUS(status) == 0 && parent.target == target && parent.body != NULL
+                       ? 0
+                       : 129;
+        }
+        if (scenario == 130) {
+            uint64_t other = target + ((uint64_t)IBTC_N << 2);
+            void *body = (uint8_t *)target_block + target_block->host_entry_off;
+            translit_ret_publish_test test = {
+                .cell = &g_ibtc[ibtc_index(target)], .target = target, .other = other, .body = body};
+            pthread_t publisher;
+            if (pthread_create(&publisher, NULL, translit_ret_publish_worker, &test) != 0) return 130;
+            while (!atomic_load_explicit(&test.ready, memory_order_acquire)) {
+                ibtc_ent pair = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+                if (!((pair.target == target && pair.body == body) ||
+                      (pair.target == other && pair.body == (void *)(uintptr_t)1)))
+                    return 130;
+            }
+            if (pthread_join(publisher, NULL) != 0) return 130;
+        }
         if (scenario == 123)
             ibtc_publish(&g_ibtc[ibtc_index(target)], target + ((uint64_t)IBTC_N << 2),
                          (uint8_t *)target_block + target_block->host_entry_off);
