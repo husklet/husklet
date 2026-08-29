@@ -3010,7 +3010,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 112 && scenario <= 125) {
+    if (scenario >= 112 && scenario <= 126) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
@@ -4637,6 +4637,13 @@ done_direct_ibtc:
 }
 
 static int translit_ret_ibtc_fixture_test(unsigned scenario) {
+    if (scenario == 126) {
+        uint64_t target = UINT64_C(0x510004);
+        ibtc_publish(&g_ibtc[ibtc_index(target)], target, (void *)(uintptr_t)UINT64_C(0x1234));
+        ibtc_clear_lazy();
+        ibtc_ent entry = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+        return entry.target == 0 && entry.body == NULL ? 0 : 127;
+    }
     if (scenario >= 121 && scenario <= 125) {
         const size_t arena_size = 65536;
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
