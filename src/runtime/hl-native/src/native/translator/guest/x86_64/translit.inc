@@ -1460,6 +1460,7 @@ static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t po
 // pair publish remains atomic because emitted readers do not take that lock. The RX entry is derived from
 // the current descriptor and generation, never from a persisted or inherited heap/code pointer.
 static void translit_ret_ibtc_simulate(struct cpu *cpu, void *code, int interrupt_consumed) {
+    if (!translit_ret_ibtc_enabled()) return;
     translit_ret_ibtc_count(TL_RET_IBTC_ATTEMPT, 1);
     if (interrupt_consumed) {
         translit_ret_ibtc_count(TL_RET_IBTC_IRQ, 1);
@@ -3009,7 +3010,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 112 && scenario <= 120) {
+    if (scenario >= 112 && scenario <= 122) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
@@ -4636,6 +4637,59 @@ done_direct_ibtc:
 }
 
 static int translit_ret_ibtc_fixture_test(unsigned scenario) {
+    if (scenario == 121 || scenario == 122) {
+        const size_t arena_size = 65536;
+        uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (arena == MAP_FAILED) return 121;
+        static _Alignas(4096) uint8_t guest_bytes[4096];
+        memset(guest_bytes, 0x0f, sizeof guest_bytes);
+        guest_bytes[0] = scenario == 121 ? 0xc3 : 0xc2;
+        if (scenario == 122) {
+            guest_bytes[1] = 0x10;
+            guest_bytes[2] = 0;
+        }
+        const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
+        const uint64_t target = source + 0x40;
+        guest_bytes[0x40] = 0xb8;
+        guest_bytes[0x41] = 42;
+        memset(guest_bytes + 0x42, 0, 3);
+        guest_bytes[0x45] = 0x0f;
+        guest_bytes[0x46] = 0x0b;
+        g_cache = arena;
+        g_cp = arena;
+        g_rw2rx = 0;
+        g_dualmap = 1;
+        g_cache_gen = UINT64_MAX - scenario;
+        map_clear();
+        translit_fall_fixture_bytes = guest_bytes;
+        translit_fall_fixture_guest = source;
+        translit_fall_fixture_length = sizeof guest_bytes;
+        hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+        if (context == NULL) return 122;
+        struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+        uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
+        *stack = target;
+        struct cpu cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+        cpu.r[4] = (uint64_t)(uintptr_t)stack;
+        run_block(context, &cpu, source_block);
+        uint64_t expected_rsp = (uint64_t)(uintptr_t)stack + (scenario == 121 ? 8 : 24);
+        if (cpu.rip != target || cpu.r[4] != expected_rsp || cpu.jcc_ibtc_miss != TL_RET_IBTC_MISS ||
+            atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_MISS],
+                                 memory_order_relaxed) != 1)
+            return 123;
+        struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        *stack = target;
+        cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+        cpu.r[4] = (uint64_t)(uintptr_t)stack;
+        run_block(context, &cpu, source_block);
+        return cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
+                       atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
+                                            memory_order_relaxed) == 1
+                   ? 0
+                   : 124;
+    }
     memset(translit_ret_ibtc, 0, sizeof translit_ret_ibtc);
     for (unsigned i = 0; i < 9; ++i)
         atomic_store_explicit(&translit_ret_ibtc_counters[i], 0, memory_order_relaxed);
