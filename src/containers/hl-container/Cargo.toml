@@ -24,6 +24,9 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 
+[features]
+native-test-hooks = ["hl-engine/native-test-hooks"]
+
 # MEASURED, because this crate's own `checkpoint/directory.rs` used to record the opposite:
 # `nix` 0.30.1 DOES build for `x86_64-pc-windows-gnu`. Every one of its modules is gated on
 # `target_os`, so it builds to an empty crate there and `nix::sys` / `nix::unistd` simply do not
