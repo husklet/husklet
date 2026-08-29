@@ -20,6 +20,7 @@ mod leaks;
 mod nested;
 mod platform;
 mod pool;
+mod profile_attribution;
 mod record;
 mod runtime;
 mod scenario;
@@ -47,6 +48,8 @@ enum Command {
     BenchmarkHash(benchmark::HashOptions),
     /// Stage content-bound artifacts for a real three-arm benchmark campaign.
     BenchmarkStage(benchmark::StageOptions),
+    /// Record or parse a bounded, immutable CPU attribution campaign.
+    ProfileAttribution(profile_attribution::Options),
     /// Profile real checkpoint/restore phases over a daily-development process tree.
     CheckpointProfile(checkpoint_profile::Options),
     /// Run self-contained runtime compatibility cases.
@@ -104,6 +107,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::BenchmarkFloor(options) => benchmark::floor(options),
         Command::BenchmarkHash(options) => benchmark::hash(options),
         Command::BenchmarkStage(options) => benchmark::stage(options),
+        Command::ProfileAttribution(options) => profile_attribution::run(options),
         Command::CheckpointProfile(options) => checkpoint_profile::run(options),
         Command::Runtime(options) => runtime::run(options).await,
         Command::RuntimeInventory => runtime::inventory(),
@@ -142,6 +146,7 @@ mod cli_tests {
             "benchmark-calibrate",
             "benchmark-hash",
             "benchmark-stage",
+            "profile-attribution",
             "checkpoint-profile",
             "runtime",
             "runtime-inventory",
