@@ -5739,16 +5739,13 @@ static int translit_jcc_ibtc_signal_stage_test(int direct_jmp) {
         cpu.mmscratch[0] = canonical_flags;
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)context_flags;
         HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
-        exact = translit_signal_capture(&cpu, &context);
-        if (!exact) { failed_stage = 20 + stage; break; }
-        if (cpu.rip != stages[stage].expected_rip) { exact = 0; failed_stage = 40 + stage; break; }
-        if (cpu.reason != R_BRANCH) { exact = 0; failed_stage = 60 + stage; break; }
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == stages[stage].expected_rip &&
+                cpu.reason == R_BRANCH;
         for (unsigned reg = 0; exact && reg < 16; reg++) {
             uint64_t expected = stages[stage].preserve & (1u << reg)
                                     ? UINT64_C(0xc000000000000000) + reg
                                     : UINT64_C(0xa000000000000000) + reg;
             exact = cpu.r[reg] == expected;
-            if (!exact) { failed_stage = 80 + reg; break; }
         }
         translit_flags_out(&expected_flags_cpu, stages[stage].flags_from_cpu ? canonical_flags : context_flags);
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
