@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 static volatile uintptr_t fault_pc, resume_pc, stack_pointer, saved_rsp;
+static volatile uintptr_t saved_rbx, saved_rbp, saved_r12, saved_r13, saved_r14, saved_r15;
 static volatile unsigned faults, rip_ok, rsp_ok, regs_ok, flags_ok;
 
 extern char ret_c3_pc, ret_c2_pc, resume_c3, resume_c2;
@@ -22,26 +23,30 @@ __attribute__((naked, noinline, used, visibility("hidden"))) void faulting_ret_c
 
 __attribute__((naked, noinline)) static void drive_c3(void) {
     __asm__ volatile(
-        "mov %rsp,saved_rsp(%rip)\n"
+        "mov %rsp,saved_rsp(%rip)\n mov %rbx,saved_rbx(%rip)\n mov %rbp,saved_rbp(%rip)\n"
+        "mov %r12,saved_r12(%rip)\n mov %r13,saved_r13(%rip)\n mov %r14,saved_r14(%rip)\n mov %r15,saved_r15(%rip)\n"
         "push $0xad7\n popfq\n"
         "mov $0x101,%rax\n mov $0x102,%rbx\n mov $0x103,%rcx\n mov $0x104,%rdx\n"
         "mov $0x105,%rsi\n mov $0x106,%rdi\n mov $0x107,%rbp\n"
         "mov $0x108,%r8\n mov $0x109,%r9\n mov $0x10a,%r10\n mov $0x10b,%r11\n"
         "mov $0x10c,%r12\n mov $0x10d,%r13\n mov $0x10e,%r14\n mov $0x10f,%r15\n"
         "mov stack_pointer(%rip),%rsp\n jmp faulting_ret_c3\n"
-        ".global resume_c3\nresume_c3: ret");
+        ".global resume_c3\nresume_c3:\n mov saved_rbx(%rip),%rbx\n mov saved_rbp(%rip),%rbp\n"
+        "mov saved_r12(%rip),%r12\n mov saved_r13(%rip),%r13\n mov saved_r14(%rip),%r14\n mov saved_r15(%rip),%r15\n ret");
 }
 
 __attribute__((naked, noinline)) static void drive_c2(void) {
     __asm__ volatile(
-        "mov %rsp,saved_rsp(%rip)\n"
+        "mov %rsp,saved_rsp(%rip)\n mov %rbx,saved_rbx(%rip)\n mov %rbp,saved_rbp(%rip)\n"
+        "mov %r12,saved_r12(%rip)\n mov %r13,saved_r13(%rip)\n mov %r14,saved_r14(%rip)\n mov %r15,saved_r15(%rip)\n"
         "push $0xad7\n popfq\n"
         "mov $0x101,%rax\n mov $0x102,%rbx\n mov $0x103,%rcx\n mov $0x104,%rdx\n"
         "mov $0x105,%rsi\n mov $0x106,%rdi\n mov $0x107,%rbp\n"
         "mov $0x108,%r8\n mov $0x109,%r9\n mov $0x10a,%r10\n mov $0x10b,%r11\n"
         "mov $0x10c,%r12\n mov $0x10d,%r13\n mov $0x10e,%r14\n mov $0x10f,%r15\n"
         "mov stack_pointer(%rip),%rsp\n jmp faulting_ret_c2\n"
-        ".global resume_c2\nresume_c2: ret");
+        ".global resume_c2\nresume_c2:\n mov saved_rbx(%rip),%rbx\n mov saved_rbp(%rip),%rbp\n"
+        "mov saved_r12(%rip),%r12\n mov saved_r13(%rip),%r13\n mov saved_r14(%rip),%r14\n mov saved_r15(%rip),%r15\n ret");
 }
 
 static void fault(int signal, siginfo_t *info, void *opaque) {
