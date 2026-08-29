@@ -198,7 +198,14 @@ static int jit_cache_init(void) {
         return -1;
     }
 #else
-    if (code_mapping_reserve_preferred(&g_code_mapping, 1) != 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    int force_single = hl_option_flag_value("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST", 0);
+#else
+    int force_single = 0;
+#endif
+    int reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
+                                      : code_mapping_reserve_preferred(&g_code_mapping, 1);
+    if (reserve_failed != 0) {
         (void)cache_oom_fail();
         return -1;
     }

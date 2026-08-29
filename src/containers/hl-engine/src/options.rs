@@ -160,6 +160,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only fail one same-ISA warm-cache reconstruction stage",
         Text
     ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
+        "test-only exercise warm-cache rollback through the single-map W^X arena",
+        Flag
+    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",

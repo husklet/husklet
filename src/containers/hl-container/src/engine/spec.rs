@@ -47,6 +47,12 @@ impl TryFrom<&ProcessConfig> for Spec {
                 stage.as_encoded_bytes(),
             )?;
         }
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
+            std::env::var_os("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST").is_some(),
+        )?;
         Self::flag(&mut options, "HL_CHECKPOINT", launch.checkpoint.is_some())?;
         Self::flag(
             &mut options,

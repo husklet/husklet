@@ -25,6 +25,8 @@ enum Mode {
     CacheChangedLibrary,
     CacheAbsentLibrary,
     CacheStageFailure,
+    CacheThreadCold,
+    CacheThreadValid,
     CacheValid,
     CacheBitflip,
     CacheTruncated,
@@ -50,6 +52,8 @@ impl Mode {
             "cache-changed-library" => Ok(Self::CacheChangedLibrary),
             "cache-absent-library" => Ok(Self::CacheAbsentLibrary),
             "cache-stage-failure" => Ok(Self::CacheStageFailure),
+            "cache-thread-cold" => Ok(Self::CacheThreadCold),
+            "cache-thread-valid" => Ok(Self::CacheThreadValid),
             "cache-valid" => Ok(Self::CacheValid),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
@@ -92,7 +96,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     require(cache.is_absolute(), "profile cache is not absolute")?;
     if matches!(
         mode,
-        Mode::CacheCold | Mode::CacheFreshRollover | Mode::ForkNoExec | Mode::ForkExec | Mode::RelocationMissing
+        Mode::CacheCold | Mode::CacheThreadCold | Mode::CacheFreshRollover | Mode::ForkNoExec | Mode::ForkExec |
+            Mode::RelocationMissing
     ) {
         require(
             !cache.exists() || cache.read_dir()?.next().is_none(),
@@ -113,6 +118,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             | Mode::CacheChangedLibrary
             | Mode::CacheAbsentLibrary
             | Mode::CacheStageFailure
+            | Mode::CacheThreadValid
     ) {
         require(
             cache.read_dir()?.next().is_some(),
@@ -143,6 +149,29 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         header.set_size(changed.len() as u64);
         header.set_cksum();
         archive.append_data(&mut header, relative, changed.as_slice())?;
+    }
+    if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
+        const SOURCE: &[u8] = br#"#include <dlfcn.h>
+#include <pthread.h>
+#include <stdio.h>
+static int stop;
+static void *peer(void *unused) { (void)unused; while (!__atomic_load_n(&stop, __ATOMIC_ACQUIRE)) {} return 0; }
+int main(void) {
+  pthread_t thread;
+  if (pthread_create(&thread, 0, peer, 0)) return 2;
+  void *library = dlopen("/usr/lib/libisl.so.23", RTLD_NOW | RTLD_LOCAL);
+  if (!library || !dlsym(library, "isl_ctx_alloc")) return 3;
+  __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
+  if (pthread_join(thread, 0)) return 4;
+  puts("thread-dlopen-ok");
+  return 0;
+}
+"#;
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(SOURCE.len() as u64);
+        header.set_cksum();
+        archive.append_data(&mut header, "work/thread_dlopen.c", SOURCE)?;
     }
     archive.finish()?;
     drop(archive);
@@ -186,6 +215,10 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         )?;
     }
     if mode == Mode::CacheStageFailure {
+        require(
+            std::env::var_os("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST").is_some(),
+            "warm failure stage did not force the single-map W^X arena",
+        )?;
         let stage = std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE")?;
         require(
             [
@@ -367,6 +400,11 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done) & wait"])
     } else if mode == Mode::ForkExec {
         Process::new("/bin/sh").args(["-c", "/bin/true & wait"])
+    } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
+        Process::new("/bin/sh").args([
+            "-c",
+            "PATH=/usr/bin:/bin gcc -B/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/ -pthread /work/thread_dlopen.c -ldl -o /tmp/thread_dlopen && exec /tmp/thread_dlopen",
+        ])
     } else {
         Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
             "-quiet",
@@ -417,6 +455,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
     if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
         require(logs.stdout.is_empty(), "fork lifecycle fixture produced output")?;
+    } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
+        require(logs.stdout == b"thread-dlopen-ok\n", "threaded dlopen workload output changed")?;
     } else {
         require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
     }
@@ -433,7 +473,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             "cache contains a non-private or non-regular entry",
         )?;
         match mode {
-            Mode::CacheCold => require(
+            Mode::CacheCold | Mode::CacheThreadCold => require(
                 entries
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
@@ -559,13 +599,22 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
                     .find(|entry| String::from_utf8_lossy(entry.file_name().as_encoded_bytes()).contains(&needle))
                     .ok_or("warm failure stage emitted no rollback receipt")?;
                 let state = fs::read(receipt.path())?;
-                require(state.len() == 32, "rollback receipt has wrong size")?;
+                require(state.len() == 40, "rollback receipt has wrong size")?;
                 let word = |offset| u64::from_le_bytes(state[offset..offset + 8].try_into().unwrap());
                 require(
-                    word(0) == 1 && word(1) == 0 && word(2) == 0 && word(3) == 0,
-                    "warm failure did not leave a pristine empty generation",
+                    word(0) == 1 && word(1) == 0 && word(2) == 0 && word(3) == 0 && word(4) == 0,
+                    "warm failure did not leave a pristine empty executable single-map generation",
                 )?;
             }
+            Mode::CacheThreadValid => require(
+                entries.iter().any(|entry| {
+                    entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")
+                }) && entries.iter().any(|entry| {
+                    entry.file_name().as_encoded_bytes().windows(20).any(|part| part == b".thread-start-state-")
+                        && fs::read(entry.path()).is_ok_and(|state| state.len() == 24)
+                }),
+                "real pthread workload did not reach the pre-peer warm-authority seam",
+            )?,
             Mode::CacheValid => require(
                 entries
                     .iter()

@@ -46,6 +46,7 @@
 static int g_fastsys;
 static uint64_t g_fast_count;
 static uint64_t x64_pcache_codegen_modes(void);
+static void x64_pc_thread_start_abandon(void);
 
 static void s1_calibrate(void) {
     // Nothing to measure; clock syscalls take the R_SYSCALL exit, as after a failure.
@@ -68,6 +69,7 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
 // abi.h's G_THREAD_START_FLUSH / G_SHARED_MAP_BARRIERS. No block here has its x86-TSO barriers elided, so
 // there is nothing to flush. Must return nonzero -- the clone path reads 0 as a clone failure.
 static int hl_x86_flush_for_thread_start(void) {
+    x64_pc_thread_start_abandon();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);
     return 1;
@@ -1957,6 +1959,32 @@ static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
 static int x64_pc_file(char *path, size_t size);
 
+/* Thread start retires the current arena before the first peer exists. Deferred maps and chain sites
+   name that arena, so they must not survive into a later library mapping callback. Refuse publication
+   for the replacement cold generation because already-mapped libraries cannot be reconstructed into a
+   complete manifest after this boundary. */
+static void x64_pc_thread_start_abandon(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    char cache_path[1024], receipt[1024];
+    uint64_t state[3] = {(uint64_t)g_pcache_loaded, g_x64_pc_deferred_count, g_x64_pc_chain_count};
+    if (x64_pc_file(cache_path, sizeof cache_path)) {
+        int length = snprintf(receipt, sizeof receipt, "%s.thread-start-state-%lld", cache_path,
+                              (long long)getpid());
+        if (length > 0 && (size_t)length < sizeof receipt)
+            (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+    }
+#endif
+    if (!g_pcache_loaded) return;
+    free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
+    free(g_x64_pc_chains); g_x64_pc_chains = NULL; g_x64_pc_chain_count = 0;
+    g_x64_pc_restored_maps = 0;
+    g_x64_pc_restored_live = 0;
+    g_x64_pc_activated_maps = 0;
+    g_x64_pc_lib_count = 0;
+    g_x64_pc_library_unsupported = 1;
+    g_pcache_loaded = 0;
+}
+
 static int x64_pc_fail_stage(const char *stage) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     const char *selected = hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE");
@@ -1970,7 +1998,8 @@ static int x64_pc_fail_stage(const char *stage) {
 static void x64_pc_stage_receipt(const char *stage) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     char cache_path[1024], receipt[1024];
-    uint64_t rolled_back[4] = {1, g_live_map_count, (uint64_t)(g_cp - g_cache), g_source_index_overflow};
+    uint64_t rolled_back[5] = {1, g_live_map_count, (uint64_t)(g_cp - g_cache),
+                               g_source_index_overflow, (uint64_t)g_dualmap};
     if (x64_pc_file(cache_path, sizeof cache_path)) {
         int length = snprintf(receipt, sizeof receipt, "%s.stage-%s-rollback-%lld", cache_path, stage,
                               (long long)getpid());
@@ -2002,6 +2031,14 @@ static void x64_pc_pristine_rewind(void) {
     pend_reset();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);
+}
+
+/* A failed warm restore may have opened the single-mapping W^X write window.  Restore executable
+   authority before discarding the candidate state.  jit_wprot records a fatal engine result when
+   reprotection fails, so execution cannot continue from a writable arena. */
+static void x64_pc_pristine_rollback(int write_window_open) {
+    if (write_window_open) (void)jit_wprot(1);
+    x64_pc_pristine_rewind();
 }
 
 static int x64_pc_span(uint64_t base, uint64_t len, uint64_t *end) {
@@ -2278,7 +2315,7 @@ static int pcache_load(uint64_t entry_jump) {
     }
     memcpy(g_cache, arena_bytes, (size_t)arena);
     if (x64_pc_fail_stage("arena-copy")) {
-        x64_pc_pristine_rewind();
+        x64_pc_pristine_rollback(1);
         x64_pc_stage_receipt("arena-copy");
         free(deferred); free(loaded_chains); free(allocation);
         return 0;
@@ -2296,19 +2333,20 @@ static int pcache_load(uint64_t entry_jump) {
         memcpy(g_cache + offset, &address, sizeof address);
     }
     if (x64_pc_fail_stage("relocation")) {
-        x64_pc_pristine_rewind();
+        x64_pc_pristine_rollback(1);
         x64_pc_stage_receipt("relocation");
         free(deferred); free(loaded_chains); free(allocation);
         return 0;
     }
     if (x64_pc_fail_stage("chain-fallback")) {
-        x64_pc_pristine_rewind();
+        x64_pc_pristine_rollback(1);
         x64_pc_stage_receipt("chain-fallback");
         free(deferred); free(loaded_chains); free(allocation);
         return 0;
     }
-    if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
-        x64_pc_pristine_rewind();
+    int reprotected = jit_wprot(1);
+    if (!reprotected || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
+        x64_pc_pristine_rollback(!reprotected);
         free(deferred);
         free(loaded_chains);
         free(allocation);
@@ -2357,8 +2395,9 @@ static int pcache_load(uint64_t entry_jump) {
             if (x64_pc_fixed(loaded_chains[i].source, loaded_chains[i].source + 1) &&
                 x64_pc_fixed(loaded_chains[i].target, loaded_chains[i].target + 1))
                 x64_pc_chain_patch(&loaded_chains[i], 1);
-        if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
-            x64_pc_pristine_rewind();
+        reprotected = jit_wprot(1);
+        if (!reprotected || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
+            x64_pc_pristine_rollback(!reprotected);
             free(deferred);
             free(loaded_chains);
             free(allocation);
@@ -2828,12 +2867,29 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
             memset(record + 24, 0xff, 8);
             g_x64_pc_activated_maps++;
         }
-        if (g_x64_pc_chain_count != 0 && jit_wprot(0)) {
+        /* Once a peer exists, even g_jit_lock cannot stop it from executing translated code.  Deferred
+           library maps are safe to publish under the map lock, but live rel32 sites remain at the
+           canonical fallback installed before RX publication. */
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (g_threaded && g_x64_pc_chain_count != 0) {
+            char cache_path[1024], receipt[1024];
+            static const uint32_t deferred = 1;
+            if (x64_pc_file(cache_path, sizeof cache_path)) {
+                int length = snprintf(receipt, sizeof receipt, "%s.library-threaded-chain-deferred-%lld",
+                                      cache_path, (long long)getpid());
+                if (length > 0 && (size_t)length < sizeof receipt)
+                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &deferred, sizeof deferred);
+            }
+        }
+#endif
+        if (!g_threaded && g_x64_pc_chain_count != 0 && jit_wprot(0)) {
             for (uint64_t j = 0; j < g_x64_pc_chain_count; j++)
                 if (x64_pc_inside(g_x64_pc_chains[j].source, g_x64_pc_chains[j].source + 1, base, len) &&
                     x64_pc_inside(g_x64_pc_chains[j].target, g_x64_pc_chains[j].target + 1, base, len))
                     x64_pc_chain_patch(&g_x64_pc_chains[j], 1);
-            if (jit_wprot(1)) (void)jit_publish_code(J_RX(g_cache), (size_t)(g_cp - g_cache));
+            int chain_reprotected = jit_wprot(1);
+            if (chain_reprotected) (void)jit_publish_code(J_RX(g_cache), (size_t)(g_cp - g_cache));
+            else x64_pc_pristine_rollback(1);
         }
         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
         return;
