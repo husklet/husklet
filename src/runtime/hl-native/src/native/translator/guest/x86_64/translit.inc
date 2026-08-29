@@ -3010,7 +3010,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 112 && scenario <= 122) {
+    if (scenario >= 112 && scenario <= 124) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
@@ -4637,14 +4637,14 @@ done_direct_ibtc:
 }
 
 static int translit_ret_ibtc_fixture_test(unsigned scenario) {
-    if (scenario == 121 || scenario == 122) {
+    if (scenario >= 121 && scenario <= 124) {
         const size_t arena_size = 65536;
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (arena == MAP_FAILED) return 121;
         static _Alignas(4096) uint8_t guest_bytes[4096];
         memset(guest_bytes, 0x0f, sizeof guest_bytes);
-        guest_bytes[0] = scenario == 121 ? 0xc3 : 0xc2;
+        guest_bytes[0] = scenario == 122 ? 0xc2 : 0xc3;
         if (scenario == 122) {
             guest_bytes[1] = 0x10;
             guest_bytes[2] = 0;
@@ -4673,17 +4673,30 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         struct cpu cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc};
         cpu.r[4] = (uint64_t)(uintptr_t)stack;
         run_block(context, &cpu, source_block);
-        uint64_t expected_rsp = (uint64_t)(uintptr_t)stack + (scenario == 121 ? 8 : 24);
+        uint64_t expected_rsp = (uint64_t)(uintptr_t)stack + (scenario == 122 ? 24 : 8);
         if (cpu.rip != target || cpu.r[4] != expected_rsp || cpu.jcc_ibtc_miss != TL_RET_IBTC_MISS ||
             atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_MISS],
                                  memory_order_relaxed) != 1)
             return 123;
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        if (scenario == 123)
+            ibtc_publish(&g_ibtc[ibtc_index(target)], target + ((uint64_t)IBTC_N << 2),
+                         (uint8_t *)target_block + target_block->host_entry_off);
+        if (scenario == 124) ibtc_publish(&g_ibtc[ibtc_index(target)], target, NULL);
+        ibtc_publish(&translit_ret_ibtc[ibtc_index(target)], target + 4, (void *)(uintptr_t)1);
         *stack = target;
         cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
         cpu.r[4] = (uint64_t)(uintptr_t)stack;
         run_block(context, &cpu, source_block);
+        if (scenario >= 123)
+            return cpu.rip == target && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
+                           atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
+                                                memory_order_relaxed) == 0 &&
+                           atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_MISS],
+                                                memory_order_relaxed) == 2
+                       ? 0
+                       : 125;
         return cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
                        atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
                                             memory_order_relaxed) == 1
