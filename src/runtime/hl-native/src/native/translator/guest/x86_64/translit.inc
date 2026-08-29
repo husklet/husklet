@@ -480,6 +480,11 @@ static FILE *translit_jitdump_file;
 static void *translit_jitdump_marker;
 static pid_t translit_jitdump_pid;
 static uint64_t translit_jitdump_index;
+typedef struct translit_profile_named_range {
+    pid_t pid;
+    const uint8_t *start, *end;
+} translit_profile_named_range;
+static translit_profile_named_range translit_profile_jcc_ibtc, translit_profile_direct_jmp_ibtc;
 extern const char *hl_c_backend_build_fingerprint(void);
 
 static void translit_profile_output_failed(const char *what) {
@@ -595,6 +600,18 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
     (void)fwrite(start, host_len, 1, translit_jitdump_file);
 }
 
+static void translit_perf_map_publish_helper(const char *name, const uint8_t *start, const uint8_t *end,
+                                             translit_profile_named_range *published) {
+    pid_t pid = getpid();
+    if (start == NULL || end <= start ||
+        (published->pid == pid && published->start == start && published->end == end))
+        return;
+    translit_perf_map_publish_named(name, start, (uint32_t)(end - start));
+    published->pid = pid;
+    published->start = start;
+    published->end = end;
+}
+
 static void translit_perf_map_publish(const struct interp_block *block, const uint8_t *start, uint32_t host_len,
                                       uint32_t instruction_count) {
     const char *fingerprint = hl_c_backend_build_fingerprint();
@@ -605,6 +622,8 @@ static void translit_perf_map_publish(const struct interp_block *block, const ui
     if (length <= 0 || (size_t)length >= sizeof name) return;
     translit_perf_map_publish_named(name, start, host_len);
 }
+#else
+#define translit_perf_map_publish_helper(name, start, end, published) ((void)0)
 #endif
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
@@ -1302,6 +1321,8 @@ static int translit_jcc_ibtc_stub_init(void) {
         translit_jcc_ibtc_stub_rsp_canonical = g_cache + header->rsp_canonical_off;
         translit_jcc_ibtc_stub_flags_canonical = g_cache + header->flags_canonical_off;
         translit_jcc_ibtc_stub_end = g_cache + header->end_off;
+        translit_perf_map_publish_helper("hl_tl_helper_jcc_ibtc", translit_jcc_ibtc_stub_entry,
+                                         translit_jcc_ibtc_stub_end, &translit_profile_jcc_ibtc);
         return 1;
     }
     if (g_cp != g_cache) return 0;
@@ -1480,7 +1501,7 @@ static int translit_jcc_ibtc_stub_init(void) {
     translit_jcc_ibtc_stub_rsp_canonical = rsp_canonical;
     translit_jcc_ibtc_stub_flags_canonical = flags_canonical;
     translit_jcc_ibtc_stub_end = a.cursor;
-    translit_perf_map_publish_named("hl_tl_helper_jcc_ibtc", entry, (uint32_t)(a.cursor - entry));
+    translit_perf_map_publish_helper("hl_tl_helper_jcc_ibtc", entry, a.cursor, &translit_profile_jcc_ibtc);
     return 1;
 }
 
@@ -1506,6 +1527,8 @@ static int translit_direct_jmp_ibtc_stub_init(void) {
         translit_direct_jmp_ibtc_stub_rsp_canonical = g_cache + header->direct_jmp_rsp_canonical_off;
         translit_direct_jmp_ibtc_stub_flags_canonical = g_cache + header->direct_jmp_flags_canonical_off;
         translit_direct_jmp_ibtc_stub_end = g_cache + header->direct_jmp_end_off;
+        translit_perf_map_publish_helper("hl_tl_helper_direct_jmp_ibtc", translit_direct_jmp_ibtc_stub_entry,
+                                         translit_direct_jmp_ibtc_stub_end, &translit_profile_direct_jmp_ibtc);
         return 1;
     }
     if (g_cp != g_cache + header->end_off) return 0;
@@ -1580,6 +1603,8 @@ static int translit_direct_jmp_ibtc_stub_init(void) {
     translit_direct_jmp_ibtc_stub_rsp_canonical = rsp_canonical;
     translit_direct_jmp_ibtc_stub_flags_canonical = flags_canonical;
     translit_direct_jmp_ibtc_stub_end = a.cursor;
+    translit_perf_map_publish_helper("hl_tl_helper_direct_jmp_ibtc", entry, a.cursor,
+                                     &translit_profile_direct_jmp_ibtc);
     return 1;
 }
 
@@ -4666,6 +4691,8 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
         }
         translit_jcc_ibtc_stub_header *before = (translit_jcc_ibtc_stub_header *)g_cache;
         uint32_t old_end = before->direct_jmp_end_off;
+        translit_profile_named_range old_jcc_profile = translit_profile_jcc_ibtc;
+        translit_profile_named_range old_direct_jmp_profile = translit_profile_direct_jmp_ibtc;
         uint64_t old_generation = g_cache_gen;
         jit_body_owner_set *old_owners = jit_body_owner_set_for(g_cache_gen, 0);
         if (old_end == 0 || g_cp != g_cache + old_end || old_owners == NULL ||
@@ -4698,6 +4725,12 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
         uint32_t final_count =
             owners == NULL ? 0 : atomic_load_explicit(&owners->count, memory_order_acquire);
         result = after->magic == TL_JCC_IBTC_STUB_MAGIC && header_end == old_end &&
+                         translit_profile_jcc_ibtc.pid == old_jcc_profile.pid &&
+                         translit_profile_jcc_ibtc.start == old_jcc_profile.start &&
+                         translit_profile_jcc_ibtc.end == old_jcc_profile.end &&
+                         translit_profile_direct_jmp_ibtc.pid == old_direct_jmp_profile.pid &&
+                         translit_profile_direct_jmp_ibtc.start == old_direct_jmp_profile.start &&
+                         translit_profile_direct_jmp_ibtc.end == old_direct_jmp_profile.end &&
                          g_cp > g_cache + header_end && owners != NULL && owners->generation == g_cache_gen &&
                          owners->rw == g_cache && owner_count == 6 && final_count > owner_count && block != NULL &&
                          (uint8_t *)block >= g_cache + header_end &&

@@ -1328,6 +1328,8 @@ fn transliterated_blocks_publish_perf_map_identities() {
     assert_eq!(&dump_bytes[..4], &0x4A695444u32.to_ne_bytes());
     let text = std::fs::read_to_string(map).unwrap();
     let mut records = 0;
+    let mut jcc_helpers = 0;
+    let mut direct_jmp_helpers = 0;
     for line in text.lines() {
         let fields: Vec<_> = line.split_whitespace().collect();
         assert_eq!(fields.len(), 3, "{line}");
@@ -1335,14 +1337,22 @@ fn transliterated_blocks_publish_perf_map_identities() {
         assert!(u64::from_str_radix(fields[1], 16).unwrap() != 0, "{line}");
         assert!(fields[2].starts_with("hl_tl_"), "{line}");
         assert!(!fields[2].contains("unfingerprinted"), "{line}");
+        if fields[2] == "hl_tl_helper_jcc_ibtc" {
+            jcc_helpers += 1;
+            continue;
+        }
+        if fields[2] == "hl_tl_helper_direct_jmp_ibtc" {
+            direct_jmp_helpers += 1;
+            continue;
+        }
         assert!(fields[2].contains("_g"), "{line}");
         assert!(fields[2].contains("_gl"), "{line}");
         assert!(fields[2].contains("_i"), "{line}");
         records += 1;
     }
     assert!(
-        records > 0 && records as u64 == backend.blocks,
-        "records={records} {}",
+        jcc_helpers == 1 && direct_jmp_helpers == 1 && records > 0 && records as u64 == backend.blocks,
+        "jcc_helpers={jcc_helpers} direct_jmp_helpers={direct_jmp_helpers} records={records} {}",
         backend.line
     );
 }
@@ -1372,14 +1382,45 @@ fn forked_translators_publish_process_owned_perf_files() {
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names.iter().filter(|name| name.starts_with("perf-")).count(), 2, "{names:?}");
-        assert_eq!(names.iter().filter(|name| name.starts_with("jit-")).count(), 2, "{names:?}");
+        assert_eq!(
+            names.iter().filter(|name| name.starts_with("perf-")).count(),
+            2,
+            "{names:?}"
+        );
+        assert_eq!(
+            names.iter().filter(|name| name.starts_with("jit-")).count(),
+            2,
+            "{names:?}"
+        );
         for pid in [parent_pid, child_pid] {
             let map = maps.join(format!("perf-{pid}.map"));
-            let text =
-                std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
-            assert!(text.contains(caller), "caller {caller} absent from {}:\n{text}", map.display());
-            assert!(text.contains(target), "target {target} absent from {}:\n{text}", map.display());
+            let text = std::fs::read_to_string(&map).unwrap_or_else(|error| panic!("{}: {error}", map.display()));
+            assert!(
+                text.contains(caller),
+                "caller {caller} absent from {}:\n{text}",
+                map.display()
+            );
+            assert!(
+                text.contains(target),
+                "target {target} absent from {}:\n{text}",
+                map.display()
+            );
+            assert_eq!(
+                text.lines()
+                    .filter(|line| line.ends_with(" hl_tl_helper_jcc_ibtc"))
+                    .count(),
+                1,
+                "helper must rebind once, without duplicates, in {}:\n{text}",
+                map.display()
+            );
+            assert_eq!(
+                text.lines()
+                    .filter(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc"))
+                    .count(),
+                1,
+                "direct-JMP helper must rebind once, without duplicates, in {}:\n{text}",
+                map.display()
+            );
         }
         backend
     };

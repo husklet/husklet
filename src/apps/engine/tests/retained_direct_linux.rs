@@ -202,7 +202,12 @@ mod linux_host {
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 
         let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
-            .args(["--diagnostics", "--translit", "--translit-perf-map"])
+            .args([
+                "--diagnostics",
+                "--translit",
+                "--translit-direct-jmp-ibtc=on",
+                "--translit-perf-map",
+            ])
             .arg(directory.path())
             .args(["--rootfs", root.path().to_str().unwrap(), "bin/profile-fixture"])
             .output()
@@ -231,6 +236,10 @@ mod linux_host {
         let text = fs::read_to_string(map).unwrap();
         assert!(
             text.lines().any(|line| line.ends_with(" hl_tl_helper_jcc_ibtc")),
+            "{text}"
+        );
+        assert!(
+            text.lines().any(|line| line.ends_with(" hl_tl_helper_direct_jmp_ibtc")),
             "{text}"
         );
         assert!(
