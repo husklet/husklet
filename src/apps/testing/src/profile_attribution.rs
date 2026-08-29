@@ -141,12 +141,14 @@ struct Receipt {
     symbol_index_sha256: String,
     direct_jmp_ibtc_disabled: bool,
     samples: u64,
+    lost_records: u64,
     lost_chunks: u64,
     lost_sample_percent: f64,
 }
 
 #[derive(Debug, Default, PartialEq)]
 struct ExportLoss {
+    lost_records: u64,
     lost_chunks: u64,
     lost_sample_percent: f64,
 }
@@ -347,6 +349,7 @@ fn record(options: RecordOptions) -> Result<(), Error> {
             symbol_index_sha256: sha256(&symbol_index)?,
             direct_jmp_ibtc_disabled: true,
             samples,
+            lost_records: loss.lost_records,
             lost_chunks: loss.lost_chunks,
             lost_sample_percent: loss.lost_sample_percent,
         };
@@ -645,15 +648,25 @@ fn elf_build_id(path: &Path) -> Result<String, Error> {
 
 fn export_script(data: &Path, destination: &Path, stderr_path: &Path) -> Result<ExportLoss, Error> {
     let output = Command::new("perf")
-        .args(["script", "--no-demangle", "-G", "-F", "event,ip,sym,dso", "-i"])
+        .args([
+            "script",
+            "--no-demangle",
+            "--show-lost-events",
+            "-G",
+            "-F",
+            "event,ip,sym,dso",
+            "-i",
+        ])
         .arg(data)
         .output()?;
     fs::write(stderr_path, &output.stderr)?;
     if !output.status.success() {
         return Err("perf script failed".into());
     }
-    let loss = parse_export_loss(&String::from_utf8(output.stderr)?)?;
-    fs::write(destination, normalize_perf_script(&String::from_utf8(output.stdout)?)?)?;
+    let mut loss = parse_export_loss(&String::from_utf8(output.stderr)?)?;
+    let (normalized, lost_records) = normalize_perf_script(&String::from_utf8(output.stdout)?)?;
+    loss.lost_records = lost_records;
+    fs::write(destination, normalized)?;
     Ok(loss)
 }
 
@@ -696,19 +709,26 @@ fn parse_export_loss(stderr: &str) -> Result<ExportLoss, Error> {
 }
 
 fn verify_export_loss(slot: usize, loss: &ExportLoss) -> Result<(), Error> {
-    if loss.lost_chunks != 0 || loss.lost_sample_percent >= MAX_LOST_SAMPLE_PERCENT {
+    if loss.lost_records != 0 || loss.lost_chunks != 0 || loss.lost_sample_percent >= MAX_LOST_SAMPLE_PERCENT {
         return Err(format!(
-            "profile {slot} exceeded loss threshold: {} chunks, {:.2}% samples",
-            loss.lost_chunks, loss.lost_sample_percent
+            "profile {slot} exceeded loss threshold: {} records, {} chunks, {:.2}% samples",
+            loss.lost_records, loss.lost_chunks, loss.lost_sample_percent
         )
         .into());
     }
     Ok(())
 }
 
-fn normalize_perf_script(output: &str) -> Result<Vec<u8>, Error> {
+fn normalize_perf_script(output: &str) -> Result<(Vec<u8>, u64), Error> {
     let mut normalized = Vec::new();
+    let mut lost_records = 0u64;
     for (index, line) in output.lines().enumerate() {
+        if let Some(value) = line.strip_prefix("PERF_RECORD_LOST lost ") {
+            lost_records = lost_records
+                .checked_add(value.parse()?)
+                .ok_or("lost-record count overflow")?;
+            continue;
+        }
         let mut fields = line.split_whitespace();
         let event = fields
             .next()
@@ -729,7 +749,7 @@ fn normalize_perf_script(output: &str) -> Result<Vec<u8>, Error> {
             .ok_or_else(|| format!("perf script row {} has unbound dso", index + 1))?;
         writeln!(normalized, "{event}\t{ip}\t{symbol}\t{dso}")?;
     }
-    Ok(normalized)
+    Ok((normalized, lost_records))
 }
 
 fn freeze_build_ids(data: &Path, results: &Path, index_path: &Path) -> Result<(), Error> {
@@ -935,6 +955,7 @@ fn read_receipts(results: &Path, manifest: &Manifest) -> Result<BTreeMap<usize, 
             || sha256(&prefix.with_extension("stderr"))? != receipt.stderr_sha256
             || sha256(&prefix.with_extension("symbols.tsv"))? != receipt.symbol_index_sha256
             || !receipt.direct_jmp_ibtc_disabled
+            || receipt.lost_records != 0
             || receipt.lost_chunks != 0
             || receipt.lost_sample_percent >= MAX_LOST_SAMPLE_PERCENT
             || match &receipt.semantic_output_sha256 {
@@ -1063,13 +1084,15 @@ mod tests {
             "cpu-clock:u:      7c505da05ac7 [.] (/memfd:hl-code (deleted))\n",
         );
         assert_eq!(
-            String::from_utf8(normalize_perf_script(output).unwrap()).unwrap(),
+            String::from_utf8(normalize_perf_script(output).unwrap().0).unwrap(),
             concat!(
                 "cpu-clock:u:\t60918e9763a1\trun_guest\t/frozen/hl\n",
                 "cpu-clock:u:\t7c505da05ac7\t[.]\t/memfd:hl-code (deleted)\n",
             )
         );
         assert!(normalize_perf_script("cpu-clock:u: malformed\n").is_err());
+        let (_, lost) = normalize_perf_script("PERF_RECORD_LOST lost 7\nPERF_RECORD_LOST lost 5\n").unwrap();
+        assert_eq!(lost, 12);
     }
 
     #[test]
@@ -1084,6 +1107,7 @@ mod tests {
         );
         let loss = parse_export_loss(warning).unwrap();
         assert_eq!(loss.lost_chunks, 30);
+        assert_eq!(loss.lost_records, 0);
         assert_eq!(loss.lost_sample_percent, 8.14);
         assert!(verify_export_loss(1, &loss).is_err());
         assert!(
@@ -1091,6 +1115,7 @@ mod tests {
                 1,
                 &ExportLoss {
                     lost_chunks: 0,
+                    lost_records: 0,
                     lost_sample_percent: 0.99,
                 }
             )
@@ -1155,6 +1180,7 @@ mod tests {
             symbol_index_sha256: "e".into(),
             direct_jmp_ibtc_disabled: true,
             samples: 1,
+            lost_records: 0,
             lost_chunks: 0,
             lost_sample_percent: 0.0,
         };
@@ -1228,6 +1254,16 @@ mod tests {
         verify_bound_hash(&path, &sealed, "symbol index").unwrap();
         fs::write(&path, "spoofed\n").unwrap();
         assert!(verify_bound_hash(&path, &sealed, "symbol index").is_err());
+    }
+
+    #[test]
+    fn sealed_exporter_stderr_rejects_dropped_or_tampered_warning() {
+        let (_directory, path) = script("Warning:\nProcessed 1 events and lost 1 chunks!\n");
+        let sealed = sha256(&path).unwrap();
+        fs::write(&path, "").unwrap();
+        assert!(verify_bound_hash(&path, &sealed, "exporter stderr").is_err());
+        fs::write(&path, "Warning: spoofed\n").unwrap();
+        assert!(verify_bound_hash(&path, &sealed, "exporter stderr").is_err());
     }
 
     #[test]
@@ -1314,6 +1350,7 @@ mod tests {
             symbol_index_sha256: "e".into(),
             direct_jmp_ibtc_disabled: true,
             samples: 0,
+            lost_records: 0,
             lost_chunks: 0,
             lost_sample_percent: 0.0,
         };
