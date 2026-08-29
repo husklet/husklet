@@ -190,7 +190,7 @@ const DEFINITIONS: &[Definition] = &[
         "publish same-ISA perf symbols without enabling execution diagnostics",
         Flag
     ),
-    injection!(
+    internal!(
         "HL_TRANSLIT_SYMBOL_RECEIPT",
         "test-only sampling symbol enqueue and teardown receipts",
         Flag
