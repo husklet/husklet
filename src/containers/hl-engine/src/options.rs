@@ -141,6 +141,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST",
+        "test-only force a threaded same-ISA fresh-arena rollover",
+        Flag
+    ),
+    internal!(
         "HL_TRANSLIT_FS_AUTHORITY_TEST",
         "test-only force same-ISA FS direct-data authority refusal",
         Flag
