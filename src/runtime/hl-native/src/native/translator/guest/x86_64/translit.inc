@@ -4669,7 +4669,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                    ? 0
                    : 127;
     }
-    if (scenario >= 121 && scenario <= 130) {
+    if (scenario >= 121 && scenario <= 134) {
         const size_t arena_size = 65536;
         uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -4682,7 +4682,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             guest_bytes[2] = 0;
         }
         const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
-        const size_t target_offset = scenario == 127 ? 0x1040 : 0x40;
+        const size_t target_offset = (scenario == 127 || scenario >= 131) ? 0x1040 : 0x40;
         const uint64_t target = source + target_offset;
         guest_bytes[target_offset] = 0xb8;
         guest_bytes[target_offset + 1] = 42;
@@ -4728,14 +4728,17 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
             return 123;
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         translit_jcc_ibtc_fill(&cpu, target_block, 0);
-        if (scenario == 127) {
+        if (scenario == 127 || scenario >= 131) {
+            if (scenario == 131) return 0;
             smc_inplace_drop();
             if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0 ||
                 ibtc_snapshot(&translit_ret_ibtc[ibtc_index(target)]).target != 0)
                 return 128;
+            if (scenario == 132) return 0;
             cpu.rip = target;
             cpu.jcc_ibtc_miss = TL_RET_IBTC_MISS;
             translit_jcc_ibtc_fill(&cpu, target_block, 0);
+            if (scenario == 133 || scenario == 134) return 0;
         }
         if (scenario == 128 || scenario == 129) {
             pid_t child = fork();

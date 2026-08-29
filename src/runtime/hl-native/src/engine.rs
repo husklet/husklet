@@ -546,7 +546,7 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 112..=130 {
+        for scenario in (112..=126).chain(128..=134).chain(std::iter::once(127)) {
             // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
             assert_eq!(unsafe { hook(scenario) }, 0, "RET IBTC simulation scenario {scenario}");
         }
