@@ -4688,10 +4688,11 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         for (unsigned reg = 0; reg < 16; ++reg) cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
         cpu.r[4] = (uint64_t)(uintptr_t)stack;
         translit_flags_out(&cpu, UINT64_C(0xad7));
+        uint64_t expected_flags = translit_flags_in(&cpu);
         if (scenario == 125) cpu.irq = 1;
         run_block(context, &cpu, source_block);
         uint64_t expected_rsp = (uint64_t)(uintptr_t)stack + (scenario == 122 ? 24 : 8);
-        int architecture_exact = translit_flags_in(&cpu) == UINT64_C(0xad7);
+        int architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
         if (scenario == 125)
@@ -4719,7 +4720,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         cpu.r[4] = (uint64_t)(uintptr_t)stack;
         translit_flags_out(&cpu, UINT64_C(0xad7));
         run_block(context, &cpu, source_block);
-        architecture_exact = translit_flags_in(&cpu) == UINT64_C(0xad7);
+        architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
         if (scenario >= 123)
@@ -4731,7 +4732,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                                                 memory_order_relaxed) == 2
                        ? 0
                        : 125;
-        architecture_exact = translit_flags_in(&cpu) == UINT64_C(0xad7);
+        architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 1; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
         return architecture_exact && cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
