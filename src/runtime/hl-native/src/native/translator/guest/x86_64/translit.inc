@@ -4685,17 +4685,24 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
         *stack = target;
         struct cpu cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+        for (unsigned reg = 0; reg < 16; ++reg) cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
         cpu.r[4] = (uint64_t)(uintptr_t)stack;
+        translit_flags_out(&cpu, UINT64_C(0xad7));
         if (scenario == 125) cpu.irq = 1;
         run_block(context, &cpu, source_block);
         uint64_t expected_rsp = (uint64_t)(uintptr_t)stack + (scenario == 122 ? 24 : 8);
+        int architecture_exact = translit_flags_in(&cpu) == UINT64_C(0xad7);
+        for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
+            if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
         if (scenario == 125)
-            return cpu.rip == target && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
+            return architecture_exact && cpu.rip == target && cpu.r[4] == expected_rsp &&
+                           cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
                            atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_IRQ],
                                                 memory_order_relaxed) == 1
                        ? 0
                        : 126;
-        if (cpu.rip != target || cpu.r[4] != expected_rsp || cpu.jcc_ibtc_miss != TL_RET_IBTC_MISS ||
+        if (!architecture_exact || cpu.rip != target || cpu.r[4] != expected_rsp ||
+            cpu.jcc_ibtc_miss != TL_RET_IBTC_MISS ||
             atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_MISS],
                                  memory_order_relaxed) != 1)
             return 123;
@@ -4708,17 +4715,26 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         ibtc_publish(&translit_ret_ibtc[ibtc_index(target)], target + 4, (void *)(uintptr_t)1);
         *stack = target;
         cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+        for (unsigned reg = 0; reg < 16; ++reg) cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
         cpu.r[4] = (uint64_t)(uintptr_t)stack;
+        translit_flags_out(&cpu, UINT64_C(0xad7));
         run_block(context, &cpu, source_block);
+        architecture_exact = translit_flags_in(&cpu) == UINT64_C(0xad7);
+        for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
+            if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
         if (scenario >= 123)
-            return cpu.rip == target && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
+            return architecture_exact && cpu.rip == target && cpu.r[4] == expected_rsp &&
+                           cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
                            atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
                                                 memory_order_relaxed) == 0 &&
                            atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_MISS],
                                                 memory_order_relaxed) == 2
                        ? 0
                        : 125;
-        return cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
+        architecture_exact = translit_flags_in(&cpu) == UINT64_C(0xad7);
+        for (unsigned reg = 1; architecture_exact && reg < 16; ++reg)
+            if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
+        return architecture_exact && cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
                        atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
                                             memory_order_relaxed) == 1
                    ? 0
