@@ -1453,6 +1453,7 @@ static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t po
     hl_x64_load_gs(a, HL_X64_RAX, TL_MM_ENTRY);
     hl_x64_lea_rsp(a, (int32_t)pop);
     ranges.rsp_end = a->cursor;
+    if (translit_jcc_ibtc_stub_entry != NULL) hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
     return ranges;
 }
 
