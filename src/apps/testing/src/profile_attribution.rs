@@ -1094,6 +1094,14 @@ mod tests {
         assert!(normalize_perf_script("cpu-clock:u: malformed\n").is_err());
         let (_, lost) = normalize_perf_script("PERF_RECORD_LOST lost 7\nPERF_RECORD_LOST lost 5\n").unwrap();
         assert_eq!(lost, 12);
+        assert!(verify_export_loss(
+            1,
+            &ExportLoss {
+                lost_records: lost,
+                ..ExportLoss::default()
+            }
+        )
+        .is_err());
     }
 
     #[test]
