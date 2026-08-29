@@ -1386,7 +1386,10 @@ static int translit_jcc_ibtc_stub_init(void) {
         hl_x64_patch_rel32(&a, not_call, a.cursor);
     }
 #endif
+    hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, 0);
+    uint8_t *typed_miss = hl_x64_jcc_rel32(&a, 5);
     hl_x64_store_gs_imm32(&a, TL_JCC_IBTC_MISS, OFF_JCC_IBTC_MISS);
+    hl_x64_patch_rel32(&a, typed_miss, a.cursor);
     translit_emit_return(&a, R_BRANCH); // cpu->rip already names the target
 
     hl_x64_patch_rel32(&a, irq, a.cursor);
