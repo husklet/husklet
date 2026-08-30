@@ -155,26 +155,6 @@ const DEFINITIONS: &[Definition] = &[
         "test-only omit one same-ISA pcache external relocation",
         Flag
     ),
-    internal!(
-        "HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE",
-        "test-only fail one same-ISA warm-cache reconstruction stage",
-        Text
-    ),
-    internal!(
-        "HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
-        "test-only exercise warm-cache rollback through the single-map W^X arena",
-        Flag
-    ),
-    internal!(
-        "HL_PCACHE_OBSERVE",
-        "emit structured persistent-cache diagnostics",
-        Flag
-    ),
-    internal!(
-        "HL_PCACHE_EXEC_AUTHORITY",
-        "snapshot-authenticated executable content identities",
-        Records
-    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",
@@ -320,6 +300,22 @@ const DEFINITIONS: &[Definition] = &[
         "HL_NATIVE_CKPT_TEST_SKIP_REGISTER",
         "test-only native checkpoint registration mutation",
         Flag
+    ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE",
+        "test-only fail one same-ISA warm-cache reconstruction stage",
+        Text
+    ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
+        "test-only exercise warm-cache rollback through the single-map W^X arena",
+        Flag
+    ),
+    internal!("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", Flag),
+    internal!(
+        "HL_PCACHE_EXEC_AUTHORITY",
+        "snapshot-authenticated executable content identities",
+        Records
     ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
     debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
