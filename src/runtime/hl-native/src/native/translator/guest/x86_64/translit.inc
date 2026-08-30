@@ -7319,9 +7319,34 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
     uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
     struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
+    uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
+    int signal_exact = destination == HL_X64_RSP;
+    if (entry != NULL && destination != HL_X64_RSP) {
+        const uint64_t canonical = UINT64_C(0x0102030405060708);
+        const uint64_t native_value = UINT64_C(0xa1a2a3a4a5a6a7a8);
+        size_t op_end_offset = 1 + 9 + 9 + ((destination & 7) == 4 ? 8 : 7);
+        struct cpu partial = {0}, faulting = {0}, completed = {0};
+        partial.r[destination] = canonical; faulting.r[destination] = canonical;
+        completed.r[destination] = canonical;
+        ucontext_t partial_uc = {0}, fault_uc = {0}, completed_uc = {0};
+        HL_HOST_UC_GREGS(&partial_uc)[g_translit_greg[destination]] = (greg_t)native_value;
+        HL_HOST_UC_GREGS(&fault_uc)[g_translit_greg[destination]] = (greg_t)(uintptr_t)&first;
+        HL_HOST_UC_GREGS(&completed_uc)[g_translit_greg[destination]] = (greg_t)native_value;
+        HL_HOST_UC_PC(&partial_uc) = (greg_t)(uintptr_t)(entry + 2);
+        HL_HOST_UC_PC(&fault_uc) = (greg_t)(uintptr_t)(entry + 20);
+        HL_HOST_UC_PC(&completed_uc) = (greg_t)(uintptr_t)(entry + op_end_offset);
+        int saved_selected = translit_selected; translit_selected = 1;
+        signal_exact = translit_signal_capture(&partial, &partial_uc) &&
+                       partial.r[destination] == native_value && partial.rip == source + 1 &&
+                       translit_signal_capture(&faulting, &fault_uc) &&
+                       faulting.r[destination] == canonical && faulting.rip == source + 1 &&
+                       translit_signal_capture(&completed, &completed_uc) &&
+                       completed.r[destination] == native_value && completed.rip == source + 10;
+        translit_selected = saved_selected;
+    }
     hl_backend_tree_begin(1, effective_host_services());
     if (body != NULL) run_block(context, &cpu, block);
-    int exact = body != NULL;
+    int exact = body != NULL && signal_exact;
     if (destination == HL_X64_RSP) {
         exact = exact && block->profile_insns == 1 && cpu.rip == source + 1;
     } else {
