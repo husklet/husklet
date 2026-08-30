@@ -57,6 +57,9 @@ struct Backend {
     line: String,
     blocks: u64,
     entries: u64,
+    redispatch_attempted: u64,
+    redispatch_hits: u64,
+    redispatch_threaded: u64,
     declined: u64,
     stitch_candidates: u64,
     stitch_admitted: u64,
@@ -195,6 +198,19 @@ fn exact_u64_field(line: &str, name: &str, context: &str) -> Result<u64, String>
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
 fn backend(stderr: &[u8]) -> Backend {
+    let redispatch = String::from_utf8_lossy(stderr)
+        .lines()
+        .find(|line| line.starts_with("[prof] redispatch "))
+        .unwrap_or_else(|| panic!("redispatch receipt in {}", String::from_utf8_lossy(stderr)))
+        .to_owned();
+    let redispatch_field = |name: &str| {
+        redispatch
+            .split_ascii_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .unwrap_or_else(|| panic!("missing {name} in {redispatch}"))
+            .parse::<u64>()
+            .unwrap()
+    };
     let text = String::from_utf8_lossy(stderr);
     let lines = text
         .lines()
@@ -441,6 +457,9 @@ fn backend(stderr: &[u8]) -> Backend {
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
+        redispatch_attempted: redispatch_field("attempted="),
+        redispatch_hits: redispatch_field("threaded-hit="),
+        redispatch_threaded: redispatch_field("threaded="),
         declined: counter("declined="),
         stitch_candidates: counter("stitch_candidates="),
         stitch_admitted: counter("stitch_admitted="),
@@ -1774,7 +1793,7 @@ fn fatal_signal_is_reported_once_by_the_safe_lifecycle_parent() {
     assert_eq!(reasons, value("crossings="), "{}", records[0]);
 }
 
-fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
+fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>, Vec<u8>) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
@@ -1795,7 +1814,8 @@ fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
     let exit = engine.wait().unwrap();
     engine.destroy().unwrap();
     let stderr = captured.err.lock().unwrap().clone();
-    (exit.guest_status, stderr)
+    let stdout = captured.out.lock().unwrap().clone();
+    (exit.guest_status, stderr, stdout)
 }
 
 #[test]
@@ -1803,8 +1823,9 @@ fn full_width_translit_profile_is_complete_for_exit_and_exit_group() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "profile_termination");
     for termination in [b"exit".as_slice(), b"group".as_slice()] {
-        let (status, stderr) = wide_profile(&executable, termination);
+        let (status, stderr, stdout) = wide_profile(&executable, termination);
         assert_eq!(status, 0);
+        assert!(stdout.is_empty(), "post-exit continuation executed: {}", String::from_utf8_lossy(&stdout));
         assert_eq!(stderr.last(), Some(&b'\n'), "{}", String::from_utf8_lossy(&stderr));
         let text = String::from_utf8(stderr).unwrap();
         let lines: Vec<_> = text
@@ -1913,6 +1934,9 @@ fn signals_delivered_into_transliterated_frames_agree_with_the_interpreter() {
 #[test]
 fn threads_fork_and_exec_agree_with_the_interpreter() {
     let tree = agrees("procs");
+    assert!(tree.redispatch_attempted > 0, "{}", tree.line);
+    assert!(tree.redispatch_threaded > 0, "{}", tree.line);
+    assert_eq!(tree.redispatch_hits, 0, "threaded guests must never fast-redispatch: {}", tree.line);
     assert!(tree.root_pid > 0, "{}", tree.tree_line);
     assert_eq!(tree.claimed, 17, "{}", tree.tree_line);
     assert_eq!(tree.completed, tree.claimed, "{}", tree.tree_line);

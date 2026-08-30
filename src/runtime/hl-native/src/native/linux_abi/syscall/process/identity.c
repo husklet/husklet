@@ -306,6 +306,26 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (unsigned long long)atomic_load_explicit(&g_exec_bytes_unstable, memory_order_acquire));
             if (profile_size > 0 && (size_t)profile_size < sizeof profile)
                 (void)profile_record_write(profile, (size_t)profile_size);
+#if defined(HL_TRANSLATOR_GUEST_X86_64_CPU_H)
+            char redispatch[512];
+            int redispatch_size = snprintf(
+                redispatch, sizeof redispatch,
+                "[prof] redispatch attempted=%llu hit=%llu threaded-hit=%llu map-miss=%llu stale=%llu threaded=%llu irq=%llu "
+                "signal=%llu fatal=%llu exited=%llu budget=%llu\n",
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_ATTEMPTED], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_HIT], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_THREADED_HIT], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_MAP_MISS], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_STALE], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_THREADED], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_IRQ], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_SIGNAL], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_FATAL], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_EXITED], memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&g_dispatch_redispatch[REDISPATCH_BUDGET], memory_order_relaxed));
+            if (redispatch_size > 0 && (size_t)redispatch_size < sizeof redispatch)
+                (void)profile_record_write(redispatch, (size_t)redispatch_size);
+#endif
             // The transliterator record is variable-width and owns its newline; keep it out of the fixed dispatcher
             // record so neither can silently consume the other's capacity.
             (void)translit_profile_write();

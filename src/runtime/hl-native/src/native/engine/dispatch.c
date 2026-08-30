@@ -260,23 +260,12 @@ static inline void dispatch_interrupt_rearm(struct cpu *c) {
 #endif
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-enum dispatch_redispatch_counter {
-    REDISPATCH_ATTEMPTED,
-    REDISPATCH_HIT,
-    REDISPATCH_MAP_MISS,
-    REDISPATCH_STALE,
-    REDISPATCH_THREADED,
-    REDISPATCH_IRQ,
-    REDISPATCH_SIGNAL,
-    REDISPATCH_FATAL,
-    REDISPATCH_EXITED,
-    REDISPATCH_BUDGET,
-    REDISPATCH_COUNTER_COUNT,
-};
-static _Atomic uint64_t g_dispatch_redispatch[REDISPATCH_COUNTER_COUNT];
 #define REDISPATCH_COUNT(kind) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed)
 #else
-#define REDISPATCH_COUNT(kind) ((void)0)
+#define REDISPATCH_COUNT(kind)                                                                                         \
+    do {                                                                                                              \
+        if (g_prof) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed);                 \
+    } while (0)
 #endif
 
 static void run_guest(struct cpu *c) {
@@ -599,6 +588,7 @@ redispatch_execute:
                     REDISPATCH_COUNT(REDISPATCH_STALE);
                 else {
                     REDISPATCH_COUNT(REDISPATCH_HIT);
+                    if (g_threaded) REDISPATCH_COUNT(REDISPATCH_THREADED_HIT);
                     code = next_code;
                     rxcode = next_rx;
                     selected_cache_gen = next_generation;

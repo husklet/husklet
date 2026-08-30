@@ -23,6 +23,22 @@ typedef struct hl_dispatch_profile {
     uint64_t reason_ns;
 } hl_dispatch_profile;
 
+enum dispatch_redispatch_counter {
+    REDISPATCH_ATTEMPTED,
+    REDISPATCH_HIT,
+    REDISPATCH_THREADED_HIT,
+    REDISPATCH_MAP_MISS,
+    REDISPATCH_STALE,
+    REDISPATCH_THREADED,
+    REDISPATCH_IRQ,
+    REDISPATCH_SIGNAL,
+    REDISPATCH_FATAL,
+    REDISPATCH_EXITED,
+    REDISPATCH_BUDGET,
+    REDISPATCH_COUNTER_COUNT,
+};
+static _Atomic uint64_t g_dispatch_redispatch[REDISPATCH_COUNTER_COUNT];
+
 enum {
     /* Native reason values outside the compact stable 0..15 range are deliberately collapsed. */
     HL_DISPATCH_REASON_LIMIT = 16,
