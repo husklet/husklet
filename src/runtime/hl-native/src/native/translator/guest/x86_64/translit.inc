@@ -4933,6 +4933,17 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     int spill_capture = body != NULL && translit_signal_capture(&interrupted, &native) &&
                         interrupted.r[HL_X64_R11] == UINT64_C(0xaaaabbbbccccdddd) &&
                         interrupted.rip == source;
+    struct cpu restoring = {0};
+    ucontext_t after_operation = {0};
+    greg_t *after_operation_regs = HL_HOST_UC_GREGS(&after_operation);
+    restoring.r[HL_X64_R11] = UINT64_C(0x1234432112344321);
+    after_operation_regs[HL_HOST_UC_REG_R11] = (greg_t)(uintptr_t)(guest + target_offset);
+    after_operation_regs[HL_HOST_UC_REG_EFL] = (greg_t)expected;
+    HL_HOST_UC_PC(&after_operation) = (greg_t)(uintptr_t)(entry + 23);
+    int restore_capture = body != NULL && translit_signal_capture(&restoring, &after_operation) &&
+                          restoring.r[HL_X64_R11] == UINT64_C(0x1234432112344321) &&
+                          restoring.rip == source + 7 &&
+                          (translit_flags_in(&restoring) & checked) == (expected & checked);
     translit_selected = saved_selected;
     int result = 0;
     if (body == NULL) result = 230;
@@ -4947,6 +4958,7 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     else if (source_preserve != (1u << HL_X64_R11)) result = 240;
     else if (restore_preserve != (1u << HL_X64_R11)) result = 241;
     else if (!spill_capture) result = 250;
+    else if (!restore_capture) result = 252;
 
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
     translit_fall_fixture_bytes = NULL;
