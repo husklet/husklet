@@ -346,6 +346,9 @@ typedef struct {
 } hl_map_host_cache_entry;
 
 static _Thread_local hl_map_host_cache_entry g_map_host_cache[2];
+static void *(*g_map_body_miss_resolver)(uint64_t gpc);
+static void *(*g_map_host_miss_resolver)(uint64_t gpc);
+static int (*g_map_visibility)(uint64_t gpc);
 
 static __attribute__((noinline, noclone)) hl_map_host_cache_entry *map_host_cache_current(void) {
     return g_map_host_cache;
@@ -862,15 +865,24 @@ static int map_idx(uint64_t gpc) {
 
 static void *map_host_cached(hl_map_host_cache_entry cache[2], uint64_t gpc) {
     uint64_t generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_ACQUIRE);
-    if (cache[0].generation == generation && cache[0].gpc == gpc) return cache[0].host;
+    if (cache[0].generation == generation && cache[0].gpc == gpc)
+        return g_map_visibility == NULL || g_map_visibility(gpc) ? cache[0].host : NULL;
     if (cache[1].generation == generation && cache[1].gpc == gpc) {
         hl_map_host_cache_entry hit = cache[1];
         cache[1] = cache[0];
         cache[0] = hit;
-        return hit.host;
+        return g_map_visibility == NULL || g_map_visibility(gpc) ? hit.host : NULL;
     }
     int i = map_idx(gpc);
-    if (i < 0) return NULL;
+    if (i < 0) {
+        if (g_map_host_miss_resolver == NULL) return NULL;
+        void *resolved = g_map_host_miss_resolver(gpc);
+        if (resolved == NULL) return NULL;
+        i = map_idx(gpc);
+        if (i < 0) return NULL;
+        generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_ACQUIRE);
+    }
+    if (g_map_visibility != NULL && !g_map_visibility(gpc)) return NULL;
     cache[1] = cache[0];
     cache[0] = (hl_map_host_cache_entry){gpc, generation, g_map[i].host};
     return g_map[i].host;
@@ -988,7 +1000,9 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
 
 static void *map_body(uint64_t gpc) {
     int i = map_idx(gpc);
-    return i < 0 ? NULL : g_map[i].body;
+    if (i >= 0)
+        return g_map_visibility == NULL || g_map_visibility(gpc) ? g_map[i].body : NULL;
+    return g_map_body_miss_resolver == NULL ? NULL : g_map_body_miss_resolver(gpc);
 }
 
 static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body) {
@@ -1816,12 +1830,20 @@ typedef struct {
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
 typedef uint32_t jit_body_owner_preserve;
 #define JIT_BODY_OWNER_PRESERVE_RET_RAX (1u << 16)
+enum jit_restored_map_state {
+    JIT_RESTORED_DORMANT = 1,
+    JIT_RESTORED_ACTIVATING = 2,
+    JIT_RESTORED_ACTIVE = 3,
+    JIT_RESTORED_INVALIDATING = 4,
+};
 typedef struct {
     uint64_t generation;
     uint8_t *rw;
     ptrdiff_t rw2rx;
     _Atomic uint32_t count;
     _Atomic(jit_body_owner_entry *) entry;
+    _Atomic(uint32_t *) restored_map_ordinal;
+    _Atomic(uint8_t *) restored_map_state;
 } jit_body_owner_set;
 _Static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "signal recovery requires lock-free atomic pointers");
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2 && sizeof(uint32_t) == sizeof(unsigned int),
@@ -1857,6 +1879,8 @@ static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int creat
     empty->rw = g_cache;
     empty->rw2rx = g_rw2rx;
     atomic_store_explicit(&empty->count, 0, memory_order_relaxed);
+    atomic_store_explicit(&empty->restored_map_ordinal, NULL, memory_order_relaxed);
+    atomic_store_explicit(&empty->restored_map_state, NULL, memory_order_relaxed);
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (atomic_load_explicit(&g_body_owner_publish_pause, memory_order_acquire) == 1) {
         atomic_store_explicit(&g_body_owner_publish_slot, (int)(empty - g_body_owners), memory_order_release);
@@ -2042,6 +2066,12 @@ static int jit_body_owner_lookup_preserve(uint64_t host_pc, uint64_t *guest, uin
             else if (rwpc >= entry->rw_end)
                 lo = mid + 1;
             else {
+                uint32_t *ordinals = atomic_load_explicit(&set->restored_map_ordinal, memory_order_acquire);
+                uint8_t *states = atomic_load_explicit(&set->restored_map_state, memory_order_acquire);
+                if (ordinals != NULL && ordinals[mid] != UINT32_MAX &&
+                    (states == NULL || __atomic_load_n(&states[ordinals[mid]], __ATOMIC_ACQUIRE) !=
+                                           JIT_RESTORED_ACTIVE))
+                    return 0;
                 *guest = entry->guest;
                 if (preserve_registers != NULL)
                     *preserve_registers = jit_body_owner_preserves(entries)[mid];
@@ -2065,6 +2095,8 @@ static void jit_body_owner_drop_generation(uint64_t generation) {
            generated frame pins this generation.  Detach first so a later lookup
            cannot acquire the allocation; only that quiescent writer may free it. */
         entries = atomic_exchange_explicit(&g_body_owners[i].entry, NULL, memory_order_acq_rel);
+        (void)atomic_exchange_explicit(&g_body_owners[i].restored_map_ordinal, NULL, memory_order_acq_rel);
+        (void)atomic_exchange_explicit(&g_body_owners[i].restored_map_state, NULL, memory_order_acq_rel);
         free(entries);
         g_body_owners[i].generation = 0;
         g_body_owners[i].rw = NULL;
@@ -2090,6 +2122,8 @@ static void jit_body_owner_clear(void) {
            teardown/STW, when no signal lookup can still hold this pointer. */
         jit_body_owner_entry *entries =
             atomic_exchange_explicit(&g_body_owners[i].entry, NULL, memory_order_acq_rel);
+        (void)atomic_exchange_explicit(&g_body_owners[i].restored_map_ordinal, NULL, memory_order_acq_rel);
+        (void)atomic_exchange_explicit(&g_body_owners[i].restored_map_state, NULL, memory_order_acq_rel);
         free(entries);
         g_body_owners[i].generation = 0;
         g_body_owners[i].rw = NULL;

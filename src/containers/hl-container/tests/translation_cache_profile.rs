@@ -331,6 +331,8 @@ int main(void) {
         let libraries = get(232) as usize;
         let chains = get(240) as usize;
         let arena = get(88);
+        const MAP_SIZE: usize = 100;
+        const OWNER_SIZE: usize = 28;
         match mode {
             Mode::CacheSemanticMap => {
                 require(maps != 0, "semantic map corruption has no map record")?;
@@ -341,8 +343,8 @@ int main(void) {
                     maps >= 2,
                     "semantic duplicate corruption has fewer than two map records",
                 )?;
-                let first = bytes[256..256 + 84].to_vec();
-                bytes[256 + 84..256 + 168].copy_from_slice(&first);
+                let first = bytes[256..256 + MAP_SIZE].to_vec();
+                bytes[256 + MAP_SIZE..256 + 2 * MAP_SIZE].copy_from_slice(&first);
             }
             Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
             Mode::CacheSemanticRelocation => {
@@ -350,12 +352,12 @@ int main(void) {
                     relocations != 0,
                     "semantic relocation corruption has no relocation record",
                 )?;
-                let offset = 256 + maps * 84 + owners * 24 + 4;
+                let offset = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + 4;
                 bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
             }
             Mode::CacheSemanticLibrary => {
                 require(libraries != 0, "semantic library corruption has no manifest record")?;
-                let offset = 256 + maps * 84 + owners * 24 + relocations * 8;
+                let offset = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + relocations * 8;
                 bytes[offset..offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
             }
             Mode::CacheSemanticOverlap => {
@@ -363,7 +365,7 @@ int main(void) {
                     libraries >= 2,
                     "semantic overlap corruption has fewer than two libraries",
                 )?;
-                let libraries_at = 256 + maps * 84 + owners * 24 + relocations * 8;
+                let libraries_at = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + relocations * 8;
                 let first_base = get(libraries_at);
                 let first_len = get(libraries_at + 8);
                 require(first_len > 1, "first manifest span is too short to overlap")?;
@@ -372,14 +374,14 @@ int main(void) {
             }
             Mode::CacheSemanticChain => {
                 require(chains != 0, "semantic chain corruption has no chain record")?;
-                let offset = 256 + maps * 84 + owners * 24 + relocations * 8 + libraries * 56 + 4;
+                let offset = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + relocations * 8 + libraries * 56 + 4;
                 bytes[offset..offset + 4].copy_from_slice(&(arena as u32).to_le_bytes());
             }
             Mode::CacheAbsentLibrary => {
                 require(libraries != 0, "absent-library arm has no manifest record")?;
                 let maps_at = 256;
-                let owners_at = maps_at + maps * 84;
-                let relocations_at = owners_at + owners * 24;
+                let owners_at = maps_at + maps * MAP_SIZE;
+                let relocations_at = owners_at + owners * OWNER_SIZE;
                 let libraries_at = relocations_at + relocations * 8;
                 let chains_at = libraries_at + libraries * 56;
                 let arena_at = chains_at + chains * 24;
@@ -388,7 +390,7 @@ int main(void) {
                         let at = libraries_at + library * 56;
                         let base = get(at);
                         let end = base.saturating_add(get(at + 8));
-                        bytes[maps_at..owners_at].chunks_exact(84).any(|record| {
+                        bytes[maps_at..owners_at].chunks_exact(MAP_SIZE).any(|record| {
                             let start = u64::from_le_bytes(record[8..16].try_into().unwrap());
                             let finish = u64::from_le_bytes(record[16..24].try_into().unwrap());
                             start >= base && finish <= end
@@ -399,32 +401,76 @@ int main(void) {
                 let lib_base = get(selected_at);
                 let lib_len = get(selected_at + 8);
                 let lib_end = lib_base.checked_add(lib_len).ok_or("library span overflow")?;
-                let mut kept_maps = Vec::new();
+                let mut kept_map_records = Vec::new();
+                let mut old_to_new = vec![None; maps];
                 let mut removed_maps = 0usize;
-                for record in bytes[maps_at..owners_at].chunks_exact(84) {
+                for (old, record) in bytes[maps_at..owners_at].chunks_exact(MAP_SIZE).enumerate() {
                     let start = u64::from_le_bytes(record[8..16].try_into().unwrap());
                     let end = u64::from_le_bytes(record[16..24].try_into().unwrap());
                     if start >= lib_base && end <= lib_end {
                         removed_maps += 1;
                     } else {
-                        kept_maps.extend_from_slice(record);
+                        old_to_new[old] = Some(kept_map_records.len());
+                        kept_map_records.push(record.to_vec());
                     }
                 }
                 require(removed_maps != 0, "selected absent library owned no cached blocks")?;
-                let mut kept_chains = Vec::new();
+                let mut kept_owners = Vec::new();
+                for record in bytes[owners_at..relocations_at].chunks_exact(OWNER_SIZE) {
+                    let old = u32::from_le_bytes(record[24..28].try_into().unwrap());
+                    if old == u32::MAX {
+                        kept_owners.extend_from_slice(record);
+                    } else if let Some(new) = old_to_new.get(old as usize).and_then(|ordinal| *ordinal) {
+                        let mut updated = record.to_vec();
+                        updated[24..28].copy_from_slice(&(new as u32).to_le_bytes());
+                        kept_owners.extend_from_slice(&updated);
+                    }
+                }
+                let mut kept_chain_records = Vec::new();
                 for record in bytes[chains_at..arena_at].chunks_exact(24) {
                     let source = u64::from_le_bytes(record[8..16].try_into().unwrap());
                     let target = u64::from_le_bytes(record[16..24].try_into().unwrap());
                     if !((source >= lib_base && source < lib_end) || (target >= lib_base && target < lib_end)) {
-                        kept_chains.extend_from_slice(record);
+                        kept_chain_records.push(record.to_vec());
                     }
                 }
+                let mut owner_cursor = 0usize;
+                let mut chain_cursor = 0usize;
+                for (ordinal, map) in kept_map_records.iter_mut().enumerate() {
+                    let owner_positions: Vec<_> = kept_owners
+                        .chunks_exact(OWNER_SIZE)
+                        .enumerate()
+                        .filter_map(|(index, owner)| {
+                            (u32::from_le_bytes(owner[24..28].try_into().unwrap()) == ordinal as u32).then_some(index)
+                        })
+                        .collect();
+                    let owner_start = owner_positions.first().copied().unwrap_or(owner_cursor);
+                    let gpc = u64::from_le_bytes(map[..8].try_into().unwrap());
+                    let chain_positions: Vec<_> = kept_chain_records
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, chain)| {
+                            (u64::from_le_bytes(chain[8..16].try_into().unwrap()) == gpc).then_some(index)
+                        })
+                        .collect();
+                    let chain_start = chain_positions.first().copied().unwrap_or(chain_cursor);
+                    map[84..88].copy_from_slice(&(owner_start as u32).to_le_bytes());
+                    map[88..92].copy_from_slice(&(owner_positions.len() as u32).to_le_bytes());
+                    map[92..96].copy_from_slice(&(chain_start as u32).to_le_bytes());
+                    map[96..100].copy_from_slice(&(chain_positions.len() as u32).to_le_bytes());
+                    owner_cursor = owner_start + owner_positions.len();
+                    chain_cursor = chain_start + chain_positions.len();
+                }
+                let kept_maps: Vec<u8> = kept_map_records.into_iter().flatten().collect();
+                let kept_chains: Vec<u8> = kept_chain_records.into_iter().flatten().collect();
                 let mut rebuilt = bytes[..256].to_vec();
                 rebuilt[96..104].copy_from_slice(&(maps - removed_maps).to_le_bytes());
+                rebuilt[104..112].copy_from_slice(&(kept_owners.len() / OWNER_SIZE).to_le_bytes());
                 rebuilt[232..240].copy_from_slice(&(libraries - 1).to_le_bytes());
                 rebuilt[240..248].copy_from_slice(&(kept_chains.len() / 24).to_le_bytes());
                 rebuilt.extend_from_slice(&kept_maps);
-                rebuilt.extend_from_slice(&bytes[owners_at..libraries_at]);
+                rebuilt.extend_from_slice(&kept_owners);
+                rebuilt.extend_from_slice(&bytes[relocations_at..libraries_at]);
                 rebuilt.extend_from_slice(&bytes[libraries_at..selected_at]);
                 rebuilt.extend_from_slice(&bytes[selected_at + 56..chains_at]);
                 rebuilt.extend_from_slice(&kept_chains);
