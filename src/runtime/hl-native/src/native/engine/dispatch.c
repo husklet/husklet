@@ -255,6 +255,10 @@ static inline void dispatch_interrupt_rearm(struct cpu *c) {
     if (signal_deliverable_for_cpu(c)) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
 }
 
+#ifndef G_FAST_REDISPATCH
+#define G_FAST_REDISPATCH(code) 0
+#endif
+
 static void run_guest(struct cpu *c) {
     G_HOT_CONTEXT_TYPE *hot_context = G_HOT_CONTEXT_CREATE();
     hl_map_host_cache_entry *map_cache = G_MAP_HOST_CACHE;
@@ -279,7 +283,9 @@ static void run_guest(struct cpu *c) {
     install_host_sigaltstack();
     int profile_reason_open = 0;
     uint64_t profile_reason_start = 0;
+    unsigned redispatch_chain = 0;
     while (!c->exited) {
+        redispatch_chain = 0;
         if (profile_reason_open) {
             hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start, now_ns());
             profile_reason_open = 0;
@@ -490,6 +496,7 @@ static void run_guest(struct cpu *c) {
         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
         // Frontend hook: per-block JT trace dump (per-arch register/flag layout). See §A.3 (5th divergence).
         G_TRACE_DUMP(c);
+redispatch_execute:
         c->reason = 0;
         hl_dispatch_profile_crossing(&g_dispatch_profile);
         if (g_threaded) hl_dispatch_profile_threaded(&g_dispatch_profile);
@@ -546,6 +553,21 @@ static void run_guest(struct cpu *c) {
         // handles R_TIER2 itself (with `continue`), so for the x86 engine this line is never reached;
         // it remains the aarch64 path. Both arches define tier2_promote (per-arch).
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
+        if (!g_threaded && c->reason == R_BRANCH && c->irq == 0 && redispatch_chain < 8 &&
+            !signal_deliverable_for_cpu(c) && hl_fatal_status(&g_jit_fatal) == HL_STATUS_OK) {
+            void *next_code = G_MAP_HOST(map_cache, G_PC(c));
+            void *next_rx;
+            uint64_t next_generation;
+            if (next_code != NULL && G_FAST_REDISPATCH(next_code) &&
+                jit_resolve_rw_code(next_code, &next_rx, &next_generation) && next_generation == g_cache_gen) {
+                code = next_code;
+                rxcode = next_rx;
+                selected_cache_gen = next_generation;
+                selected_bus_epoch = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+                redispatch_chain++;
+                goto redispatch_execute;
+            }
+        }
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
         if (signal_deliverable_for_cpu(c)) maybe_deliver_signal(c);
         if (profile_reason_open) {
