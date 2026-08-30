@@ -2695,6 +2695,17 @@ enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED }
 static void jit_guest_soft_test_set(int);
 static void jit_guest_bus_test_set(int);
 static const int g_translit_greg[16];
+static int translit_test_deliver_guest_fault(struct cpu *, ucontext_t *, uint64_t);
+static void record_guest_fault_state(struct cpu *, int, siginfo_t *);
+
+static int translit_test_deliver_guest_fault(struct cpu *cpu, ucontext_t *context, uint64_t address) {
+    siginfo_t info = {0};
+    info.si_addr = (void *)(uintptr_t)address;
+    info.si_code = SEGV_ACCERR;
+    if (!translit_signal_capture(cpu, context)) return 0;
+    record_guest_fault_state(cpu, 11, &info);
+    return 1;
+}
 
 static uint64_t translit_test_decode_refuse_pc;
 
@@ -5487,6 +5498,48 @@ static int translit_riprel_load_bridge_gate_test(void) {
                 if (context != NULL) hl_x86_hot_context_destroy(context);
             }
         }
+    }
+    if (execution_exact && translit_test_natural_load_address_end != NULL) {
+        uint64_t fault_address = (uint64_t)(uintptr_t)(guest + target_offset);
+        int saved_selected = translit_selected;
+        translit_selected = 1;
+        for (int mapped = 1; execution_exact && mapped >= 0; --mapped) {
+            if (mapped) {
+                execution_exact &= mprotect(guest + 4096, 4096, PROT_NONE) == 0;
+            } else {
+                execution_exact &= munmap(guest + 4096, 4096) == 0;
+            }
+            struct cpu faulted = {0};
+            faulted.rip = source;
+            faulted.r[15] = UINT64_C(0x1122334455667788);
+            ucontext_t native = {0};
+            HL_HOST_UC_GREGS(&native)[g_translit_greg[15]] = (greg_t)fault_address;
+            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)translit_test_natural_load_address_end;
+            int delivered = translit_test_deliver_guest_fault(&faulted, &native, fault_address);
+            int fault_exact = delivered && faulted.rip == source &&
+                              faulted.r[15] == UINT64_C(0x1122334455667788) &&
+                              faulted.sync_signal == 11 && faulted.sync_address == fault_address &&
+                              faulted.sync_code == (mapped ? 2 : 1);
+            if (!delivered) execution_error |= 1;
+            if (faulted.rip != source) execution_error |= 2;
+            if (faulted.r[15] != UINT64_C(0x1122334455667788)) execution_error |= 4;
+            if (faulted.sync_signal != 11 || faulted.sync_address != fault_address ||
+                faulted.sync_code != (mapped ? 2 : 1))
+                execution_error |= 8;
+            execution_exact &= fault_exact;
+            if (mapped) {
+                execution_exact &= mprotect(guest + 4096, 4096, PROT_READ | PROT_WRITE) == 0;
+            } else {
+                void *restored = mmap(guest + 4096, 4096, PROT_READ | PROT_WRITE,
+                                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+                execution_exact &= restored == guest + 4096;
+                if (restored == guest + 4096) {
+                    memset(restored, 0x0f, 4096);
+                    guest[target_offset] = 0x5a;
+                }
+            }
+        }
+        translit_selected = saved_selected;
     }
     if (execution_exact && last_matrix_block != NULL) {
         map_put(source, last_matrix_block->guest_start, last_matrix_block->guest_end,
