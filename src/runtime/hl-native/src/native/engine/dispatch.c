@@ -553,7 +553,7 @@ redispatch_execute:
         // handles R_TIER2 itself (with `continue`), so for the x86 engine this line is never reached;
         // it remains the aarch64 path. Both arches define tier2_promote (per-arch).
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
-        if (!g_threaded && c->reason == R_BRANCH && c->irq == 0 && redispatch_chain < 8 &&
+        if (!c->exited && !g_threaded && c->reason == R_BRANCH && c->irq == 0 && redispatch_chain < 8 &&
             !signal_deliverable_for_cpu(c) && hl_fatal_status(&g_jit_fatal) == HL_STATUS_OK) {
             void *next_code = G_MAP_HOST(map_cache, G_PC(c));
             void *next_rx;
