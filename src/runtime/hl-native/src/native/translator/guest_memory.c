@@ -1,6 +1,12 @@
 #include "guest_memory.h"
 
 static const hl_guest_memory_ops *g_ops;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic int g_test_indirect;
+void hl_guest_memory_test_indirect(int active) {
+    atomic_store_explicit(&g_test_indirect, active != 0, memory_order_release);
+}
+#endif
 const _Atomic uint64_t *hl_guest_memory_generation;
 
 void hl_guest_memory_bind(const hl_guest_memory_ops *ops) {
@@ -79,6 +85,9 @@ void hl_guest_memory_store_observe(uint64_t guest, size_t length) {
 }
 
 int hl_guest_memory_indirect(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_load_explicit(&g_test_indirect, memory_order_acquire)) return 1;
+#endif
     return g_ops != NULL && g_ops->indirect != NULL && g_ops->indirect();
 }
 

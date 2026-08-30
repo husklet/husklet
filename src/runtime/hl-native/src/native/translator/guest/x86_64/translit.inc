@@ -2680,6 +2680,9 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
 
 enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED };
 #if defined(HL_NATIVE_TEST_HOOKS)
+static void jit_guest_soft_test_set(int);
+static void jit_guest_bus_test_set(int);
+
 static uint64_t translit_test_decode_refuse_pc;
 
 static void *translit_body_owner_publish_worker(void *opaque) {
@@ -5331,9 +5334,9 @@ static int translit_riprel_load_bridge_gate_test(void) {
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = mapping_size;
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
-    uint16_t counts[4] = {0};
+    uint16_t counts[7] = {0};
     int execution_exact = 1, execution_error = 0;
-    for (int mode = 0; mode < 4; ++mode) {
+    for (int mode = 0; mode < 7; ++mode) {
         if (mprotect(guest + 4096, 4096, mode == 2 ? PROT_READ : PROT_READ | PROT_WRITE) != 0) {
             execution_exact = 0;
             break;
@@ -5344,6 +5347,9 @@ static int translit_riprel_load_bridge_gate_test(void) {
         g_cp = arena + sizeof(struct interp_block);
         (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", mode != 0 ? "1" : "0", 1);
         (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", mode == 3 ? "1" : "0", 1);
+        if (mode == 4) jit_guest_soft_test_set(1);
+        if (mode == 5) jit_guest_bus_test_set(1);
+        if (mode == 6) hl_guest_memory_test_indirect(1);
         hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
         struct interp_block *block = (struct interp_block *)arena;
         void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
@@ -5361,6 +5367,9 @@ static int translit_riprel_load_bridge_gate_test(void) {
             execution_exact &= execution_error == 0;
         }
         if (context != NULL) hl_x86_hot_context_destroy(context);
+        if (mode == 4) jit_guest_soft_test_set(0);
+        if (mode == 5) jit_guest_bus_test_set(0);
+        if (mode == 6) hl_guest_memory_test_indirect(0);
     }
     // Exercise the real decoder/builder/body path for both architectural widths and every destination
     // that can safely be borrowed.  RSP is the sole exclusion because the emitted load cannot use it as
@@ -5425,10 +5434,11 @@ static int translit_riprel_load_bridge_gate_test(void) {
     g_nonpie_bias = saved_nonpie_bias;
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
-    return execution_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0
+    return execution_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
+                   counts[4] == 0 && counts[5] == 0 && counts[6] == 0
                ? 0
                : (int)((execution_error << 28) | (counts[0] << 24) | (counts[1] << 16) |
-                       (counts[2] << 8) | counts[3]);
+                       (counts[2] << 8) | counts[3] | counts[4] | counts[5] | counts[6]);
 }
 
 static int translit_fall_fixture_test(unsigned scenario) {
