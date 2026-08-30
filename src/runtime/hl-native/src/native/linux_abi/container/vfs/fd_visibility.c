@@ -316,8 +316,9 @@ static int fdvis_index_contract_test(void) {
 
     second_entry = fdvis_index_find(second, 0, NULL);
     second_entry->physical = FDVIS_N;
-    int stale_rebuild = fdvis_find(second, 22, 0) == &slots[29] &&
-                        fdvis_index_find(second, 0, NULL)->physical == 29;
+    struct fdvis_slot *stale_result = fdvis_find(second, 22, 0);
+    second_entry = fdvis_index_find(second, 0, NULL);
+    int stale_rebuild = stale_result == &slots[29] && second_entry && second_entry->physical == 29;
 
     uint64_t late = absent + 1;
     slots[41] = (struct fdvis_slot){.key = late, .owner_start_ns = 33};
@@ -617,7 +618,10 @@ static int fdvis_index_rebuild_locked(void) {
         uint64_t key = g_fdvis[index].key;
         if (key == 0 || key == UINT64_MAX) continue;
         if (!fdvis_index_publish_locked(&g_fdvis[index])) {
-            atomic_store_explicit(&g_fdvis_control->index_dirty, 1, memory_order_relaxed);
+            /* 2 means rebuilding found contradictory physical authority. A later one-row publication
+               must not clear it: lookups stay on the authoritative full scan until a complete rebuild
+               succeeds. */
+            atomic_store_explicit(&g_fdvis_control->index_dirty, 2, memory_order_relaxed);
             return 0;
         }
     }
@@ -627,12 +631,14 @@ static int fdvis_index_rebuild_locked(void) {
 
 static void fdvis_index_begin_locked(void) {
     if (!g_fdvis_index) return;
-    atomic_store_explicit(&g_fdvis_control->index_dirty, 1, memory_order_release);
+    if (atomic_load_explicit(&g_fdvis_control->index_dirty, memory_order_relaxed) == 0)
+        atomic_store_explicit(&g_fdvis_control->index_dirty, 1, memory_order_release);
 }
 
 static void fdvis_index_commit_locked(int coherent) {
     if (!g_fdvis_index) return;
-    if (coherent) atomic_store_explicit(&g_fdvis_control->index_dirty, 0, memory_order_release);
+    if (coherent && atomic_load_explicit(&g_fdvis_control->index_dirty, memory_order_relaxed) == 1)
+        atomic_store_explicit(&g_fdvis_control->index_dirty, 0, memory_order_release);
 }
 
 static void fdvis_slot_clear_locked(struct fdvis_slot *slot) {
