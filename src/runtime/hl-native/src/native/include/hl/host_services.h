@@ -344,7 +344,9 @@ enum {
     HL_HOST_MEMORY_FIXED_NOREPLACE = 1u << 3
 };
 
-enum { HL_HOST_CODE_DUAL_ALIAS = 1u << 0 };
+/* PREFERRED consumes writable_address/executable_address from the output record as exact, non-replacing
+ * placement requests. A conflict is a normal allocation failure; hosts must never replace an existing map. */
+enum { HL_HOST_CODE_DUAL_ALIAS = 1u << 0, HL_HOST_CODE_PREFERRED = 1u << 1 };
 
 /* What sync_address is being asked to guarantee when it returns. Zero -- no bit set -- is the
  * strong form and matches the handle-keyed sync: the range is durable in its backing object

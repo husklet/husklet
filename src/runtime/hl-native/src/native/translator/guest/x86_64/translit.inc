@@ -1631,6 +1631,20 @@ static uint8_t *translit_direct_jmp_ibtc_stub_entry;
 static uint8_t *translit_direct_jmp_ibtc_stub_rsp_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_flags_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_end;
+#define TL_HELPER_RELATIVE_N (JIT_MAP_N * 4u)
+typedef struct { uint32_t offset; uint32_t helper; } translit_helper_relative;
+static translit_helper_relative translit_helper_relatives[TL_HELPER_RELATIVE_N];
+static uint32_t translit_helper_relative_count;
+static uint32_t translit_helper_relative_emitted;
+
+static void translit_helper_jmp(hl_x64_asm *a, uint8_t *target, uint32_t helper) {
+    if (translit_helper_relative_count < TL_HELPER_RELATIVE_N) {
+        translit_helper_relatives[translit_helper_relative_count++] =
+            (translit_helper_relative){(uint32_t)(a->cursor - g_cache), helper};
+    }
+    translit_helper_relative_emitted++;
+    hl_x64_jmp_rel32(a, target);
+}
 #if !defined(HL_NATIVE_TEST_HOOKS)
 static ibtc_ent translit_call_sim_ibtc[IBTC_N];
 static _Atomic uint64_t translit_call_sim_generation[IBTC_N];
@@ -1665,6 +1679,8 @@ static void translit_call_sim_publish(uint64_t target, void *body, int call_publ
    first byte is reusable; a later enabled translation republishes pointers
    only after rebuilding the generation-owned header and owner ranges. */
 static void translit_shared_ibtc_stubs_reset(void) {
+    translit_helper_relative_count = 0;
+    translit_helper_relative_emitted = 0;
     translit_jcc_ibtc_stub_entry = NULL;
     translit_jcc_ibtc_stub_rsp_canonical = NULL;
     translit_jcc_ibtc_stub_flags_canonical = NULL;
@@ -2031,7 +2047,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint6
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+    translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -2045,7 +2061,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
     hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
-    hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+    translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -2058,7 +2074,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_jmp_ibtc(hl_x64_asm *a
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    hl_x64_jmp_rel32(a, translit_direct_jmp_ibtc_stub_entry);
+    translit_helper_jmp(a, translit_direct_jmp_ibtc_stub_entry, 1);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -4587,7 +4603,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             if (translit_jcc_ibtc_stub_entry != NULL)
-                hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+                translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
             else
                 translit_emit_exit_preset(a, R_BRANCH);
             break;

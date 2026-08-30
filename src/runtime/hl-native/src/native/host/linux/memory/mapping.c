@@ -586,13 +586,29 @@ static hl_host_result hl_linux_memory_reserve_code(void *context, uint64_t size,
     void *writable;
     void *executable;
     hl_host_result handle;
+    uint64_t preferred_writable = output == NULL ? 0 : output->writable_address;
+    uint64_t preferred_executable = output == NULL ? 0 : output->executable_address;
     if (output == NULL || size == 0 || size > SIZE_MAX || size > INT64_MAX || page <= 0 || alignment == 0 ||
         (alignment & (alignment - 1)) != 0 || alignment < (uint64_t)page)
         return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if ((flags & HL_HOST_CODE_PREFERRED) != 0 &&
+        (preferred_writable == 0 || preferred_writable % alignment != 0 ||
+         (((flags & HL_HOST_CODE_DUAL_ALIAS) != 0) &&
+          (preferred_executable == 0 || preferred_executable % alignment != 0))))
+        return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     memset(output, 0, sizeof(*output));
     if ((flags & HL_HOST_CODE_DUAL_ALIAS) == 0) {
-        writable =
-            hl_linux_map_aligned(-1, size, alignment, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS);
+        writable = (flags & HL_HOST_CODE_PREFERRED) != 0
+            ? mmap((void *)(uintptr_t)preferred_writable, (size_t)size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0)
+            : hl_linux_map_aligned(-1, size, alignment, PROT_READ | PROT_WRITE | PROT_EXEC,
+                                   MAP_PRIVATE | MAP_ANONYMOUS);
+        if ((flags & HL_HOST_CODE_PREFERRED) != 0 && writable != MAP_FAILED &&
+            writable != (void *)(uintptr_t)preferred_writable) {
+            (void)munmap(writable, (size_t)size);
+            errno = EEXIST;
+            writable = MAP_FAILED;
+        }
         if (writable == MAP_FAILED) return hl_linux_errno_result();
         handle = hl_linux_allocate_handle(host, HL_LINUX_HANDLE_MAPPING, -1, writable, writable, size, -1);
         if (handle.status != HL_STATUS_OK) {
@@ -613,12 +629,30 @@ static hl_host_result hl_linux_memory_reserve_code(void *context, uint64_t size,
         close(descriptor);
         return hl_linux_errno_result();
     }
-    writable = hl_linux_map_aligned(descriptor, size, alignment, PROT_READ | PROT_WRITE, MAP_SHARED);
+    writable = (flags & HL_HOST_CODE_PREFERRED) != 0
+        ? mmap((void *)(uintptr_t)preferred_writable, (size_t)size, PROT_READ | PROT_WRITE,
+               MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0)
+        : hl_linux_map_aligned(descriptor, size, alignment, PROT_READ | PROT_WRITE, MAP_SHARED);
+    if ((flags & HL_HOST_CODE_PREFERRED) != 0 && writable != MAP_FAILED &&
+        writable != (void *)(uintptr_t)preferred_writable) {
+        (void)munmap(writable, (size_t)size);
+        errno = EEXIST;
+        writable = MAP_FAILED;
+    }
     if (writable == MAP_FAILED) {
         close(descriptor);
         return hl_linux_errno_result();
     }
-    executable = hl_linux_map_aligned(descriptor, size, alignment, PROT_READ | PROT_EXEC, MAP_SHARED);
+    executable = (flags & HL_HOST_CODE_PREFERRED) != 0
+        ? mmap((void *)(uintptr_t)preferred_executable, (size_t)size, PROT_READ | PROT_EXEC,
+               MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0)
+        : hl_linux_map_aligned(descriptor, size, alignment, PROT_READ | PROT_EXEC, MAP_SHARED);
+    if ((flags & HL_HOST_CODE_PREFERRED) != 0 && executable != MAP_FAILED &&
+        executable != (void *)(uintptr_t)preferred_executable) {
+        (void)munmap(executable, (size_t)size);
+        errno = EEXIST;
+        executable = MAP_FAILED;
+    }
     if (executable == MAP_FAILED) {
         munmap(writable, (size_t)size);
         close(descriptor);
@@ -671,19 +705,26 @@ static hl_host_result hl_linux_memory_repair_code(void *context, hl_host_code_ma
         descriptor = memfd_create("hl-code", MFD_CLOEXEC);
         if (descriptor < 0) return hl_linux_errno_result();
         if (ftruncate(descriptor, (off_t)inherited.size) != 0) goto fresh_failed;
-        /* Same arena, same reason: a fork child that rebuilds its cache must not take a VA the guest owns. */
-        writable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
-                                        PROT_READ | PROT_WRITE, MAP_SHARED);
-        if (writable == MAP_FAILED) goto fresh_failed;
-        executable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
-                                          PROT_READ | PROT_EXEC, MAP_SHARED);
-        if (executable == MAP_FAILED) goto fresh_failed;
-
-        if (preserve != 0) {
+        if (preserve == 0) {
+            /* Rebuild with empty private backing, but retain the arena identity. MAP_FIXED is safe here:
+               both targets are this handle's inherited aliases in the just-forked child. */
+            writable = mmap(inherited.address, (size_t)inherited.size, PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_FIXED, descriptor, 0);
+            if (writable == MAP_FAILED) goto fresh_failed;
+            executable = mmap(inherited.executable_address, (size_t)inherited.size, PROT_READ | PROT_EXEC,
+                              MAP_SHARED | MAP_FIXED, descriptor, 0);
+            if (executable == MAP_FAILED) goto fresh_failed;
+        } else {
             /* Linux inherits MAP_SHARED memfd pages as genuinely process-shared
                pages. Give the child a private backing object while retaining
                the exact cache addresses and bytes expected by every map entry,
                chain, and inline-cache pointer. */
+            writable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
+                                            PROT_READ | PROT_WRITE, MAP_SHARED);
+            if (writable == MAP_FAILED) goto fresh_failed;
+            executable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
+                                              PROT_READ | PROT_EXEC, MAP_SHARED);
+            if (executable == MAP_FAILED) goto fresh_failed;
             memcpy(writable, inherited.address, (size_t)mapping->content_size);
             if (mmap(inherited.address, (size_t)inherited.size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED,
                      descriptor, 0) == MAP_FAILED ||
@@ -716,10 +757,6 @@ static hl_host_result hl_linux_memory_repair_code(void *context, hl_host_code_ma
         pthread_mutex_unlock(&host->lock);
 
         hl_host_process_fd_private_remove(inherited.descriptor);
-        if (preserve == 0) {
-            (void)munmap(inherited.executable_address, (size_t)inherited.size);
-            (void)munmap(inherited.address, (size_t)inherited.size);
-        }
         if (inherited.descriptor >= 0) (void)close(inherited.descriptor);
     } else {
         writable = inherited.address;

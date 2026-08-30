@@ -619,7 +619,7 @@ static hl_host_result hl_macos_reserve_code(void *context, uint64_t size, uint64
     void *executable;
     hl_host_result handle;
     long page = sysconf(_SC_PAGESIZE);
-    if (output == NULL || size == 0 || size > SIZE_MAX || page <= 0 || alignment > (uint64_t)page)
+    if (output == NULL || (flags & HL_HOST_CODE_PREFERRED) != 0 || size == 0 || size > SIZE_MAX || page <= 0 || alignment > (uint64_t)page)
         return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     memset(output, 0, sizeof(*output));
     if ((flags & HL_HOST_CODE_DUAL_ALIAS) != 0) {

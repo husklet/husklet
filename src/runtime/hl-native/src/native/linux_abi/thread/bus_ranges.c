@@ -782,6 +782,7 @@ static int guest_exec_direct_valid(uint64_t guest, size_t length) {
 static void *g_nonpie_collision_mapping;
 static int g_nonpie_collision_active;
 int HL_TARGET_LOCAL(jit_rollover_mapping_test)(uint64_t *result);
+int HL_TARGET_LOCAL(jit_preferred_mapping_test)(uint64_t *result);
 
 static int nonpie_collision_finish_release(int released) {
     if (released != 0) return -EIO;
@@ -899,6 +900,7 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 51:
     case 52: result = map_source_index_test(scenario, scans); break;
     case 18: result = HL_TARGET_LOCAL(jit_rollover_mapping_test)(scans); break;
+    case 53: result = HL_TARGET_LOCAL(jit_preferred_mapping_test)(scans); break;
     case 19: { // Fetch-span hits reuse the page verdict until its authority changes.
         _Alignas(4096) unsigned char page_bytes[4096] = {0};
         unsigned char byte = 0;
