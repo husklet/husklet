@@ -2697,6 +2697,9 @@ static void jit_guest_bus_test_set(int);
 static const int g_translit_greg[16];
 static int translit_test_deliver_guest_fault(struct cpu *, ucontext_t *, uint64_t);
 static void record_guest_fault_state(struct cpu *, int, siginfo_t *);
+static int gnx_hit(uint64_t, uint64_t);
+static void gnx_add(uint64_t, uint64_t);
+static void gnx_clear(uint64_t, uint64_t);
 
 static int translit_test_deliver_guest_fault(struct cpu *cpu, ucontext_t *context, uint64_t address) {
     siginfo_t info = {0};
@@ -4334,12 +4337,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                        translit_lower_natural_riprel_readonly(a, &insn, storage_target,
                                                                               &riprel_readonly_save_end,
                                                                               &riprel_readonly_op_end);
+                int executable_target = !g_nonpie_lo &&
+                                        gnx_hit(storage_target, insn.opsize == 8 ? 8 : 4);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
                 if (!readonly_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
-                                                    context->riprel_load_bridge_enabled && !direct_data_authority,
+                                                    context->riprel_load_bridge_enabled &&
+                                                        !direct_data_authority && !executable_target,
                                                     &preserve_register))) {
                     if (g_nonpie_lo)
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
@@ -5376,10 +5382,10 @@ static int translit_riprel_load_bridge_gate_test(void) {
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = mapping_size;
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
-    uint16_t counts[7] = {0};
+    uint16_t counts[8] = {0};
     int execution_exact = 1, execution_error = 0;
     struct interp_block *last_matrix_block = NULL;
-    for (int mode = 0; mode < 7; ++mode) {
+    for (int mode = 0; mode < 8; ++mode) {
         if (mprotect(guest + 4096, 4096, mode == 2 ? PROT_READ : PROT_READ | PROT_WRITE) != 0) {
             execution_exact = 0;
             break;
@@ -5393,6 +5399,8 @@ static int translit_riprel_load_bridge_gate_test(void) {
         if (mode == 4) jit_guest_soft_test_set(1);
         if (mode == 5) jit_guest_bus_test_set(1);
         if (mode == 6) hl_guest_memory_test_indirect(1);
+        if (mode == 7) gnx_add((uint64_t)(uintptr_t)(guest + target_offset),
+                               (uint64_t)(uintptr_t)(guest + target_offset + 8));
         hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
         struct interp_block *block = (struct interp_block *)arena;
         void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
@@ -5413,6 +5421,8 @@ static int translit_riprel_load_bridge_gate_test(void) {
         if (mode == 4) jit_guest_soft_test_set(0);
         if (mode == 5) jit_guest_bus_test_set(0);
         if (mode == 6) hl_guest_memory_test_indirect(0);
+        if (mode == 7) gnx_clear((uint64_t)(uintptr_t)(guest + target_offset),
+                                 (uint64_t)(uintptr_t)(guest + target_offset + 8));
     }
     // Exercise the real decoder/builder/body path for both architectural widths and every destination
     // that can safely be borrowed.  RSP is the sole exclusion because the emitted load cannot use it as
@@ -5566,7 +5576,7 @@ static int translit_riprel_load_bridge_gate_test(void) {
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
     return execution_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
-                   counts[4] == 0 && counts[5] == 0 && counts[6] == 0
+                   counts[4] == 0 && counts[5] == 0 && counts[6] == 0 && counts[7] == 0
                ? 0
                : (int)((execution_error << 28) | (counts[0] << 24) | (counts[1] << 16) |
                        (counts[2] << 8) | counts[3] | counts[4] | counts[5] | counts[6]);
