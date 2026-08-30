@@ -26,5 +26,8 @@ void x64_pc_put64(uint8_t **cursor, uint64_t value);
 uint16_t x64_pc_get16(const uint8_t *cursor);
 uint32_t x64_pc_get32(const uint8_t *cursor);
 uint64_t x64_pc_get64(const uint8_t *cursor);
+int x64_pc_header_validate(const uint8_t *bytes, size_t size, uint64_t abi, uint64_t cpu_size,
+                           uint64_t map_slots, const uint8_t identity[32], uint64_t entry,
+                           uint64_t modes, uint64_t matches[10]);
 
 #endif

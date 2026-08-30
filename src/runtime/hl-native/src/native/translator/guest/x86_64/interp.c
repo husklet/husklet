@@ -2457,27 +2457,11 @@ static int pcache_load(uint64_t entry_jump) {
     const uint8_t *bytes = allocation;
     unsigned validation = 2; /* structurally invalid/truncated */
     unsigned semantic_stage = 0;
-    int valid = size >= X64_PC_HEADER_SIZE && x64_pc_get64(bytes) == X64_PC_MAGIC &&
-                x64_pc_get64(bytes + 8) == X64_PC_VERSION && x64_pc_get64(bytes + 16) == X64_PC_ENDIAN &&
-                x64_pc_get64(bytes + 24) == HL_PCACHE_ABI_X86_64 && x64_pc_get64(bytes + 32) == sizeof(struct cpu) &&
-                x64_pc_get64(bytes + 40) == JIT_MAP_N &&
-                memcmp(bytes + 48, g_pc_binid.bytes, sizeof g_pc_binid.bytes) == 0 &&
-                x64_pc_get64(bytes + 80) == entry_jump &&
-                x64_pc_get64(bytes + 192) == x64_pcache_codegen_modes();
+    uint64_t header_state[10];
+    int valid = x64_pc_header_validate(bytes, size, HL_PCACHE_ABI_X86_64, sizeof(struct cpu), JIT_MAP_N,
+                                       g_pc_binid.bytes, entry_jump, x64_pcache_codegen_modes(), header_state);
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (!valid) {
-        uint64_t header_state[10] = {
-            size >= X64_PC_HEADER_SIZE,
-            size >= 8 && x64_pc_get64(bytes) == X64_PC_MAGIC,
-            size >= 16 && x64_pc_get64(bytes + 8) == X64_PC_VERSION,
-            size >= 24 && x64_pc_get64(bytes + 16) == X64_PC_ENDIAN,
-            size >= 32 && x64_pc_get64(bytes + 24) == HL_PCACHE_ABI_X86_64,
-            size >= 40 && x64_pc_get64(bytes + 32) == sizeof(struct cpu),
-            size >= 48 && x64_pc_get64(bytes + 40) == JIT_MAP_N,
-            size >= 80 && memcmp(bytes + 48, g_pc_binid.bytes, sizeof g_pc_binid.bytes) == 0,
-            size >= 88 && x64_pc_get64(bytes + 80) == entry_jump,
-            size >= 200 && x64_pc_get64(bytes + 192) == x64_pcache_codegen_modes(),
-        };
         char header_receipt[1024];
         int header_length = snprintf(header_receipt, sizeof header_receipt, "%s.header-invalid-%lld", path,
                                      (long long)getpid());
