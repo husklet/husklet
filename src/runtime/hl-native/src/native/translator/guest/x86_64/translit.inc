@@ -974,6 +974,7 @@ static void translit_perf_map_flush_at_exit(void) {
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
 static uint64_t translit_natural_lea_lowered;
+static uint64_t translit_natural_load_bridge_lowered;
 static uint64_t translit_displaced_refusal_opcode[512];
 static uint64_t translit_displaced_refusal_prefix;
 static uint64_t translit_displaced_refusal_width;
@@ -987,6 +988,7 @@ typedef struct {
     uint64_t displaced_operand_declined, displaced_sse2_declined;
     uint64_t displaced_riprel_projected, displaced_riprel_unreachable, displaced_riprel_lowered;
     uint64_t displaced_scratch_lowered, displaced_lea_lowered, natural_abs32_lowered, natural_lea_lowered;
+    uint64_t natural_load_bridge_lowered;
     uint64_t rip_indirect_lowered;
     uint64_t body_owner_published, jcc_link_admitted;
     uint16_t refusal_key[TL_MAX_INSNS];
@@ -4069,6 +4071,7 @@ static void translit_attempt_telemetry_publish(void) {
     TL_PUBLISH(displaced_lea_lowered, translit_displaced_lea_lowered);
     TL_PUBLISH(natural_abs32_lowered, translit_natural_abs32_lowered);
     TL_PUBLISH(natural_lea_lowered, translit_natural_lea_lowered);
+    TL_PUBLISH(natural_load_bridge_lowered, translit_natural_load_bridge_lowered);
     TL_PUBLISH(rip_indirect_lowered, translit_rip_indirect_lowered);
 #if defined(HL_NATIVE_TEST_HOOKS)
     TL_PUBLISH(body_owner_published, translit_body_owner_published);
@@ -4306,7 +4309,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     preserve_register = HL_X64_R11;
                     readonly_riprel_count++;
                 }
-                uint64_t *counter = insn.op == 0x8D && !insn.two
+                uint64_t *counter = preserve_register >= 0 && !g_nonpie_lo
+                                        ? &translit_natural_load_bridge_lowered
+                                        : insn.op == 0x8D && !insn.two
                                         ? (g_nonpie_lo ? &translit_displaced_lea_lowered
                                                        : &translit_natural_lea_lowered)
                                         : &translit_displaced_riprel_lowered;
@@ -4314,9 +4319,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     TL_ATTEMPT_ADD(translit_displaced_lea_lowered, displaced_lea_lowered);
                 else if (counter == &translit_natural_lea_lowered)
                     TL_ATTEMPT_ADD(translit_natural_lea_lowered, natural_lea_lowered);
+                else if (counter == &translit_natural_load_bridge_lowered)
+                    TL_ATTEMPT_ADD(translit_natural_load_bridge_lowered, natural_load_bridge_lowered);
                 else
                     TL_ATTEMPT_ADD(translit_displaced_riprel_lowered, displaced_riprel_lowered);
-                if (preserve_register >= 0)
+                if (preserve_register >= 0 && g_nonpie_lo)
                     TL_ATTEMPT_ADD(translit_displaced_scratch_lowered, displaced_scratch_lowered);
             }
             uint32_t preserve = translit_preserve_mask(preserve_register);
@@ -7264,6 +7271,8 @@ static int translit_report(char *out, size_t size) {
     uint64_t displaced_lea_lowered = __atomic_load_n(&translit_displaced_lea_lowered, __ATOMIC_RELAXED);
     uint64_t natural_abs32_lowered = __atomic_load_n(&translit_natural_abs32_lowered, __ATOMIC_RELAXED);
     uint64_t natural_lea_lowered = __atomic_load_n(&translit_natural_lea_lowered, __ATOMIC_RELAXED);
+    uint64_t natural_load_bridge_lowered =
+        __atomic_load_n(&translit_natural_load_bridge_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_prefix = __atomic_load_n(&translit_displaced_refusal_prefix, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_width = __atomic_load_n(&translit_displaced_refusal_width, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_rsp = __atomic_load_n(&translit_displaced_refusal_rsp, __ATOMIC_RELAXED);
@@ -7297,7 +7306,8 @@ static int translit_report(char *out, size_t size) {
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
-        displaced_lea_lowered = natural_abs32_lowered = natural_lea_lowered = UINT64_MAX;
+        displaced_lea_lowered = natural_abs32_lowered = natural_lea_lowered =
+            natural_load_bridge_lowered = UINT64_MAX;
         displaced_refusal_count = displaced_refusal_prefix = displaced_refusal_width = UINT64_MAX;
         displaced_refusal_rsp = displaced_refusal_opcode_other = UINT64_MAX;
         jcc_fall_candidates = jcc_fall_admitted = jcc_fall_page_refused = UINT64_MAX;
@@ -7380,7 +7390,7 @@ static int translit_report(char *out, size_t size) {
                     TRANSLIT_FS_PROFILE
                     TRANSLIT_FS_BRIDGE_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
-                    " natural_lea_lowered=%llu"
+                    " natural_lea_lowered=%llu natural_load_bridge_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
                     " jcc_fall_executed=%llu jcc_link_admitted=%llu jcc_link_taken=%llu"
@@ -7407,6 +7417,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)displaced_lea_lowered,
                     (unsigned long long)natural_abs32_lowered,
                     (unsigned long long)natural_lea_lowered,
+                    (unsigned long long)natural_load_bridge_lowered,
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                     (unsigned long long)jcc_fall_page_refused,
                     (unsigned long long)jcc_fall_successor_page_refused,
