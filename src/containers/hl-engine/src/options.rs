@@ -311,6 +311,11 @@ const DEFINITIONS: &[Definition] = &[
         "control the default-on read-only FS-load bridge in the same-ISA backend",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_RIPREL_LOAD_BRIDGE",
+        "control default-off natural RIP-relative register-load lowering",
+        Flag
+    ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
     debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
 ];

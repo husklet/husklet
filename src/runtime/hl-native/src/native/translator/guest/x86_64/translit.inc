@@ -523,6 +523,7 @@ static int translit_fall_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
+static int translit_riprel_load_bridge_gate_test(void);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
@@ -973,6 +974,7 @@ static void translit_perf_map_flush_at_exit(void) {
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
 static uint64_t translit_natural_lea_lowered;
+static uint64_t translit_natural_load_bridge_lowered;
 static uint64_t translit_displaced_refusal_opcode[512];
 static uint64_t translit_displaced_refusal_prefix;
 static uint64_t translit_displaced_refusal_width;
@@ -986,6 +988,7 @@ typedef struct {
     uint64_t displaced_operand_declined, displaced_sse2_declined;
     uint64_t displaced_riprel_projected, displaced_riprel_unreachable, displaced_riprel_lowered;
     uint64_t displaced_scratch_lowered, displaced_lea_lowered, natural_abs32_lowered, natural_lea_lowered;
+    uint64_t natural_load_bridge_lowered;
     uint64_t rip_indirect_lowered;
     uint64_t body_owner_published, jcc_link_admitted;
     uint16_t refusal_key[TL_MAX_INSNS];
@@ -2038,6 +2041,9 @@ static uint8_t *translit_test_ret_instruction_start;
 static translit_ret_sim_ranges translit_test_ret_site;
 static uint64_t translit_test_ret_source_guest;
 static uint8_t *translit_test_jmp_mem_instruction_start;
+static uint8_t *translit_test_natural_load_start;
+static uint8_t *translit_test_natural_load_address_end;
+static uint8_t *translit_test_natural_load_op_end;
 static uint8_t *translit_test_jmp_mem_borrow_start;
 static uint8_t *translit_test_jmp_mem_rip_end;
 static uint8_t *translit_test_jmp_mem_r11_end;
@@ -2520,7 +2526,8 @@ static void translit_xmm_cpu(hl_x64_asm *a, int reg, int load) {
 // without borrowing a guest register, touching the stack, or adding fault-recovery state. LEA is address
 // materialisation rather than a dereference, so an immediate move preserves its low guest identity.
 static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn, uint64_t guest_target,
-                                          uint64_t storage_target, int displaced, int *preserve_register) {
+                                          uint64_t storage_target, int displaced, int natural_load_bridge,
+                                          int *preserve_register) {
     *preserve_register = -1;
     if (insn->op == 0x8D && !insn->two) {
         if (insn->lock || insn->rep || insn->repne ||
@@ -2567,16 +2574,20 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         (void)__atomic_fetch_add(&translit_natural_abs32_lowered, 1, __ATOMIC_RELAXED);
         return !a->overflow;
     }
-    // Natural mode never falls into the displaced image's borrowed-register or moffs families.
-    if (!displaced) return 0;
+    // Natural mode may opt into only the borrowed-destination register-load family below. Stores and
+    // RMW forms still require guest-write/SMC mediation and must never reach the displaced moffs spellings.
+    if (!displaced && !natural_load_bridge) return 0;
+    // The natural builder currently admits only the one-byte MOV load at this boundary.  Keep the
+    // wider displaced family below unchanged instead of advertising unreachable natural forms.
+    if (!displaced && (insn->two || insn->op != 0x8B)) return 0;
     uint8_t moffs = 0;
-    if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
+    if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
         moffs = 0xA0;
-    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8B)
+    else if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8B)
         moffs = 0xA1;
-    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x88)
+    else if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x88)
         moffs = 0xA2;
-    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x89)
+    else if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x89)
         moffs = 0xA3;
     if (moffs == 0) {
         int family = (!insn->two && (insn->op == 0x8B || insn->op == 0x63)) ||
@@ -2597,7 +2608,13 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
             if (g_nonpie_lo) TL_ATTEMPT_ADD(translit_displaced_refusal_rsp, refusal_rsp);
             return 0;
         }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (!displaced) translit_test_natural_load_start = a->cursor;
+#endif
         hl_x64_mov_imm64(a, reg, storage_target);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (!displaced) translit_test_natural_load_address_end = a->cursor;
+#endif
         uint8_t rex = (uint8_t)(0x40 | (insn->opsize == 8 ? 8 : 0) | (reg >= 8 ? 5 : 0));
         if (rex != 0x40) hl_x64_u8(a, rex);
         if (insn->two) hl_x64_u8(a, 0x0F);
@@ -2607,6 +2624,9 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         hl_x64_u8(a, (uint8_t)(mod | ((reg & 7) << 3) | (low == 4 ? 4 : low)));
         if (low == 4) hl_x64_u8(a, 0x24);
         if (low == 5) hl_x64_u8(a, 0);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (!displaced) translit_test_natural_load_op_end = a->cursor;
+#endif
         if (a->overflow) return 0;
         *preserve_register = reg;
         return 1;
@@ -2671,7 +2691,27 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
 }
 
 enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED };
+static int gnx_hit(uint64_t, uint64_t);
+static int jit86_load_has_exec_alias(uint64_t, size_t);
 #if defined(HL_NATIVE_TEST_HOOKS)
+static void jit_guest_soft_test_set(int);
+static void jit_guest_bus_test_set(int);
+static const int g_translit_greg[16];
+static int translit_test_deliver_guest_fault(struct cpu *, ucontext_t *, uint64_t);
+static void record_guest_fault_state(struct cpu *, int, siginfo_t *);
+static void gnx_add(uint64_t, uint64_t);
+static void gnx_clear(uint64_t, uint64_t);
+static void filemap_register(uint64_t, uint64_t, int, uint64_t, int, int);
+
+static int translit_test_deliver_guest_fault(struct cpu *cpu, ucontext_t *context, uint64_t address) {
+    siginfo_t info = {0};
+    info.si_addr = (void *)(uintptr_t)address;
+    info.si_code = SEGV_ACCERR;
+    if (!translit_signal_capture(cpu, context)) return 0;
+    record_guest_fault_state(cpu, 11, &info);
+    return 1;
+}
+
 static uint64_t translit_test_decode_refuse_pc;
 
 static void *translit_body_owner_publish_worker(void *opaque) {
@@ -2771,6 +2811,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 8},
             {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 9},
+            {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 10},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();
@@ -2922,6 +2963,60 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
     if (scenario >= 175 && scenario <= 184) return translit_fs_load_bridge_fixture_test(scenario);
+    if (scenario == 187) {
+        struct insn load = {.op = 0x8B, .opsize = 8};
+        const uint64_t target = UINT64_C(0x7f0012345678);
+        for (int reg = 0; reg < 16; ++reg) {
+            uint8_t code[32] = {0};
+            hl_x64_asm output = {code, code + sizeof code, 0};
+            int preserve = -1;
+            load.reg = reg;
+            int lowered = translit_lower_absolute_riprel(&output, &load, target, target, 0, 1, &preserve);
+            if ((reg == HL_X64_RSP) == lowered || (lowered && preserve != reg)) return 252 + reg;
+        }
+        uint8_t code[32] = {0};
+        hl_x64_asm output = {code, code + sizeof code, 0};
+        int preserve = -1;
+        load.reg = 1;
+        if (translit_lower_absolute_riprel(&output, &load, target, target, 0, 0, &preserve)) return 269;
+        load.op = 0x89;
+        output = (hl_x64_asm){code, code + sizeof code, 0};
+        return translit_lower_absolute_riprel(&output, &load, target, target, 0, 1, &preserve) ? 270 : 0;
+    }
+    if (scenario == 188) {
+        (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+        hl_x86_hot_context *absent = hl_x86_hot_context_create(NULL, NULL, NULL);
+        uint64_t absent_modes = x64_pcache_codegen_modes();
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+        hl_x86_hot_context *on = hl_x86_hot_context_create(NULL, NULL, NULL);
+        uint64_t on_modes = x64_pcache_codegen_modes();
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "0", 1);
+        hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
+        uint64_t off_modes = x64_pcache_codegen_modes();
+        int exact = absent != NULL && on != NULL && off != NULL && !absent->riprel_load_bridge_enabled &&
+                    on->riprel_load_bridge_enabled && !off->riprel_load_bridge_enabled &&
+                    (absent_modes & (UINT64_C(1) << 10)) == 0 &&
+                    (on_modes & (UINT64_C(1) << 10)) != 0 &&
+                    (off_modes & (UINT64_C(1) << 10)) == 0;
+        hl_x86_hot_context_destroy(off);
+        hl_x86_hot_context_destroy(on);
+        hl_x86_hot_context_destroy(absent);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+        pid_t child = fork();
+        if (child == 0) {
+            hl_x86_hot_context *inherited = hl_x86_hot_context_create(NULL, NULL, NULL);
+            int inherited_exact = inherited != NULL && inherited->riprel_load_bridge_enabled &&
+                                  (x64_pcache_codegen_modes() & (UINT64_C(1) << 10)) != 0;
+            if (inherited != NULL) hl_x86_hot_context_destroy(inherited);
+            _exit(inherited_exact ? 0 : 1);
+        }
+        int status = 0;
+        exact = exact && child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                WEXITSTATUS(status) == 0;
+        (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+        return exact ? 0 : 271;
+    }
+    if (scenario == 189) return translit_riprel_load_bridge_gate_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -2957,7 +3052,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8D;
         insn.reg = 9;
         int preserve;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 13;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 13;
         const uint8_t expected[] = {0x49, 0xB9, 0x23, 0x01, 0x40, 0, 0, 0, 0, 0};
         return output.cursor - bytes == (ptrdiff_t)sizeof(expected) && memcmp(bytes, expected, sizeof(expected)) == 0
                    ? 0
@@ -2967,7 +3062,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 11 ? 0x8B : 0x89;
         insn.reg = 0;
         int preserve;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 15;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 15;
         return output.cursor - bytes == 10 && bytes[0] == 0x48 && bytes[1] == (scenario == 11 ? 0xA1 : 0xA3) &&
                        memcmp(bytes + 2, (uint8_t[]){0x23, 0x01, 0x40, 0, 0x01, 0, 0, 0}, 8) == 0
                    ? 0
@@ -2977,7 +3072,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8B;
         insn.reg = 4;
         int preserve;
-        return translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve) ? 17 : 0;
+        return translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve) ? 17 : 0;
     }
     if (scenario >= 14 && scenario <= 16) {
         int preserve;
@@ -2985,7 +3080,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 16 ? 0xBE : 0x8B;
         insn.two = scenario == 16;
         insn.opsize = scenario == 15 ? 4 : 8;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 18;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 18;
         static const uint8_t suffix[][4] = {{0x48, 0x8B, 0x09, 0}, {0x45, 0x8B, 0x6D, 0},
                                              {0x48, 0x0F, 0xBE, 0x12}};
         size_t suffix_size = scenario == 14 ? 3 : 4;
@@ -3002,7 +3097,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 18 ? 0xB6 : 0x63;
         insn.two = scenario == 18;
         insn.opsize = scenario == 18 ? 4 : 8;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 21;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 21;
         const uint8_t *expected = scenario == 18 ? (uint8_t[]){0x45, 0x0F, 0xB6, 0x1B}
                                                  : (uint8_t[]){0x4D, 0x63, 0x36};
         size_t expected_size = scenario == 18 ? 4 : 3;
@@ -3024,7 +3119,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int preserve;
         insn.op = 0x8B;
         insn.reg = 10;
-        int lowered = translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + 0x123, 0, &preserve);
+        int lowered = translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + 0x123, 0, 0, &preserve);
         const uint8_t expected[] = {0x67, 0x4C, 0x8B, 0x14, 0x25, 0x23, 0x01, 0x40, 0x00};
         return lowered && preserve == -1 && output.cursor - bytes == (ptrdiff_t)sizeof(expected) &&
                        memcmp(bytes, expected, sizeof(expected)) == 0
@@ -3036,7 +3131,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8D;
         insn.reg = scenario == 22 ? 10 : 9;
         uint64_t target = scenario == 22 ? lo + 0x123 : UINT64_C(0x7f0012345678);
-        int lowered = translit_lower_absolute_riprel(&output, &insn, target, target, 0, &preserve);
+        int lowered = translit_lower_absolute_riprel(&output, &insn, target, target, 0, 0, &preserve);
         const uint8_t *expected = scenario == 22 ? (uint8_t[]){0x41, 0xBA, 0x23, 0x01, 0x40, 0x00}
                                                  : (uint8_t[]){0x49, 0xB9, 0x78, 0x56, 0x34, 0x12,
                                                                0x00, 0x7F, 0x00, 0x00};
@@ -4026,6 +4121,7 @@ static void translit_attempt_telemetry_publish(void) {
     TL_PUBLISH(displaced_lea_lowered, translit_displaced_lea_lowered);
     TL_PUBLISH(natural_abs32_lowered, translit_natural_abs32_lowered);
     TL_PUBLISH(natural_lea_lowered, translit_natural_lea_lowered);
+    TL_PUBLISH(natural_load_bridge_lowered, translit_natural_load_bridge_lowered);
     TL_PUBLISH(rip_indirect_lowered, translit_rip_indirect_lowered);
 #if defined(HL_NATIVE_TEST_HOOKS)
     TL_PUBLISH(body_owner_published, translit_body_owner_published);
@@ -4243,11 +4339,17 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                        translit_lower_natural_riprel_readonly(a, &insn, storage_target,
                                                                               &riprel_readonly_save_end,
                                                                               &riprel_readonly_op_end);
+                int executable_target = !g_nonpie_lo &&
+                                        gnx_hit(storage_target, insn.opsize == 8 ? 8 : 4);
+                int executable_alias = !g_nonpie_lo &&
+                                       jit86_load_has_exec_alias(storage_target, insn.opsize == 8 ? 8 : 4);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
                 if (!readonly_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
+                                                    context->riprel_load_bridge_enabled &&
+                                                        !direct_data_authority && !executable_target && !executable_alias,
                                                     &preserve_register))) {
                     if (g_nonpie_lo)
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
@@ -4262,7 +4364,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     preserve_register = HL_X64_R11;
                     readonly_riprel_count++;
                 }
-                uint64_t *counter = insn.op == 0x8D && !insn.two
+                uint64_t *counter = preserve_register >= 0 && !g_nonpie_lo
+                                        ? &translit_natural_load_bridge_lowered
+                                        : insn.op == 0x8D && !insn.two
                                         ? (g_nonpie_lo ? &translit_displaced_lea_lowered
                                                        : &translit_natural_lea_lowered)
                                         : &translit_displaced_riprel_lowered;
@@ -4270,9 +4374,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     TL_ATTEMPT_ADD(translit_displaced_lea_lowered, displaced_lea_lowered);
                 else if (counter == &translit_natural_lea_lowered)
                     TL_ATTEMPT_ADD(translit_natural_lea_lowered, natural_lea_lowered);
+                else if (counter == &translit_natural_load_bridge_lowered)
+                    TL_ATTEMPT_ADD(translit_natural_load_bridge_lowered, natural_load_bridge_lowered);
                 else
                     TL_ATTEMPT_ADD(translit_displaced_riprel_lowered, displaced_riprel_lowered);
-                if (preserve_register >= 0)
+                if (preserve_register >= 0 && g_nonpie_lo)
                     TL_ATTEMPT_ADD(translit_displaced_scratch_lowered, displaced_scratch_lowered);
             }
             uint32_t preserve = translit_preserve_mask(preserve_register);
@@ -5246,6 +5352,279 @@ static int translit_riprel_readonly_off_receipt_test(unsigned scenario) {
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
     return result;
+}
+
+static int translit_riprel_load_bridge_gate_test(void) {
+    const size_t mapping_size = 8192;
+    uint8_t *arena = mmap((void *)UINT64_C(0x700000000000), mapping_size,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    uint8_t *guest = mmap((void *)UINT64_C(0x600000000000), mapping_size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, mapping_size);
+        if (guest != MAP_FAILED) munmap(guest, mapping_size);
+        return 272;
+    }
+    memset(guest, 0x0f, mapping_size);
+    const size_t source_offset = 128, target_offset = 4096;
+    guest[source_offset] = 0x8b; // mov rax,[rip+disp32]
+    guest[source_offset + 1] = 0x05;
+    int32_t displacement = (int32_t)(target_offset - source_offset - 6);
+    memcpy(guest + source_offset + 2, &displacement, sizeof displacement);
+    guest[target_offset] = 0x5a;
+
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    uint64_t saved_nonpie_lo = g_nonpie_lo, saved_nonpie_hi = g_nonpie_hi, saved_nonpie_bias = g_nonpie_bias;
+    g_cache = arena;
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_C(0xfffffffffffffdff);
+    g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = mapping_size;
+    uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+    uint16_t counts[8] = {0};
+    int execution_exact = 1, execution_error = 0;
+    struct interp_block *last_matrix_block = NULL;
+    for (int mode = 0; mode < 8; ++mode) {
+        if (mprotect(guest + 4096, 4096, mode == 2 ? PROT_READ : PROT_READ | PROT_WRITE) != 0) {
+            execution_exact = 0;
+            break;
+        }
+        jit_body_owner_drop_generation(g_cache_gen);
+        map_clear();
+        memset(arena, 0, mapping_size);
+        g_cp = arena + sizeof(struct interp_block);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", mode != 0 ? "1" : "0", 1);
+        (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", mode == 3 ? "1" : "0", 1);
+        if (mode == 4) jit_guest_soft_test_set(1);
+        if (mode == 5) jit_guest_bus_test_set(1);
+        if (mode == 6) hl_guest_memory_test_indirect(1);
+        if (mode == 7) gnx_add((uint64_t)(uintptr_t)(guest + target_offset),
+                               (uint64_t)(uintptr_t)(guest + target_offset + 8));
+        hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+        counts[mode] = body == NULL ? 0 : block->profile_insns;
+        if ((mode == 1 || mode == 2) && body != NULL) {
+            block->magic = INTERP_BLOCK_MAGIC;
+            block->gpc = source;
+            struct cpu cpu = {0};
+            cpu.rip = source;
+            hl_backend_tree_begin(1, effective_host_services());
+            run_block(context, &cpu, block);
+            if (cpu.rip != source + 6) execution_error |= 1;
+            // Plain 8B without REX.W writes eax and therefore zero-extends the 32-bit load.
+            if (cpu.r[HL_X64_RAX] != UINT64_C(0x0f0f0f5a)) execution_error |= 2;
+            execution_exact &= execution_error == 0;
+        }
+        if (context != NULL) hl_x86_hot_context_destroy(context);
+        if (mode == 4) jit_guest_soft_test_set(0);
+        if (mode == 5) jit_guest_bus_test_set(0);
+        if (mode == 6) hl_guest_memory_test_indirect(0);
+        if (mode == 7) gnx_clear((uint64_t)(uintptr_t)(guest + target_offset),
+                                 (uint64_t)(uintptr_t)(guest + target_offset + 8));
+    }
+    // A real MAP_SHARED registration permanently disables direct fetch authority for the process.
+    // Isolate that lifecycle transition in a child so the rest of this integration process remains usable.
+    int shared_alias_exact = 0;
+    pid_t shared_child = fork();
+    if (shared_child == 0) {
+        int descriptors[2] = {-1, -1};
+        int child_exact = pipe(descriptors) == 0;
+        if (child_exact) {
+            uint64_t target_address = (uint64_t)(uintptr_t)(guest + target_offset);
+            uint64_t alias_address = (uint64_t)(uintptr_t)(guest + source_offset + 64);
+            filemap_register(target_address, 8, descriptors[0], 0, 1, 0);
+            jit_body_owner_drop_generation(g_cache_gen);
+            map_clear();
+            memset(arena, 0, mapping_size);
+            g_cp = arena + sizeof(struct interp_block);
+            (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+            hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+            struct interp_block *block = (struct interp_block *)arena;
+            void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+            child_exact = context != NULL && body != NULL;
+            if (context != NULL) hl_x86_hot_context_destroy(context);
+            filemap_register(alias_address, 8, descriptors[0], 0, 1, 0);
+            gnx_add(alias_address, alias_address + 8);
+            jit_body_owner_drop_generation(g_cache_gen);
+            map_clear();
+            memset(arena, 0, mapping_size);
+            g_cp = arena + sizeof(struct interp_block);
+            context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+            block = (struct interp_block *)arena;
+            body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+            child_exact = child_exact && context != NULL && body == NULL;
+            if (context != NULL) hl_x86_hot_context_destroy(context);
+            close(descriptors[0]);
+            close(descriptors[1]);
+        }
+        _exit(child_exact ? 0 : 1);
+    }
+    int shared_status = 0;
+    shared_alias_exact = shared_child > 0 && waitpid(shared_child, &shared_status, 0) == shared_child &&
+                         WIFEXITED(shared_status) && WEXITSTATUS(shared_status) == 0;
+    execution_exact &= shared_alias_exact;
+    // Exercise the real decoder/builder/body path for both architectural widths and every destination
+    // that can safely be borrowed.  RSP is the sole exclusion because the emitted load cannot use it as
+    // an address temporary without changing the host stack.
+    for (int readonly = 0; execution_exact && readonly <= 1; ++readonly) {
+        if (mprotect(guest + 4096, 4096, readonly ? PROT_READ : PROT_READ | PROT_WRITE) != 0) {
+            execution_exact = 0;
+            break;
+        }
+        for (int width = 4; execution_exact && width <= 8; width += 4) {
+            for (int reg = 0; execution_exact && reg < 16; ++reg) {
+                if (reg == HL_X64_RSP) continue;
+                uint8_t *instruction = guest + source_offset;
+                uint8_t rex = (uint8_t)(0x40 | (width == 8 ? 8 : 0) | (reg >= 8 ? 4 : 0));
+                size_t prefix = rex == 0x40 ? 0 : 1;
+                if (prefix != 0) instruction[0] = rex;
+                instruction[prefix] = 0x8b;
+                instruction[prefix + 1] = (uint8_t)(((reg & 7) << 3) | 5);
+                size_t length = prefix + 6;
+                displacement = (int32_t)(target_offset - source_offset - length);
+                memcpy(instruction + prefix + 2, &displacement, sizeof displacement);
+                instruction[length] = 0x0f;
+                instruction[length + 1] = 0x0b;
+                jit_body_owner_drop_generation(g_cache_gen);
+                map_clear();
+                memset(arena, 0, mapping_size);
+                g_cp = arena + sizeof(struct interp_block);
+                (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+                (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", "0", 1);
+                hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+                struct interp_block *block = (struct interp_block *)arena;
+                void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+                last_matrix_block = block;
+                if (body == NULL || block->profile_insns != 1) {
+                    execution_exact = 0;
+                } else {
+                    block->magic = INTERP_BLOCK_MAGIC;
+                    block->gpc = source;
+                    struct cpu cpu = {0};
+                    cpu.rip = source;
+                    cpu.r[reg] = UINT64_C(0xa5a5a5a5a5a5a5a5);
+                    hl_backend_tree_begin(1, effective_host_services());
+                    run_block(context, &cpu, block);
+                    uint64_t expected = width == 8 ? UINT64_C(0x0f0f0f0f0f0f0f5a)
+                                                   : UINT64_C(0x0f0f0f5a);
+                    execution_exact &= cpu.rip == source + length && cpu.r[reg] == expected;
+                    if (!readonly && width == 8 && reg == HL_X64_R11) {
+                        struct cpu irq_cpu = {0};
+                        irq_cpu.rip = source;
+                        irq_cpu.r[reg] = UINT64_C(0x1122334455667788);
+                        irq_cpu.irq = 1;
+                        run_block(context, &irq_cpu, block);
+                        // The normal block IRQ boundary is after the completed guest instruction.
+                        if (irq_cpu.rip != source + length) execution_error |= 1;
+                        if (irq_cpu.r[reg] != expected) execution_error |= 2;
+                        if (irq_cpu.irq != 1) execution_error |= 4;
+                        execution_exact &= (execution_error & 7) == 0;
+
+                        uint8_t *stages[] = {translit_test_natural_load_start,
+                                             translit_test_natural_load_address_end - 1,
+                                             translit_test_natural_load_op_end};
+                        uint64_t expected_rip[] = {source, source, source + length};
+                        uint64_t expected_reg[] = {UINT64_C(0x1122334455667788),
+                                                   UINT64_C(0x1122334455667788), expected};
+                        int saved_selected = translit_selected;
+                        translit_selected = 1;
+                        for (unsigned stage = 0; execution_exact && stage < 3; ++stage) {
+                            struct cpu interrupted = {0};
+                            interrupted.rip = source;
+                            interrupted.r[reg] = UINT64_C(0x1122334455667788);
+                            ucontext_t native = {0};
+                            HL_HOST_UC_GREGS(&native)[g_translit_greg[reg]] =
+                                (greg_t)(stage == 2 ? expected : UINT64_C(0xaabbccddeeff0011));
+                            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)stages[stage];
+                            execution_exact = translit_signal_capture(&interrupted, &native) &&
+                                              interrupted.rip == expected_rip[stage] &&
+                                              interrupted.r[reg] == expected_reg[stage];
+                            if (!execution_exact) execution_error |= 8;
+                        }
+                        translit_selected = saved_selected;
+                    }
+                }
+                if (context != NULL) hl_x86_hot_context_destroy(context);
+            }
+        }
+    }
+    if (execution_exact && translit_test_natural_load_address_end != NULL) {
+        uint64_t fault_address = (uint64_t)(uintptr_t)(guest + target_offset);
+        int saved_selected = translit_selected;
+        translit_selected = 1;
+        for (int mapped = 1; execution_exact && mapped >= 0; --mapped) {
+            if (mapped) {
+                execution_exact &= mprotect(guest + 4096, 4096, PROT_NONE) == 0;
+            } else {
+                execution_exact &= munmap(guest + 4096, 4096) == 0;
+            }
+            struct cpu faulted = {0};
+            faulted.rip = source;
+            faulted.r[15] = UINT64_C(0x1122334455667788);
+            ucontext_t native = {0};
+            HL_HOST_UC_GREGS(&native)[g_translit_greg[15]] = (greg_t)fault_address;
+            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)translit_test_natural_load_address_end;
+            int delivered = translit_test_deliver_guest_fault(&faulted, &native, fault_address);
+            int fault_exact = delivered && faulted.rip == source &&
+                              faulted.r[15] == UINT64_C(0x1122334455667788) &&
+                              faulted.sync_signal == 11 && faulted.sync_address == fault_address &&
+                              faulted.sync_code == (mapped ? 2 : 1);
+            if (!delivered) execution_error |= 1;
+            if (faulted.rip != source) execution_error |= 2;
+            if (faulted.r[15] != UINT64_C(0x1122334455667788)) execution_error |= 4;
+            if (faulted.sync_signal != 11 || faulted.sync_address != fault_address ||
+                faulted.sync_code != (mapped ? 2 : 1))
+                execution_error |= 8;
+            execution_exact &= fault_exact;
+            if (mapped) {
+                execution_exact &= mprotect(guest + 4096, 4096, PROT_READ | PROT_WRITE) == 0;
+            } else {
+                void *restored = mmap(guest + 4096, 4096, PROT_READ | PROT_WRITE,
+                                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+                execution_exact &= restored == guest + 4096;
+                if (restored == guest + 4096) {
+                    memset(restored, 0x0f, 4096);
+                    guest[target_offset] = 0x5a;
+                }
+            }
+        }
+        translit_selected = saved_selected;
+    }
+    if (execution_exact && last_matrix_block != NULL) {
+        map_put(source, last_matrix_block->guest_start, last_matrix_block->guest_end,
+                last_matrix_block, last_matrix_block);
+        execution_exact &= map_body(source) == last_matrix_block;
+        int saved_rwx_guest = g_rwx_guest;
+        g_rwx_guest = 1;
+        jit86_drop_range_translations(source, source + 1);
+        g_rwx_guest = saved_rwx_guest;
+        execution_exact &= map_body(source) == NULL;
+    }
+    (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+    (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
+    translit_fall_fixture_bytes = NULL;
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_nonpie_lo = saved_nonpie_lo;
+    g_nonpie_hi = saved_nonpie_hi;
+    g_nonpie_bias = saved_nonpie_bias;
+    munmap(guest, mapping_size);
+    munmap(arena, mapping_size);
+    return execution_exact && shared_alias_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
+                   counts[4] == 0 && counts[5] == 0 && counts[6] == 0 && counts[7] == 0
+               ? 0
+               : (int)((execution_error << 28) | (counts[0] << 24) | (counts[1] << 16) |
+                       (counts[2] << 8) | counts[3] | counts[4] | counts[5] | counts[6]);
 }
 
 static int translit_fall_fixture_test(unsigned scenario) {
@@ -7088,6 +7467,8 @@ static int translit_report(char *out, size_t size) {
     uint64_t displaced_lea_lowered = __atomic_load_n(&translit_displaced_lea_lowered, __ATOMIC_RELAXED);
     uint64_t natural_abs32_lowered = __atomic_load_n(&translit_natural_abs32_lowered, __ATOMIC_RELAXED);
     uint64_t natural_lea_lowered = __atomic_load_n(&translit_natural_lea_lowered, __ATOMIC_RELAXED);
+    uint64_t natural_load_bridge_lowered =
+        __atomic_load_n(&translit_natural_load_bridge_lowered, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_prefix = __atomic_load_n(&translit_displaced_refusal_prefix, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_width = __atomic_load_n(&translit_displaced_refusal_width, __ATOMIC_RELAXED);
     uint64_t displaced_refusal_rsp = __atomic_load_n(&translit_displaced_refusal_rsp, __ATOMIC_RELAXED);
@@ -7121,7 +7502,8 @@ static int translit_report(char *out, size_t size) {
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
-        displaced_lea_lowered = natural_abs32_lowered = natural_lea_lowered = UINT64_MAX;
+        displaced_lea_lowered = natural_abs32_lowered = natural_lea_lowered =
+            natural_load_bridge_lowered = UINT64_MAX;
         displaced_refusal_count = displaced_refusal_prefix = displaced_refusal_width = UINT64_MAX;
         displaced_refusal_rsp = displaced_refusal_opcode_other = UINT64_MAX;
         jcc_fall_candidates = jcc_fall_admitted = jcc_fall_page_refused = UINT64_MAX;
@@ -7204,7 +7586,7 @@ static int translit_report(char *out, size_t size) {
                     TRANSLIT_FS_PROFILE
                     TRANSLIT_FS_BRIDGE_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
-                    " natural_lea_lowered=%llu"
+                    " natural_lea_lowered=%llu natural_load_bridge_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
                     " jcc_fall_executed=%llu jcc_link_admitted=%llu jcc_link_taken=%llu"
@@ -7231,6 +7613,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)displaced_lea_lowered,
                     (unsigned long long)natural_abs32_lowered,
                     (unsigned long long)natural_lea_lowered,
+                    (unsigned long long)natural_load_bridge_lowered,
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                     (unsigned long long)jcc_fall_page_refused,
                     (unsigned long long)jcc_fall_successor_page_refused,

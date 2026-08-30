@@ -68,6 +68,11 @@ static void jit_guest_soft_deactivate(void) {
 static int jit_guest_soft_active(void) {
     return atomic_load_explicit(&g_guest_soft_active, memory_order_acquire);
 }
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void jit_guest_soft_test_set(int active) {
+    atomic_store_explicit(&g_guest_soft_active, active != 0, memory_order_release);
+}
+#endif
 
 void jit_guest_bus_changed(void *opaque, uint64_t generation, int active) {
     (void)opaque;
@@ -87,6 +92,13 @@ void jit_guest_bus_arm_latched(void) {
 int jit_guest_bus_active(void) {
     return hl_target_bus_active(&g_target_bus);
 }
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void jit_guest_bus_test_set(int active) {
+    if (g_target_bus.guest.ops == NULL) hl_target_bus_init(&g_target_bus, &bus_ops, NULL);
+    uint64_t state = atomic_load_explicit(&g_target_bus.guest.state, memory_order_acquire);
+    atomic_store_explicit(&g_target_bus.guest.state, (state & ~UINT64_C(1)) | (active != 0), memory_order_release);
+}
+#endif
 
 uint64_t jit_guest_bus_fault(uint64_t address, uint64_t size) {
     return hl_target_bus_fault(&g_target_bus, address, size);

@@ -92,6 +92,9 @@ void hl_guest_memory_transaction_begin(void);
 void hl_guest_memory_transaction_end(void);
 void hl_guest_memory_store_observe(uint64_t guest, size_t length);
 int hl_guest_memory_indirect(void);
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_guest_memory_test_indirect(int);
+#endif
 uint64_t hl_guest_memory_host_pointer(uint64_t guest);
 
 #endif
