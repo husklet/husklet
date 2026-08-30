@@ -19,6 +19,7 @@ const EXPLICIT_ROOTS: &[&str] = &[
     "src/native/engine/lifecycle.c",
     "src/native/engine/target/aarch64.c",
     "src/native/engine/target/x86_64.c",
+    "src/native/translator/guest/x86_64/interp/persistence.c",
     "src/native/engine/checkpoint_channel.c",
 ];
 

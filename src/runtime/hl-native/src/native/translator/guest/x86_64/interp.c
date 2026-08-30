@@ -1930,22 +1930,7 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 
 /* Same-ISA cold-publication format. Warm restore deliberately remains disabled until the relocation and
  * generation reconstruction review is complete. Every address in the payload is an arena-relative offset. */
-#define X64_PC_MAGIC UINT64_C(0x3143535034364c48) /* "HL64PSC1" */
-#define X64_PC_VERSION UINT64_C(9)
-
-#define X64_PC_ENDIAN UINT64_C(0x0807060504030201)
-#define X64_PC_HEADER_SIZE 272u
-#define X64_PC_MAP_SIZE 100u
-#define X64_PC_OWNER_SIZE 28u
-#define X64_PC_RELOC_SIZE 8u
-#define X64_PC_HELPER_RELOC_SIZE 8u
-#define X64_PC_LIB_SIZE 56u
-#define X64_PC_CHAIN_SIZE 24u
-#define X64_PC_CHECKSUM_OFFSET 264u
-#define X64_PC_LIB_BASE UINT64_C(0x0000050000000000)
-#define X64_PC_LIB_SPAN (UINT64_C(1) << 38)
-#define X64_PC_LIB_MAX 512u
-#define X64_PC_LIB_HASH_MAX (UINT64_C(512) << 20)
+#include "interp/persistence.h"
 #define PC_LIB_BASE X64_PC_LIB_BASE
 #define PC_LIB_SPAN X64_PC_LIB_SPAN
 #define PCACHE_MMAP_HINT 1
@@ -1955,12 +1940,6 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 #define X64_PC_FIXED_IMAGE_SUPPORTED 0
 #endif
 
-static void x64_pc_put16(uint8_t **p, uint16_t v) { (*p)[0] = (uint8_t)v; (*p)[1] = (uint8_t)(v >> 8); *p += 2; }
-static void x64_pc_put32(uint8_t **p, uint32_t v) { for (unsigned i = 0; i < 4; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 4; }
-static void x64_pc_put64(uint8_t **p, uint64_t v) { for (unsigned i = 0; i < 8; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 8; }
-static uint16_t x64_pc_get16(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
-static uint32_t x64_pc_get32(const uint8_t *p) { uint32_t v = 0; for (unsigned i = 0; i < 4; i++) v |= (uint32_t)p[i] << (8*i); return v; }
-static uint64_t x64_pc_get64(const uint8_t *p) { uint64_t v = 0; for (unsigned i = 0; i < 8; i++) v |= (uint64_t)p[i] << (8*i); return v; }
 
 typedef struct x64_pc_map_save {
     uint32_t index;
