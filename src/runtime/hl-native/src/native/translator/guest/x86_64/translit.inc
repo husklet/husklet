@@ -517,6 +517,7 @@ static size_t translit_fall_fixture_length;
 static uint32_t translit_test_last_fall_marker;
 static int translit_test_fall_marker_seen;
 static int translit_fall_fixture_test(unsigned scenario);
+static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
@@ -2569,6 +2570,33 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
     return !a->overflow;
 }
 
+// Natural same-ISA images keep their data at the guest address.  These two byte operations have no
+// register operand, so R11 is a bounded scratch: spill it to the canonical CPU image, materialise the
+// exact storage address, execute the original flag operation, then restore it with flag-neutral MOVs.
+// The caller publishes split provenance around op_end: a fault in the operation belongs to source,
+// while an asynchronous interruption during restoration belongs to next.
+static int translit_lower_natural_riprel_readonly(hl_x64_asm *a, const struct insn *insn,
+                                                   uint64_t storage_target, uint8_t **op_end) {
+    int test = !insn->two && insn->op == 0xF6 && insn->reg == 0;
+    int compare = !insn->two && insn->op == 0x80 && insn->reg == 7;
+    if ((!test && !compare) || !insn->has_modrm || !insn->is_mem || !insn->rip_rel ||
+        // The decoder's canonical opsize remains 4 for byte-coded opcode families; the opcode itself
+        // supplies the byte width (the interpreter follows the same rule).
+        insn->mod != 0 || insn->rm != 5 || insn->imm_bytes != 1 || insn->opsize != 4 ||
+        insn->addr32 || insn->seg || insn->lock || insn->rep || insn->repne || insn->p66 ||
+        insn->has_rex)
+        return 0;
+    hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+    hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
+    hl_x64_u8(a, 0x41);
+    hl_x64_u8(a, test ? 0xF6 : 0x80);
+    hl_x64_u8(a, test ? 0x03 : 0x3B);
+    hl_x64_u8(a, (uint8_t)insn->imm);
+    *op_end = a->cursor;
+    hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+    return !a->overflow;
+}
+
 static int translit_fix_riprel(struct translit_builder *b, const struct insn *insn, uint64_t guest_next,
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
@@ -2739,6 +2767,54 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         translit_sampling_overflow = saved_overflow;
         return !raced && test.done && size > 0 && exact ? 0 : 218;
     }
+    if (scenario == 158 || scenario == 159) {
+        struct insn readonly = {.len = 7,
+                                .op = scenario == 158 ? 0xF6 : 0x80,
+                                .opsize = 4,
+                                .has_modrm = 1,
+                                .modrm = scenario == 158 ? 0x05 : 0x3D,
+                                .mod = 0,
+                                .reg = scenario == 158 ? 0 : 7,
+                                .rm = 5,
+                                .is_mem = 1,
+                                .rip_rel = 1,
+                                .imm = scenario == 158 ? 0xA5 : 0x5A,
+                                .imm_bytes = 1};
+        uint8_t emitted[64] = {0};
+        hl_x64_asm readonly_output = {emitted, emitted + sizeof emitted, 0};
+        uint8_t *op_end = NULL;
+        uint64_t target = UINT64_C(0x1122334455667788);
+        if (!translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end))
+            return 219;
+        const uint8_t prefix[] = {0x65, 0x4C, 0x89, 0x1C, 0x25, 0x58, 0, 0,
+                                  0,    0x49, 0xBB, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
+                                  0x22, 0x11, 0x41};
+        const uint8_t suffix[] = {0x65, 0x4C, 0x8B, 0x1C, 0x25, 0x58, 0, 0, 0};
+        if (readonly_output.cursor - emitted != 32) return 220;
+        if (op_end != emitted + 23) return 223;
+        if (memcmp(emitted, prefix, sizeof prefix) != 0) return 224;
+        if (emitted[20] != (scenario == 158 ? 0xF6 : 0x80)) return 225;
+        if (emitted[21] != (scenario == 158 ? 0x03 : 0x3B)) return 226;
+        if (emitted[22] != (scenario == 158 ? 0xA5 : 0x5A)) return 227;
+        if (memcmp(emitted + 23, suffix, sizeof suffix) != 0) return 228;
+#define TL_READONLY_REJECT(field) do { \
+            readonly.field = 1; readonly_output.cursor = emitted; op_end = NULL; \
+            if (translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end)) return 221; \
+            readonly.field = 0; \
+        } while (0)
+        TL_READONLY_REJECT(addr32);
+        TL_READONLY_REJECT(seg);
+        TL_READONLY_REJECT(lock);
+        TL_READONLY_REJECT(rep);
+        TL_READONLY_REJECT(repne);
+        TL_READONLY_REJECT(p66);
+        TL_READONLY_REJECT(has_rex);
+#undef TL_READONLY_REJECT
+        readonly.mod = 1;
+        readonly_output.cursor = emitted;
+        return !translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end) ? 0 : 222;
+    }
+    if (scenario >= 160 && scenario <= 161) return translit_riprel_readonly_fixture_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4037,6 +4113,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         translit_jcc_ibtc_site_ranges ibtc_site = {0};
         translit_ret_sim_ranges ret_site = {0};
         int preserve_register = -1;
+        uint8_t *riprel_readonly_op_end = NULL;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
         uint8_t *jmp_mem_borrow_start = NULL, *jmp_mem_rip_end = NULL, *jmp_mem_r11_end = NULL;
 
@@ -4048,11 +4125,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
                                                                  g_nonpie_hi, g_nonpie_bias);
+                int readonly_lowered = !g_nonpie_lo &&
+                                       hl_option_flag_value("HL_TRANSLIT_RIPREL_READONLY", 0) &&
+                                       translit_lower_natural_riprel_readonly(a, &insn, storage_target,
+                                                                              &riprel_readonly_op_end);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
-                if ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
+                if (!readonly_lowered &&
+                    ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
-                                                    &preserve_register)) {
+                                                    &preserve_register))) {
                     if (g_nonpie_lo)
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
                     if (g_nonpie_lo) translit_count_displaced_refusal(&insn);
@@ -4062,6 +4144,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
                     break;
                 }
+                if (readonly_lowered) preserve_register = HL_X64_R11;
                 uint64_t *counter = insn.op == 0x8D && !insn.two
                                         ? (g_nonpie_lo ? &translit_displaced_lea_lowered
                                                        : &translit_natural_lea_lowered)
@@ -4076,6 +4159,27 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     TL_ATTEMPT_ADD(translit_displaced_scratch_lowered, displaced_scratch_lowered);
             }
             uint32_t preserve = translit_preserve_mask(preserve_register);
+            if (riprel_readonly_op_end != NULL) {
+                owner_normal_pending = 0;
+                int exact = translit_owner_append(owners, &owner_count, instruction_start,
+                                                   riprel_readonly_op_end, pc, preserve) &&
+                            translit_owner_append(owners, &owner_count, riprel_readonly_op_end,
+                                                   a->cursor, next, preserve) &&
+                            translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                   instruction_start, riprel_readonly_op_end, pc,
+                                                   preserve) &&
+                            translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                   riprel_readonly_op_end, a->cursor, next, preserve);
+                if (!exact) {
+                    a->overflow = 1;
+                    a->cursor = instruction_start;
+                    break;
+                }
+                pc = next;
+                count++;
+                previous_kind = kind;
+                continue;
+            }
             int instruction_ok = translit_owner_append(instruction_ranges, &instruction_range_count,
                                                         instruction_start, a->cursor, pc, preserve);
             int owner_ok;
@@ -4713,6 +4817,103 @@ static int translit_fall_fixture_fetch(void *opaque, uint64_t guest, void *desti
     memcpy(destination, translit_fall_fixture_bytes + offset, copied);
     memset((uint8_t *)destination + copied, 0, length - copied);
     return 0;
+}
+
+static int translit_riprel_readonly_fixture_test(unsigned scenario) {
+    const size_t arena_size = 8192;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, 8192, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, arena_size);
+        if (guest != MAP_FAILED) munmap(guest, 8192);
+        return 229;
+    }
+    memset(guest, 0x0f, 8192);
+    const size_t source_offset = 128, target_offset = 4096;
+    int compare = scenario == 161;
+    uint8_t opcode = compare ? 0x80 : 0xF6;
+    uint8_t modrm = compare ? 0x3D : 0x05;
+    uint8_t immediate = compare ? 0x20 : 0xA5;
+    guest[source_offset] = opcode;
+    guest[source_offset + 1] = modrm;
+    int32_t displacement = (int32_t)(target_offset - source_offset - 7);
+    memcpy(guest + source_offset + 2, &displacement, sizeof displacement);
+    guest[source_offset + 6] = immediate;
+    guest[source_offset + 7] = 0x0f;
+    guest[source_offset + 8] = 0x0b;
+    guest[target_offset] = compare ? 0x10 : 0xA5;
+
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    uint64_t saved_nonpie_lo = g_nonpie_lo;
+    uint64_t saved_nonpie_hi = g_nonpie_hi;
+    uint64_t saved_nonpie_bias = g_nonpie_bias;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - scenario;
+    g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    map_clear();
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = 8192;
+    (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "1", 1);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *block = (struct interp_block *)arena;
+    uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+    void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+    block->magic = INTERP_BLOCK_MAGIC;
+    block->gpc = source;
+    struct cpu cpu = {0};
+    cpu.rip = source;
+    cpu.r[HL_X64_R11] = UINT64_C(0x1122334455667788);
+    translit_flags_out(&cpu, UINT64_C(0x602)); // IF and DF set; arithmetic bits deliberately clear.
+    hl_backend_tree_begin(1, effective_host_services());
+    if (body != NULL) run_block(context, &cpu, block);
+    uint64_t flags = translit_flags_in(&cpu);
+    uint64_t expected = compare ? UINT64_C(0x687) : UINT64_C(0x686);
+    uint64_t checked = UINT64_C(0xCD5); // CF/PF/AF/ZF/SF/DF/OF
+    uint8_t *entry = (uint8_t *)block + block->host_entry_off;
+    uint64_t source_pc = 0, restore_pc = 0;
+    uint32_t source_preserve = 0, restore_preserve = 0;
+    int source_exact = body != NULL &&
+                       jit_instruction_guest_pc_preserve((uint64_t)(uintptr_t)(entry + 22), &source_pc,
+                                                         &source_preserve);
+    int restore_exact = body != NULL &&
+                        jit_instruction_guest_pc_preserve((uint64_t)(uintptr_t)(entry + 23), &restore_pc,
+                                                          &restore_preserve);
+    int result = 0;
+    if (body == NULL) result = 230;
+    else if (block->profile_insns != 1) result = 232;
+    else if (cpu.rip != source + 7) result = 245;
+    else if (cpu.r[HL_X64_R11] != UINT64_C(0x1122334455667788)) result = 234;
+    else if ((flags & checked) != (expected & checked)) result = 235;
+    else if (!source_exact) result = 236;
+    else if (!restore_exact) result = 237;
+    else if (source_pc != source) result = 246;
+    else if (restore_pc != source + 7) result = 239;
+    else if (source_preserve != (1u << HL_X64_R11)) result = 240;
+    else if (restore_preserve != (1u << HL_X64_R11)) result = 241;
+
+    (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_nonpie_lo = saved_nonpie_lo;
+    g_nonpie_hi = saved_nonpie_hi;
+    g_nonpie_bias = saved_nonpie_bias;
+    munmap(guest, 8192);
+    munmap(arena, arena_size);
+    return result;
 }
 
 static int translit_fall_fixture_test(unsigned scenario) {

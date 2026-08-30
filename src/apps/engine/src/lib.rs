@@ -112,6 +112,9 @@ struct LaunchArguments {
     /// Late-link direct JMP targets through the same-ISA IBTC.
     #[arg(long, value_enum, value_name = "on|off")]
     translit_direct_jmp_ibtc: Option<DirectJmpIbtcControl>,
+    /// Lower selected read-only RIP-relative byte operations in same-ISA blocks.
+    #[arg(long, requires = "translit")]
+    translit_riprel_readonly: bool,
     /// Execute a same-ISA Linux x86-64 guest under the experimental native syscall supervisor.
     #[arg(long)]
     native_supervised: bool,
@@ -446,6 +449,7 @@ fn rootfs_plan(
     for (enabled, name) in [
         (launch.diagnostics, "HL_C_DIAGNOSTICS"),
         (launch.translit, "HL_TRANSLIT"),
+        (launch.translit_riprel_readonly, "HL_TRANSLIT_RIPREL_READONLY"),
         (launch.native_supervised, "HL_NATIVE_SUPERVISED"),
     ] {
         if enabled {
@@ -711,6 +715,7 @@ mod tests {
         assert_eq!(defaults.translit_mixed_sse, None);
         assert_eq!(defaults.translit_jcc_ibtc, None);
         assert_eq!(defaults.translit_direct_jmp_ibtc, None);
+        assert!(!defaults.translit_riprel_readonly);
         assert!(!defaults.native_supervised);
 
         let selected = launch(&[
@@ -719,6 +724,7 @@ mod tests {
             "--translit-mixed-sse=off",
             "--translit-jcc-ibtc=off",
             "--translit-direct-jmp-ibtc=off",
+            "--translit-riprel-readonly",
             "--native-supervised",
             "--rootfs",
             "/image",
@@ -732,6 +738,7 @@ mod tests {
             selected.translit_direct_jmp_ibtc,
             Some(super::DirectJmpIbtcControl::Off)
         );
+        assert!(selected.translit_riprel_readonly);
         assert!(selected.native_supervised);
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
     }

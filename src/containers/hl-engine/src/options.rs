@@ -301,6 +301,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only native checkpoint registration mutation",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_RIPREL_READONLY",
+        "lower selected read-only RIP-relative byte operations in the same-ISA backend",
+        Flag
+    ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
     debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
 ];
