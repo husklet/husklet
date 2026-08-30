@@ -19,6 +19,7 @@ static int g_test_store_preflight_calls;
 // container, host-service, and engine layers. Architecture-specific translation remains under
 // translator/guest/x86_64; Linux executable loading and process construction belong to linux_abi.
 
+#define HL_PCACHE_IDENTITY_OBSERVE 1
 // jit86.c — an x86-64-guest JIT (x86-64 -> ARM64) for Linux guests on macOS/arm64.
 //
 // Sibling of runtime/jit/jit.c (which is aarch64->aarch64). See DESIGN.md for the
@@ -1769,6 +1770,9 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
     g_coldprof = hl_option_flag_value("HL_PCACHE_OBSERVE", 0);
+    g_pcache_identity_ns = 0;
+    g_pcache_identity_bytes = 0;
+    g_pcache_identity_files = 0;
     /* Diagnostic stubs embed fork-shared counter addresses. They are launch-private and deliberately have
        no persistent-cache relocation: diagnostics therefore disables restore/save before cache lookup. */
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;

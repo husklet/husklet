@@ -93,6 +93,10 @@ impl TryFrom<&ProcessConfig> for Spec {
                 .translation_cache
                 .as_ref()
                 .map(|cache| cache.as_os_str().as_encoded_bytes().to_vec()),
+            translation_symbols: launch
+                .translation_symbols
+                .as_ref()
+                .map(|directory| directory.as_os_str().as_encoded_bytes().to_vec()),
             lower_layers: launch
                 .overlay
                 .as_ref()
@@ -281,6 +285,10 @@ impl Spec {
             "HL_PCACHE_OBSERVE",
             launch.translation_cache_observability,
         )?;
+        if let Some(directory) = &launch.translation_symbols {
+            Self::set(options, "HL_TRANSLIT_SYMBOLIZE", b"1")?;
+            Self::set(options, "HL_TRANSLIT_PERF_MAP", directory.as_os_str().as_encoded_bytes())?;
+        }
         if let Some(overlay) = &launch.overlay {
             Self::set(options, "HL_LOWER", overlay.lower.as_os_str().as_encoded_bytes())?;
             Self::set(

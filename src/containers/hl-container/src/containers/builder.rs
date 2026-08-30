@@ -23,6 +23,7 @@ struct Assembly<S> {
     runtime_root: std::path::PathBuf,
     translation_cache: Option<std::path::PathBuf>,
     translation_cache_observability: bool,
+    translation_symbols: Option<std::path::PathBuf>,
     checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -55,6 +56,7 @@ impl<S: Storage + 'static> Assembly<S> {
             runtime_root: self.runtime_root,
             translation_cache: self.translation_cache,
             translation_cache_observability: self.translation_cache_observability,
+            translation_symbols: self.translation_symbols,
             checkpoints: self.checkpoints,
         }));
         service.reconcile().await?;
@@ -102,6 +104,7 @@ impl Builder {
             .map(crate::config::TranslationCache::prepare)
             .transpose()?;
         let translation_cache_observability = self.config.translation_cache_observability;
+        let translation_symbols = self.config.translation_symbols.map(crate::config::TranslationCache::prepare).transpose()?;
         let volume_root = root.join("volumes");
         let runtime_root = root.join("runtime");
         let checkpoints = match self.checkpoints {
@@ -126,6 +129,7 @@ impl Builder {
                     runtime_root,
                     translation_cache,
                     translation_cache_observability,
+                    translation_symbols,
                     checkpoints,
                 }
                 .build()
@@ -141,6 +145,7 @@ impl Builder {
                     runtime_root,
                     translation_cache,
                     translation_cache_observability,
+                    translation_symbols,
                     checkpoints,
                 }
                 .build()
@@ -171,6 +176,7 @@ pub(super) async fn build_with<S: Storage + 'static>(
         runtime_root,
         translation_cache: None,
         translation_cache_observability: false,
+        translation_symbols: None,
         checkpoints,
     }
     .build()

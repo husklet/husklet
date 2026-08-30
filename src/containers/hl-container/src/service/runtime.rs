@@ -57,6 +57,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) filesystem_generation: PathBuf,
     pub(crate) translation_cache: Option<PathBuf>,
     pub(crate) translation_cache_observability: bool,
+    pub(crate) translation_symbols: Option<PathBuf>,
     pub(crate) checkpoint: Option<CheckpointRole>,
     pub(crate) guest: Guest,
     pub(crate) execution: crate::Execution,

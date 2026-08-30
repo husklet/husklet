@@ -1959,6 +1959,8 @@ static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
 static uint64_t g_x64_pc_observe_load_ns;
 static uint64_t g_x64_pc_observe_validation_ns;
+static uint64_t g_x64_pc_observe_read_ns;
+static uint64_t g_x64_pc_observe_library_ns, g_x64_pc_observe_library_bytes, g_x64_pc_observe_library_files;
 static unsigned g_x64_pc_observe_outcome;
 static int x64_pc_file(char *path, size_t size);
 
@@ -1968,13 +1970,22 @@ static void x64_pc_observe_emit(const char *outcome, uint64_t save_ns) {
     uint64_t translated = g_live_map_count > restored_live ? g_live_map_count - restored_live : 0;
     fprintf(stderr,
             "[pcache-v1] outcome=%s restored=%llu live=%llu deferred=%llu new_translations=%llu "
-            "load_ns=%llu validation_ns=%llu reconstruction_ns=%llu save_ns=%llu\n",
+            "load_ns=%llu cache_read_ns=%llu validation_ns=%llu reconstruction_ns=%llu "
+            "image_identity_ns=%llu image_identity_bytes=%llu image_identity_files=%llu "
+            "library_identity_ns=%llu library_identity_bytes=%llu library_identity_files=%llu save_ns=%llu\n",
             outcome, (unsigned long long)g_x64_pc_restored_maps, (unsigned long long)g_live_map_count,
             (unsigned long long)g_x64_pc_deferred_count, (unsigned long long)translated,
             (unsigned long long)g_x64_pc_observe_load_ns,
+            (unsigned long long)g_x64_pc_observe_read_ns,
             (unsigned long long)g_x64_pc_observe_validation_ns,
             (unsigned long long)(g_x64_pc_observe_load_ns > g_x64_pc_observe_validation_ns
                                      ? g_x64_pc_observe_load_ns - g_x64_pc_observe_validation_ns : 0),
+            (unsigned long long)g_pcache_identity_ns,
+            (unsigned long long)g_pcache_identity_bytes,
+            (unsigned long long)g_pcache_identity_files,
+            (unsigned long long)g_x64_pc_observe_library_ns,
+            (unsigned long long)g_x64_pc_observe_library_bytes,
+            (unsigned long long)g_x64_pc_observe_library_files,
             (unsigned long long)save_ns);
 }
 
@@ -2088,6 +2099,7 @@ static int x64_pc_file_digest(hl_host_handle handle, const hl_host_file_metadata
         metadata->size > X64_PC_LIB_HASH_MAX || g_host_services == NULL || g_host_services->file == NULL ||
         g_host_services->file->read_at == NULL || metadata->size > SIZE_MAX)
         return 0;
+    uint64_t observe_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     uint8_t *image = malloc((size_t)metadata->size);
     if (image == NULL) return 0;
     uint64_t done = 0;
@@ -2103,6 +2115,11 @@ static int x64_pc_file_digest(hl_host_handle handle, const hl_host_file_metadata
     }
     *digest = hl_identity_image_digest(image, (size_t)metadata->size);
     free(image);
+    if (g_coldprof) {
+        g_x64_pc_observe_library_ns += coldprof_now_ns(effective_host_services()) - observe_started;
+        g_x64_pc_observe_library_bytes += metadata->size;
+        g_x64_pc_observe_library_files++;
+    }
     return !hl_identity_digest_empty(digest);
 }
 
@@ -2140,6 +2157,7 @@ static int pcache_load(uint64_t entry_jump) {
     g_x64_pc_observe_outcome = 0;
     g_x64_pc_observe_load_ns = 0;
     g_x64_pc_observe_validation_ns = 0;
+    g_x64_pc_observe_read_ns = 0;
     uint64_t observe_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     char path[1024];
     void *allocation = NULL;
@@ -2147,6 +2165,7 @@ static int pcache_load(uint64_t entry_jump) {
     if (!x64_pc_file(path, sizeof path) ||
         !hl_persist_load_at(&g_x64_pc_directory, path, CACHE_SZ + UINT64_C(134217728), &allocation, &size))
         return 0;
+    if (g_coldprof) g_x64_pc_observe_read_ns = coldprof_now_ns(effective_host_services()) - observe_started;
     g_x64_pc_observe_outcome = 3;
     const uint8_t *bytes = allocation;
     unsigned validation = 2; /* structurally invalid/truncated */
@@ -2384,9 +2403,10 @@ static int pcache_load(uint64_t entry_jump) {
         uint64_t gpc = x64_pc_get64(record), host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
         struct interp_block *block = (struct interp_block *)(g_cache + body);
         block->generation = g_cache_gen;
-        if (x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16)))
+        if (x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16))) {
             map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), g_cache + host, block);
-        else {
+            translit_perf_map_publish(block, g_cache + host, block->host_len, block->profile_insns);
+        } else {
             memcpy(deferred + deferred_at * X64_PC_MAP_SIZE, record, X64_PC_MAP_SIZE);
             deferred_at++;
         }
@@ -2771,6 +2791,9 @@ static void pcache_exec_force_interp(void) {
 static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
                                uint64_t jump) {
     if (!g_pcache) return;
+    g_x64_pc_observe_library_ns = 0;
+    g_x64_pc_observe_library_bytes = 0;
+    g_x64_pc_observe_library_files = 0;
     g_pc_binid = pcache_make_id(program, interpreter, argv0);
     g_pc_entry = jump;
     g_x64_pc_forked = 0;
@@ -2910,6 +2933,8 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
             if (!x64_pc_inside(lo, hi, base, len) || x64_pc_get64(record + 24) == UINT64_MAX) continue;
             uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
             map_put(x64_pc_get64(record), lo, hi, g_cache + host, g_cache + body);
+            struct interp_block *block = (struct interp_block *)(g_cache + body);
+            translit_perf_map_publish(block, g_cache + host, block->host_len, block->profile_insns);
             memset(record + 24, 0xff, 8);
             g_x64_pc_activated_maps++;
         }

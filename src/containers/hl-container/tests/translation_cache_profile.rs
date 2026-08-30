@@ -247,6 +247,10 @@ int main(void) {
     let config = config.translation_cache_observability(
         std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1"),
     );
+    let config = match std::env::var_os("HL_PCACHE_PROFILE_SYMBOLS") {
+        Some(directory) => config.translation_symbols(directory),
+        None => config,
+    };
     let containers = Containers::builder(config).images(images.clone()).build().await?;
     if mode == Mode::RelocationMissing {
         require(

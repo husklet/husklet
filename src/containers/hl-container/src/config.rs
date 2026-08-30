@@ -112,6 +112,7 @@ pub struct Config {
     pub(crate) persistence: Persistence,
     pub(crate) translation_cache: Option<TranslationCache>,
     pub(crate) translation_cache_observability: bool,
+    pub(crate) translation_symbols: Option<TranslationCache>,
 }
 
 impl Config {
@@ -122,6 +123,7 @@ impl Config {
             persistence: Persistence::File,
             translation_cache: None,
             translation_cache_observability: false,
+            translation_symbols: None,
         }
     }
 
@@ -142,6 +144,13 @@ impl Config {
     #[must_use]
     pub fn translation_cache_observability(mut self, enabled: bool) -> Self {
         self.translation_cache_observability = enabled;
+        self
+    }
+
+    /// Selects a fresh directory for production translation symbols.
+    #[must_use]
+    pub fn translation_symbols(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.translation_symbols = Some(TranslationCache::new(directory.into()));
         self
     }
 

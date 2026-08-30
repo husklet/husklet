@@ -185,7 +185,13 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     // the same g_pcache the consumer keys on, so a cache-on run is byte-identical and a cache-off run
     // stops producing a value no one will read. An empty digest is exactly what hl_identity_digest_empty
     // already denotes.
+    uint64_t identity_started = g_coldprof && g_pcache ? coldprof_now_ns(effective_host_services()) : 0;
     out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size) : (hl_identity_digest){0};
+    if (g_coldprof && g_pcache) {
+        g_pcache_identity_ns += coldprof_now_ns(effective_host_services()) - identity_started;
+        g_pcache_identity_bytes += image.size;
+        g_pcache_identity_files++;
+    }
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);

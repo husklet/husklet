@@ -299,6 +299,7 @@ mod tests {
             filesystem_generation: "/generation".into(),
             translation_cache: None,
             translation_cache_observability: false,
+            translation_symbols: None,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             execution: crate::Execution::default(),
