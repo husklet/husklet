@@ -521,6 +521,7 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
 static int translit_fs_partial_spill_signal_test(void);
+static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
@@ -1154,6 +1155,10 @@ static int translit_classify(const struct insn *insn) {
         if (insn->rip_rel && insn->reg == 4) return TL_JMP_RIP;
     }
     return TL_NO;
+}
+
+static int translit_fs_load_bridge_candidate(const struct insn *insn) {
+    return translit_classify(insn) == TL_FS_MEM && insn->op == 0x8B && insn->reg != HL_X64_RSP;
 }
 
 static unsigned translit_unsupported_width(const struct insn *insn) {
@@ -2726,6 +2731,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
             {"HL_TRANSLIT_RIPREL_READONLY", 0, 8},
+            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 0, 9},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();
@@ -2841,6 +2847,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 251;
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
+    if (scenario >= 175 && scenario <= 179) return translit_fs_load_bridge_fixture_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -3988,6 +3995,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
 #endif
     int fs_run = first_kind == TL_FS_MEM;
+    int fs_load_bridged = 0;
     int mixed_sse_enabled = !hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0);
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
     // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
@@ -4095,9 +4103,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
             break;
         }
-        // FS is still an isolated one-instruction transaction.  Only the normal/SSE ownership-ledger
-        // boundary is removable in phase one.
-        if ((fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) {
+        int fs_load_bridge = !fs_run && kind == TL_FS_MEM && context->fs_load_bridge_enabled &&
+                             !fs_load_bridged && !direct_data_authority &&
+                             translit_fs_load_bridge_candidate(&insn);
+        if (fs_load_bridged && kind == TL_SSE2) break;
+        if (((fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) && !fs_load_bridge) {
 #if defined(HL_NATIVE_TEST_HOOKS)
             if (fs_run)
                 fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;
@@ -4240,6 +4250,35 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
 
         if (kind == TL_FS_MEM) {
+            if (fs_load_bridge) {
+                int destination = insn.reg;
+                uint32_t preserve = translit_preserve_mask(destination);
+                hl_x64_store_gs(a, destination, R_OFF(destination));
+                uint8_t *save_end = a->cursor;
+                hl_x64_load_gs(a, destination, OFF_FS);
+                hl_x64_reg_mem_disp32(a, 0x8B, destination, destination, (int32_t)insn.disp);
+                uint8_t *op_end = a->cursor;
+                if (a->overflow) {
+                    a->cursor = instruction_start;
+                    break;
+                }
+                owner_normal_pending = 0;
+                if (!translit_owner_append(owners, &owner_count, instruction_start, save_end, pc, 0) ||
+                    !translit_owner_append(owners, &owner_count, save_end, op_end, pc, preserve) ||
+                    !translit_owner_append(instruction_ranges, &instruction_range_count,
+                                           instruction_start, save_end, pc, 0) ||
+                    !translit_owner_append(instruction_ranges, &instruction_range_count,
+                                           save_end, op_end, pc, preserve)) {
+                    a->overflow = 1;
+                    a->cursor = instruction_start;
+                    break;
+                }
+                pc = next;
+                count++;
+                previous_kind = kind;
+                fs_load_bridged = 1;
+                continue;
+            }
             int scratch = insn.reg == HL_X64_R11 ? 10 : HL_X64_R11;
             uint32_t preserve = translit_preserve_mask(scratch);
             hl_x64_store_gs(a, scratch, R_OFF(scratch));
@@ -7237,6 +7276,66 @@ static int translit_fs_partial_spill_signal_test(void) {
     munmap(guest, 4096);
     munmap(arena, arena_size);
     return exact ? 0 : 254;
+}
+
+static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
+    const int destinations[] = {HL_X64_RAX, 8, 12, 13, HL_X64_RSP};
+    int destination = destinations[scenario - 175];
+    uint8_t *arena = mmap(NULL, 8192, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, 8192);
+        if (guest != MAP_FAILED) munmap(guest, 4096);
+        return 255;
+    }
+    size_t cursor = 0;
+    guest[cursor++] = 0x90;
+    guest[cursor++] = 0x64;
+    guest[cursor++] = (uint8_t)(0x48 | (destination >= 8 ? 4 : 0));
+    guest[cursor++] = 0x8B;
+    guest[cursor++] = (uint8_t)(((destination & 7) << 3) | 4);
+    guest[cursor++] = 0x25;
+    memset(guest + cursor, 0, 4); cursor += 4;
+    guest[cursor++] = 0x90;
+    guest[cursor++] = 0x0F; guest[cursor++] = 0x0B;
+
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen, saved_lo = g_nonpie_lo;
+    uint64_t saved_hi = g_nonpie_hi, saved_bias = g_nonpie_bias;
+    g_cache = arena; g_cp = arena + sizeof(struct interp_block); g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - scenario; g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    map_clear();
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = 4096;
+    (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *block = (struct interp_block *)arena;
+    uint64_t source = (uint64_t)(uintptr_t)guest;
+    void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+    block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+    uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
+    struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
+    hl_backend_tree_begin(1, effective_host_services());
+    if (body != NULL) run_block(context, &cpu, block);
+    int exact = body != NULL;
+    if (destination == HL_X64_RSP) {
+        exact = exact && block->profile_insns == 1 && cpu.rip == source + 1;
+    } else {
+        exact = exact && block->profile_insns == 3 && cpu.r[destination] == first && cpu.rip == source + 11;
+        memset(&cpu, 0, sizeof cpu); cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&second;
+        run_block(context, &cpu, block);
+        exact = exact && cpu.r[destination] == second && cpu.rip == source + 11;
+    }
+    translit_fall_fixture_bytes = NULL;
+    hl_x86_hot_context_destroy(context); (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
+    map_clear(); g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
+    munmap(guest, 4096); munmap(arena, 8192);
+    return exact ? 0 : 256;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

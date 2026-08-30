@@ -59,6 +59,7 @@ typedef struct {
     /* Launch options are immutable in production. Snapshot this admission once per execution context
        so an option-disabled block build does not perform a name lookup at every RIP-relative site. */
     uint8_t riprel_readonly_enabled;
+    uint8_t fs_load_bridge_enabled;
 } hl_x86_hot_context;
 
 hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque,

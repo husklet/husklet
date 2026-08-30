@@ -175,6 +175,9 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_TRANSLIT_RIPREL_READONLY",
                      "lower selected read-only RIP-relative byte operations in the same-ISA backend",
                      HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_TRANSLIT_FS_LOAD_BRIDGE",
+                     "bridge selected read-only FS loads in the same-ISA backend",
+                     HL_OPTION_FLAG),
     HL_DEBUG_OPTION("HL_LOG", "debug-build logging tag selector", HL_OPTION_TEXT),
     HL_DEBUG_OPTION("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", HL_OPTION_FLAG),
 };
