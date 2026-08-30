@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../../../persist.h"
 
 #define X64_PC_MAGIC UINT64_C(0x3143535034364c48)
 #define X64_PC_VERSION UINT64_C(9)
@@ -60,5 +61,10 @@ typedef int (*x64_pc_external_authority)(void *context, uint32_t kind);
 int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
                                           x64_pc_external_authority external, void *context,
                                           unsigned *stage);
+int x64_pc_artifact_name(const hl_host_services *services, const char *directory,
+                         const uint8_t identity[32], char *name, size_t size);
+int x64_pc_artifact_load(const char *name, uint64_t limit, void **data, size_t *size);
+int x64_pc_artifact_store(const char *name, const void *data, size_t size);
+void x64_pc_artifact_close(void);
 
 #endif

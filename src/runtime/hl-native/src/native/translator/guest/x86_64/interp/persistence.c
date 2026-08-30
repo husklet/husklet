@@ -2,7 +2,11 @@
 #include "../../../digest.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+
+static hl_persist_directory x64_pc_directory;
+static char x64_pc_directory_path[1024];
 
 void x64_pc_put16(uint8_t **cursor, uint16_t value) {
     (*cursor)[0] = (uint8_t)value;
@@ -317,4 +321,42 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
         valid = authority;
     }
     return valid;
+}
+
+int x64_pc_artifact_name(const hl_host_services *services, const char *directory,
+                         const uint8_t identity[32], char *name, size_t size) {
+    if (directory == NULL || directory[0] == 0 || name == NULL || size < 76) return 0;
+    if (x64_pc_directory.handle != HL_HOST_HANDLE_INVALID &&
+        strcmp(x64_pc_directory_path, directory) != 0) {
+        (void)hl_persist_directory_close(&x64_pc_directory);
+        x64_pc_directory_path[0] = 0;
+    }
+    if (x64_pc_directory.handle == HL_HOST_HANDLE_INVALID &&
+        !hl_persist_directory_open(&x64_pc_directory, services, directory, 1))
+        return 0;
+    if (!x64_pc_directory_path[0]) {
+        int copied = snprintf(x64_pc_directory_path, sizeof x64_pc_directory_path, "%s", directory);
+        if (copied <= 0 || (size_t)copied >= sizeof x64_pc_directory_path) return 0;
+    }
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < 32; i++) {
+        name[i * 2] = hex[identity[i] >> 4];
+        name[i * 2 + 1] = hex[identity[i] & 15];
+    }
+    memcpy(name + 64, ".x64pcache", 11);
+    return 1;
+}
+
+int x64_pc_artifact_load(const char *name, uint64_t limit, void **data, size_t *size) {
+    return hl_persist_load_at(&x64_pc_directory, name, limit, data, size);
+}
+
+int x64_pc_artifact_store(const char *name, const void *data, size_t size) {
+    return hl_persist_store_at(&x64_pc_directory, name, data, size);
+}
+
+void x64_pc_artifact_close(void) {
+    if (x64_pc_directory.handle != HL_HOST_HANDLE_INVALID)
+        (void)hl_persist_directory_close(&x64_pc_directory);
+    x64_pc_directory_path[0] = 0;
 }

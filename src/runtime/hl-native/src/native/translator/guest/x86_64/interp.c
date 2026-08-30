@@ -1974,8 +1974,6 @@ static int x64_pc_helper_reloc_compare(const void *left, const void *right) {
     return a->offset < b->offset ? -1 : a->offset != b->offset;
 }
 
-static hl_persist_directory g_x64_pc_directory;
-static char g_x64_pc_directory_path[1024];
 static int g_x64_pc_forked;
 static uint64_t g_x64_pc_restored_maps;
 static uint64_t g_x64_pc_restored_live;
@@ -2114,10 +2112,10 @@ static struct interp_block *x64_pc_restored_copy(uint32_t ordinal) {
             int relocated_length = snprintf(relocated_receipt, sizeof relocated_receipt,
                                             "%s.slice-relocated-%lld-%u", path, (long long)getpid(), ordinal);
             if (original_length > 0 && (size_t)original_length < sizeof original_receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, original_receipt,
+                (void)x64_pc_artifact_store(original_receipt,
                                           g_x64_pc_snapshot_arena + source, length);
             if (relocated_length > 0 && (size_t)relocated_length < sizeof relocated_receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, relocated_receipt, destination, length);
+                (void)x64_pc_artifact_store(relocated_receipt, destination, length);
         }
     }
 #endif
@@ -2163,7 +2161,7 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
             int length = snprintf(receipt, sizeof receipt, "%s.activation-paused-%lld", path, (long long)getpid());
             static const unsigned paused = 1;
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &paused, sizeof paused);
+                (void)x64_pc_artifact_store(receipt, &paused, sizeof paused);
         }
         for (unsigned spin = 0; spin < 1000000; spin++) sched_yield();
     }
@@ -2243,7 +2241,7 @@ static void x64_pc_thread_start_abandon(void) {
         int length = snprintf(receipt, sizeof receipt, "%s.thread-start-state-%lld", cache_path,
                               (long long)getpid());
         if (length > 0 && (size_t)length < sizeof receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+            (void)x64_pc_artifact_store(receipt, state, sizeof state);
     }
 #endif
     if (g_x64_pc_control_loaded_empty)
@@ -2279,7 +2277,7 @@ static void x64_pc_stage_receipt(const char *stage) {
         int length = snprintf(receipt, sizeof receipt, "%s.stage-%s-rollback-%lld", cache_path, stage,
                               (long long)getpid());
         if (length > 0 && (size_t)length < sizeof receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, receipt, rolled_back, sizeof rolled_back);
+            (void)x64_pc_artifact_store(receipt, rolled_back, sizeof rolled_back);
     }
 #else
     (void)stage;
@@ -2384,27 +2382,8 @@ static uint64_t x64_pc_offset(const void *pointer, uint64_t used) {
 }
 
 static int x64_pc_file(char *path, size_t size) {
-    const char *directory = hl_option_get("HL_PCACHE_DIR");
-    if (directory == NULL || directory[0] == 0) return 0;
-    if (g_x64_pc_directory.handle != HL_HOST_HANDLE_INVALID && strcmp(g_x64_pc_directory_path, directory) != 0) {
-        (void)hl_persist_directory_close(&g_x64_pc_directory);
-        g_x64_pc_directory_path[0] = 0;
-    }
-    if (g_x64_pc_directory.handle == HL_HOST_HANDLE_INVALID &&
-        !hl_persist_directory_open(&g_x64_pc_directory, &g_jit_services, directory, 1))
-        return 0;
-    if (!g_x64_pc_directory_path[0]) {
-        int copied = snprintf(g_x64_pc_directory_path, sizeof g_x64_pc_directory_path, "%s", directory);
-        if (copied <= 0 || (size_t)copied >= sizeof g_x64_pc_directory_path) return 0;
-    }
-    if (size < 76) return 0;
-    static const char hex[] = "0123456789abcdef";
-    for (size_t i = 0; i < sizeof g_pc_binid.bytes; i++) {
-        path[i * 2] = hex[g_pc_binid.bytes[i] >> 4];
-        path[i * 2 + 1] = hex[g_pc_binid.bytes[i] & 15];
-    }
-    memcpy(path + 64, ".x64pcache", 11);
-    return 1;
+    return x64_pc_artifact_name(&g_jit_services, hl_option_get("HL_PCACHE_DIR"),
+                                g_pc_binid.bytes, path, size);
 }
 
 static int pcache_load(uint64_t entry_jump) {
@@ -2429,7 +2408,7 @@ static int pcache_load(uint64_t entry_jump) {
     uint64_t call_state[4] = {entry_jump, g_cache_gen, load_generation,
                               load_control != NULL && strcmp(load_control, "preload-return") == 0};
     if (call_length > 0 && (size_t)call_length < sizeof call_receipt)
-        (void)hl_persist_store_at(&g_x64_pc_directory, call_receipt, call_state, sizeof call_state);
+        (void)x64_pc_artifact_store(call_receipt, call_state, sizeof call_state);
 #endif
     if (load_control != NULL && strcmp(load_control, "preload-return") == 0) {
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -2438,7 +2417,7 @@ static int pcache_load(uint64_t entry_jump) {
                                       (long long)getpid());
         static const uint32_t reached = 1;
         if (preload_length > 0 && (size_t)preload_length < sizeof preload_receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, preload_receipt, &reached, sizeof reached);
+            (void)x64_pc_artifact_store(preload_receipt, &reached, sizeof reached);
 #endif
         return 0;
     }
@@ -2448,7 +2427,7 @@ static int pcache_load(uint64_t entry_jump) {
         free(allocation);
         return 0;
     }
-    if (!hl_persist_load_at(&g_x64_pc_directory, path, CACHE_SZ + UINT64_C(134217728), &allocation, &size))
+    if (!x64_pc_artifact_load(path, CACHE_SZ + UINT64_C(134217728), &allocation, &size))
         return 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     char open_receipt[1024];
@@ -2456,7 +2435,7 @@ static int pcache_load(uint64_t entry_jump) {
                                (long long)getpid(), (unsigned long long)load_generation);
     uint64_t open_state[2] = {size, entry_jump};
     if (open_length > 0 && (size_t)open_length < sizeof open_receipt)
-        (void)hl_persist_store_at(&g_x64_pc_directory, open_receipt, open_state, sizeof open_state);
+        (void)x64_pc_artifact_store(open_receipt, open_state, sizeof open_state);
 #endif
     if (g_coldprof) g_x64_pc_observe_read_ns = coldprof_now_ns(effective_host_services()) - observe_started;
     g_x64_pc_observe_outcome = 3;
@@ -2473,7 +2452,7 @@ static int pcache_load(uint64_t entry_jump) {
         int header_length = snprintf(header_receipt, sizeof header_receipt, "%s.header-invalid-%lld", path,
                                      (long long)getpid());
         if (header_length > 0 && (size_t)header_length < sizeof header_receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, header_receipt, header_state, sizeof header_state);
+            (void)x64_pc_artifact_store(header_receipt, header_state, sizeof header_state);
     }
 #endif
     if (valid) {
@@ -2487,7 +2466,7 @@ static int pcache_load(uint64_t entry_jump) {
             int structural_length = snprintf(structural_receipt, sizeof structural_receipt,
                                              "%s.structural-invalid-%lld", path, (long long)getpid());
             if (structural_length > 0 && (size_t)structural_length < sizeof structural_receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, structural_receipt, structural_state,
+                (void)x64_pc_artifact_store(structural_receipt, structural_state,
                                           sizeof structural_state);
         }
 #endif
@@ -2519,7 +2498,7 @@ static int pcache_load(uint64_t entry_jump) {
     int receipt_length = snprintf(receipt, sizeof receipt, "%s.%s", path,
                                   validation == 1 ? "valid" : validation == 3 ? "checksum-invalid" : "length-invalid");
     if (receipt_length > 0 && (size_t)receipt_length < sizeof receipt)
-        (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &validation, sizeof validation);
+        (void)x64_pc_artifact_store(receipt, &validation, sizeof validation);
 #endif
     if (g_coldprof) g_x64_pc_observe_validation_ns = coldprof_now_ns(effective_host_services()) - observe_started;
     if (!valid) {
@@ -2565,7 +2544,7 @@ static int pcache_load(uint64_t entry_jump) {
             int length = snprintf(receipt, sizeof receipt, "%s.preferred-collision-%lld", path,
                                   (long long)getpid());
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+                (void)x64_pc_artifact_store(receipt, state, sizeof state);
             (void)munmap(g_preferred_collision_sentinel, CACHE_SZ);
             g_preferred_collision_sentinel = NULL;
         }
@@ -2678,7 +2657,7 @@ static int pcache_load(uint64_t entry_jump) {
                                   (long long)getpid());
             uint64_t state[5] = {g_x64_pc_chain_count, selected, before, after, fallback};
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+                (void)x64_pc_artifact_store(receipt, state, sizeof state);
         }
         if (selected == UINT64_MAX || after != fallback) {
             x64_pc_pristine_rewind(); free(allocation); return 0;
@@ -2703,7 +2682,7 @@ static int pcache_load(uint64_t entry_jump) {
                                 (long long)getpid());
     uint64_t fixed_state[5] = {(uint64_t)(uintptr_t)g_cache, (uint64_t)(uintptr_t)J_RX(g_cache), arena, maps, relocs};
     if (fixed_length > 0 && (size_t)fixed_length < sizeof fixed_receipt)
-        (void)hl_persist_store_at(&g_x64_pc_directory, fixed_receipt, fixed_state, sizeof fixed_state);
+        (void)x64_pc_artifact_store(fixed_receipt, fixed_state, sizeof fixed_state);
 #endif
     free(allocation);
     return 1;
@@ -2994,7 +2973,7 @@ static int pcache_load(uint64_t entry_jump) {
     uint64_t activation_state[5] = {g_x64_pc_activation_limit, g_x64_pc_activated_maps,
                                     g_x64_pc_restored_live, activation_only, activation_predecessor};
     if (activation_length > 0 && (size_t)activation_length < sizeof activation_receipt)
-        (void)hl_persist_store_at(&g_x64_pc_directory, activation_receipt, activation_state,
+        (void)x64_pc_artifact_store(activation_receipt, activation_state,
                                   sizeof activation_state);
 #endif
     if (rebuild_helpers) {
@@ -3027,7 +3006,7 @@ static int pcache_load(uint64_t entry_jump) {
         char hit_receipt[1024];
         int hit_length = snprintf(hit_receipt, sizeof hit_receipt, "%s.hit-%lld", path, (long long)getpid());
         if (hit_length > 0 && (size_t)hit_length < sizeof hit_receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, hit_receipt, &hit, sizeof hit);
+            (void)x64_pc_artifact_store(hit_receipt, &hit, sizeof hit);
     }
 #endif
     return 1;
@@ -3075,7 +3054,7 @@ static void pcache_save(void) {
                     int length = snprintf(receipt, sizeof receipt, "%s.execution-census-%lld", base,
                                           (long long)getpid());
                     if (length > 0 && (size_t)length < sizeof receipt)
-                        (void)hl_persist_store_at(&g_x64_pc_directory, receipt, receipt_bytes, bytes);
+                        (void)x64_pc_artifact_store(receipt, receipt_bytes, bytes);
                 }
                 free(receipt_bytes);
             }
@@ -3090,14 +3069,14 @@ static void pcache_save(void) {
         if (x64_pc_file(base, sizeof base)) {
             int length = snprintf(receipt, sizeof receipt, "%s.warm-stats-%lld", base, (long long)getpid());
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, stats, sizeof stats);
+                (void)x64_pc_artifact_store(receipt, stats, sizeof stats);
             if (hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST") != NULL && g_cache_gen != 1) {
                 length = snprintf(receipt, sizeof receipt, "%s.rollover-preserved-%lld", base,
                                   (long long)getpid());
                 uint64_t state[3] = {g_cache_gen, (uint64_t)(uintptr_t)g_cache,
                                      (uint64_t)(uintptr_t)J_RX(g_cache)};
                 if (length > 0 && (size_t)length < sizeof receipt)
-                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+                    (void)x64_pc_artifact_store(receipt, state, sizeof state);
             }
         }
         return;
@@ -3125,7 +3104,7 @@ static void pcache_save(void) {
                 uint64_t state[3] = {g_cache_gen, (uint64_t)(uintptr_t)g_cache,
                                      (uint64_t)(uintptr_t)J_RX(g_cache)};
                 if (length > 0 && (size_t)length < sizeof receipt)
-                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+                    (void)x64_pc_artifact_store(receipt, state, sizeof state);
             }
         }
 #endif
@@ -3138,7 +3117,7 @@ static void pcache_save(void) {
             int length = snprintf(receipt, sizeof receipt, "%s.fork-refused-%lld", base, (long long)getpid());
             static const unsigned refused = 1;
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &refused, sizeof refused);
+                (void)x64_pc_artifact_store(receipt, &refused, sizeof refused);
         }
         return;
     }
@@ -3182,7 +3161,7 @@ static void pcache_save(void) {
             int length = snprintf(receipt, sizeof receipt, "%s.relocation-refused-%lld", base, (long long)getpid());
             static const unsigned refused = 1;
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &refused, sizeof refused);
+                (void)x64_pc_artifact_store(receipt, &refused, sizeof refused);
         }
 #endif
         return;
@@ -3240,7 +3219,7 @@ static void pcache_save(void) {
                                           "%s.chain-filter-stats-%lld", chain_stats_path, (long long)getpid());
         uint64_t chain_stats[2] = {live_chains, (uint64_t)translit_chain_site_overflow};
         if (chain_stats_length > 0 && (size_t)chain_stats_length < sizeof chain_stats_receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, chain_stats_receipt, chain_stats, sizeof chain_stats);
+            (void)x64_pc_artifact_store(chain_stats_receipt, chain_stats, sizeof chain_stats);
     }
 #endif
     if (translit_chain_site_overflow) {
@@ -3362,7 +3341,7 @@ static void pcache_save(void) {
                 uint64_t invalid[7] = {i, chain.site_offset, chain.fallback_offset, chain_map_at,
                                        chain.source, chain.target, map_count};
                 if (invalid_length > 0 && (size_t)invalid_length < sizeof invalid_receipt)
-                    (void)hl_persist_store_at(&g_x64_pc_directory, invalid_receipt, invalid, sizeof invalid);
+                    (void)x64_pc_artifact_store(invalid_receipt, invalid, sizeof invalid);
             }
 #endif
             continue;
@@ -3469,13 +3448,13 @@ static void pcache_save(void) {
     uint64_t observe_save_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     char path[1024];
     if (x64_pc_file(path, sizeof path)) {
-        int stored = hl_persist_store_at(&g_x64_pc_directory, path, buffer, total);
+        int stored = x64_pc_artifact_store(path, buffer, total);
 #if defined(HL_NATIVE_TEST_HOOKS)
         if (stored) {
             char receipt[1024];
             int length = snprintf(receipt, sizeof receipt, "%s.published-%lld", path, (long long)getpid());
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &stored, sizeof stored);
+                (void)x64_pc_artifact_store(receipt, &stored, sizeof stored);
             const char *fresh = hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST");
             if (fresh != NULL && fresh[0] != '0' && fresh[0] != 0 &&
                 translit_test_external_absolute_nonempty_resets != 0 &&
@@ -3484,7 +3463,7 @@ static void pcache_save(void) {
                 length = snprintf(receipt, sizeof receipt, "%s.relocation-rollover-exact-%lld", path,
                                   (long long)getpid());
                 if (length > 0 && (size_t)length < sizeof receipt)
-                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt,
+                    (void)x64_pc_artifact_store(receipt,
                                               &translit_external_absolute_count,
                                               sizeof translit_external_absolute_count);
             }
@@ -3552,11 +3531,7 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
 #define PCACHE_FORK_HOOK x64_pc_after_fork()
 #define PCACHE_EXEC_HOOKS 1
 
-static void pcache_directory_close(void) {
-    if (g_x64_pc_directory.handle != HL_HOST_HANDLE_INVALID)
-        (void)hl_persist_directory_close(&g_x64_pc_directory);
-    g_x64_pc_directory_path[0] = 0;
-}
+static void pcache_directory_close(void) { x64_pc_artifact_close(); }
 
 static void pcache_note_fixed_img(uint64_t base, uint64_t span) {
     if (!g_pcache) return;
@@ -3596,7 +3571,7 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
             int length = snprintf(receipt, sizeof receipt, "%s.thread-map-state-%lld", cache_path,
                                   (long long)getpid());
             if (length > 0 && (size_t)length < sizeof receipt)
-                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+                (void)x64_pc_artifact_store(receipt, state, sizeof state);
         }
     }
 #endif
@@ -3648,7 +3623,7 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
                 int length = snprintf(receipt, sizeof receipt, "%s.library-mismatch-%lld", cache_path,
                                       (long long)getpid());
                 if (length > 0 && (size_t)length < sizeof receipt)
-                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &mismatch, sizeof mismatch);
+                    (void)x64_pc_artifact_store(receipt, &mismatch, sizeof mismatch);
             }
 #endif
             return;
@@ -3675,7 +3650,7 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
         int length = snprintf(receipt, sizeof receipt, "%s.library-absent-%lld", cache_path,
                               (long long)getpid());
         if (length > 0 && (size_t)length < sizeof receipt)
-            (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &absent, sizeof absent);
+            (void)x64_pc_artifact_store(receipt, &absent, sizeof absent);
     }
 #endif
 }
