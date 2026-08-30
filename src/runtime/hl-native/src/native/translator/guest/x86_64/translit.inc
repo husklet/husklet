@@ -2847,7 +2847,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 251;
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
-    if (scenario >= 175 && scenario <= 179) return translit_fs_load_bridge_fixture_test(scenario);
+    if (scenario >= 175 && scenario <= 180) return translit_fs_load_bridge_fixture_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -7280,7 +7280,7 @@ static int translit_fs_partial_spill_signal_test(void) {
 
 static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     const int destinations[] = {HL_X64_RAX, 8, 12, 13, HL_X64_RSP};
-    int destination = destinations[scenario - 175];
+    int destination = scenario == 180 ? HL_X64_RAX : destinations[scenario - 175];
     uint8_t *arena = mmap(NULL, 8192, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uint8_t *guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
@@ -7312,6 +7312,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = 4096;
     (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
+    if (scenario == 180) (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", "1", 1);
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     struct interp_block *block = (struct interp_block *)arena;
     uint64_t source = (uint64_t)(uintptr_t)guest;
@@ -7320,8 +7321,9 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
     struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
     uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
-    int signal_exact = destination == HL_X64_RSP;
-    if (entry != NULL && destination != HL_X64_RSP) {
+    int rejected = destination == HL_X64_RSP || scenario == 180;
+    int signal_exact = rejected;
+    if (entry != NULL && !rejected) {
         const uint64_t canonical = UINT64_C(0x0102030405060708);
         const uint64_t native_value = UINT64_C(0xa1a2a3a4a5a6a7a8);
         size_t op_end_offset = 1 + 9 + 9 + ((destination & 7) == 4 ? 8 : 7);
@@ -7347,7 +7349,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     hl_backend_tree_begin(1, effective_host_services());
     if (body != NULL) run_block(context, &cpu, block);
     int exact = body != NULL && signal_exact;
-    if (destination == HL_X64_RSP) {
+    if (rejected) {
         exact = exact && block->profile_insns == 1 && cpu.rip == source + 1;
     } else {
         exact = exact && block->profile_insns == 3 && cpu.r[destination] == first && cpu.rip == source + 11;
@@ -7357,6 +7359,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     }
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context); (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
+    (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
     map_clear(); g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx;
     g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
     munmap(guest, 4096); munmap(arena, 8192);

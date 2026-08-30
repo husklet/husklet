@@ -60,7 +60,7 @@ fn standalone_fs_partial_spill_uses_native_scratch_state() {
 #[test]
 fn fs_load_bridge_handles_destination_encoding_and_context_reuse() {
     let _guard = native_globals();
-    for scenario in 175..=179 {
+    for scenario in 175..=180 {
         assert_eq!(hl_native::x86_64_translit_displaced_test(scenario), 0, "scenario {scenario}");
     }
 }
