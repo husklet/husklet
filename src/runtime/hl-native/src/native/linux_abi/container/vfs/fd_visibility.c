@@ -75,6 +75,8 @@ static unsigned fdvis_index_start(uint64_t key);
 static struct fdvis_index_slot *fdvis_index_find(uint64_t key, int insert, unsigned *probes);
 static void fdvis_index_remove_locked(const struct fdvis_slot *slot);
 static void fdvis_slot_clear_locked(struct fdvis_slot *slot);
+static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint64_t object);
+static void proc_fdvis_close(int guest_fd);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int fdvis_after_fork_rollback_test(void);
 static int fdvis_stalled_parent_test(void);
@@ -280,19 +282,36 @@ static int fdvis_reservation_sweep_test(uint32_t scenario) {
 static int fdvis_index_contract_test(void) {
     struct fdvis_slot *slots = calloc(FDVIS_N, sizeof *slots);
     struct fdvis_index_slot *index = calloc(FDVIS_INDEX_N, sizeof *index);
+    struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdvis_control *control = calloc(1, sizeof *control);
-    if (!slots || !index || !control) {
+    if (!slots || !index || !paths || !control) {
         free(slots);
         free(index);
+        free(paths);
         free(control);
         return 0;
     }
     struct fdvis_slot *saved_slots = g_fdvis;
     struct fdvis_index_slot *saved_index = g_fdvis_index;
+    struct fdpath_slot *saved_paths = g_fdpaths;
     struct fdvis_control *saved_control = g_fdvis_control;
     g_fdvis = slots;
     g_fdvis_index = index;
+    g_fdpaths = paths;
     g_fdvis_control = control;
+
+    int self = 0;
+    uint64_t self_start = 0;
+    (void)fdvis_self(&self, &self_start);
+    const int ordinary_fd = HL_NFD - 7;
+    int ordinary_status = proc_fdvis_publish(ordinary_fd, HL_HOST_FD_FILE, 71, 72);
+    uint64_t ordinary_key = fdvis_key(self, ordinary_fd);
+    struct fdvis_index_slot *ordinary_entry = fdvis_index_find(ordinary_key, 0, NULL);
+    int ordinary_published = ordinary_status <= 0 && ordinary_entry && ordinary_entry->physical < FDVIS_N &&
+                             slots[ordinary_entry->physical].key == ordinary_key &&
+                             slots[ordinary_entry->physical].owner_start_ns == self_start;
+    proc_fdvis_close(ordinary_fd);
+    int ordinary_removed = fdvis_index_find(ordinary_key, 0, NULL) == NULL;
 
     uint64_t first = UINT64_C(0x100000001);
     uint64_t second = first + 1;
@@ -330,12 +349,14 @@ static int fdvis_index_contract_test(void) {
 
     g_fdvis = saved_slots;
     g_fdvis_index = saved_index;
+    g_fdpaths = saved_paths;
     g_fdvis_control = saved_control;
     free(slots);
     free(index);
+    free(paths);
     free(control);
-    return collision && delete_keeps_tail && reuses_tombstone && stale_rebuild && heals_publish_gap &&
-           heals_remove_gap;
+    return ordinary_published && ordinary_removed && collision && delete_keeps_tail && reuses_tombstone && stale_rebuild &&
+           heals_publish_gap && heals_remove_gap;
 }
 
 HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
