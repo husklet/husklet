@@ -2576,10 +2576,12 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
 // Natural same-ISA images keep their data at the guest address.  These two byte operations have no
 // register operand, so R11 is a bounded scratch: spill it to the canonical CPU image, materialise the
 // exact storage address, execute the original flag operation, then restore it with flag-neutral MOVs.
-// The caller publishes split provenance around op_end: a fault in the operation belongs to source,
-// while an asynchronous interruption during restoration belongs to next.
+// The caller publishes split provenance at save_end and op_end: an interruption while the GS spill is
+// incomplete takes R11 from the host context; after the spill it preserves canonical R11.  A fault in
+// the operation belongs to source, while an interruption during restoration belongs to next.
 static int translit_lower_natural_riprel_readonly(hl_x64_asm *a, const struct insn *insn,
-                                                   uint64_t storage_target, uint8_t **op_end) {
+                                                   uint64_t storage_target, uint8_t **save_end,
+                                                   uint8_t **op_end) {
     int test = !insn->two && insn->op == 0xF6 && insn->reg == 0;
     int compare = !insn->two && insn->op == 0x80 && insn->reg == 7;
     if ((!test && !compare) || !insn->has_modrm || !insn->is_mem || !insn->rip_rel ||
@@ -2590,6 +2592,7 @@ static int translit_lower_natural_riprel_readonly(hl_x64_asm *a, const struct in
         insn->has_rex)
         return 0;
     hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+    *save_end = a->cursor;
     hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
     hl_x64_u8(a, 0x41);
     hl_x64_u8(a, test ? 0xF6 : 0x80);
@@ -2786,15 +2789,17 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                 .imm_bytes = 1};
         uint8_t emitted[64] = {0};
         hl_x64_asm readonly_output = {emitted, emitted + sizeof emitted, 0};
-        uint8_t *op_end = NULL;
+        uint8_t *save_end = NULL, *op_end = NULL;
         uint64_t target = UINT64_C(0x1122334455667788);
-        if (!translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end))
+        if (!translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &save_end,
+                                                     &op_end))
             return 219;
         const uint8_t prefix[] = {0x65, 0x4C, 0x89, 0x1C, 0x25, 0x58, 0, 0,
                                   0,    0x49, 0xBB, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
                                   0x22, 0x11, 0x41};
         const uint8_t suffix[] = {0x65, 0x4C, 0x8B, 0x1C, 0x25, 0x58, 0, 0, 0};
         if (readonly_output.cursor - emitted != 32) return 220;
+        if (save_end != emitted + 9) return 249;
         if (op_end != emitted + 23) return 223;
         if (memcmp(emitted, prefix, sizeof prefix) != 0) return 224;
         if (emitted[20] != (scenario == 158 ? 0xF6 : 0x80)) return 225;
@@ -2802,8 +2807,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (emitted[22] != (scenario == 158 ? 0xA5 : 0x5A)) return 227;
         if (memcmp(emitted + 23, suffix, sizeof suffix) != 0) return 228;
 #define TL_READONLY_REJECT(field) do { \
-            readonly.field = 1; readonly_output.cursor = emitted; op_end = NULL; \
-            if (translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end)) return 221; \
+            readonly.field = 1; readonly_output.cursor = emitted; save_end = op_end = NULL; \
+            if (translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &save_end, &op_end)) return 221; \
             readonly.field = 0; \
         } while (0)
         TL_READONLY_REJECT(addr32);
@@ -2816,7 +2821,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
 #undef TL_READONLY_REJECT
         readonly.mod = 1;
         readonly_output.cursor = emitted;
-        return !translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end) ? 0 : 222;
+        return !translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &save_end,
+                                                        &op_end) ? 0 : 222;
     }
     if (scenario >= 160 && scenario <= 162) return translit_riprel_readonly_fixture_test(scenario);
     if (scenario >= 163 && scenario <= 169) return translit_riprel_readonly_rejection_test(scenario);
@@ -4120,7 +4126,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         translit_jcc_ibtc_site_ranges ibtc_site = {0};
         translit_ret_sim_ranges ret_site = {0};
         int preserve_register = -1;
-        uint8_t *riprel_readonly_op_end = NULL;
+        uint8_t *riprel_readonly_save_end = NULL, *riprel_readonly_op_end = NULL;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
         uint8_t *jmp_mem_borrow_start = NULL, *jmp_mem_rip_end = NULL, *jmp_mem_r11_end = NULL;
 
@@ -4135,6 +4141,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 int readonly_lowered = !g_nonpie_lo &&
                                        hl_option_flag_value("HL_TRANSLIT_RIPREL_READONLY", 0) &&
                                        translit_lower_natural_riprel_readonly(a, &insn, storage_target,
+                                                                              &riprel_readonly_save_end,
                                                                               &riprel_readonly_op_end);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
@@ -4172,11 +4179,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (riprel_readonly_op_end != NULL) {
                 owner_normal_pending = 0;
                 int exact = translit_owner_append(owners, &owner_count, instruction_start,
+                                                   riprel_readonly_save_end, pc, 0) &&
+                            translit_owner_append(owners, &owner_count, riprel_readonly_save_end,
                                                    riprel_readonly_op_end, pc, preserve) &&
                             translit_owner_append(owners, &owner_count, riprel_readonly_op_end,
                                                    a->cursor, next, preserve) &&
                             translit_owner_append(instruction_ranges, &instruction_range_count,
-                                                   instruction_start, riprel_readonly_op_end, pc,
+                                                   instruction_start, riprel_readonly_save_end, pc, 0) &&
+                            translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                   riprel_readonly_save_end, riprel_readonly_op_end, pc,
                                                    preserve) &&
                             translit_owner_append(instruction_ranges, &instruction_range_count,
                                                    riprel_readonly_op_end, a->cursor, next, preserve);
@@ -4899,6 +4910,19 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     int restore_exact = body != NULL &&
                         jit_instruction_guest_pc_preserve((uint64_t)(uintptr_t)(entry + 23), &restore_pc,
                                                           &restore_preserve);
+    struct cpu interrupted = {0};
+    ucontext_t native = {0};
+    greg_t *native_regs = HL_HOST_UC_GREGS(&native);
+    interrupted.r[HL_X64_R11] = UINT64_C(0x1111222233334444);
+    native_regs[HL_HOST_UC_REG_R11] = (greg_t)UINT64_C(0xaaaabbbbccccdddd);
+    native_regs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0x202);
+    HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)(entry + 1);
+    int saved_selected = translit_selected;
+    translit_selected = 1;
+    int spill_capture = body != NULL && translit_signal_capture(&interrupted, &native) &&
+                        interrupted.r[HL_X64_R11] == UINT64_C(0xaaaabbbbccccdddd) &&
+                        interrupted.rip == source;
+    translit_selected = saved_selected;
     int result = 0;
     if (body == NULL) result = 230;
     else if (block->profile_insns != 1) result = 232;
@@ -4911,6 +4935,7 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     else if (restore_pc != source + 7) result = 239;
     else if (source_preserve != (1u << HL_X64_R11)) result = 240;
     else if (restore_preserve != (1u << HL_X64_R11)) result = 241;
+    else if (!spill_capture) result = 250;
 
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
     translit_fall_fixture_bytes = NULL;
