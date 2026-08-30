@@ -358,12 +358,23 @@ static int jit_cache_init(void) {
     /* A stable first choice lets an authenticated code image retain every intra-arena displacement.
        MAP_FIXED_NOREPLACE makes occupancy a clean miss, never permission to replace another mapping. */
     const uint64_t preferred_rw = HL_JIT_PREFERRED_RW;
-    int reserve_failed = force_single
-        ? code_mapping_reserve_preferred_address(&g_code_mapping, 0, preferred_rw, preferred_rw)
-        : code_mapping_reserve_preferred_address(&g_code_mapping, 1, preferred_rw, preferred_rw + CACHE_SZ);
-    if (reserve_failed != 0)
+    int reserve_failed;
+#if defined(HL_PCACHE_IDENTITY_OBSERVE)
+    if (!g_pcache) {
         reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
                                       : code_mapping_reserve_preferred(&g_code_mapping, 1);
+    } else {
+        reserve_failed = force_single
+            ? code_mapping_reserve_preferred_address(&g_code_mapping, 0, preferred_rw, preferred_rw)
+            : code_mapping_reserve_preferred_address(&g_code_mapping, 1, preferred_rw, preferred_rw + CACHE_SZ);
+        if (reserve_failed != 0)
+            reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
+                                          : code_mapping_reserve_preferred(&g_code_mapping, 1);
+    }
+#else
+    reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
+                                  : code_mapping_reserve_preferred(&g_code_mapping, 1);
+#endif
     if (reserve_failed != 0) {
         (void)cache_oom_fail();
         return -1;
@@ -2855,12 +2866,21 @@ static int jit_flush_to_fresh(int retain_map_generations) {
     if (retain_generations && g_cache_gen >= 3) (void)map_invalidate_cache_generation(g_cache_gen - 3);
 #endif
     reclaim_retired(); // free retired caches no peer is still in -> bound VA + free space for the new alloc
-    uint64_t preferred_rw = HL_JIT_PREFERRED_RW +
-        ((g_cache_gen + 1) % HL_JIT_PREFERRED_SLOTS) * HL_JIT_PREFERRED_STRIDE;
-    int reserve_failed = code_mapping_reserve_preferred_address(
-        &mapping, g_dualmap, preferred_rw, preferred_rw + (g_dualmap ? CACHE_SZ : 0));
-    if (reserve_failed != 0 && code_mapping_reserve_preferred(&mapping, g_dualmap) != 0)
-        return cache_oom_fail();
+    int reserve_failed;
+#if defined(HL_PCACHE_IDENTITY_OBSERVE)
+    if (!g_pcache) {
+        reserve_failed = code_mapping_reserve_preferred(&mapping, g_dualmap);
+    } else {
+        uint64_t preferred_rw = HL_JIT_PREFERRED_RW +
+            ((g_cache_gen + 1) % HL_JIT_PREFERRED_SLOTS) * HL_JIT_PREFERRED_STRIDE;
+        reserve_failed = code_mapping_reserve_preferred_address(
+            &mapping, g_dualmap, preferred_rw, preferred_rw + (g_dualmap ? CACHE_SZ : 0));
+        if (reserve_failed != 0) reserve_failed = code_mapping_reserve_preferred(&mapping, g_dualmap);
+    }
+#else
+    reserve_failed = code_mapping_reserve_preferred(&mapping, g_dualmap);
+#endif
+    if (reserve_failed != 0) return cache_oom_fail();
     if (!retire_current()) {
         hl_arena_release(&g_jit_services, mapping.handle);
         return 0;
