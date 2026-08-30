@@ -6,6 +6,8 @@
 #define FDVIS_N 131072
 #endif
 #define FDPATH_N 8192
+#define FDVIS_INDEX_N 262144
+#define FDVIS_INDEX_TOMBSTONE UINT64_MAX
 
 struct fdvis_slot {
     uint64_t key; /* host pid in high 32 bits; guest fd + 1 in low 32 bits; 0 = free */
@@ -36,6 +38,17 @@ _Static_assert(offsetof(struct fdvis_slot, device) == 32, "fdvis device offset c
 _Static_assert(offsetof(struct fdvis_slot, object) == 40, "fdvis object offset changed");
 static struct fdvis_slot *g_fdvis;
 
+struct fdvis_index_slot {
+    uint64_t key;
+    uint32_t physical;
+    uint32_t reserved;
+};
+_Static_assert((FDVIS_INDEX_N & (FDVIS_INDEX_N - 1)) == 0, "fdvis index size must be a power of two");
+_Static_assert(FDVIS_INDEX_N >= 2 * FDVIS_N, "fdvis index must retain an empty slot at full physical capacity");
+_Static_assert(FDVIS_N <= UINT32_MAX, "fdvis physical index does not fit");
+_Static_assert(sizeof(struct fdvis_index_slot) == 16, "fdvis index shared layout changed");
+static struct fdvis_index_slot *g_fdvis_index;
+
 struct fdpath_slot {
     uint64_t key;
     uint64_t owner_start_ns;
@@ -47,6 +60,7 @@ static struct fdpath_slot *g_fdpaths;
 struct fdvis_control {
     _Atomic uint64_t owner;
     uint64_t generation;
+    _Atomic uint64_t index_dirty;
 };
 static struct fdvis_control *g_fdvis_control;
 static int g_fdvis_fork_parent;
@@ -55,6 +69,12 @@ static uint64_t fdvis_process_token(int pid);
 static void fdpath_sweep_stale_locked(void);
 static void fdvis_sweep_stale_locked(void);
 static int fdvis_self(int *pid, uint64_t *token);
+static struct fdvis_slot *fdvis_find(uint64_t key, uint64_t owner_start_ns, int claim);
+static int fdvis_index_rebuild_locked(void);
+static unsigned fdvis_index_start(uint64_t key);
+static struct fdvis_index_slot *fdvis_index_find(uint64_t key, int insert, unsigned *probes);
+static void fdvis_index_remove_locked(const struct fdvis_slot *slot);
+static void fdvis_slot_clear_locked(struct fdvis_slot *slot);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int fdvis_after_fork_rollback_test(void);
 static int fdvis_stalled_parent_test(void);
@@ -213,8 +233,10 @@ static int fdvis_reservation_sweep_test(uint32_t scenario) {
     }
     struct fdvis_slot *saved_slots = g_fdvis;
     struct fdpath_slot *saved_paths = g_fdpaths;
+    struct fdvis_index_slot *saved_index = g_fdvis_index;
     g_fdvis = slots;
     g_fdpaths = paths;
+    g_fdvis_index = NULL;
     slots[0].key = UINT64_MAX;
     int verdict = 0;
     if (scenario == 8) {
@@ -249,13 +271,75 @@ static int fdvis_reservation_sweep_test(uint32_t scenario) {
     }
     g_fdvis = saved_slots;
     g_fdpaths = saved_paths;
+    g_fdvis_index = saved_index;
     free(slots);
     free(paths);
     return verdict;
 }
 
+static int fdvis_index_contract_test(void) {
+    struct fdvis_slot *slots = calloc(FDVIS_N, sizeof *slots);
+    struct fdvis_index_slot *index = calloc(FDVIS_INDEX_N, sizeof *index);
+    struct fdvis_control *control = calloc(1, sizeof *control);
+    if (!slots || !index || !control) {
+        free(slots);
+        free(index);
+        free(control);
+        return 0;
+    }
+    struct fdvis_slot *saved_slots = g_fdvis;
+    struct fdvis_index_slot *saved_index = g_fdvis_index;
+    struct fdvis_control *saved_control = g_fdvis_control;
+    g_fdvis = slots;
+    g_fdvis_index = index;
+    g_fdvis_control = control;
+
+    uint64_t first = UINT64_C(0x100000001);
+    uint64_t second = first + 1;
+    while (fdvis_index_start(second) != fdvis_index_start(first)) ++second;
+    slots[17] = (struct fdvis_slot){.key = first, .owner_start_ns = 11};
+    slots[29] = (struct fdvis_slot){.key = second, .owner_start_ns = 22};
+    int rebuilt = fdvis_index_rebuild_locked();
+    struct fdvis_index_slot *first_entry = fdvis_index_find(first, 0, NULL);
+    struct fdvis_index_slot *second_entry = fdvis_index_find(second, 0, NULL);
+    unsigned miss_probes = 0;
+    uint64_t absent = second + 1;
+    while (fdvis_index_start(absent) != fdvis_index_start(first)) ++absent;
+    int collision = rebuilt && first_entry && first_entry->physical == 17 && second_entry &&
+                    second_entry->physical == 29 && fdvis_index_find(absent, 0, &miss_probes) == NULL &&
+                    miss_probes == 3;
+
+    fdvis_slot_clear_locked(&slots[17]);
+    int delete_keeps_tail = fdvis_find(second, 22, 0) == &slots[29];
+    struct fdvis_index_slot *tombstone = fdvis_index_find(first, 1, NULL);
+    int reuses_tombstone = tombstone == first_entry;
+
+    second_entry = fdvis_index_find(second, 0, NULL);
+    second_entry->physical = FDVIS_N;
+    int stale_rebuild = fdvis_find(second, 22, 0) == &slots[29] &&
+                        fdvis_index_find(second, 0, NULL)->physical == 29;
+
+    uint64_t late = absent + 1;
+    slots[41] = (struct fdvis_slot){.key = late, .owner_start_ns = 33};
+    atomic_store_explicit(&control->index_dirty, 1, memory_order_relaxed);
+    int heals_publish_gap = fdvis_find(late, 33, 0) == &slots[41];
+    fdvis_index_remove_locked(&slots[41]);
+    atomic_store_explicit(&control->index_dirty, 1, memory_order_relaxed);
+    int heals_remove_gap = fdvis_find(late, 33, 0) == &slots[41];
+
+    g_fdvis = saved_slots;
+    g_fdvis_index = saved_index;
+    g_fdvis_control = saved_control;
+    free(slots);
+    free(index);
+    free(control);
+    return collision && delete_keeps_tail && reuses_tombstone && stale_rebuild && heals_publish_gap &&
+           heals_remove_gap;
+}
+
 HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
     if (scenario == 12) return fdvis_recursive_identity_test();
+    if (scenario == 14) return fdvis_index_contract_test();
     if (scenario >= 8 && scenario <= 11) return fdvis_reservation_sweep_test(scenario);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdpath_slot *saved_paths = g_fdpaths;
@@ -448,12 +532,18 @@ static int fdvis_owner_is_gone(int pid, uint64_t owner) {
 static void fdvis_init(const hl_host_services *host) {
     void *arena = NULL;
     if (g_fdvis != NULL) return;
-    size_t bytes =
-        sizeof(struct fdvis_slot) * FDVIS_N + sizeof(struct fdpath_slot) * FDPATH_N + sizeof(*g_fdvis_control);
+    _Static_assert(sizeof(struct fdvis_slot) * FDVIS_N <= SIZE_MAX - sizeof(struct fdpath_slot) * FDPATH_N,
+                   "fdvis shared arena size overflows");
+    size_t bytes = sizeof(struct fdvis_slot) * FDVIS_N + sizeof(struct fdpath_slot) * FDPATH_N;
+    if (bytes > SIZE_MAX - sizeof(*g_fdvis_control) ||
+        bytes + sizeof(*g_fdvis_control) > SIZE_MAX - sizeof(struct fdvis_index_slot) * FDVIS_INDEX_N)
+        return;
+    bytes += sizeof(*g_fdvis_control) + sizeof(struct fdvis_index_slot) * FDVIS_INDEX_N;
     if (hl_linux_shared_create(host, bytes, &arena) != HL_STATUS_OK) return;
     g_fdvis = arena;
     g_fdpaths = (void *)((unsigned char *)arena + sizeof(struct fdvis_slot) * FDVIS_N);
     g_fdvis_control = (void *)((unsigned char *)g_fdpaths + sizeof(struct fdpath_slot) * FDPATH_N);
+    g_fdvis_index = (void *)(g_fdvis_control + 1);
     (void)atexit(proc_fdvis_cleanup);
     // Enumerate this process's open descriptors ONCE and publish the non-engine-private ones. Each
     // hl_host_process_fds() call is a full /proc/self/fd getdents scan whose kernel cost is O(highest open
@@ -481,8 +571,113 @@ static void fdvis_init(const hl_host_services *host) {
     }
 }
 
+static unsigned fdvis_index_start(uint64_t key) {
+    return (unsigned)((key ^ (key >> 32)) * UINT64_C(2654435761)) & (FDVIS_INDEX_N - 1);
+}
+
+static struct fdvis_index_slot *fdvis_index_find(uint64_t key, int insert, unsigned *probes) {
+    struct fdvis_index_slot *tombstone = NULL;
+    unsigned start = fdvis_index_start(key);
+    for (unsigned probe = 0; probe < FDVIS_INDEX_N; ++probe) {
+        struct fdvis_index_slot *entry = &g_fdvis_index[(start + probe) & (FDVIS_INDEX_N - 1)];
+        if (probes) *probes = probe + 1;
+        if (entry->key == key) return entry;
+        if (entry->key == FDVIS_INDEX_TOMBSTONE) {
+            if (insert && tombstone == NULL) tombstone = entry;
+            continue;
+        }
+        if (entry->key == 0) return insert && tombstone ? tombstone : insert ? entry : NULL;
+    }
+    return insert ? tombstone : NULL;
+}
+
+static int fdvis_index_publish_locked(struct fdvis_slot *slot) {
+    if (!g_fdvis_index || !slot || slot->key == 0 || slot->key == UINT64_MAX) return 0;
+    struct fdvis_index_slot *entry = fdvis_index_find(slot->key, 1, NULL);
+    if (!entry) return 0;
+    if (entry->key == slot->key && entry->physical != (uint32_t)(slot - g_fdvis)) return 0;
+    entry->physical = (uint32_t)(slot - g_fdvis);
+    entry->key = slot->key;
+    return 1;
+}
+
+static void fdvis_index_remove_locked(const struct fdvis_slot *slot) {
+    if (!g_fdvis_index || !slot || slot->key == 0 || slot->key == UINT64_MAX) return;
+    struct fdvis_index_slot *entry = fdvis_index_find(slot->key, 0, NULL);
+    if (entry && entry->physical == (uint32_t)(slot - g_fdvis)) {
+        entry->key = FDVIS_INDEX_TOMBSTONE;
+        entry->physical = 0;
+    }
+}
+
+static int fdvis_index_rebuild_locked(void) {
+    if (!g_fdvis_index) return 0;
+    memset(g_fdvis_index, 0, sizeof *g_fdvis_index * FDVIS_INDEX_N);
+    for (unsigned index = 0; index < FDVIS_N; ++index) {
+        uint64_t key = g_fdvis[index].key;
+        if (key == 0 || key == UINT64_MAX) continue;
+        if (!fdvis_index_publish_locked(&g_fdvis[index])) {
+            atomic_store_explicit(&g_fdvis_control->index_dirty, 1, memory_order_relaxed);
+            return 0;
+        }
+    }
+    atomic_store_explicit(&g_fdvis_control->index_dirty, 0, memory_order_release);
+    return 1;
+}
+
+static void fdvis_index_begin_locked(void) {
+    if (!g_fdvis_index) return;
+    atomic_store_explicit(&g_fdvis_control->index_dirty, 1, memory_order_release);
+}
+
+static void fdvis_index_commit_locked(int coherent) {
+    if (!g_fdvis_index) return;
+    if (coherent) atomic_store_explicit(&g_fdvis_control->index_dirty, 0, memory_order_release);
+}
+
+static void fdvis_slot_clear_locked(struct fdvis_slot *slot) {
+    fdvis_index_begin_locked();
+    fdvis_index_remove_locked(slot);
+    memset(slot, 0, sizeof *slot);
+    fdvis_index_commit_locked(1);
+}
+
 static struct fdvis_slot *fdvis_find(uint64_t key, uint64_t owner_start_ns, int claim) {
     if (!g_fdvis || key == 0) return NULL;
+    int use_index = g_fdvis_index != NULL;
+    if (use_index && atomic_load_explicit(&g_fdvis_control->index_dirty, memory_order_acquire))
+        use_index = fdvis_index_rebuild_locked();
+    if (use_index) {
+        struct fdvis_index_slot *entry = fdvis_index_find(key, 0, NULL);
+        if (entry && entry->physical >= FDVIS_N) {
+            use_index = fdvis_index_rebuild_locked();
+            entry = use_index ? fdvis_index_find(key, 0, NULL) : NULL;
+        }
+        if (entry && entry->physical < FDVIS_N) {
+            struct fdvis_slot *slot = &g_fdvis[entry->physical];
+            if (slot->key == key) {
+                if (slot->owner_start_ns == owner_start_ns) {
+                    return slot;
+                }
+                if (claim) {
+                    fdvis_index_begin_locked();
+                    fdvis_index_remove_locked(slot);
+                    memset(slot, 0, sizeof *slot);
+                    slot->key = key;
+                    slot->owner_start_ns = owner_start_ns;
+                    return slot;
+                }
+                return NULL;
+            }
+            use_index = fdvis_index_rebuild_locked();
+            entry = use_index ? fdvis_index_find(key, 0, NULL) : NULL;
+            if (entry && entry->physical < FDVIS_N && g_fdvis[entry->physical].key == key &&
+                g_fdvis[entry->physical].owner_start_ns == owner_start_ns) {
+                return &g_fdvis[entry->physical];
+            }
+        }
+        if (use_index && !claim) return NULL;
+    }
     unsigned start = (unsigned)((key ^ (key >> 32)) * UINT64_C(2654435761)) & (FDVIS_N - 1);
     for (unsigned probe = 0; probe < FDVIS_N; ++probe) {
         struct fdvis_slot *slot = &g_fdvis[(start + probe) & (FDVIS_N - 1)];
@@ -490,12 +685,14 @@ static struct fdvis_slot *fdvis_find(uint64_t key, uint64_t owner_start_ns, int 
         if (present == key) {
             if (slot->owner_start_ns == owner_start_ns) return slot;
             if (!claim) return NULL;
+            fdvis_index_begin_locked();
             memset(slot, 0, sizeof *slot);
             slot->key = key;
             slot->owner_start_ns = owner_start_ns;
             return slot;
         }
         if (claim && present == 0) {
+            fdvis_index_begin_locked();
             slot->key = key;
             slot->owner_start_ns = owner_start_ns;
             return slot;
@@ -512,14 +709,20 @@ static void fdvis_lock(void) {
     for (unsigned spin = 0;; ++spin) {
         uint64_t expected = 0;
         if (atomic_compare_exchange_weak_explicit(&g_fdvis_control->owner, &expected, mine, memory_order_acquire,
-                                                  memory_order_relaxed))
+                                                  memory_order_relaxed)) {
+            if (atomic_load_explicit(&g_fdvis_control->index_dirty, memory_order_acquire))
+                (void)fdvis_index_rebuild_locked();
             return;
+        }
         if ((spin & 1023u) == 1023u) {
             uint64_t owner = atomic_load_explicit(&g_fdvis_control->owner, memory_order_relaxed);
             if (owner != 0 && fdvis_owner_is_gone((int)(uint32_t)(owner >> 32), owner) &&
                 atomic_compare_exchange_strong_explicit(&g_fdvis_control->owner, &owner, mine, memory_order_acquire,
-                                                        memory_order_relaxed))
+                                                        memory_order_relaxed)) {
+                if (atomic_load_explicit(&g_fdvis_control->index_dirty, memory_order_acquire))
+                    (void)fdvis_index_rebuild_locked();
                 return;
+            }
             sched_yield();
         }
     }
@@ -593,7 +796,7 @@ static void fdvis_sweep_stale_locked(void) {
             memo_start = slot->owner_start_ns;
             memo_gone = gone;
         }
-        if (gone) memset(slot, 0, sizeof *slot);
+        if (gone) fdvis_slot_clear_locked(slot);
     }
     fdpath_sweep_stale_locked();
 }
@@ -687,6 +890,7 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
     } else {
         slot = reserved;
     }
+    fdvis_index_begin_locked();
     slot->device = device;
     slot->object = object;
     slot->kind = kind;
@@ -694,6 +898,7 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
     slot->owner_start_ns = owner_start;
     slot->generation = ++g_fdvis_control->generation;
     slot->key = fdvis_key(pid, guest_fd);
+    fdvis_index_commit_locked(fdvis_index_publish_locked(slot));
     fdvis_unlock();
     reservation->active = 0;
 }
@@ -720,6 +925,7 @@ static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint
     slot->kind = kind;
     int path_status = proc_fdvis_publish_path_locked(pid, owner_start, guest_fd);
     slot->generation = generation;
+    fdvis_index_commit_locked(fdvis_index_publish_locked(slot));
     fdvis_unlock();
     return path_status;
 }
@@ -813,7 +1019,7 @@ static void proc_fdvis_close(int guest_fd) {
     uint64_t owner_start = 0;
     (void)fdvis_self(&pid, &owner_start);
     struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
-    if (slot) memset(slot, 0, sizeof *slot);
+    if (slot) fdvis_slot_clear_locked(slot);
     struct fdpath_slot *path = fdpath_find(fdvis_key(pid, guest_fd), owner_start, 0);
     if (path) fdpath_delete_locked(path);
     fdvis_unlock();
@@ -922,7 +1128,7 @@ static int proc_fdvis_fork_prepare(struct fdvis_fork_plan *plan) {
         }
         /* Corpse-aware, for the reason on fdpath_sweep_stale_locked: a zombie owner still answers with
            the start time it published, so comparing tokens retained its slots until somebody reaped it. */
-        if (fdvis_owner_is_gone(owner, fdvis_identity(owner, slot->owner_start_ns))) memset(slot, 0, sizeof *slot);
+        if (fdvis_owner_is_gone(owner, fdvis_identity(owner, slot->owner_start_ns))) fdvis_slot_clear_locked(slot);
     }
     fdpath_sweep_stale_locked();
     for (unsigned index = 0; index < FDVIS_N && reserved < count; ++index) {
@@ -971,7 +1177,7 @@ static void proc_fdvis_fork_child_abort(struct fdvis_fork_plan *plan, int child)
         if (slot->key != key || (slot->owner_start_ns != 0 && slot->owner_start_ns != child_start)) continue;
         struct fdpath_slot *path = fdpath_find(key, slot->owner_start_ns, 0);
         if (path) fdpath_delete_locked(path);
-        memset(slot, 0, sizeof *slot);
+        fdvis_slot_clear_locked(slot);
     }
     fdvis_unlock();
 }
@@ -990,6 +1196,7 @@ static int proc_fdvis_fork_child_timeout(struct fdvis_fork_plan *plan, int child
         fdvis_unlock();
         return 1;
     }
+    fdvis_index_begin_locked();
     for (size_t index = 0; index < plan->count; ++index) {
         const struct fdvis_fork_entry *entry = &plan->entries[index];
         struct fdvis_slot *slot = &g_fdvis[entry->slot];
@@ -1000,6 +1207,7 @@ static int proc_fdvis_fork_child_timeout(struct fdvis_fork_plan *plan, int child
         slot->owner_start_ns = UINT64_MAX;
         slot->generation = ++g_fdvis_control->generation;
     }
+    (void)fdvis_index_rebuild_locked();
     fdvis_unlock();
     return 0;
 }
@@ -1010,7 +1218,7 @@ static void proc_fdvis_fork_parent_clear_timeout(struct fdvis_fork_plan *plan, i
         const struct fdvis_fork_entry *entry = &plan->entries[index];
         struct fdvis_slot *slot = &g_fdvis[entry->slot];
         if (slot->key == fdvis_key(child, entry->guest_fd) && slot->owner_start_ns == UINT64_MAX)
-            memset(slot, 0, sizeof *slot);
+            fdvis_slot_clear_locked(slot);
     }
     fdvis_unlock();
 }
@@ -1154,6 +1362,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
         journal[index].owner_start_ns = child_start;
         journal[index].reservation_owned = journal[index].identity->key == UINT64_MAX;
     }
+    fdvis_index_begin_locked();
     for (size_t index = 0; index < plan->count; ++index) {
         struct fdvis_fork_entry *entry = &plan->entries[index];
         struct fdvis_slot *copy = &g_fdvis[entry->slot];
@@ -1210,6 +1419,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
             g_fdvis_fork_parent_start = child_start;
         }
     }
+    (void)fdvis_index_rebuild_locked();
     fdvis_unlock();
     if (status != 0 && !in_child) proc_fdvis_fork_parent_clear_timeout(plan, child);
     free(journal);
@@ -1230,6 +1440,7 @@ static int fdvis_after_fork_rollback_test(void) {
     struct fdvis_slot *saved_identities = g_fdvis;
     struct fdpath_slot *saved_paths = g_fdpaths;
     struct fdvis_control *saved_control = g_fdvis_control;
+    struct fdvis_index_slot *saved_index = g_fdvis_index;
     int child = (int)getpid();
     uint64_t child_start = fdvis_process_token(child);
     for (unsigned index = 0; index + 1 < FDPATH_N; ++index) {
@@ -1258,6 +1469,7 @@ static int fdvis_after_fork_rollback_test(void) {
     g_fdvis = identities;
     g_fdpaths = paths;
     g_fdvis_control = control;
+    g_fdvis_index = NULL;
     int status = proc_fdvis_after_fork(&plan, child, 0);
     uint64_t first_key = fdvis_key(child, entries[0].guest_fd);
     uint64_t second_key = fdvis_key(child, entries[1].guest_fd);
@@ -1347,6 +1559,7 @@ static int fdvis_after_fork_rollback_test(void) {
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
     g_fdvis_control = saved_control;
+    g_fdvis_index = saved_index;
     free(identities);
     free(paths);
     free(control);
@@ -1374,9 +1587,11 @@ static int fdvis_stalled_parent_test(void) {
     struct fdvis_slot *saved_identities = g_fdvis;
     struct fdpath_slot *saved_paths = g_fdpaths;
     struct fdvis_control *saved_control = g_fdvis_control;
+    struct fdvis_index_slot *saved_index = g_fdvis_index;
     g_fdvis = identities;
     g_fdpaths = paths;
     g_fdvis_control = control;
+    g_fdvis_index = NULL;
     int parent = (int)getpid();
     uint64_t parent_start = fdvis_process_token(parent);
     identities[0] = (struct fdvis_slot){.key = fdvis_key(parent, 3),
@@ -1410,6 +1625,7 @@ static int fdvis_stalled_parent_test(void) {
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
     g_fdvis_control = saved_control;
+    g_fdvis_index = saved_index;
     (void)munmap(identities, sizeof *identities * FDVIS_N);
     (void)munmap(paths, sizeof *paths * FDPATH_N);
     (void)munmap(control, sizeof *control);
@@ -1530,7 +1746,7 @@ static void proc_fdvis_cleanup(void) {
     fdvis_lock();
     for (unsigned index = 0; index < FDVIS_N; ++index)
         if ((int)(uint32_t)(g_fdvis[index].key >> 32) == owner && g_fdvis[index].owner_start_ns == owner_start)
-            memset(&g_fdvis[index], 0, sizeof g_fdvis[index]);
+            fdvis_slot_clear_locked(&g_fdvis[index]);
     fdpath_cleanup_owner_locked(owner, owner_start);
     fdvis_unlock();
 }
