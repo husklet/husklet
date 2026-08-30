@@ -1957,7 +1957,26 @@ static uint64_t g_x64_pc_deferred_count;
 static int g_x64_pc_library_unsupported;
 static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
+static uint64_t g_x64_pc_observe_load_ns;
+static uint64_t g_x64_pc_observe_validation_ns;
+static unsigned g_x64_pc_observe_outcome;
 static int x64_pc_file(char *path, size_t size);
+
+static void x64_pc_observe_emit(const char *outcome, uint64_t save_ns) {
+    if (!g_coldprof) return;
+    uint64_t restored_live = g_x64_pc_restored_live + g_x64_pc_activated_maps;
+    uint64_t translated = g_live_map_count > restored_live ? g_live_map_count - restored_live : 0;
+    fprintf(stderr,
+            "[pcache-v1] outcome=%s restored=%llu live=%llu deferred=%llu new_translations=%llu "
+            "load_ns=%llu validation_ns=%llu reconstruction_ns=%llu save_ns=%llu\n",
+            outcome, (unsigned long long)g_x64_pc_restored_maps, (unsigned long long)g_live_map_count,
+            (unsigned long long)g_x64_pc_deferred_count, (unsigned long long)translated,
+            (unsigned long long)g_x64_pc_observe_load_ns,
+            (unsigned long long)g_x64_pc_observe_validation_ns,
+            (unsigned long long)(g_x64_pc_observe_load_ns > g_x64_pc_observe_validation_ns
+                                     ? g_x64_pc_observe_load_ns - g_x64_pc_observe_validation_ns : 0),
+            (unsigned long long)save_ns);
+}
 
 /* Before the first peer exists, abandon restored deferred maps and chain sites so a later library
    mapping callback cannot patch their arena-relative locations while guest threads execute. Refuse
@@ -2118,12 +2137,17 @@ static int x64_pc_file(char *path, size_t size) {
 
 static int pcache_load(uint64_t entry_jump) {
     g_pcache_loaded = 0;
+    g_x64_pc_observe_outcome = 0;
+    g_x64_pc_observe_load_ns = 0;
+    g_x64_pc_observe_validation_ns = 0;
+    uint64_t observe_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     char path[1024];
     void *allocation = NULL;
     size_t size = 0;
     if (!x64_pc_file(path, sizeof path) ||
         !hl_persist_load_at(&g_x64_pc_directory, path, CACHE_SZ + UINT64_C(134217728), &allocation, &size))
         return 0;
+    g_x64_pc_observe_outcome = 3;
     const uint8_t *bytes = allocation;
     unsigned validation = 2; /* structurally invalid/truncated */
     int valid = size >= X64_PC_HEADER_SIZE && x64_pc_get64(bytes) == X64_PC_MAGIC &&
@@ -2257,6 +2281,7 @@ static int pcache_load(uint64_t entry_jump) {
     if (receipt_length > 0 && (size_t)receipt_length < sizeof receipt)
         (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &validation, sizeof validation);
 #endif
+    if (g_coldprof) g_x64_pc_observe_validation_ns = coldprof_now_ns(effective_host_services()) - observe_started;
     if (!valid) {
         free(allocation);
         return 0;
@@ -2468,6 +2493,8 @@ static int pcache_load(uint64_t entry_jump) {
     pend_reset();
     translit_ret_ibtc_reset();
     g_pcache_loaded = 1;
+    g_x64_pc_observe_outcome = 1;
+    g_x64_pc_observe_load_ns = g_coldprof ? coldprof_now_ns(effective_host_services()) - observe_started : 0;
     g_x64_pc_restored_maps = maps;
 #if defined(HL_NATIVE_TEST_HOOKS)
     int hit = 1;
@@ -2503,7 +2530,11 @@ static void pcache_save(void) {
         return;
     }
 #else
-    if (g_pcache_loaded) return;
+    if (g_pcache_loaded) {
+        uint64_t restored_live = g_x64_pc_restored_live + g_x64_pc_activated_maps;
+        x64_pc_observe_emit(g_live_map_count > restored_live ? "PARTIAL" : "HIT", 0);
+        return;
+    }
 #endif
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_x64_pc_forked) {
@@ -2683,6 +2714,7 @@ static void pcache_save(void) {
     hl_digest_update(&digest, buffer, total);
     cursor = buffer + X64_PC_CHECKSUM_OFFSET;
     x64_pc_put64(&cursor, hl_digest_value(&digest));
+    uint64_t observe_save_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     char path[1024];
     if (x64_pc_file(path, sizeof path)) {
         int stored = hl_persist_store_at(&g_x64_pc_directory, path, buffer, total);
@@ -2708,6 +2740,8 @@ static void pcache_save(void) {
 #endif
     }
     free(buffer);
+    x64_pc_observe_emit(g_x64_pc_observe_outcome == 3 ? "REFUSED" : "MISS",
+                        g_coldprof ? coldprof_now_ns(effective_host_services()) - observe_save_started : 0);
 }
 
 static void x64_pc_after_fork(void) {

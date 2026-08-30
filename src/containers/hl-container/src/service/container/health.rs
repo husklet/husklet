@@ -63,6 +63,7 @@ impl Service {
                 owners,
                 filesystem_generation,
                 translation_cache: self.translation_cache.clone(),
+                translation_cache_observability: self.translation_cache_observability,
                 checkpoint: None,
                 guest: container.spec.guest,
                 execution: container.spec.execution,

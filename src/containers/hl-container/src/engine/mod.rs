@@ -298,6 +298,7 @@ mod tests {
             owners: Vec::new(),
             filesystem_generation: "/generation".into(),
             translation_cache: None,
+            translation_cache_observability: false,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             execution: crate::Execution::default(),

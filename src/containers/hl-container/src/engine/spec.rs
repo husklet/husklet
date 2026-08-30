@@ -276,6 +276,11 @@ impl Spec {
             Self::set(options, "HL_PCACHE", b"1")?;
             Self::set(options, "HL_PCACHE_DIR", cache.as_os_str().as_encoded_bytes())?;
         }
+        Self::flag(
+            options,
+            "HL_PCACHE_OBSERVE",
+            launch.translation_cache_observability,
+        )?;
         if let Some(overlay) = &launch.overlay {
             Self::set(options, "HL_LOWER", overlay.lower.as_os_str().as_encoded_bytes())?;
             Self::set(

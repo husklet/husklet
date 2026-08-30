@@ -1768,7 +1768,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     if (rdir != NULL) return hl_vfs_cursor_state_finish(ckpt_restore_tree(rootfs));
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
-    g_coldprof = 0;
+    g_coldprof = hl_option_flag_value("HL_PCACHE_OBSERVE", 0);
     /* Diagnostic stubs embed fork-shared counter addresses. They are launch-private and deliberately have
        no persistent-cache relocation: diagnostics therefore disables restore/save before cache lookup. */
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;

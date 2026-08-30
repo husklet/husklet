@@ -111,6 +111,7 @@ pub struct Config {
     pub(crate) root: PathBuf,
     pub(crate) persistence: Persistence,
     pub(crate) translation_cache: Option<TranslationCache>,
+    pub(crate) translation_cache_observability: bool,
 }
 
 impl Config {
@@ -120,6 +121,7 @@ impl Config {
             root: root.into(),
             persistence: Persistence::File,
             translation_cache: None,
+            translation_cache_observability: false,
         }
     }
 
@@ -133,6 +135,13 @@ impl Config {
     #[must_use]
     pub fn translation_cache(mut self, directory: impl Into<PathBuf>) -> Self {
         self.translation_cache = Some(TranslationCache::new(directory.into()));
+        self
+    }
+
+    /// Emits structured translated-cache diagnostics for explicit profiling runs.
+    #[must_use]
+    pub fn translation_cache_observability(mut self, enabled: bool) -> Self {
+        self.translation_cache_observability = enabled;
         self
     }
 

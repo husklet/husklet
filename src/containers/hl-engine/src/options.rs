@@ -165,6 +165,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only exercise warm-cache rollback through the single-map W^X arena",
         Flag
     ),
+    internal!(
+        "HL_PCACHE_OBSERVE",
+        "emit structured persistent-cache diagnostics",
+        Flag
+    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",

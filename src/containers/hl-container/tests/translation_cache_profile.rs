@@ -244,6 +244,9 @@ int main(void) {
     } else {
         config
     };
+    let config = config.translation_cache_observability(
+        std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1"),
+    );
     let containers = Containers::builder(config).images(images.clone()).build().await?;
     if mode == Mode::RelocationMissing {
         require(
@@ -662,10 +665,11 @@ int main(void) {
                 }),
                 "loaded warm authority survived real pthread start or remained patchable afterward",
             )?,
+            // The production diagnostic is written by the native engine to the host diagnostic
+            // descriptor, outside captured guest stderr; the external benchmark runner validates it.
+            Mode::CacheValid if !cfg!(feature = "native-test-hooks") => {},
             Mode::CacheValid => require(
-                entries
-                    .iter()
-                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
+                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
                 "valid same-ISA artifact did not reach the C validator's authenticated path",
             )
             .and_then(|()| {

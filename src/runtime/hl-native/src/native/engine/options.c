@@ -104,6 +104,7 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only fail one same-ISA warm-cache reconstruction stage", HL_OPTION_TEXT),
     HL_INJECTION_OPTION("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
                         "test-only exercise warm-cache rollback through the single-map W^X arena", HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_TRANSLIT_MIXED_SSE_DISABLE",
                      "disable mixed normal/SSE same-ISA descriptor admission", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_JCC_LINK_DISABLE",
