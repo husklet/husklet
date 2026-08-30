@@ -44,3 +44,9 @@ fn readonly_riprel_option_off_emission_receipt() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(171), 1_846_790_643);
     assert_eq!(hl_native::x86_64_translit_displaced_test(172), (223 << 16) | 1);
 }
+
+#[test]
+fn readonly_riprel_admission_is_snapshotted_per_execution_context() {
+    let _guard = native_globals();
+    assert_eq!(hl_native::x86_64_translit_displaced_test(173), 0);
+}

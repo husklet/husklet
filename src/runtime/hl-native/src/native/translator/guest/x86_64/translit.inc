@@ -2827,6 +2827,18 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario >= 160 && scenario <= 162) return translit_riprel_readonly_fixture_test(scenario);
     if (scenario >= 163 && scenario <= 169) return translit_riprel_readonly_rejection_test(scenario);
     if (scenario >= 170 && scenario <= 172) return translit_riprel_readonly_off_receipt_test(scenario);
+    if (scenario == 173) {
+        (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+        hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "1", 1);
+        hl_x86_hot_context *on = hl_x86_hot_context_create(NULL, NULL, NULL);
+        int exact = off != NULL && on != NULL && !off->riprel_readonly_enabled &&
+                    on->riprel_readonly_enabled && !off->riprel_readonly_enabled;
+        hl_x86_hot_context_destroy(on);
+        hl_x86_hot_context_destroy(off);
+        (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+        return exact ? 0 : 251;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4138,8 +4150,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
                                                                  g_nonpie_hi, g_nonpie_bias);
-                int readonly_lowered = !g_nonpie_lo &&
-                                       hl_option_flag_value("HL_TRANSLIT_RIPREL_READONLY", 0) &&
+                int readonly_lowered = !g_nonpie_lo && context->riprel_readonly_enabled &&
                                        translit_lower_natural_riprel_readonly(a, &insn, storage_target,
                                                                               &riprel_readonly_save_end,
                                                                               &riprel_readonly_op_end);
