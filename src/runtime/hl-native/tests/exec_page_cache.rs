@@ -212,10 +212,3 @@ fn source_page_index_grows_nodes_across_chunk_boundaries() {
         assert_eq!(exec_page_cache_test(isa, 51), Ok(1), "isa={isa}");
     }
 }
-
-#[test]
-fn restored_activation_cannot_overwrite_concurrent_invalidation() {
-    for isa in [1, 2] {
-        assert_eq!(exec_page_cache_test(isa, 52), Ok(1), "isa={isa}");
-    }
-}

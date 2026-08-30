@@ -47,7 +47,6 @@ static int g_fastsys;
 static uint64_t g_fast_count;
 static uint64_t x64_pcache_codegen_modes(void);
 static void x64_pc_thread_start_abandon(void);
-static void x64_pc_restored_abandon_range(uint64_t lo, uint64_t hi);
 static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi);
 static int g_x64_pc_control_loaded_empty;
 
@@ -64,7 +63,6 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
         fprintf(stderr, "[pcache-control] loaded-policy=invalidate-range\n");
     if (__builtin_expect(g_pcache_loaded, 0)) {
         x64_pc_restored_unlink_targets(lo, hi);
-        x64_pc_restored_abandon_range(lo, hi);
     }
     uint64_t range[1][2];
     range[0][0] = lo;
@@ -2011,31 +2009,9 @@ static uint64_t g_x64_pc_image_lo, g_x64_pc_image_hi, g_x64_pc_interp_lo, g_x64_
 static uint64_t g_x64_pc_lib_next = X64_PC_LIB_BASE;
 static x64_pc_lib g_x64_pc_libs[X64_PC_LIB_MAX];
 static uint32_t g_x64_pc_lib_count;
+/* Kept only until the old lifecycle cleanup sites are removed. Fixed-image restore never assigns it. */
 static uint8_t *g_x64_pc_deferred;
 static uint64_t g_x64_pc_deferred_count;
-typedef struct x64_pc_restored_slot {
-    uint64_t gpc;
-    uint32_t ordinal;
-    uint32_t occupied;
-} x64_pc_restored_slot;
-static x64_pc_restored_slot *g_x64_pc_restored_slots;
-static uint32_t g_x64_pc_restored_slot_mask;
-static uint32_t *g_x64_pc_owner_ordinals;
-static uint8_t *g_x64_pc_restored_states;
-static void *g_x64_pc_snapshot;
-static const uint8_t *g_x64_pc_snapshot_owners;
-static const uint8_t *g_x64_pc_snapshot_relocs;
-static const uint8_t *g_x64_pc_snapshot_helper_relocs;
-static const uint8_t *g_x64_pc_snapshot_chains;
-static const uint8_t *g_x64_pc_snapshot_arena;
-static uint64_t g_x64_pc_snapshot_owner_count;
-static uint64_t g_x64_pc_snapshot_reloc_count;
-static uint64_t g_x64_pc_snapshot_helper_reloc_count;
-static uint64_t g_x64_pc_snapshot_arena_size;
-static uint64_t g_x64_pc_activation_limit = UINT64_MAX;
-static uint64_t g_x64_pc_activation_only = UINT64_MAX;
-static uint64_t g_x64_pc_activation_pair = UINT64_MAX;
-static uint64_t g_x64_pc_activation_predecessor = UINT64_MAX;
 static uint64_t g_x64_pc_load_generation;
 static int g_x64_pc_control_record_libraries;
 static int g_x64_pc_library_unsupported;
@@ -2048,45 +2024,12 @@ static uint64_t g_x64_pc_observe_library_ns, g_x64_pc_observe_library_bytes, g_x
 static unsigned g_x64_pc_observe_outcome;
 static int x64_pc_file(char *path, size_t size);
 
-static void x64_pc_restore_candidate_free(uint8_t *maps, uint8_t *states, uint32_t *ordinals,
-                                          x64_pc_restored_slot *slots, translit_chain_site *chains) {
-    free(maps); free(states); free(ordinals); free(slots); free(chains);
-}
-
 static void x64_pc_restored_clear(void) {
-    g_map_body_miss_resolver = NULL;
-    g_map_host_miss_resolver = NULL;
-    g_map_visibility = NULL;
-    free(g_x64_pc_restored_slots); g_x64_pc_restored_slots = NULL; g_x64_pc_restored_slot_mask = 0;
-    free(g_x64_pc_owner_ordinals); g_x64_pc_owner_ordinals = NULL;
-    free(g_x64_pc_restored_states); g_x64_pc_restored_states = NULL;
-    free(g_x64_pc_snapshot); g_x64_pc_snapshot = NULL;
-    g_x64_pc_snapshot_owners = NULL; g_x64_pc_snapshot_relocs = NULL; g_x64_pc_snapshot_helper_relocs = NULL;
-    g_x64_pc_snapshot_chains = NULL; g_x64_pc_snapshot_arena = NULL;
-    g_x64_pc_snapshot_owner_count = 0; g_x64_pc_snapshot_reloc_count = 0;
-    g_x64_pc_snapshot_helper_reloc_count = 0;
-    g_x64_pc_snapshot_arena_size = 0;
-    g_x64_pc_activation_limit = UINT64_MAX;
-    g_x64_pc_activation_only = UINT64_MAX;
-    g_x64_pc_activation_pair = UINT64_MAX;
-    g_x64_pc_activation_predecessor = UINT64_MAX;
 }
 
-static void x64_pc_restored_detach(void) {
-    if (g_x64_pc_restored_states != NULL) {
-        for (uint64_t i = 0; i < g_x64_pc_restored_maps; i++)
-            if (__atomic_load_n(&g_x64_pc_restored_states[i], __ATOMIC_RELAXED) != 0)
-                __atomic_store_n(&g_x64_pc_restored_states[i], JIT_RESTORED_INVALIDATING, __ATOMIC_RELEASE);
-        map_host_cache_invalidate();
-    }
-    jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 0);
-    if (set != NULL) {
-        atomic_store_explicit(&set->restored_map_ordinal, NULL, memory_order_release);
-        atomic_store_explicit(&set->restored_map_state, NULL, memory_order_release);
-    }
-    x64_pc_restored_clear();
-}
+static void x64_pc_restored_detach(void) { x64_pc_restored_clear(); }
 
+#if 0 /* Retired compact/dormant resolver implementation. */
 static x64_pc_restored_slot *x64_pc_restored_find(uint64_t gpc) {
     if (g_x64_pc_restored_slots == NULL) return NULL;
     uint32_t slot = (uint32_t)(gpc * UINT64_C(2654435761)) & g_x64_pc_restored_slot_mask;
@@ -2276,6 +2219,7 @@ static void x64_pc_restored_abandon_range(uint64_t lo, uint64_t hi) {
             __atomic_store_n(&g_x64_pc_restored_states[i], 0, __ATOMIC_RELEASE);
     }
 }
+#endif
 
 static void x64_pc_observe_emit(const char *outcome, uint64_t save_ns) {
     if (!g_coldprof) return;
@@ -2971,6 +2915,7 @@ static int pcache_load(uint64_t entry_jump) {
 #endif
     free(allocation);
     return 1;
+#if 0 /* Retired compact/lazy restore experiment; fixed-image restore above is the only product path. */
     const char *validated_control = hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE");
     if (validated_control != NULL && strcmp(validated_control, "validation-only") == 0) {
         free(allocation);
@@ -3294,6 +3239,7 @@ static int pcache_load(uint64_t entry_jump) {
     }
 #endif
     return 1;
+#endif
 }
 
 static void pcache_save(void) {
@@ -3917,7 +3863,6 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
                     (void)hl_persist_store_at(&g_x64_pc_directory, receipt, &mismatch, sizeof mismatch);
             }
 #endif
-            x64_pc_restored_abandon_range(base, end);
             return;
         }
         if (x64_pc_fail_stage("manifest-activation")) {
