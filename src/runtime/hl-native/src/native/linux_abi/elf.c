@@ -739,6 +739,55 @@ struct main_placement {
     int etype;
 };
 
+static hl_identity_digest g_pcache_authorized_image;
+static uint64_t g_pcache_authorized_size;
+
+static int pcache_hex_digit(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    return -1;
+}
+
+/* Exact internal records: snapshot<TAB>canonical-guest-path<TAB>size<TAB>sha256. */
+int pcache_authorize_image(const char *guest_path, uint64_t size) {
+    const char *records = hl_option_get("HL_PCACHE_EXEC_AUTHORITY");
+    memset(&g_pcache_authorized_image, 0, sizeof g_pcache_authorized_image);
+    g_pcache_authorized_size = 0;
+    if (!g_pcache || records == NULL || guest_path == NULL) return 0;
+    for (const char *record = records; *record;) {
+        const char *end = strchr(record, '\n');
+        if (end == NULL) end = record + strlen(record);
+        const char *first = memchr(record, '\t', (size_t)(end - record));
+        const char *second = first == NULL ? NULL : memchr(first + 1, '\t', (size_t)(end - first - 1));
+        const char *third = second == NULL ? NULL : memchr(second + 1, '\t', (size_t)(end - second - 1));
+        size_t path_size = second == NULL ? 0 : (size_t)(second - first - 1);
+        if (first != NULL && second != NULL && third != NULL && path_size == strlen(guest_path) &&
+            memcmp(first + 1, guest_path, path_size) == 0 && end - third - 1 == 64) {
+            char number[32];
+            size_t number_size = (size_t)(third - second - 1);
+            if (number_size == 0 || number_size >= sizeof number) return 0;
+            memcpy(number, second + 1, number_size);
+            number[number_size] = 0;
+            char *tail = NULL;
+            unsigned long long recorded_size = strtoull(number, &tail, 10);
+            if (tail == NULL || *tail != 0 || recorded_size != size) return 0;
+            for (size_t index = 0; index < sizeof g_pcache_authorized_image.bytes; index++) {
+                int high = pcache_hex_digit(third[1 + index * 2]);
+                int low = pcache_hex_digit(third[2 + index * 2]);
+                if (high < 0 || low < 0) {
+                    memset(&g_pcache_authorized_image, 0, sizeof g_pcache_authorized_image);
+                    return 0;
+                }
+                g_pcache_authorized_image.bytes[index] = (uint8_t)((high << 4) | low);
+            }
+            g_pcache_authorized_size = size;
+            return 1;
+        }
+        record = *end == 0 ? end : end + 1;
+    }
+    return 0;
+}
+
 static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struct main_placement *placement) {
     if (plan == NULL || placement == NULL || plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI || plan->size < sizeof(*plan) ||
         plan->link_end <= plan->link_start || (plan->kind != 1 && plan->kind != 2))
@@ -769,12 +818,19 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
 #if defined(HL_PCACHE_IDENTITY_OBSERVE)
     uint64_t identity_started = g_coldprof && g_pcache ? coldprof_now_ns(effective_host_services()) : 0;
 #endif
-    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size) : (hl_identity_digest){0};
+    int identity_authorized = g_pcache && g_pcache_authorized_size == image.size;
+    out->identity = g_pcache ? (identity_authorized ? g_pcache_authorized_image
+                                                                       : hl_identity_image_digest(image.bytes, image.size))
+                             : (hl_identity_digest){0};
+    memset(&g_pcache_authorized_image, 0, sizeof g_pcache_authorized_image);
+    g_pcache_authorized_size = 0;
 #if defined(HL_PCACHE_IDENTITY_OBSERVE)
     if (g_coldprof && g_pcache) {
         g_pcache_identity_ns += coldprof_now_ns(effective_host_services()) - identity_started;
-        g_pcache_identity_bytes += image.size;
-        g_pcache_identity_files++;
+        if (!identity_authorized) {
+            g_pcache_identity_bytes += image.size;
+            g_pcache_identity_files++;
+        }
     }
 #endif
     hl_linux_elf64_layout layout;

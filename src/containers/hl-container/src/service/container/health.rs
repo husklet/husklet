@@ -49,7 +49,7 @@ impl Service {
             .await?;
         let process = Self::health_process(container, check)?;
         let requested_mounts = container.spec.mounts.clone();
-        let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
+        let (rootfs, overlay, owners, executable_digest_authority) = self.rootfs_launch(&container.spec.rootfs).await?;
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.open(container)?);
         let filesystem_generation = self.identity.generation(container)?.path().to_owned();
@@ -60,6 +60,7 @@ impl Service {
                 network_namespace: container.id.namespace(),
                 rootfs,
                 overlay,
+                executable_digest_authority,
                 owners,
                 filesystem_generation,
                 translation_cache: self.translation_cache.clone(),

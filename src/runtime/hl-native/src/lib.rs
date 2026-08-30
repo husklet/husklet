@@ -21,6 +21,8 @@ mod artifact;
 
 #[cfg(unix)]
 pub use checkpoint::{AuthenticatedCheckpointPeer, CheckpointBroker, CheckpointTransport};
+#[cfg(unix)]
+pub use engine::executable_interpreter;
 pub use engine::{Engine, EngineBoxConfig, EngineConfig, EngineNetworkInterface, EnginePublishRule, Error, Exit};
 pub use loader::{LoadError, LoadKind};
 #[cfg(unix)]

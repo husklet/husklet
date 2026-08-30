@@ -1570,6 +1570,8 @@ static int engine_global_init(void) {
 
 // Load the main program and optional interpreter, recording their entry metadata. The gb/pb/ib
 // buffers are static because g_exe_path points into gb and must outlive this call.
+int pcache_authorize_image(const char *guest_path, uint64_t size);
+
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp, const hl_engine_main_image_plan *image_plan) {
     static char gb[1024];
@@ -1610,6 +1612,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         }
         placement = &main_placement;
     }
+    if (g_pcache && g_initial_executable_image != NULL)
+        pcache_authorize_image(g_exe_path, g_initial_executable_size);
     load_elf(prog_host, lm, placement, NULL);
     g_loadbase = lm->base;
     *jump = lm->entry;
@@ -1627,6 +1631,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         g_initial_executable_image = g_initial_interpreter_image;
         g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
+        if (g_pcache && g_initial_interpreter_image != NULL)
+            pcache_authorize_image(interp, g_initial_interpreter_size);
         load_elf(interp_host, li, NULL, NULL);
         g_initial_executable_image = NULL;
         g_initial_executable_size = 0;

@@ -302,6 +302,17 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     return Err(3);
 }
 
+/// Inspect one already-resolved host executable and return its guest interpreter path.
+/// This performs the same strict ELF validation used by engine creation.
+#[cfg(unix)]
+pub fn executable_interpreter(path: &std::path::Path, isa: u32) -> Result<Option<Vec<u8>>, Error> {
+    let mut file = File::open(path).map_err(|_| Error::Status(1))?;
+    let length = file.metadata().map_err(|_| Error::Status(1))?.len();
+    validate_elf_image(&mut file, length, isa)
+        .map(|(_, layout)| layout.interpreter)
+        .map_err(Error::Status)
+}
+
 #[cfg(unix)]
 fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
     use std::os::unix::{ffi::OsStrExt as _, fs::OpenOptionsExt as _};
@@ -567,7 +578,9 @@ mod tests {
         {
             // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
             let status = unsafe { hook(scenario) };
-            if status != 0 { failures.push((scenario, status)); }
+            if status != 0 {
+                failures.push((scenario, status));
+            }
         }
         assert!(failures.is_empty(), "RET IBTC scenarios failed: {failures:?}");
     }

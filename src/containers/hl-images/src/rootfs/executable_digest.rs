@@ -43,7 +43,11 @@ struct Record {
 
 impl ExecutableDigestAuthority {
     pub(super) fn new(snapshot: &str, lower: PathBuf, records: PathBuf) -> Self {
-        Self { snapshot: snapshot.into(), lower, records }
+        Self {
+            snapshot: snapshot.into(),
+            lower,
+            records,
+        }
     }
 
     /// Authenticate `host` only when it is the exact immutable-lower binding of `guest_path`.
@@ -68,12 +72,21 @@ impl ExecutableDigestAuthority {
         let key = hex(&Sha256::digest(guest.as_bytes()));
         let record_path = self.records.join(format!("{}-{key}.json", self.snapshot));
         let lock_path = self.records.join(format!("{}-{key}.lock", self.snapshot));
-        let lock = OpenOptions::new().create(true).read(true).write(true).mode(0o600).open(&lock_path).at(&lock_path)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(&lock_path)
+            .at(&lock_path)?;
         lock.lock_exclusive().at(&lock_path)?;
         let metadata = fs::metadata(&host).at(&host)?;
         if let Some(record) = read_record(&record_path) {
-            if record.version == VERSION && record.snapshot == self.snapshot && record.guest_path == guest
-                && record.size == metadata.len() && decode_digest(&record.sha256).is_some()
+            if record.version == VERSION
+                && record.snapshot == self.snapshot
+                && record.guest_path == guest
+                && record.size == metadata.len()
+                && decode_digest(&record.sha256).is_some()
             {
                 return Ok(Some(ExecutableDigest {
                     snapshot: record.snapshot,
@@ -91,59 +104,101 @@ impl ExecutableDigestAuthority {
         let mut buffer = [0u8; 64 * 1024];
         loop {
             let count = file.read(&mut buffer).at(&host)?;
-            if count == 0 { break; }
+            if count == 0 {
+                break;
+            }
             hash.update(&buffer[..count]);
-            copied = copied.checked_add(count as u64).ok_or_else(|| Error::InvalidMetadata("executable size overflow".into()))?;
+            copied = copied
+                .checked_add(count as u64)
+                .ok_or_else(|| Error::InvalidMetadata("executable size overflow".into()))?;
         }
         let after = file.metadata().at(&host)?;
         if copied != before.len() || after.len() != before.len() || after.modified().ok() != before.modified().ok() {
             return Ok(None);
         }
         let digest: [u8; 32] = hash.finalize().into();
-        let record = Record { version: VERSION, snapshot: self.snapshot.clone(), guest_path: guest.clone(), size: copied, sha256: hex(&digest) };
+        let record = Record {
+            version: VERSION,
+            snapshot: self.snapshot.clone(),
+            guest_path: guest.clone(),
+            size: copied,
+            sha256: hex(&digest),
+        };
         replace_private(&record_path, &serde_json::to_vec(&record)?)?;
-        Ok(Some(ExecutableDigest { snapshot: self.snapshot.clone(), guest_path: guest, size: copied, sha256: digest, bytes_hashed: copied }))
+        Ok(Some(ExecutableDigest {
+            snapshot: self.snapshot.clone(),
+            guest_path: guest,
+            size: copied,
+            sha256: digest,
+            bytes_hashed: copied,
+        }))
     }
 }
 
 fn normalize_guest(path: &Path) -> Result<String> {
-    if !path.is_absolute() { return Err(Error::InvalidMetadata("executable path is not guest-absolute".into())); }
+    if !path.is_absolute() {
+        return Err(Error::InvalidMetadata("executable path is not guest-absolute".into()));
+    }
     let mut out = PathBuf::from("/");
     for part in path.components() {
         match part {
             Component::RootDir | Component::CurDir => {}
             Component::Normal(value) => out.push(value),
-            Component::ParentDir | Component::Prefix(_) => return Err(Error::InvalidMetadata("executable path is noncanonical".into())),
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(Error::InvalidMetadata("executable path is noncanonical".into()));
+            }
         }
     }
-    let value = out.to_str().ok_or_else(|| Error::InvalidMetadata("executable path is not UTF-8".into()))?.to_owned();
-    if value.len() > MAX_GUEST_PATH_BYTES { return Err(Error::InvalidMetadata("executable path is too long".into())); }
+    let value = out
+        .to_str()
+        .ok_or_else(|| Error::InvalidMetadata("executable path is not UTF-8".into()))?
+        .to_owned();
+    if value.len() > MAX_GUEST_PATH_BYTES {
+        return Err(Error::InvalidMetadata("executable path is too long".into()));
+    }
     Ok(value)
 }
 
 fn read_record(path: &Path) -> Option<Record> {
     let file = fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() > MAX_RECORD_BYTES { return None; }
+    if file.metadata().ok()?.len() > MAX_RECORD_BYTES {
+        return None;
+    }
     let mut bytes = Vec::new();
     file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes).ok()?;
-    (bytes.len() as u64 <= MAX_RECORD_BYTES).then(|| serde_json::from_slice(&bytes).ok()).flatten()
+    (bytes.len() as u64 <= MAX_RECORD_BYTES)
+        .then(|| serde_json::from_slice(&bytes).ok())
+        .flatten()
 }
 
 fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
-    let mut file = OpenOptions::new().create_new(true).write(true).mode(0o600).open(&temp).at(&temp)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temp)
+        .at(&temp)?;
     file.write_all(bytes).at(&temp)?;
     file.sync_all().at(&temp)?;
     fs::rename(&temp, path).at(path)?;
-    if let Some(parent) = path.parent() { fs::File::open(parent).and_then(|file| file.sync_all()).at(parent)?; }
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent).and_then(|file| file.sync_all()).at(parent)?;
+    }
     Ok(())
 }
 
-fn hex(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 fn decode_digest(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64 { return None; }
+    if value.len() != 64 {
+        return None;
+    }
     let mut out = [0; 32];
-    for (index, byte) in out.iter_mut().enumerate() { *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?; }
+    for (index, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
     Some(out)
 }
 
@@ -188,19 +243,36 @@ mod tests {
         let (root, authority, host) = fixture("chain-one");
         authority.authenticate(Path::new("/bin/tool"), &host).unwrap().unwrap();
         let copied = ExecutableDigestAuthority::new("chain-two", authority.lower.clone(), root.path().join("metadata"));
-        assert!(copied.authenticate(Path::new("/bin/tool"), &host).unwrap().unwrap().bytes_hashed > 0);
+        assert!(
+            copied
+                .authenticate(Path::new("/bin/tool"), &host)
+                .unwrap()
+                .unwrap()
+                .bytes_hashed
+                > 0
+        );
     }
 
     #[test]
     fn corrupt_record_is_ignored_and_rebuilt() {
         let (_root, authority, host) = fixture("chain-one");
         authority.authenticate(Path::new("/bin/tool"), &host).unwrap().unwrap();
-        let record = fs::read_dir(&authority.records).unwrap().find_map(|entry| {
-            let path = entry.unwrap().path();
-            (path.extension().and_then(|value| value.to_str()) == Some("json")).then_some(path)
-        }).unwrap();
+        let record = fs::read_dir(&authority.records)
+            .unwrap()
+            .find_map(|entry| {
+                let path = entry.unwrap().path();
+                (path.extension().and_then(|value| value.to_str()) == Some("json")).then_some(path)
+            })
+            .unwrap();
         fs::write(&record, b"{corrupt").unwrap();
-        assert!(authority.authenticate(Path::new("/bin/tool"), &host).unwrap().unwrap().bytes_hashed > 0);
+        assert!(
+            authority
+                .authenticate(Path::new("/bin/tool"), &host)
+                .unwrap()
+                .unwrap()
+                .bytes_hashed
+                > 0
+        );
         assert!(read_record(&record).is_some());
     }
 
@@ -208,12 +280,17 @@ mod tests {
     fn concurrent_writers_publish_one_complete_record() {
         let (_root, authority, host) = fixture("chain-one");
         let authority = Arc::new(authority);
-        let workers = (0..8).map(|_| {
-            let authority = Arc::clone(&authority);
-            let host = host.clone();
-            std::thread::spawn(move || authority.authenticate(Path::new("/bin/tool"), &host).unwrap().unwrap())
-        }).collect::<Vec<_>>();
-        let results = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
+        let workers = (0..8)
+            .map(|_| {
+                let authority = Arc::clone(&authority);
+                let host = host.clone();
+                std::thread::spawn(move || authority.authenticate(Path::new("/bin/tool"), &host).unwrap().unwrap())
+            })
+            .collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(results.iter().filter(|result| result.bytes_hashed != 0).count(), 1);
         assert!(results.windows(2).all(|pair| pair[0].sha256 == pair[1].sha256));
     }

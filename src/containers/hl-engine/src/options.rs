@@ -170,6 +170,11 @@ const DEFINITIONS: &[Definition] = &[
         "emit structured persistent-cache diagnostics",
         Flag
     ),
+    internal!(
+        "HL_PCACHE_EXEC_AUTHORITY",
+        "snapshot-authenticated executable content identities",
+        Records
+    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",

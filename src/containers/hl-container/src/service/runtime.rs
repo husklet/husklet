@@ -53,6 +53,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) network_namespace: String,
     pub(crate) rootfs: PathBuf,
     pub(crate) overlay: Option<OverlayConfig>,
+    pub(crate) executable_digest_authority: Option<hl_images::rootfs::ExecutableDigestAuthority>,
     pub(crate) owners: Vec<(PathBuf, u32, u32)>,
     pub(crate) filesystem_generation: PathBuf,
     pub(crate) translation_cache: Option<PathBuf>,

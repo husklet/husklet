@@ -1,6 +1,8 @@
 //! Resolution of a guest entry path to the host path that backs it.
 
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Component, Path, PathBuf};
 
 /// A guest path, resolved against the layered rootfs that backs it rather than against the host
@@ -65,6 +67,21 @@ impl GuestPath {
                 .find(|candidate| Self::executable_here(candidate));
         }
         None
+    }
+
+    /// Return the normalized guest interpreter named by a validated ELF executable.
+    #[cfg(unix)]
+    pub fn interpreter(
+        executable: &Path,
+        isa: crate::activation::GuestIsa,
+    ) -> Result<Option<PathBuf>, crate::engine::EngineError> {
+        let isa = match isa {
+            crate::activation::GuestIsa::Aarch64 => 1,
+            crate::activation::GuestIsa::X86_64 => 2,
+        };
+        hl_native::executable_interpreter(executable, isa)
+            .map(|path| path.map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes))))
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)
     }
 
     /// Whether a host path is a file the host would agree to execute.
