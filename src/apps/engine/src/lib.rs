@@ -115,6 +115,9 @@ struct LaunchArguments {
     /// Lower selected read-only RIP-relative byte operations in same-ISA blocks.
     #[arg(long, requires = "translit")]
     translit_riprel_readonly: bool,
+    /// Bridge one strict FS-relative load into the preceding same-ISA descriptor.
+    #[arg(long, requires = "translit")]
+    translit_fs_load_bridge: bool,
     /// Execute a same-ISA Linux x86-64 guest under the experimental native syscall supervisor.
     #[arg(long)]
     native_supervised: bool,
@@ -375,6 +378,11 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--translit-riprel-readonly is available only in the x86-64 worker".to_owned(),
         ));
     }
+    if launch.translit_fs_load_bridge && guest != Guest::X86_64 {
+        return Err(Failure::Request(
+            "--translit-fs-load-bridge is available only in the x86-64 worker".to_owned(),
+        ));
+    }
     if launch.rootfs.is_none() && (launch.diagnostics || launch.translit || launch.native_supervised) {
         return Err(Failure::Request(
             "--diagnostics, --translit and --native-supervised require --rootfs; raw host-path launches do not carry launch options"
@@ -455,6 +463,7 @@ fn rootfs_plan(
         (launch.diagnostics, "HL_C_DIAGNOSTICS"),
         (launch.translit, "HL_TRANSLIT"),
         (launch.translit_riprel_readonly, "HL_TRANSLIT_RIPREL_READONLY"),
+        (launch.translit_fs_load_bridge, "HL_TRANSLIT_FS_LOAD_BRIDGE"),
         (launch.native_supervised, "HL_NATIVE_SUPERVISED"),
     ] {
         if enabled {
@@ -721,6 +730,7 @@ mod tests {
         assert_eq!(defaults.translit_jcc_ibtc, None);
         assert_eq!(defaults.translit_direct_jmp_ibtc, None);
         assert!(!defaults.translit_riprel_readonly);
+        assert!(!defaults.translit_fs_load_bridge);
         assert!(!defaults.native_supervised);
 
         let selected = launch(&[
@@ -730,6 +740,7 @@ mod tests {
             "--translit-jcc-ibtc=off",
             "--translit-direct-jmp-ibtc=off",
             "--translit-riprel-readonly",
+            "--translit-fs-load-bridge",
             "--native-supervised",
             "--rootfs",
             "/image",
@@ -744,6 +755,7 @@ mod tests {
             Some(super::DirectJmpIbtcControl::Off)
         );
         assert!(selected.translit_riprel_readonly);
+        assert!(selected.translit_fs_load_bridge);
         assert!(selected.native_supervised);
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
     }
@@ -855,6 +867,33 @@ mod tests {
             &launch(&[
                 "--translit",
                 "--translit-riprel-readonly",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("available only in the x86-64 worker"));
+    }
+
+    #[test]
+    fn fs_load_bridge_is_x86_transliteration_only() {
+        assert!(
+            LaunchArguments::try_parse_from([
+                "hl-x86_64",
+                "--translit-fs-load-bridge",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ])
+            .is_err(),
+            "accepted the bridge without --translit"
+        );
+        let failure = execute(
+            Guest::Aarch64,
+            &launch(&[
+                "--translit",
+                "--translit-fs-load-bridge",
                 "--rootfs",
                 "/image",
                 "bin/program",
@@ -1044,6 +1083,7 @@ mod tests {
         assert_eq!(defaults.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"), None);
+        assert_eq!(defaults.options.get("HL_TRANSLIT_FS_LOAD_BRIDGE"), None);
         assert_eq!(defaults.options.get("HL_NATIVE_SUPERVISED"), None);
 
         let selected = rootfs_plan(
@@ -1054,6 +1094,7 @@ mod tests {
                 "--translit-mixed-sse=off",
                 "--translit-jcc-ibtc=off",
                 "--translit-direct-jmp-ibtc=off",
+                "--translit-fs-load-bridge",
                 "--native-supervised",
                 "--rootfs",
                 root.path().to_str().unwrap(),
@@ -1066,6 +1107,7 @@ mod tests {
         assert_eq!(selected.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"), Some("1"));
+        assert_eq!(selected.options.get("HL_TRANSLIT_FS_LOAD_BRIDGE"), Some("1"));
         assert!(
             selected
                 .environment
