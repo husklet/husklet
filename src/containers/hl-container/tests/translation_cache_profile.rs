@@ -17,6 +17,7 @@ enum Mode {
     CacheCold,
     CacheFreshRollover,
     CacheSemanticMap,
+    CacheSemanticOwner,
     CacheSemanticDuplicate,
     CacheSemanticHelper,
     CacheSemanticRelocation,
@@ -46,6 +47,7 @@ impl Mode {
             "cache-cold" => Ok(Self::CacheCold),
             "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
             "cache-semantic-map" => Ok(Self::CacheSemanticMap),
+            "cache-semantic-owner" => Ok(Self::CacheSemanticOwner),
             "cache-semantic-duplicate" => Ok(Self::CacheSemanticDuplicate),
             "cache-semantic-helper" => Ok(Self::CacheSemanticHelper),
             "cache-semantic-relocation" => Ok(Self::CacheSemanticRelocation),
@@ -120,6 +122,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             | Mode::CacheBitflip
             | Mode::CacheTruncated
             | Mode::CacheSemanticMap
+            | Mode::CacheSemanticOwner
             | Mode::CacheSemanticDuplicate
             | Mode::CacheSemanticHelper
             | Mode::CacheSemanticRelocation
@@ -303,6 +306,7 @@ int main(void) {
     if matches!(
         mode,
         Mode::CacheSemanticMap
+            | Mode::CacheSemanticOwner
             | Mode::CacheSemanticDuplicate
             | Mode::CacheSemanticHelper
             | Mode::CacheSemanticRelocation
@@ -337,6 +341,11 @@ int main(void) {
             Mode::CacheSemanticMap => {
                 require(maps != 0, "semantic map corruption has no map record")?;
                 bytes[256 + 8..256 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+            }
+            Mode::CacheSemanticOwner => {
+                require(owners != 0, "semantic owner corruption has no owner record")?;
+                let owners_at = 256 + maps * MAP_SIZE;
+                bytes[owners_at + 24..owners_at + 28].copy_from_slice(&(maps as u32).to_le_bytes());
             }
             Mode::CacheSemanticDuplicate => {
                 require(
@@ -696,6 +705,7 @@ int main(void) {
                 "fresh generation did not publish an exact relocation-ledger receipt",
             )?,
             Mode::CacheSemanticMap
+            | Mode::CacheSemanticOwner
             | Mode::CacheSemanticDuplicate
             | Mode::CacheSemanticHelper
             | Mode::CacheSemanticRelocation
