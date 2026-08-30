@@ -2970,15 +2970,33 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 188) {
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
         hl_x86_hot_context *absent = hl_x86_hot_context_create(NULL, NULL, NULL);
+        uint64_t absent_modes = x64_pcache_codegen_modes();
         (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
         hl_x86_hot_context *on = hl_x86_hot_context_create(NULL, NULL, NULL);
+        uint64_t on_modes = x64_pcache_codegen_modes();
         (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "0", 1);
         hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
+        uint64_t off_modes = x64_pcache_codegen_modes();
         int exact = absent != NULL && on != NULL && off != NULL && !absent->riprel_load_bridge_enabled &&
-                    on->riprel_load_bridge_enabled && !off->riprel_load_bridge_enabled;
+                    on->riprel_load_bridge_enabled && !off->riprel_load_bridge_enabled &&
+                    (absent_modes & (UINT64_C(1) << 10)) == 0 &&
+                    (on_modes & (UINT64_C(1) << 10)) != 0 &&
+                    (off_modes & (UINT64_C(1) << 10)) == 0;
         hl_x86_hot_context_destroy(off);
         hl_x86_hot_context_destroy(on);
         hl_x86_hot_context_destroy(absent);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+        pid_t child = fork();
+        if (child == 0) {
+            hl_x86_hot_context *inherited = hl_x86_hot_context_create(NULL, NULL, NULL);
+            int inherited_exact = inherited != NULL && inherited->riprel_load_bridge_enabled &&
+                                  (x64_pcache_codegen_modes() & (UINT64_C(1) << 10)) != 0;
+            if (inherited != NULL) hl_x86_hot_context_destroy(inherited);
+            _exit(inherited_exact ? 0 : 1);
+        }
+        int status = 0;
+        exact = exact && child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                WEXITSTATUS(status) == 0;
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
         return exact ? 0 : 271;
     }
