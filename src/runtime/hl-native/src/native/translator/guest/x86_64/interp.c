@@ -661,6 +661,12 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         cpu->reason = R_BRANCH;
         return;
     }
+    if (block->host_entry_off == 0 && INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX) {
+        uint16_t ordinal = INTERP_BLOCK_PCACHE_ORDINAL(block);
+        translit_pcache_census_count[ordinal]++;
+        if (translit_pcache_census_order[ordinal] == 0)
+            translit_pcache_census_order[ordinal] = ++translit_pcache_census_sequence;
+    }
     // Guest-fault landing pad. savemask=0 -- this is the hottest line in the engine (once per guest block)
     // and savemask=1 makes glibc issue a real rt_sigprocmask here. interp_restore_handler_mask does the
     // restore on the fault path instead, where it is paid once per fault rather than once per block.
@@ -1883,7 +1889,8 @@ static uint64_t x64_pcache_codegen_modes(void) {
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1) << 4) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_FS_AUTHORITY_TEST", 0) << 5) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_PROVENANCE_FALLBACK", 0) << 6) |
-           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_BODY_OWNER_EXHAUST", 0) << 7);
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_BODY_OWNER_EXHAUST", 0) << 7) |
+           ((uint64_t)(g_coldprof != 0) << 8);
 }
 
 static uint64_t pcache_engine_id(void) {
@@ -2233,7 +2240,8 @@ static int pcache_load(uint64_t entry_jump) {
             valid = host < arena && body < arena && host == body && block == body && start <= gpc && gpc < end &&
                     x64_pc_get64(record + 48) == INTERP_BLOCK_MAGIC && x64_pc_get64(record + 56) == gpc &&
                     entry <= length && entry <= arena && host <= arena - entry && length <= arena - host &&
-                    x64_pc_get16(record + 82) == 0;
+                    (g_coldprof ? x64_pc_get16(record + 82) < UINT16_MAX
+                                : x64_pc_get16(record + 82) == UINT16_MAX);
             uint64_t slot = (gpc ^ (gpc >> 32)) % JIT_MAP_N, probes = 0;
             while (valid && seen_used[slot] && seen_gpc[slot] != gpc && ++probes < JIT_MAP_N)
                 slot = (slot + 1) % JIT_MAP_N;
@@ -2536,6 +2544,41 @@ static void pcache_save(void) {
                                 (unsigned long long)g_x64_pc_interp_lo);
         return;
     }
+    if (g_pcache_loaded && g_coldprof) {
+        uint64_t restored = 0, executed = 0;
+        for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+            if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
+            struct interp_block *block = (struct interp_block *)g_map[i].body;
+            if (INTERP_BLOCK_PCACHE_ORDINAL(block) == UINT16_MAX) continue;
+            restored++;
+            if (translit_pcache_census_count[INTERP_BLOCK_PCACHE_ORDINAL(block)] != 0) executed++;
+        }
+        if (restored <= (SIZE_MAX - 16) / 24) {
+            size_t bytes = 16 + (size_t)restored * 24;
+            uint8_t *receipt_bytes = malloc(bytes);
+            if (receipt_bytes != NULL) {
+                uint8_t *at = receipt_bytes;
+                x64_pc_put64(&at, restored); x64_pc_put64(&at, executed);
+                for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+                    if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
+                    struct interp_block *block = (struct interp_block *)g_map[i].body;
+                    uint16_t ordinal = INTERP_BLOCK_PCACHE_ORDINAL(block);
+                    if (ordinal == UINT16_MAX) continue;
+                    x64_pc_put64(&at, g_map[i].gpc);
+                    x64_pc_put64(&at, translit_pcache_census_count[ordinal]);
+                    x64_pc_put64(&at, translit_pcache_census_order[ordinal]);
+                }
+                char base[1024], receipt[1024];
+                if (x64_pc_file(base, sizeof base)) {
+                    int length = snprintf(receipt, sizeof receipt, "%s.execution-census-%lld", base,
+                                          (long long)getpid());
+                    if (length > 0 && (size_t)length < sizeof receipt)
+                        (void)hl_persist_store_at(&g_x64_pc_directory, receipt, receipt_bytes, bytes);
+                }
+                free(receipt_bytes);
+            }
+        }
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_pcache_loaded) {
         uint64_t restored_live = g_x64_pc_restored_live + g_x64_pc_activated_maps;
@@ -2704,7 +2747,8 @@ static void pcache_save(void) {
         x64_pc_put64(&cursor, g_map_metadata[i].guest_end); x64_pc_put64(&cursor, host); x64_pc_put64(&cursor, body);
         x64_pc_put64(&cursor, body); x64_pc_put64(&cursor, block->magic); x64_pc_put64(&cursor, block->gpc);
         x64_pc_put64(&cursor, block->generation); x64_pc_put32(&cursor, block->host_entry_off);
-        x64_pc_put32(&cursor, block->host_len); x64_pc_put16(&cursor, block->profile_insns); x64_pc_put16(&cursor, 0);
+        x64_pc_put32(&cursor, block->host_len); x64_pc_put16(&cursor, block->profile_insns);
+        x64_pc_put16(&cursor, INTERP_BLOCK_PCACHE_ORDINAL(block));
     }
     jit_body_owner_preserve *preserves = owner_entries == NULL ? NULL : jit_body_owner_preserves(owner_entries);
     for (uint32_t i = 0; i < owner_count; i++) {

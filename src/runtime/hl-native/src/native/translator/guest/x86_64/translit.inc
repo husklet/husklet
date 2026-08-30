@@ -383,13 +383,18 @@ enum translit_external_absolute_kind {
     TL_EXT_CALL_HIT = 0x400, TL_EXT_CALL_MISS, TL_EXT_CALL_IRQ,
     TL_EXT_HOOK_LINK_TAKEN = 0x500, TL_EXT_HOOK_LINK_IRQ, TL_EXT_HOOK_LINK_DISPATCH,
     TL_EXT_HOOK_JCC_SHAPE, TL_EXT_HOOK_CALL_HIT, TL_EXT_HOOK_CALL_MISS,
+    TL_EXT_PCACHE_CENSUS_BASE = 0x10000,
 };
 typedef struct { uint32_t offset; uint32_t kind; } translit_external_absolute;
-#define TL_EXTERNAL_ABSOLUTE_N 65536u
+#define TL_EXTERNAL_ABSOLUTE_N 262144u
 static translit_external_absolute translit_external_absolutes[TL_EXTERNAL_ABSOLUTE_N];
 static uint32_t translit_external_absolute_count;
 static uint32_t translit_external_absolute_emitted;
 static int translit_external_absolute_unclassified;
+static uint64_t translit_pcache_census_count[UINT16_MAX];
+static uint64_t translit_pcache_census_order[UINT16_MAX];
+static uint64_t translit_pcache_census_sequence;
+static uint16_t translit_pcache_census_next;
 typedef struct {
     uint32_t site_offset, fallback_offset;
     uint64_t source, target;
@@ -415,6 +420,10 @@ static void translit_external_absolute_generation_reset(void) {
     translit_external_absolute_unclassified = 0;
     translit_chain_site_count = 0;
     translit_chain_site_overflow = 0;
+    translit_pcache_census_next = 0;
+    translit_pcache_census_sequence = 0;
+    memset(translit_pcache_census_count, 0, sizeof translit_pcache_census_count);
+    memset(translit_pcache_census_order, 0, sizeof translit_pcache_census_order);
 #if defined(HL_NATIVE_TEST_HOOKS)
     translit_test_dropped_external_absolute = 0;
 #endif
@@ -432,6 +441,10 @@ static void translit_chain_site_note(uint8_t *site, uint8_t *fallback, uint64_t 
 }
 
 static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
+    uintptr_t census = (uintptr_t)translit_pcache_census_count;
+    if (address >= census && address < census + sizeof translit_pcache_census_count &&
+        (address - census) % sizeof(uint64_t) == 0)
+        return TL_EXT_PCACHE_CENSUS_BASE + (uint32_t)((address - census) / sizeof(uint64_t));
     static const enum translit_ret_fast_ibtc_counter ret[] = {
         TL_RET_FAST_IBTC_HIT, TL_RET_FAST_IBTC_MISS, TL_RET_FAST_IBTC_IRQ};
     for (uint32_t i = 0; i < 3; i++)
@@ -462,6 +475,8 @@ static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
 }
 
 static uintptr_t translit_external_absolute_address_for(uint32_t kind) {
+    if (kind >= TL_EXT_PCACHE_CENSUS_BASE && kind < TL_EXT_PCACHE_CENSUS_BASE + UINT16_MAX)
+        return (uintptr_t)&translit_pcache_census_count[kind - TL_EXT_PCACHE_CENSUS_BASE];
     static const enum translit_ret_fast_ibtc_counter ret[] = {
         TL_RET_FAST_IBTC_HIT, TL_RET_FAST_IBTC_MISS, TL_RET_FAST_IBTC_IRQ};
     if (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ)
@@ -495,11 +510,23 @@ static uintptr_t translit_external_absolute_address_for(uint32_t kind) {
 }
 
 static int translit_external_absolute_kind_valid(uint32_t kind) {
-    return (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ) ||
+    return (kind >= TL_EXT_PCACHE_CENSUS_BASE && kind < TL_EXT_PCACHE_CENSUS_BASE + UINT16_MAX) ||
+           (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ) ||
            (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ) ||
            (kind >= TL_EXT_JMP_HIT && kind <= TL_EXT_JMP_IRQ) ||
            (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ) ||
            (kind >= TL_EXT_HOOK_LINK_TAKEN && kind <= TL_EXT_HOOK_CALL_MISS);
+}
+
+static void translit_emit_spill(hl_x64_asm *a);
+static void translit_emit_reload(hl_x64_asm *a);
+static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind);
+
+static void translit_emit_pcache_census(hl_x64_asm *a, uint16_t ordinal) {
+    translit_emit_spill(a);
+    hl_x64_atomic_inc_abs_kind(a, (uintptr_t)&translit_pcache_census_count[ordinal],
+                               TL_EXT_PCACHE_CENSUS_BASE + ordinal);
+    translit_emit_reload(a);
 }
 
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind) {
@@ -3988,6 +4015,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
     struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
+    if (INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX) {
+        translit_emit_pcache_census(a, INTERP_BLOCK_PCACHE_ORDINAL(block));
+    }
 
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;

@@ -388,12 +388,23 @@ struct interp_block {
     // Immutable translated instruction count. Production diagnostics aggregate this at execution time;
     // zero retains the interpreter-descriptor meaning without a separate side table or policy decision.
     uint16_t profile_insns;
+#if !defined(HL_NATIVE_TEST_HOOKS)
+    uint16_t pcache_observe_ordinal;
+#endif
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint8_t profile_jcc_fall_stitches;
     uint8_t profile_fallback_kind;
     uint64_t profile_fallback_form;
 #endif
 };
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define INTERP_BLOCK_PCACHE_ORDINAL(block) UINT16_MAX
+#define INTERP_BLOCK_PCACHE_SET_ORDINAL(block, value) ((void)(block), (void)(value))
+#else
+#define INTERP_BLOCK_PCACHE_ORDINAL(block) ((block)->pcache_observe_ordinal)
+#define INTERP_BLOCK_PCACHE_SET_ORDINAL(block, value) ((block)->pcache_observe_ordinal = (value))
+#endif
 
 static void *translate_block(hl_x86_hot_context *context, uint64_t gpc);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -440,6 +451,8 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->host_entry_off = 0;
     block->host_len = 0;
     block->profile_insns = 0;
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, g_coldprof && translit_pcache_census_next != UINT16_MAX
+                                              ? translit_pcache_census_next++ : UINT16_MAX);
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;

@@ -195,7 +195,10 @@ int main(void) {
             .arg(&host_binary)
             .arg(&host_source)
             .status()?;
-        require(built.success(), "pinned host compiler did not build the static pthread fixture")?;
+        require(
+            built.success(),
+            "pinned host compiler did not build the static pthread fixture",
+        )?;
         let binary = fs::read(&host_binary)?;
         let mut header = tar::Header::new_gnu();
         header.set_mode(0o755);
@@ -211,7 +214,10 @@ int main(void) {
             .collect::<Vec<_>>();
         dependencies.sort();
         dependencies.dedup();
-        require(!dependencies.is_empty(), "pthread fixture reported no dynamic dependencies")?;
+        require(
+            !dependencies.is_empty(),
+            "pthread fixture reported no dynamic dependencies",
+        )?;
         for dependency in dependencies {
             let bytes = fs::read(&dependency)?;
             let mut header = tar::Header::new_gnu();
@@ -255,9 +261,8 @@ int main(void) {
     } else {
         config
     };
-    let config = config.translation_cache_observability(
-        std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1"),
-    );
+    let config = config
+        .translation_cache_observability(std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1"));
     let config = match std::env::var_os("HL_PCACHE_PROFILE_SYMBOLS") {
         Some(directory) => config.translation_symbols(directory),
         None => config,
@@ -508,7 +513,7 @@ int main(void) {
             read_only_root: false,
             network_isolated: true,
             seccomp_baseline: hl_container::SeccompBaseline::Container,
-    });
+        });
     containers.create(spec).await?;
     if !matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
         benchmark_barrier("ready", "release")?;
@@ -546,7 +551,7 @@ int main(void) {
                 read_only_root: false,
                 network_isolated: true,
                 seccomp_baseline: hl_container::SeccompBaseline::Container,
-        });
+            });
         containers.create(repeat).await?;
         if mode == Mode::CacheAuthorityReuse {
             benchmark_barrier("ready", "release")?;
@@ -573,7 +578,10 @@ int main(void) {
     if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
         require(logs.stdout.is_empty(), "fork lifecycle fixture produced output")?;
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
-        require(logs.stdout == b"thread-warm-ok\n", "threaded executable-map workload output changed")?;
+        require(
+            logs.stdout == b"thread-warm-ok\n",
+            "threaded executable-map workload output changed",
+        )?;
     } else {
         require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
     }
@@ -594,13 +602,14 @@ int main(void) {
                 entries
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
-                    && (!cfg!(feature = "native-test-hooks") || entries.iter().any(|entry| {
+                    && (!cfg!(feature = "native-test-hooks")
+                        || entries.iter().any(|entry| {
                             entry
                                 .file_name()
                                 .as_encoded_bytes()
                                 .windows(11)
                                 .any(|part| part == b".published-")
-                    })),
+                        })),
                 "cold arm did not publish a cache artifact (and hook receipt when enabled)",
             )?,
             Mode::CacheUpperOverride => require(
@@ -752,23 +761,65 @@ int main(void) {
             }
             Mode::CacheThreadValid => require(
                 entries.iter().any(|entry| {
-                    entry.file_name().as_encoded_bytes().windows(5).any(|part| part == b".hit-")
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(5)
+                        .any(|part| part == b".hit-")
                 }) && entries.iter().any(|entry| {
-                    entry.file_name().as_encoded_bytes().windows(20).any(|part| part == b".thread-start-state-")
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(20)
+                        .any(|part| part == b".thread-start-state-")
                         && fs::read(entry.path()).is_ok_and(|state| {
                             state.len() == 24 && u64::from_le_bytes(state[..8].try_into().unwrap()) == 1
                         })
                 }) && entries.iter().any(|entry| {
-                    entry.file_name().as_encoded_bytes().windows(18).any(|part| part == b".thread-map-state-")
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(18)
+                        .any(|part| part == b".thread-map-state-")
                         && fs::read(entry.path()).is_ok_and(|state| state == [0u8; 16])
                 }),
                 "loaded warm authority survived real pthread start or remained patchable afterward",
             )?,
             // The production diagnostic is written by the native engine to the host diagnostic
             // descriptor, outside captured guest stderr; the external benchmark runner validates it.
-            Mode::CacheValid if !cfg!(feature = "native-test-hooks") => {},
+            Mode::CacheValid if !cfg!(feature = "native-test-hooks") => {
+                if std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1") {
+                    let receipt = entries
+                        .iter()
+                        .find(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(18)
+                                .any(|part| part == b".execution-census-")
+                        })
+                        .ok_or("observed warm HIT emitted no execution census")?;
+                    let census = fs::read(receipt.path())?;
+                    require(
+                        census.len() >= 16 && (census.len() - 16) % 24 == 0,
+                        "execution census shape changed",
+                    )?;
+                    let restored = u64::from_le_bytes(census[..8].try_into().unwrap());
+                    let executed = u64::from_le_bytes(census[8..16].try_into().unwrap());
+                    require(
+                        restored > 0 && executed == restored,
+                        "warm HIT did not execute every restored map",
+                    )?;
+                    require(
+                        census.len() == 16 + restored as usize * 24,
+                        "execution census record count changed",
+                    )?;
+                }
+            }
             Mode::CacheValid => require(
-                entries.iter().any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".valid")),
                 "valid same-ISA artifact did not reach the C validator's authenticated path",
             )
             .and_then(|()| {
