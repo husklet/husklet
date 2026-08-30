@@ -758,6 +758,7 @@ mod tests {
         assert_eq!(defaults.translit_jcc_ibtc, None);
         assert_eq!(defaults.translit_direct_jmp_ibtc, None);
         assert_eq!(defaults.translit_riprel_readonly, None);
+        assert_eq!(defaults.translit_riprel_load_bridge, None);
         assert_eq!(defaults.translit_fs_load_bridge, None);
         assert!(!defaults.native_supervised);
 
@@ -768,6 +769,7 @@ mod tests {
             "--translit-jcc-ibtc=off",
             "--translit-direct-jmp-ibtc=off",
             "--translit-riprel-readonly",
+            "--translit-riprel-load-bridge",
             "--translit-fs-load-bridge",
             "--native-supervised",
             "--rootfs",
@@ -787,13 +789,21 @@ mod tests {
             Some(super::TranslitFeatureControl::On)
         );
         assert_eq!(
+            selected.translit_riprel_load_bridge,
+            Some(super::TranslitFeatureControl::On)
+        );
+        assert_eq!(
             selected.translit_fs_load_bridge,
             Some(super::TranslitFeatureControl::On)
         );
         assert!(selected.native_supervised);
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
 
-        for option in ["--translit-riprel-readonly", "--translit-fs-load-bridge"] {
+        for option in [
+            "--translit-riprel-readonly",
+            "--translit-riprel-load-bridge",
+            "--translit-fs-load-bridge",
+        ] {
             let bare = launch(&["--translit", option, "program"]);
             assert_eq!(bare.executable.as_os_str(), "program");
         }
@@ -968,6 +978,51 @@ mod tests {
                 "bin/program"
             ])
             .translit_fs_load_bridge,
+            Some(super::TranslitFeatureControl::Off)
+        );
+    }
+
+    #[test]
+    fn natural_riprel_load_bridge_is_typed_and_x86_transliteration_only() {
+        for invalid in ["yes", "0", "disabled", ""] {
+            let option = format!("--translit-riprel-load-bridge={invalid}");
+            assert!(LaunchArguments::try_parse_from([
+                "hl-x86_64",
+                "--translit",
+                option.as_str(),
+                "program",
+            ])
+            .is_err());
+        }
+        assert!(LaunchArguments::try_parse_from([
+            "hl-x86_64",
+            "--translit-riprel-load-bridge",
+            "--rootfs",
+            "/image",
+            "bin/program",
+        ])
+        .is_err());
+        let failure = execute(
+            Guest::Aarch64,
+            &launch(&[
+                "--translit",
+                "--translit-riprel-load-bridge",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("available only in the x86-64 worker"));
+        assert_eq!(
+            launch(&[
+                "--translit",
+                "--translit-riprel-load-bridge=off",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ])
+            .translit_riprel_load_bridge,
             Some(super::TranslitFeatureControl::Off)
         );
     }
@@ -1152,6 +1207,7 @@ mod tests {
         assert_eq!(defaults.options.get("HL_TRANSLIT_MIXED_SSE_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"), None);
+        assert_eq!(defaults.options.get("HL_TRANSLIT_RIPREL_LOAD_BRIDGE"), None);
         assert_eq!(defaults.options.get("HL_TRANSLIT_FS_LOAD_BRIDGE"), None);
         assert_eq!(defaults.options.get("HL_NATIVE_SUPERVISED"), None);
 
@@ -1164,6 +1220,7 @@ mod tests {
                 "--translit-jcc-ibtc=off",
                 "--translit-direct-jmp-ibtc=off",
                 "--translit-riprel-readonly",
+                "--translit-riprel-load-bridge",
                 "--translit-fs-load-bridge",
                 "--native-supervised",
                 "--rootfs",
@@ -1178,6 +1235,7 @@ mod tests {
         assert_eq!(selected.options.get("HL_TRANSLIT_JCC_IBTC_DISABLE"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_RIPREL_READONLY"), Some("1"));
+        assert_eq!(selected.options.get("HL_TRANSLIT_RIPREL_LOAD_BRIDGE"), Some("1"));
         assert_eq!(selected.options.get("HL_TRANSLIT_FS_LOAD_BRIDGE"), Some("1"));
         assert!(
             selected
@@ -1192,6 +1250,7 @@ mod tests {
             &launch(&[
                 "--translit",
                 "--translit-riprel-readonly=off",
+                "--translit-riprel-load-bridge=off",
                 "--translit-fs-load-bridge=off",
                 "--rootfs",
                 root.path().to_str().unwrap(),
@@ -1200,6 +1259,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(disabled.options.get("HL_TRANSLIT_RIPREL_READONLY"), Some("0"));
+        assert_eq!(disabled.options.get("HL_TRANSLIT_RIPREL_LOAD_BRIDGE"), Some("0"));
         assert_eq!(disabled.options.get("HL_TRANSLIT_FS_LOAD_BRIDGE"), Some("0"));
         assert!(
             selected
