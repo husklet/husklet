@@ -2041,6 +2041,9 @@ static uint8_t *translit_test_ret_instruction_start;
 static translit_ret_sim_ranges translit_test_ret_site;
 static uint64_t translit_test_ret_source_guest;
 static uint8_t *translit_test_jmp_mem_instruction_start;
+static uint8_t *translit_test_natural_load_start;
+static uint8_t *translit_test_natural_load_address_end;
+static uint8_t *translit_test_natural_load_op_end;
 static uint8_t *translit_test_jmp_mem_borrow_start;
 static uint8_t *translit_test_jmp_mem_rip_end;
 static uint8_t *translit_test_jmp_mem_r11_end;
@@ -2605,7 +2608,13 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
             if (g_nonpie_lo) TL_ATTEMPT_ADD(translit_displaced_refusal_rsp, refusal_rsp);
             return 0;
         }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (!displaced) translit_test_natural_load_start = a->cursor;
+#endif
         hl_x64_mov_imm64(a, reg, storage_target);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (!displaced) translit_test_natural_load_address_end = a->cursor;
+#endif
         uint8_t rex = (uint8_t)(0x40 | (insn->opsize == 8 ? 8 : 0) | (reg >= 8 ? 5 : 0));
         if (rex != 0x40) hl_x64_u8(a, rex);
         if (insn->two) hl_x64_u8(a, 0x0F);
@@ -2615,6 +2624,9 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         hl_x64_u8(a, (uint8_t)(mod | ((reg & 7) << 3) | (low == 4 ? 4 : low)));
         if (low == 4) hl_x64_u8(a, 0x24);
         if (low == 5) hl_x64_u8(a, 0);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (!displaced) translit_test_natural_load_op_end = a->cursor;
+#endif
         if (a->overflow) return 0;
         *preserve_register = reg;
         return 1;
@@ -2682,6 +2694,7 @@ enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED }
 #if defined(HL_NATIVE_TEST_HOOKS)
 static void jit_guest_soft_test_set(int);
 static void jit_guest_bus_test_set(int);
+static const int g_translit_greg[16];
 
 static uint64_t translit_test_decode_refuse_pc;
 
@@ -5415,6 +5428,41 @@ static int translit_riprel_load_bridge_gate_test(void) {
                     uint64_t expected = width == 8 ? UINT64_C(0x0f0f0f0f0f0f0f5a)
                                                    : UINT64_C(0x0f0f0f5a);
                     execution_exact &= cpu.rip == source + length && cpu.r[reg] == expected;
+                    if (!readonly && width == 8 && reg == HL_X64_R11) {
+                        struct cpu irq_cpu = {0};
+                        irq_cpu.rip = source;
+                        irq_cpu.r[reg] = UINT64_C(0x1122334455667788);
+                        irq_cpu.irq = 1;
+                        run_block(context, &irq_cpu, block);
+                        // The normal block IRQ boundary is after the completed guest instruction.
+                        if (irq_cpu.rip != source + length) execution_error |= 1;
+                        if (irq_cpu.r[reg] != expected) execution_error |= 2;
+                        if (irq_cpu.irq != 1) execution_error |= 4;
+                        execution_exact &= (execution_error & 7) == 0;
+
+                        uint8_t *stages[] = {translit_test_natural_load_start,
+                                             translit_test_natural_load_address_end - 1,
+                                             translit_test_natural_load_op_end};
+                        uint64_t expected_rip[] = {source, source, source + length};
+                        uint64_t expected_reg[] = {UINT64_C(0x1122334455667788),
+                                                   UINT64_C(0x1122334455667788), expected};
+                        int saved_selected = translit_selected;
+                        translit_selected = 1;
+                        for (unsigned stage = 0; execution_exact && stage < 3; ++stage) {
+                            struct cpu interrupted = {0};
+                            interrupted.rip = source;
+                            interrupted.r[reg] = UINT64_C(0x1122334455667788);
+                            ucontext_t native = {0};
+                            HL_HOST_UC_GREGS(&native)[g_translit_greg[reg]] =
+                                (greg_t)(stage == 2 ? expected : UINT64_C(0xaabbccddeeff0011));
+                            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)stages[stage];
+                            execution_exact = translit_signal_capture(&interrupted, &native) &&
+                                              interrupted.rip == expected_rip[stage] &&
+                                              interrupted.r[reg] == expected_reg[stage];
+                            if (!execution_exact) execution_error |= 8;
+                        }
+                        translit_selected = saved_selected;
+                    }
                 }
                 if (context != NULL) hl_x86_hot_context_destroy(context);
             }
