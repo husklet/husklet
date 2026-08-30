@@ -519,14 +519,14 @@ int main(void) {
                 entries
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
-                    && entries.iter().any(|entry| {
+                    && (!cfg!(feature = "native-test-hooks") || entries.iter().any(|entry| {
                         entry
                             .file_name()
                             .as_encoded_bytes()
                             .windows(11)
                             .any(|part| part == b".published-")
-                    }),
-                "cold arm did not publish a cache artifact and receipt",
+                    })),
+                "cold arm did not publish a cache artifact (and hook receipt when enabled)",
             )?,
             Mode::CacheFreshRollover => require(
                 entries.iter().any(|entry| {
