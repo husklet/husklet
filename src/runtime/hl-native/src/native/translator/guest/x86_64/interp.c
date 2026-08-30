@@ -2455,6 +2455,7 @@ static int pcache_load(uint64_t entry_jump) {
     if (g_coldprof) g_x64_pc_observe_read_ns = coldprof_now_ns(effective_host_services()) - observe_started;
     g_x64_pc_observe_outcome = 3;
     const uint8_t *bytes = allocation;
+    x64_pc_format_layout layout = {0};
     unsigned validation = 2; /* structurally invalid/truncated */
     unsigned semantic_stage = 0;
     uint64_t header_state[10];
@@ -2472,7 +2473,6 @@ static int pcache_load(uint64_t entry_jump) {
     if (valid) {
         const x64_pc_format_limits limits = {CACHE_SZ, JIT_MAP_N, JIT_BODY_OWNER_N,
             TL_EXTERNAL_ABSOLUTE_N, TL_HELPER_RELATIVE_N, X64_PC_LIB_MAX, TL_CHAIN_SITE_N};
-        x64_pc_format_layout layout;
         uint64_t structural_state[8];
         valid = x64_pc_layout_validate(bytes, size, &limits, &layout, structural_state);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -2653,17 +2653,14 @@ static int pcache_load(uint64_t entry_jump) {
         return 0;
     }
 
-    uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
-    uint64_t helper_relocs = x64_pc_get64(bytes + 112);
-    uint64_t relocs = x64_pc_get64(bytes + 184), libraries = x64_pc_get64(bytes + 232);
-    uint64_t chains = x64_pc_get64(bytes + 240);
-    const uint8_t *map_records = bytes + X64_PC_HEADER_SIZE;
-    const uint8_t *owner_records = map_records + maps * X64_PC_MAP_SIZE;
-    const uint8_t *reloc_records = owner_records + owners * X64_PC_OWNER_SIZE;
-    const uint8_t *helper_reloc_records = reloc_records + relocs * X64_PC_RELOC_SIZE;
-    const uint8_t *library_records = helper_reloc_records + helper_relocs * X64_PC_HELPER_RELOC_SIZE;
-    const uint8_t *chain_records = library_records + libraries * X64_PC_LIB_SIZE;
-    const uint8_t *arena_bytes = chain_records + chains * X64_PC_CHAIN_SIZE;
+    uint64_t arena = layout.arena, maps = layout.maps, owners = layout.owners;
+    uint64_t helper_relocs = layout.helper_relocations, relocs = layout.relocations;
+    uint64_t libraries = layout.libraries, chains = layout.chains;
+    const uint8_t *map_records = layout.map_records, *owner_records = layout.owner_records;
+    const uint8_t *reloc_records = layout.relocation_records;
+    const uint8_t *helper_reloc_records = layout.helper_relocation_records;
+    const uint8_t *library_records = layout.library_records, *chain_records = layout.chain_records;
+    const uint8_t *arena_bytes = layout.arena_bytes;
     int has_entry = 0;
     for (uint64_t i = 0; i < maps; i++)
         if (x64_pc_get64(map_records + i * X64_PC_MAP_SIZE) == entry_jump &&

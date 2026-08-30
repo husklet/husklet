@@ -110,6 +110,15 @@ int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_forma
         if (matches != NULL) matches[i] = local[i];
         valid = valid && local[i];
     }
+    if (valid) {
+        layout->map_records = bytes + X64_PC_HEADER_SIZE;
+        layout->owner_records = layout->map_records + layout->map_bytes;
+        layout->relocation_records = layout->owner_records + layout->owner_bytes;
+        layout->helper_relocation_records = layout->relocation_records + layout->relocation_bytes;
+        layout->library_records = layout->helper_relocation_records + layout->helper_relocation_bytes;
+        layout->chain_records = layout->library_records + layout->library_bytes;
+        layout->arena_bytes = layout->chain_records + layout->chain_bytes;
+    }
     valid = valid && layout->image_lo < layout->image_hi &&
             layout->interpreter_lo < layout->interpreter_hi && layout->image_hi <= layout->interpreter_lo &&
             layout->image_hi <= UINT64_C(0x0000800000000000) &&

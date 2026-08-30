@@ -38,6 +38,8 @@ typedef struct x64_pc_format_layout {
     uint64_t arena, maps, owners, relocations, helper_relocations, libraries, chains;
     uint64_t map_bytes, owner_bytes, relocation_bytes, helper_relocation_bytes, library_bytes, chain_bytes;
     uint64_t image_lo, image_hi, interpreter_lo, interpreter_hi;
+    const uint8_t *map_records, *owner_records, *relocation_records, *helper_relocation_records;
+    const uint8_t *library_records, *chain_records, *arena_bytes;
 } x64_pc_format_layout;
 
 int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_format_limits *limits,
