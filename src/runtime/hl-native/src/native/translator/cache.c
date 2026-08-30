@@ -218,16 +218,36 @@ int HL_TARGET_LOCAL(jit_preferred_mapping_test)(uint64_t *result) {
     int released = munmap(sentinel, CACHE_SZ);
     if (collision != MAP_FAILED) { (void)munmap(collision, CACHE_SZ); close(descriptor); return -EEXIST; }
     if (!intact || released != 0) { close(descriptor); return -EUCLEAN; }
+
+    const uint64_t rx = rw + CACHE_SZ;
+    sentinel = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (sentinel != (void *)(uintptr_t)rx) {
+        if (sentinel != MAP_FAILED) (void)munmap(sentinel, CACHE_SZ);
+        close(descriptor);
+        return -EADDRINUSE;
+    }
+    *(volatile uint8_t *)(uintptr_t)rx = UINT8_C(0xa5);
+    void *partial = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
+                         MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
+    collision = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_EXEC,
+                     MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
+    intact = *(volatile uint8_t *)(uintptr_t)rx == UINT8_C(0xa5);
+    released = munmap(sentinel, CACHE_SZ);
+    if (partial != MAP_FAILED) (void)munmap(partial, CACHE_SZ);
+    if (collision != MAP_FAILED) { (void)munmap(collision, CACHE_SZ); close(descriptor); return -EEXIST; }
+    if (!intact || released != 0) { close(descriptor); return -EUCLEAN; }
+
     void *writable = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
                           MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
-    void *executable = mmap((void *)(uintptr_t)(rw + CACHE_SZ), CACHE_SZ, PROT_READ | PROT_EXEC,
+    void *executable = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_EXEC,
                             MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
-    int exact = writable == (void *)(uintptr_t)rw && executable == (void *)(uintptr_t)(rw + CACHE_SZ);
+    int exact = writable == (void *)(uintptr_t)rw && executable == (void *)(uintptr_t)rx;
     if (executable != MAP_FAILED) (void)munmap(executable, CACHE_SZ);
     if (writable != MAP_FAILED) (void)munmap(writable, CACHE_SZ);
     close(descriptor);
     if (!exact) return -EADDRNOTAVAIL;
-    *result = 3;
+    *result = 5;
     return 0;
 #endif
 }

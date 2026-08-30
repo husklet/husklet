@@ -146,7 +146,7 @@ fn jit_rollover_falls_back_to_an_executable_single_mapping() {
 #[cfg(target_os = "linux")]
 #[test]
 fn preferred_code_mapping_is_exact_and_never_replaces_an_occupied_alias() {
-    assert_eq!(exec_page_cache_test(2, 53), Ok(3));
+    assert_eq!(exec_page_cache_test(2, 53), Ok(5));
 }
 
 #[test]
