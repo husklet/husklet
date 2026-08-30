@@ -50,3 +50,9 @@ fn readonly_riprel_admission_is_snapshotted_per_execution_context() {
     let _guard = native_globals();
     assert_eq!(hl_native::x86_64_translit_displaced_test(173), 0);
 }
+
+#[test]
+fn standalone_fs_partial_spill_uses_native_scratch_state() {
+    let _guard = native_globals();
+    assert_eq!(hl_native::x86_64_translit_displaced_test(174), 0);
+}

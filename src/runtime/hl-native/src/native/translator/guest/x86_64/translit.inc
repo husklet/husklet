@@ -520,6 +520,7 @@ static int translit_fall_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
+static int translit_fs_partial_spill_signal_test(void);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
@@ -2839,6 +2840,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
         return exact ? 0 : 251;
     }
+    if (scenario == 174) return translit_fs_partial_spill_signal_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -3503,13 +3505,16 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         uint64_t base = UINT64_C(0x12345000);
         uint64_t guest = 0;
         uint32_t preserve = 0;
-        jit_instruction_map_put_preserve(base, base + 10, UINT64_C(0x11110000), 1u << 11);
+        jit_instruction_map_put_preserve(base, base + 5, UINT64_C(0x11110000), 0);
+        jit_instruction_map_put_preserve(base + 5, base + 10, UINT64_C(0x11110000), 1u << 11);
         jit_instruction_map_put_preserve(base + 10, base + 20, UINT64_C(0x22220000), 1u << 11);
-        int source = jit_instruction_map_lookup(base + 9, &guest, &preserve) &&
+        int partial_spill = jit_instruction_map_lookup(base + 4, &guest, &preserve) &&
+                            guest == UINT64_C(0x11110000) && preserve == 0;
+        int source = jit_instruction_map_lookup(base + 5, &guest, &preserve) &&
                      guest == UINT64_C(0x11110000) && preserve == (1u << 11);
         int postcommit = jit_instruction_map_lookup(base + 10, &guest, &preserve) &&
                          guest == UINT64_C(0x22220000) && preserve == (1u << 11);
-        return source && postcommit ? 0 : 64;
+        return partial_spill && source && postcommit ? 0 : 64;
     }
     if (scenario == 51) {
         uint8_t *saved_cache = g_cache;
@@ -4238,6 +4243,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             int scratch = insn.reg == HL_X64_R11 ? 10 : HL_X64_R11;
             uint32_t preserve = translit_preserve_mask(scratch);
             hl_x64_store_gs(a, scratch, R_OFF(scratch));
+            uint8_t *save_end = a->cursor;
             hl_x64_load_gs(a, scratch, OFF_FS);
             hl_x64_reg_mem_disp32(a, insn.op, insn.reg, scratch, (int32_t)insn.disp);
             uint8_t *commit_end = a->cursor;
@@ -4247,9 +4253,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 break;
             }
             owner_normal_pending = 0;
-            if (!translit_owner_append(owners, &owner_count, instruction_start, commit_end, pc, preserve) ||
+            if (!translit_owner_append(owners, &owner_count, instruction_start, save_end, pc, 0) ||
+                !translit_owner_append(owners, &owner_count, save_end, commit_end, pc, preserve) ||
                 !translit_owner_append(owners, &owner_count, commit_end, a->cursor, next, preserve) ||
                 !translit_owner_append(instruction_ranges, &instruction_range_count, instruction_start,
+                                       save_end, pc, 0) ||
+                !translit_owner_append(instruction_ranges, &instruction_range_count, save_end,
                                        commit_end, pc, preserve) ||
                 !translit_owner_append(instruction_ranges, &instruction_range_count, commit_end,
                                        a->cursor, next, preserve)) {
@@ -7164,6 +7173,72 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_fs_partial_spill_signal_test(void) {
+    const size_t arena_size = 8192;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, arena_size);
+        if (guest != MAP_FAILED) munmap(guest, 4096);
+        return 253;
+    }
+    static const uint8_t fs_load[] = {0x64, 0x4C, 0x8B, 0x3C, 0x25, 0, 0, 0, 0, 0x0F, 0x0B};
+    memcpy(guest, fs_load, sizeof fs_load);
+
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    uint64_t saved_nonpie_lo = g_nonpie_lo;
+    uint64_t saved_nonpie_hi = g_nonpie_hi;
+    uint64_t saved_nonpie_bias = g_nonpie_bias;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - 174;
+    g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    map_clear();
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = 4096;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *block = (struct interp_block *)arena;
+    uint64_t source = (uint64_t)(uintptr_t)guest;
+    void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+    block->magic = INTERP_BLOCK_MAGIC;
+    block->gpc = source;
+
+    struct cpu interrupted = {0};
+    ucontext_t native = {0};
+    interrupted.r[HL_X64_R11] = UINT64_C(0x1111222233334444);
+    HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_R11] = (greg_t)UINT64_C(0xaaaabbbbccccdddd);
+    HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0x202);
+    uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
+    if (entry != NULL) HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)(entry + 1);
+    int saved_selected = translit_selected;
+    translit_selected = 1;
+    int exact = entry != NULL && translit_signal_capture(&interrupted, &native) &&
+                interrupted.r[HL_X64_R11] == UINT64_C(0xaaaabbbbccccdddd) &&
+                interrupted.rip == source;
+    translit_selected = saved_selected;
+
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    map_clear();
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_nonpie_lo = saved_nonpie_lo;
+    g_nonpie_hi = saved_nonpie_hi;
+    g_nonpie_bias = saved_nonpie_bias;
+    munmap(guest, 4096);
+    munmap(arena, arena_size);
+    return exact ? 0 : 254;
+}
+
 // Deterministic signal-context reconstruction across the source handoff and
 // each canonicalization stage of the shared stub. Distinct context/cpu values
 // make every preserve decision, the static-to-dynamic RIP transition, and the
