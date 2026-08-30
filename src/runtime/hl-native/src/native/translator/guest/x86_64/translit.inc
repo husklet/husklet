@@ -2718,6 +2718,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
+            {"HL_TRANSLIT_RIPREL_READONLY", 0, 8},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();
@@ -4876,7 +4877,9 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     if (body != NULL) run_block(context, &cpu, block);
     uint64_t flags = translit_flags_in(&cpu);
     uint64_t expected = compare ? UINT64_C(0x687) : UINT64_C(0x686);
-    uint64_t checked = UINT64_C(0xCD5); // CF/PF/AF/ZF/SF/DF/OF
+    // TEST leaves AF undefined architecturally; CMP defines it.  Every other arithmetic flag and DF is
+    // checked for both forms.
+    uint64_t checked = compare ? UINT64_C(0xCD5) : UINT64_C(0xCC5); // CF/PF[/AF]/ZF/SF/DF/OF
     uint8_t *entry = (uint8_t *)block + block->host_entry_off;
     uint64_t source_pc = 0, restore_pc = 0;
     uint32_t source_preserve = 0, restore_preserve = 0;
