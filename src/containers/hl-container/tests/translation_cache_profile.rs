@@ -28,6 +28,7 @@ enum Mode {
     CacheThreadCold,
     CacheThreadValid,
     CacheValid,
+    CacheAuthorityReuse,
     CacheBitflip,
     CacheTruncated,
     ForkNoExec,
@@ -55,6 +56,7 @@ impl Mode {
             "cache-thread-cold" => Ok(Self::CacheThreadCold),
             "cache-thread-valid" => Ok(Self::CacheThreadValid),
             "cache-valid" => Ok(Self::CacheValid),
+            "cache-authority-reuse" => Ok(Self::CacheAuthorityReuse),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
             "fork-no-exec" => Ok(Self::ForkNoExec),
@@ -96,8 +98,8 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     require(cache.is_absolute(), "profile cache is not absolute")?;
     if matches!(
         mode,
-        Mode::CacheCold | Mode::CacheThreadCold | Mode::CacheFreshRollover | Mode::ForkNoExec | Mode::ForkExec |
-            Mode::RelocationMissing
+        Mode::CacheCold | Mode::CacheAuthorityReuse | Mode::CacheThreadCold | Mode::CacheFreshRollover |
+            Mode::ForkNoExec | Mode::ForkExec | Mode::RelocationMissing
     ) {
         require(
             !cache.exists() || cache.read_dir()?.next().is_none(),
@@ -471,6 +473,7 @@ int main(void) {
             "-",
         ])
     };
+    let repeat_process = process.clone();
     let spec = ContainerSpec::new(root, process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
@@ -493,6 +496,26 @@ int main(void) {
     let elapsed = started.elapsed();
     let logs = containers.logs("pcache-profile").await?;
     containers.remove("pcache-profile").await?;
+    if mode == Mode::CacheAuthorityReuse {
+        let repeat_root = images.roots().fork_overlay(unpacked.snapshot())?;
+        let repeat = ContainerSpec::new(repeat_root, repeat_process)
+            .name("pcache-profile-repeat")
+            .guest(Guest::X86_64)
+            .execution(Execution::native(false))
+            .isolation(Isolation {
+                sandbox: Sandbox::Disabled,
+                read_only_root: false,
+                network_isolated: true,
+                seccomp_baseline: hl_container::SeccompBaseline::Container,
+            });
+        containers.create(repeat).await?;
+        containers.start("pcache-profile-repeat").await?;
+        let repeat_status = containers.wait("pcache-profile-repeat").await?;
+        let repeat_logs = containers.logs("pcache-profile-repeat").await?;
+        containers.remove("pcache-profile-repeat").await?;
+        require(repeat_status == ExitStatus::Code(0), "repeated compiler process failed")?;
+        require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
+    }
     benchmark_barrier("done", "finish")?;
     if status != ExitStatus::Code(0) {
         return Err(format!(
@@ -522,7 +545,7 @@ int main(void) {
             "cache contains a non-private or non-regular entry",
         )?;
         match mode {
-            Mode::CacheCold | Mode::CacheThreadCold => require(
+            Mode::CacheCold | Mode::CacheAuthorityReuse | Mode::CacheThreadCold => require(
                 entries
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
