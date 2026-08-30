@@ -592,6 +592,7 @@ redispatch_execute:
                     REDISPATCH_COUNT(REDISPATCH_STALE);
                 else {
                     REDISPATCH_COUNT(REDISPATCH_HIT);
+                    if (next_generation != g_cache_gen) REDISPATCH_COUNT(REDISPATCH_STALE_HIT);
                     if (g_threaded) REDISPATCH_COUNT(REDISPATCH_THREADED_HIT);
                     code = next_code;
                     rxcode = next_rx;

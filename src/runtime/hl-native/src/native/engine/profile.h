@@ -27,6 +27,7 @@ typedef struct hl_dispatch_profile {
 enum dispatch_redispatch_counter {
     REDISPATCH_ATTEMPTED,
     REDISPATCH_HIT,
+    REDISPATCH_STALE_HIT,
     REDISPATCH_THREADED_HIT,
     REDISPATCH_MAP_MISS,
     REDISPATCH_STALE,

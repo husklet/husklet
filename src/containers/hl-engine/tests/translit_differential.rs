@@ -59,6 +59,7 @@ struct Backend {
     entries: u64,
     redispatch_attempted: u64,
     redispatch_hits: u64,
+    redispatch_stale_hits: u64,
     redispatch_threaded_hits: u64,
     redispatch_threaded: u64,
     redispatch_budget: u64,
@@ -465,6 +466,7 @@ fn backend(stderr: &[u8]) -> Backend {
         entries: counter("entries="),
         redispatch_attempted: redispatch_field("attempted="),
         redispatch_hits: redispatch_field("hit="),
+        redispatch_stale_hits: redispatch_field("stale-hit="),
         redispatch_threaded_hits: redispatch_field("threaded-hit="),
         redispatch_threaded: redispatch_field("threaded="),
         redispatch_budget: redispatch_field("budget="),
@@ -1938,6 +1940,7 @@ fn exhausted_body_owner_capacity_falls_back_to_the_interpreter() {
 fn a_guest_that_generates_code_at_runtime_agrees_with_the_interpreter() {
     let backend = agrees("smc");
     assert!(backend.redispatch_stale > 0, "SMC must decline stale descriptors: {}", backend.line);
+    assert_eq!(backend.redispatch_stale_hits, 0, "SMC must never execute a stale descriptor: {}", backend.line);
 }
 
 /// Faults into transliterated frames, including a guest stack overflow onto the alternate stack.
@@ -1954,6 +1957,7 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
     assert!(tree.redispatch_attempted > 0, "{}", tree.line);
     assert!(tree.redispatch_threaded > 0, "{}", tree.line);
     assert_eq!(tree.redispatch_threaded_hits, 0, "threaded guests must never fast-redispatch: {}", tree.line);
+    assert_eq!(tree.redispatch_stale_hits, 0, "fork/exec must never fast-redispatch stale code: {}", tree.line);
     assert!(tree.root_pid > 0, "{}", tree.tree_line);
     assert_eq!(tree.claimed, 17, "{}", tree.tree_line);
     assert_eq!(tree.completed, tree.claimed, "{}", tree.tree_line);
