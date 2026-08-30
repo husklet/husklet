@@ -1,0 +1,1 @@
+dns-explicit send=1 sendto=1 sendmsg-connected=1 sendmsg-to=1 reused=1 udp=1

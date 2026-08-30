@@ -720,6 +720,7 @@
         if (dns_enabled() && dns_dest_is(sa, (socklen_t)a2)) {
             int stream = ((int)a0 >= 0 && (int)a0 < HL_NFD) ? g_sock_stream[(int)a0] : 0;
             if (dns_swap((int)a0, stream) == 0) {
+                g_dns_ns[(int)a0] = *(const uint32_t *)(sa + 4);
                 G_RET(c) = 0;
                 break;
             } // swap failed -> fall through to the normal (host loopback) connect
@@ -1155,7 +1156,7 @@
             break;
         }
         if (fd >= 0 && fd < HL_NFD && g_dns_sock[fd]) { // DNS socket: peer is the nameserver 127.0.0.11:53
-            dns_fill_ns((uint8_t *)a1, (socklen_t *)a2);
+            dns_fill_ns(fd, (uint8_t *)a1, (socklen_t *)a2);
             G_RET(c) = 0;
             break;
         }

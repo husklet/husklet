@@ -22,18 +22,21 @@ static int dns_enabled(void) {
     return !g_dns_off;
 }
 
-// A Linux sockaddr_in destined for the embedded nameserver 127.0.0.11:53 (family value 2 == macOS AF_INET).
+// A Linux sockaddr_in destined for DNS. The guest image owns resolv.conf: Docker-style images commonly name
+// 127.0.0.11, while ordinary distro roots name an upstream resolver. Both must enter the in-process resolver;
+// a UDP socket may already have been projected onto the private AF_UNIX switch and cannot reach an upstream
+// AF_INET address directly.
 static int dns_dest_is(const uint8_t *sa, socklen_t l) {
-    return sa && l >= 8 && *(const uint16_t *)sa == AF_INET && *(const uint16_t *)(sa + 2) == htons(53) &&
-           *(const uint32_t *)(sa + 4) == HL_DNS_NS;
+    return sa && l >= 8 && *(const uint16_t *)sa == AF_INET && *(const uint16_t *)(sa + 2) == htons(53);
 }
 
-// Report the nameserver's address (127.0.0.11:53) back to the guest as the packet source / peer.
-static void dns_fill_ns(uint8_t *sa, socklen_t *l) {
+// Report the selected nameserver back as the packet source / peer. Resolvers reject a response attributed to
+// a different server, so an 8.8.8.8 query must not be presented as though 127.0.0.11 answered it.
+static void dns_fill_ns(int fd, uint8_t *sa, socklen_t *l) {
     if (!sa) return;
     *(uint16_t *)(sa + 0) = AF_INET;
     *(uint16_t *)(sa + 2) = htons(53);
-    *(uint32_t *)(sa + 4) = HL_DNS_NS;
+    *(uint32_t *)(sa + 4) = fd >= 0 && fd < HL_NFD && g_dns_ns[fd] ? g_dns_ns[fd] : HL_DNS_NS;
     memset(sa + 8, 0, 8);
     if (l) *l = 16;
 }
@@ -457,6 +460,7 @@ static int dns_try_send(int fd, const uint8_t *buf, size_t len, const uint8_t *d
         int stream = (fd >= 0 && fd < HL_NFD) ? g_sock_stream[fd] : 0;
         if (dns_swap(fd, stream) < 0) return 0; // couldn't swap -> let the normal path try
     }
+    if (dst && dstlen >= 8 && *(const uint16_t *)dst == AF_INET) g_dns_ns[fd] = *(const uint32_t *)(dst + 4);
     int stream = (fd >= 0 && fd < HL_NFD) ? g_sock_stream[fd] : 0;
     *ret = dns_send(fd, buf, len, stream);
     return 1;

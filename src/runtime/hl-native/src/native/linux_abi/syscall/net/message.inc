@@ -212,7 +212,7 @@
                 *(uint32_t *)(g + 8) = 16;
             } else if (gname && gnamelen && (int)a0 >= 0 && (int)a0 < HL_NFD && g_dns_sock[(int)a0]) {
                 // DNS socket: report the nameserver (127.0.0.11:53) as the source (see case 207).
-                dns_fill_ns(gname, NULL);
+                dns_fill_ns((int)a0, gname, NULL);
                 *(uint32_t *)(g + 8) = 16;
             } else if (gname && gnamelen &&
                        udp_switch_source((int)a0, &nss, mh.msg_namelen, gname, (socklen_t *)(g + 8))) {
@@ -530,7 +530,7 @@
             *(uint32_t *)(g + 56) = (uint32_t)r;
             if (nr == 243) {
                 if (gname && gnamelen && (int)a0 >= 0 && (int)a0 < HL_NFD && g_dns_sock[(int)a0]) {
-                    dns_fill_ns(gname, NULL); // DNS socket: source is the nameserver (see case 207)
+                    dns_fill_ns((int)a0, gname, NULL); // DNS socket: source is the nameserver (see case 207)
                     *(uint32_t *)(g + 8) = 16;
                 } else if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
                     int ll = sa_m2l((struct sockaddr *)&nss, gname, gnamelen);

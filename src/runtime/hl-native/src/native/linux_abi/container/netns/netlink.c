@@ -635,3 +635,4 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
 #define HL_DNS_NS 0x0b00007fu      // 127.0.0.11, network byte order (bytes 7f 00 00 0b == LE u32 0x0b00007f)
 static uint8_t g_dns_sock[HL_NFD]; // fd -> 1 if this fd is an intercepted, socketpair-backed DNS socket
 static int g_dns_peer[HL_NFD];     // fd -> engine-held socketpair end we write synthesized responses into
+static uint32_t g_dns_ns[HL_NFD];  // fd -> nameserver address the guest selected (network byte order)
