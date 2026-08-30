@@ -1,4 +1,5 @@
 #include "persistence.h"
+#include "../../../digest.h"
 
 #include <string.h>
 
@@ -121,4 +122,23 @@ int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_forma
                 (entry < rsp && rsp <= flags && flags < end && end <= layout->arena);
     }
     return valid;
+}
+
+static uint64_t x64_pc_checksum(const uint8_t *bytes, size_t size) {
+    static const uint8_t zero[8];
+    hl_digest digest;
+    hl_digest_init(&digest, HL_DIGEST_SEED);
+    hl_digest_update(&digest, bytes, X64_PC_CHECKSUM_OFFSET);
+    hl_digest_update(&digest, zero, sizeof zero);
+    hl_digest_update(&digest, bytes + X64_PC_HEADER_SIZE, size - X64_PC_HEADER_SIZE);
+    return hl_digest_value(&digest);
+}
+
+int x64_pc_checksum_validate(const uint8_t *bytes, size_t size) {
+    return size >= X64_PC_HEADER_SIZE && x64_pc_get64(bytes + X64_PC_CHECKSUM_OFFSET) == x64_pc_checksum(bytes, size);
+}
+
+void x64_pc_checksum_write(uint8_t *bytes, size_t size) {
+    uint8_t *cursor = bytes + X64_PC_CHECKSUM_OFFSET;
+    x64_pc_put64(&cursor, x64_pc_checksum(bytes, size));
 }

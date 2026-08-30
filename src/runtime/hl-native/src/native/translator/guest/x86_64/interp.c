@@ -2487,13 +2487,7 @@ static int pcache_load(uint64_t entry_jump) {
 #endif
     }
     if (valid) {
-        static const uint8_t zero[8];
-        hl_digest digest;
-        hl_digest_init(&digest, HL_DIGEST_SEED);
-        hl_digest_update(&digest, bytes, X64_PC_CHECKSUM_OFFSET);
-        hl_digest_update(&digest, zero, sizeof zero);
-        hl_digest_update(&digest, bytes + X64_PC_HEADER_SIZE, size - X64_PC_HEADER_SIZE);
-        valid = x64_pc_get64(bytes + X64_PC_CHECKSUM_OFFSET) == hl_digest_value(&digest);
+        valid = x64_pc_checksum_validate(bytes, size);
         validation = valid ? 1 : 3; /* authenticated or checksum mismatch */
     }
     if (valid) {
@@ -3600,11 +3594,7 @@ static void pcache_save(void) {
         x64_pc_put64(&cursor, translit_chain_sites[i].target);
     }
     memcpy(cursor, g_cache, (size_t)used);
-    hl_digest digest;
-    hl_digest_init(&digest, HL_DIGEST_SEED);
-    hl_digest_update(&digest, buffer, total);
-    cursor = buffer + X64_PC_CHECKSUM_OFFSET;
-    x64_pc_put64(&cursor, hl_digest_value(&digest));
+    x64_pc_checksum_write(buffer, total);
     uint64_t observe_save_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     char path[1024];
     if (x64_pc_file(path, sizeof path)) {

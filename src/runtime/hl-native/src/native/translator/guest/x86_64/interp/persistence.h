@@ -42,5 +42,7 @@ typedef struct x64_pc_format_layout {
 
 int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_format_limits *limits,
                            x64_pc_format_layout *layout, uint64_t matches[8]);
+int x64_pc_checksum_validate(const uint8_t *bytes, size_t size);
+void x64_pc_checksum_write(uint8_t *bytes, size_t size);
 
 #endif
