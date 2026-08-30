@@ -2735,8 +2735,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
-            {"HL_TRANSLIT_RIPREL_READONLY", 0, 8},
-            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 0, 9},
+            {"HL_TRANSLIT_RIPREL_READONLY", 1, 8},
+            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 9},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();
@@ -2841,18 +2841,21 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario >= 170 && scenario <= 172) return translit_riprel_readonly_off_receipt_test(scenario);
     if (scenario == 173) {
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
-        hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
+        hl_x86_hot_context *absent = hl_x86_hot_context_create(NULL, NULL, NULL);
         (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "1", 1);
         hl_x86_hot_context *on = hl_x86_hot_context_create(NULL, NULL, NULL);
-        int exact = off != NULL && on != NULL && !off->riprel_readonly_enabled &&
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "0", 1);
+        hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
+        int exact = absent != NULL && on != NULL && off != NULL && absent->riprel_readonly_enabled &&
                     on->riprel_readonly_enabled && !off->riprel_readonly_enabled;
-        hl_x86_hot_context_destroy(on);
         hl_x86_hot_context_destroy(off);
+        hl_x86_hot_context_destroy(on);
+        hl_x86_hot_context_destroy(absent);
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
         return exact ? 0 : 251;
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
-    if (scenario >= 175 && scenario <= 183) return translit_fs_load_bridge_fixture_test(scenario);
+    if (scenario >= 175 && scenario <= 184) return translit_fs_load_bridge_fixture_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -5130,7 +5133,7 @@ static int translit_riprel_readonly_off_receipt_test(unsigned scenario) {
     translit_fall_fixture_bytes = guest;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = mapping_size;
-    (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+    (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "0", 1);
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     struct interp_block *block = (struct interp_block *)arena;
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
@@ -5223,6 +5226,9 @@ static int translit_fall_fixture_test(unsigned scenario) {
     translit_fall_fixture_length = length;
     translit_test_last_fall_marker = 0;
     translit_test_fall_marker_seen = 0;
+    // Scenario 73 freezes the pre-bridge NORMAL_TO_FS fall boundary.  Keep that control explicit now
+    // that ordinary missing-option contexts enable the bridge; scenarios 181/184 cover the default.
+    if (scenario == 73) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "0", 1);
     hl_x86_hot_context *context =
         hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL,
                                   scenario >= 78 ? hl_guest_fetch_authority_source() : NULL);
@@ -5318,6 +5324,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
         if (reason != expected && summary.translated_fall_stop[reason] != 0) executed = 0;
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
+    if (scenario == 73) (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache;
     g_cp = saved_cp;
@@ -7345,7 +7352,8 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = 4096;
     (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
-    if (scenario <= 180 || scenario == 183) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
+    if (scenario <= 180 || scenario == 183 || scenario == 184)
+        (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
     if (scenario == 182) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "0", 1);
     if (scenario == 180) (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", "1", 1);
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
@@ -7361,7 +7369,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
     struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
     uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
-    int rejected = destination == HL_X64_RSP || (scenario >= 180 && scenario != 183);
+    int rejected = destination == HL_X64_RSP || scenario == 180 || scenario == 182;
     int signal_exact = rejected;
     if (entry != NULL && !rejected) {
         const uint64_t canonical = UINT64_C(0x0102030405060708);
@@ -7458,7 +7466,9 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
     munmap(guest, 4096); munmap(arena, 8192);
     if (!exact) return 256;
-    return scenario == 181 || scenario == 182 ? (int)(emitted_hash & UINT64_C(0x7fffffff)) : 0;
+    return scenario == 181 || scenario == 182 || scenario == 184
+               ? (int)(emitted_hash & UINT64_C(0x7fffffff))
+               : 0;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

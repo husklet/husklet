@@ -4,7 +4,9 @@ use std::sync::{Mutex, OnceLock};
 
 fn native_globals() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[test]
@@ -30,7 +32,11 @@ fn readonly_riprel_execution_preserves_flags_scratch_and_split_provenance() {
 fn readonly_riprel_rejected_prefixes_fall_back_at_the_real_builder_boundary() {
     let _guard = native_globals();
     for scenario in 163..=169 {
-        assert_eq!(hl_native::x86_64_translit_displaced_test(scenario), 0, "prefix scenario {scenario}");
+        assert_eq!(
+            hl_native::x86_64_translit_displaced_test(scenario),
+            0,
+            "prefix scenario {scenario}"
+        );
     }
 }
 
@@ -38,8 +44,9 @@ fn readonly_riprel_rejected_prefixes_fall_back_at_the_real_builder_boundary() {
 fn readonly_riprel_option_off_emission_receipt() {
     let _guard = native_globals();
     // Re-derived from exact c8da42dfd with the same fixed guest/arena addresses and toolchain.  The C
-    // hook also rebuilds once with the option absent and once explicitly set to zero, and returns zero
-    // if their bytes, body length, or profile boundary differ.
+    // hook builds twice with the option explicitly set to zero and returns zero if their bytes, body
+    // length, or profile boundary differ.  These values are therefore the old f39/c8 OFF baseline,
+    // independent of the new missing-value default.
     assert_eq!(hl_native::x86_64_translit_displaced_test(170), 1_094_434_755);
     assert_eq!(hl_native::x86_64_translit_displaced_test(171), 1_846_790_643);
     assert_eq!(hl_native::x86_64_translit_displaced_test(172), (223 << 16) | 1);
@@ -61,21 +68,25 @@ fn standalone_fs_partial_spill_uses_native_scratch_state() {
 fn fs_load_bridge_handles_destination_encoding_and_context_reuse() {
     let _guard = native_globals();
     for scenario in 175..=180 {
-        assert_eq!(hl_native::x86_64_translit_displaced_test(scenario), 0, "scenario {scenario}");
+        assert_eq!(
+            hl_native::x86_64_translit_displaced_test(scenario),
+            0,
+            "scenario {scenario}"
+        );
     }
 }
 
 #[test]
-fn fs_load_bridge_absent_and_explicit_off_emit_identical_baseline_body() {
+fn fs_load_bridge_absent_matches_explicit_on_and_off_retains_the_old_boundary() {
     let _guard = native_globals();
     let absent = hl_native::x86_64_translit_displaced_test(181);
     let off = hl_native::x86_64_translit_displaced_test(182);
-    assert_eq!(absent, off);
-    // Frozen alongside scenarios 170..=172, whose larger option-OFF body is byte-identical to exact
-    // c8da42dfd. This fixture adds the FS boundary itself: absent and explicit zero must both stop after
-    // the preceding NOP with the same one-instruction profile and emitted body. The raw body hash is
-    // compared only between these adjacent builds because it contains emitted process addresses and
-    // therefore is not stable across ASLR placements.
+    let on = hl_native::x86_64_translit_displaced_test(184);
+    assert_eq!(absent, on, "a missing option must emit the explicit-ON body");
+    assert_ne!(off, on, "explicit OFF must retain the old one-instruction boundary");
+    // The raw hash is compared only between adjacent builds because it contains emitted process
+    // addresses and is not stable across ASLR placements.  The explicit-OFF path is independently
+    // frozen by the fixed-address RIP-relative receipt above and by the exact-output GCC control.
 }
 
 #[test]

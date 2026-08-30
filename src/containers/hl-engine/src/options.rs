@@ -303,12 +303,12 @@ const DEFINITIONS: &[Definition] = &[
     ),
     launch!(
         "HL_TRANSLIT_RIPREL_READONLY",
-        "lower selected read-only RIP-relative byte operations in the same-ISA backend",
+        "control default-on read-only RIP-relative lowering in the same-ISA backend",
         Flag
     ),
     launch!(
         "HL_TRANSLIT_FS_LOAD_BRIDGE",
-        "bridge selected read-only FS loads in the same-ISA backend",
+        "control the default-on read-only FS-load bridge in the same-ISA backend",
         Flag
     ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
