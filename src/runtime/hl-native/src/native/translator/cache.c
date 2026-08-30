@@ -1036,23 +1036,15 @@ static int map_idx(uint64_t gpc) {
 static void *map_host_cached(hl_map_host_cache_entry cache[2], uint64_t gpc) {
     uint64_t generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_ACQUIRE);
     if (cache[0].generation == generation && cache[0].gpc == gpc)
-        return g_map_visibility == NULL || g_map_visibility(gpc) ? cache[0].host : NULL;
+        return cache[0].host;
     if (cache[1].generation == generation && cache[1].gpc == gpc) {
         hl_map_host_cache_entry hit = cache[1];
         cache[1] = cache[0];
         cache[0] = hit;
-        return g_map_visibility == NULL || g_map_visibility(gpc) ? hit.host : NULL;
+        return hit.host;
     }
     int i = map_idx(gpc);
-    if (i < 0) {
-        if (g_map_host_miss_resolver == NULL) return NULL;
-        void *resolved = g_map_host_miss_resolver(gpc);
-        if (resolved == NULL) return NULL;
-        i = map_idx(gpc);
-        if (i < 0) return NULL;
-        generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_ACQUIRE);
-    }
-    if (g_map_visibility != NULL && !g_map_visibility(gpc)) return NULL;
+    if (i < 0) return NULL;
     cache[1] = cache[0];
     cache[0] = (hl_map_host_cache_entry){gpc, generation, g_map[i].host};
     return g_map[i].host;
@@ -1170,9 +1162,7 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
 
 static void *map_body(uint64_t gpc) {
     int i = map_idx(gpc);
-    if (i >= 0)
-        return g_map_visibility == NULL || g_map_visibility(gpc) ? g_map[i].body : NULL;
-    return g_map_body_miss_resolver == NULL ? NULL : g_map_body_miss_resolver(gpc);
+    return i >= 0 ? g_map[i].body : NULL;
 }
 
 static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body) {

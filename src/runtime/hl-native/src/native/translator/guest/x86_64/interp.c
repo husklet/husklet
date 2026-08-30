@@ -670,11 +670,13 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         cpu->reason = R_BRANCH;
         return;
     }
-    if (block->host_entry_off == 0 && INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX) {
+    if (g_coldprof && block->host_entry_off == 0) {
         uint16_t ordinal = INTERP_BLOCK_PCACHE_ORDINAL(block);
-        translit_pcache_census_count[ordinal]++;
-        if (translit_pcache_census_order[ordinal] == 0)
-            translit_pcache_census_order[ordinal] = ++translit_pcache_census_sequence;
+        if (ordinal != UINT16_MAX) {
+            translit_pcache_census_count[ordinal]++;
+            if (translit_pcache_census_order[ordinal] == 0)
+                translit_pcache_census_order[ordinal] = ++translit_pcache_census_sequence;
+        }
     }
     // Guest-fault landing pad. savemask=0 -- this is the hottest line in the engine (once per guest block)
     // and savemask=1 makes glibc issue a real rt_sigprocmask here. interp_restore_handler_mask does the
