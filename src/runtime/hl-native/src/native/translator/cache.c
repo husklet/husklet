@@ -207,49 +207,61 @@ int HL_TARGET_LOCAL(jit_preferred_mapping_test)(uint64_t *result) {
     return -ENOTSUP;
 #else
     const uint64_t rw = HL_JIT_PREFERRED_RW + UINT64_C(500) * HL_JIT_PREFERRED_STRIDE;
+    const uint64_t rx = rw + CACHE_SZ;
+    hl_host_linux *host = NULL;
+    hl_host_services services = {0};
+    hl_host_code_mapping mapping = {0};
+    if (hl_host_linux_create(&host, &services) != HL_STATUS_OK) return -ENOMEM;
     void *sentinel = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (sentinel != (void *)(uintptr_t)rw) {
         if (sentinel != MAP_FAILED) (void)munmap(sentinel, CACHE_SZ);
+        hl_host_linux_destroy(host);
         return -EADDRINUSE;
     }
     *(volatile uint8_t *)(uintptr_t)rw = UINT8_C(0x5a);
-    int descriptor = memfd_create("hl-preferred-test", MFD_CLOEXEC);
-    if (descriptor < 0 || ftruncate(descriptor, CACHE_SZ) != 0) return -errno;
-    void *collision = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
-                           MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
+    mapping.writable_address = rw;
+    mapping.executable_address = rx;
+    hl_host_result collision = services.memory->reserve_code(
+        services.context, CACHE_SZ, UINT64_C(4096), HL_HOST_CODE_DUAL_ALIAS | HL_HOST_CODE_PREFERRED, &mapping);
     int intact = *(volatile uint8_t *)(uintptr_t)rw == UINT8_C(0x5a);
     int released = munmap(sentinel, CACHE_SZ);
-    if (collision != MAP_FAILED) { (void)munmap(collision, CACHE_SZ); close(descriptor); return -EEXIST; }
-    if (!intact || released != 0) { close(descriptor); return -EUCLEAN; }
+    if (collision.status == HL_STATUS_OK) (void)services.memory->release(services.context, mapping.handle);
+    if (collision.status == HL_STATUS_OK || !intact || released != 0) {
+        hl_host_linux_destroy(host);
+        return -EUCLEAN;
+    }
 
-    const uint64_t rx = rw + CACHE_SZ;
     sentinel = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (sentinel != (void *)(uintptr_t)rx) {
         if (sentinel != MAP_FAILED) (void)munmap(sentinel, CACHE_SZ);
-        close(descriptor);
+        hl_host_linux_destroy(host);
         return -EADDRINUSE;
     }
     *(volatile uint8_t *)(uintptr_t)rx = UINT8_C(0xa5);
-    void *partial = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
-                         MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
-    collision = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_EXEC,
-                     MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
+    memset(&mapping, 0, sizeof mapping);
+    mapping.writable_address = rw;
+    mapping.executable_address = rx;
+    collision = services.memory->reserve_code(
+        services.context, CACHE_SZ, UINT64_C(4096), HL_HOST_CODE_DUAL_ALIAS | HL_HOST_CODE_PREFERRED, &mapping);
     intact = *(volatile uint8_t *)(uintptr_t)rx == UINT8_C(0xa5);
     released = munmap(sentinel, CACHE_SZ);
-    if (partial != MAP_FAILED) (void)munmap(partial, CACHE_SZ);
-    if (collision != MAP_FAILED) { (void)munmap(collision, CACHE_SZ); close(descriptor); return -EEXIST; }
-    if (!intact || released != 0) { close(descriptor); return -EUCLEAN; }
+    if (collision.status == HL_STATUS_OK) (void)services.memory->release(services.context, mapping.handle);
+    if (collision.status == HL_STATUS_OK || !intact || released != 0) {
+        hl_host_linux_destroy(host);
+        return -EUCLEAN;
+    }
 
-    void *writable = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
-                          MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
-    void *executable = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_EXEC,
-                            MAP_SHARED | MAP_FIXED_NOREPLACE, descriptor, 0);
-    int exact = writable == (void *)(uintptr_t)rw && executable == (void *)(uintptr_t)rx;
-    if (executable != MAP_FAILED) (void)munmap(executable, CACHE_SZ);
-    if (writable != MAP_FAILED) (void)munmap(writable, CACHE_SZ);
-    close(descriptor);
+    memset(&mapping, 0, sizeof mapping);
+    mapping.writable_address = rw;
+    mapping.executable_address = rx;
+    hl_host_result exact_result = services.memory->reserve_code(
+        services.context, CACHE_SZ, UINT64_C(4096), HL_HOST_CODE_DUAL_ALIAS | HL_HOST_CODE_PREFERRED, &mapping);
+    int exact = exact_result.status == HL_STATUS_OK && mapping.writable_address == rw &&
+                mapping.executable_address == rx;
+    if (exact_result.status == HL_STATUS_OK) (void)services.memory->release(services.context, mapping.handle);
+    hl_host_linux_destroy(host);
     if (!exact) return -EADDRNOTAVAIL;
     *result = 5;
     return 0;
