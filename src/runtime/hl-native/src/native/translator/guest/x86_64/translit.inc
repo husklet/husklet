@@ -430,6 +430,7 @@ static void translit_external_absolute_generation_reset(void) {
 }
 
 static void translit_chain_site_note(uint8_t *site, uint8_t *fallback, uint64_t source, uint64_t target) {
+    if (__builtin_expect(!g_pcache, 1)) return;
     uintptr_t base = (uintptr_t)g_cache, s = (uintptr_t)site, f = (uintptr_t)fallback;
     if (s < base || f < base || s - base > UINT32_MAX || f - base > UINT32_MAX ||
         translit_chain_site_count >= TL_CHAIN_SITE_N) {
@@ -530,6 +531,7 @@ static void translit_emit_pcache_census(hl_x64_asm *a, uint16_t ordinal) {
 }
 
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind) {
+    if (__builtin_expect(!g_pcache, 1)) return;
     (void)emitter_kind;
     uintptr_t base = (uintptr_t)g_cache, value = (uintptr_t)slot;
     if (value < base || value - base > CACHE_SZ - sizeof(uint64_t)) return;
