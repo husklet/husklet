@@ -2700,6 +2700,8 @@ static void record_guest_fault_state(struct cpu *, int, siginfo_t *);
 static int gnx_hit(uint64_t, uint64_t);
 static void gnx_add(uint64_t, uint64_t);
 static void gnx_clear(uint64_t, uint64_t);
+static void filemap_register(uint64_t, uint64_t, int, uint64_t, int, int);
+static int jit86_load_has_exec_alias(uint64_t, size_t);
 
 static int translit_test_deliver_guest_fault(struct cpu *cpu, ucontext_t *context, uint64_t address) {
     siginfo_t info = {0};
@@ -4339,13 +4341,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                                                               &riprel_readonly_op_end);
                 int executable_target = !g_nonpie_lo &&
                                         gnx_hit(storage_target, insn.opsize == 8 ? 8 : 4);
+                int executable_alias = !g_nonpie_lo &&
+                                       jit86_load_has_exec_alias(storage_target, insn.opsize == 8 ? 8 : 4);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
                 if (!readonly_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
                                                     context->riprel_load_bridge_enabled &&
-                                                        !direct_data_authority && !executable_target,
+                                                        !direct_data_authority && !executable_target && !executable_alias,
                                                     &preserve_register))) {
                     if (g_nonpie_lo)
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
@@ -5424,6 +5428,47 @@ static int translit_riprel_load_bridge_gate_test(void) {
         if (mode == 7) gnx_clear((uint64_t)(uintptr_t)(guest + target_offset),
                                  (uint64_t)(uintptr_t)(guest + target_offset + 8));
     }
+    // A real MAP_SHARED registration permanently disables direct fetch authority for the process.
+    // Isolate that lifecycle transition in a child so the rest of this integration process remains usable.
+    int shared_alias_exact = 0;
+    pid_t shared_child = fork();
+    if (shared_child == 0) {
+        int descriptors[2] = {-1, -1};
+        int child_exact = pipe(descriptors) == 0;
+        if (child_exact) {
+            uint64_t target_address = (uint64_t)(uintptr_t)(guest + target_offset);
+            uint64_t alias_address = (uint64_t)(uintptr_t)(guest + source_offset + 64);
+            filemap_register(target_address, 8, descriptors[0], 0, 1, 0);
+            jit_body_owner_drop_generation(g_cache_gen);
+            map_clear();
+            memset(arena, 0, mapping_size);
+            g_cp = arena + sizeof(struct interp_block);
+            (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+            hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+            struct interp_block *block = (struct interp_block *)arena;
+            void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+            child_exact = context != NULL && body != NULL;
+            if (context != NULL) hl_x86_hot_context_destroy(context);
+            filemap_register(alias_address, 8, descriptors[0], 0, 1, 0);
+            gnx_add(alias_address, alias_address + 8);
+            jit_body_owner_drop_generation(g_cache_gen);
+            map_clear();
+            memset(arena, 0, mapping_size);
+            g_cp = arena + sizeof(struct interp_block);
+            context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+            block = (struct interp_block *)arena;
+            body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+            child_exact = child_exact && context != NULL && body == NULL;
+            if (context != NULL) hl_x86_hot_context_destroy(context);
+            close(descriptors[0]);
+            close(descriptors[1]);
+        }
+        _exit(child_exact ? 0 : 1);
+    }
+    int shared_status = 0;
+    shared_alias_exact = shared_child > 0 && waitpid(shared_child, &shared_status, 0) == shared_child &&
+                         WIFEXITED(shared_status) && WEXITSTATUS(shared_status) == 0;
+    execution_exact &= shared_alias_exact;
     // Exercise the real decoder/builder/body path for both architectural widths and every destination
     // that can safely be borrowed.  RSP is the sole exclusion because the emitted load cannot use it as
     // an address temporary without changing the host stack.
@@ -5575,7 +5620,7 @@ static int translit_riprel_load_bridge_gate_test(void) {
     g_nonpie_bias = saved_nonpie_bias;
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
-    return execution_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
+    return execution_exact && shared_alias_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
                    counts[4] == 0 && counts[5] == 0 && counts[6] == 0 && counts[7] == 0
                ? 0
                : (int)((execution_error << 28) | (counts[0] << 24) | (counts[1] << 16) |

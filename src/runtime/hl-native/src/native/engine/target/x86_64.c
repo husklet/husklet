@@ -656,6 +656,38 @@ static uint64_t jit86_store_alias_segment(struct cpu *cpu, uint64_t cursor, uint
     return segment_last;
 }
 
+// True when a direct data load overlaps a MAP_SHARED view whose same-backing,
+// same-offset peer is executable. This runs only while building a translation;
+// the emitted load itself remains a plain host load.
+static int jit86_load_has_exec_alias(uint64_t guest, size_t size) {
+    if (size == 0 || guest > UINT64_MAX - size || !filemap_shared_filter_maybe(guest, size)) return 0;
+    uint64_t last = guest + size;
+    int hit = 0;
+    pthread_mutex_lock(&g_filemap_lock);
+    for (int source_index = 0; !hit && source_index < g_nfilemap; ++source_index) {
+        const struct guest_file_mapping *source = &g_filemap[source_index];
+        if (!source->shared || source->hi <= guest || source->lo >= last) continue;
+        uint64_t first = source->lo > guest ? source->lo : guest;
+        uint64_t end = source->hi < last ? source->hi : last;
+        uint64_t backing_first = source->offset + (first - source->lo);
+        uint64_t backing_last = backing_first + (end - first);
+        for (int alias_index = 0; !hit && alias_index < g_nfilemap; ++alias_index) {
+            const struct guest_file_mapping *alias = &g_filemap[alias_index];
+            if (!alias->shared || alias->device != source->device || alias->inode != source->inode) continue;
+            uint64_t alias_length = alias->hi - alias->lo;
+            if (alias->offset > UINT64_MAX - alias_length) continue;
+            uint64_t alias_backing_last = alias->offset + alias_length;
+            uint64_t overlap_first = backing_first > alias->offset ? backing_first : alias->offset;
+            uint64_t overlap_last = backing_last < alias_backing_last ? backing_last : alias_backing_last;
+            if (overlap_last <= overlap_first) continue;
+            uint64_t alias_guest = alias->lo + (overlap_first - alias->offset);
+            hit = gnx_hit(alias_guest, overlap_last - overlap_first);
+        }
+    }
+    pthread_mutex_unlock(&g_filemap_lock);
+    return hit;
+}
+
 static void jit86_store_alias_changed(uint64_t guest, size_t size) {
     if (size == 0 || guest > UINT64_MAX - size) return;
     struct cpu *cpu = pthread_getspecific(g_cpu_key);
