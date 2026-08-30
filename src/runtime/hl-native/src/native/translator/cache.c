@@ -1844,8 +1844,19 @@ static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int creat
     if (!create || empty == NULL) return NULL;
     // Keep the 16-byte search entry compact: one parallel 16-bit mask per range carries the complete
     // x86 GPR preserve set, in the same allocation and behind the same release publication as the entry.
-    jit_body_owner_entry *entries = calloc(JIT_BODY_OWNER_N, sizeof(*entries) + sizeof(jit_body_owner_preserve));
+    size_t allocation_size = JIT_BODY_OWNER_N * (sizeof(jit_body_owner_entry) + sizeof(jit_body_owner_preserve));
+    jit_body_owner_entry *entries = malloc(allocation_size);
     if (entries == NULL) return NULL;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    /* Production deliberately leaves the unpublished tail untouched.  Poison it in
+       test builds so a lookup that escapes the release-published count cannot pass
+       by mistaking allocator-supplied zeroes for an empty owner range. */
+    jit_body_owner_preserve *poison_preserves = (jit_body_owner_preserve *)(void *)(entries + JIT_BODY_OWNER_N);
+    for (uint32_t i = 0; i < JIT_BODY_OWNER_N; i++) {
+        entries[i] = (jit_body_owner_entry){0, CACHE_SZ, UINT64_C(0xa5a5a5a5a5a5a5a5)};
+        poison_preserves[i] = UINT32_C(0xa5a5a5a5);
+    }
+#endif
     empty->generation = generation;
     empty->rw = g_cache;
     empty->rw2rx = g_rw2rx;

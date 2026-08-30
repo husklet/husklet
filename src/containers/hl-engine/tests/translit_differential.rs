@@ -2420,7 +2420,7 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     );
     assert_eq!(
         selected_stack_backend.body_owner_recovered, 1,
-        "the forced instruction-ring miss did not recover through the immutable body owner -- {}",
+        "the forced instruction-ring miss did not recover through the immutable body owner with a poisoned unpublished tail -- {}",
         selected_stack_backend.line
     );
     let native_stack = std::process::Command::new(&executable)
