@@ -7339,6 +7339,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     g_cache = arena; g_cp = arena + sizeof(struct interp_block); g_rw2rx = 0;
     g_cache_gen = UINT64_MAX - scenario; g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
     map_clear();
+    translit_shared_ibtc_stubs_reset();
     translit_fall_fixture_bytes = guest;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = 4096;
@@ -7351,6 +7352,11 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     uint64_t source = (uint64_t)(uintptr_t)guest;
     void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
     block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+    uint64_t emitted_hash = UINT64_C(1469598103934665603);
+    if (body != NULL) {
+        uint8_t *byte = (uint8_t *)block + block->host_entry_off;
+        while (byte < g_cp) { emitted_hash ^= *byte++; emitted_hash *= UINT64_C(1099511628211); }
+    }
     uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
     struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
     uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
@@ -7413,19 +7419,15 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
                     WIFEXITED(status) && WEXITSTATUS(status) == 0;
         }
     }
-    uint64_t hash = UINT64_C(1469598103934665603);
-    if (body != NULL) {
-        uint8_t *byte = (uint8_t *)block + block->host_entry_off;
-        while (byte < g_cp) { hash ^= *byte++; hash *= UINT64_C(1099511628211); }
-    }
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context); (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
     (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
+    translit_shared_ibtc_stubs_reset();
     map_clear(); g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx;
     g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
     munmap(guest, 4096); munmap(arena, 8192);
     if (!exact) return 256;
-    return scenario >= 181 ? (int)(hash & UINT64_C(0x7fffffff)) : 0;
+    return scenario >= 181 ? (int)(emitted_hash & UINT64_C(0x7fffffff)) : 0;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

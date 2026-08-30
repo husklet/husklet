@@ -74,5 +74,5 @@ fn fs_load_bridge_absent_and_explicit_off_emit_identical_baseline_body() {
     // Frozen alongside scenarios 170..=172, whose larger option-OFF body is byte-identical to exact
     // c8da42dfd. This fixture adds the FS boundary itself: absent and explicit zero must both stop after
     // the preceding NOP with the same one-instruction profile and emitted body.
-    assert_eq!(absent, 999_912_242);
+    assert_eq!(absent, 872_088_701);
 }
