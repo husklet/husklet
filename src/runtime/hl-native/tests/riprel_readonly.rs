@@ -33,3 +33,14 @@ fn readonly_riprel_rejected_prefixes_fall_back_at_the_real_builder_boundary() {
         assert_eq!(hl_native::x86_64_translit_displaced_test(scenario), 0, "prefix scenario {scenario}");
     }
 }
+
+#[test]
+fn readonly_riprel_option_off_emission_receipt() {
+    let _guard = native_globals();
+    // Re-derived from exact c8da42dfd with the same fixed guest/arena addresses and toolchain.  The C
+    // hook also rebuilds once with the option absent and once explicitly set to zero, and returns zero
+    // if their bytes, body length, or profile boundary differ.
+    assert_eq!(hl_native::x86_64_translit_displaced_test(170), 1_094_434_755);
+    assert_eq!(hl_native::x86_64_translit_displaced_test(171), 1_846_790_643);
+    assert_eq!(hl_native::x86_64_translit_displaced_test(172), (223 << 16) | 1);
+}

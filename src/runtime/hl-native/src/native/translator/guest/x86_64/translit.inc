@@ -519,6 +519,7 @@ static int translit_test_fall_marker_seen;
 static int translit_fall_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
+static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
@@ -2819,6 +2820,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario >= 160 && scenario <= 162) return translit_riprel_readonly_fixture_test(scenario);
     if (scenario >= 163 && scenario <= 169) return translit_riprel_readonly_rejection_test(scenario);
+    if (scenario >= 170 && scenario <= 172) return translit_riprel_readonly_off_receipt_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4985,6 +4987,92 @@ static int translit_riprel_readonly_rejection_test(unsigned scenario) {
     g_nonpie_bias = saved_nonpie_bias;
     munmap(guest, 8192);
     munmap(arena, arena_size);
+    return result;
+}
+
+static int translit_riprel_readonly_off_receipt_test(unsigned scenario) {
+    const size_t mapping_size = 8192;
+    uint8_t *arena = mmap((void *)UINT64_C(0x700000000000), mapping_size,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    uint8_t *guest = mmap((void *)UINT64_C(0x41000000), mapping_size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, mapping_size);
+        if (guest != MAP_FAILED) munmap(guest, mapping_size);
+        return 249;
+    }
+    memset(guest, 0x0f, mapping_size);
+    const size_t source_offset = 128, target_offset = 4096;
+    guest[source_offset] = 0x31; // xor eax,eax: the c8-stable emitted prefix
+    guest[source_offset + 1] = 0xc0;
+    guest[source_offset + 2] = 0x80;
+    guest[source_offset + 3] = 0x3d;
+    int32_t displacement = (int32_t)(target_offset - source_offset - 9);
+    memcpy(guest + source_offset + 4, &displacement, sizeof displacement);
+    guest[source_offset + 8] = 0x20;
+    guest[target_offset] = 0x10;
+
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    uint64_t saved_nonpie_lo = g_nonpie_lo, saved_nonpie_hi = g_nonpie_hi, saved_nonpie_bias = g_nonpie_bias;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_C(0xfffffffffffffeff) - scenario;
+    g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    map_clear();
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = mapping_size;
+    (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *block = (struct interp_block *)arena;
+    uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+    void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+    uint64_t hash = UINT64_C(14695981039346656037);
+    if (body != NULL)
+        for (uint32_t i = 0; i < block->host_len; i++) {
+            hash ^= ((const uint8_t *)body)[i];
+            hash *= UINT64_C(1099511628211);
+        }
+    uint32_t host_len = block->host_len;
+    uint16_t profile_insns = block->profile_insns;
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    memset(arena, 0, mapping_size);
+    g_cp = arena + sizeof(struct interp_block);
+    (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "0", 1);
+    block = (struct interp_block *)arena;
+    void *off_body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+    uint64_t off_hash = UINT64_C(14695981039346656037);
+    if (off_body != NULL)
+        for (uint32_t i = 0; i < block->host_len; i++) {
+            off_hash ^= ((const uint8_t *)off_body)[i];
+            off_hash *= UINT64_C(1099511628211);
+        }
+    if (body == NULL || off_body == NULL || off_hash != hash || block->host_len != host_len ||
+        block->profile_insns != profile_insns)
+        hash = 0;
+    int result = scenario == 170 ? (int)(hash & UINT64_C(0x7fffffff))
+                                 : scenario == 171 ? (int)((hash >> 31) & UINT64_C(0x7fffffff))
+                                                   : (int)((host_len << 16) | profile_insns);
+    (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_nonpie_lo = saved_nonpie_lo;
+    g_nonpie_hi = saved_nonpie_hi;
+    g_nonpie_bias = saved_nonpie_bias;
+    munmap(guest, mapping_size);
+    munmap(arena, mapping_size);
     return result;
 }
 
