@@ -15,6 +15,10 @@
 #include "guest_fetch.h"
 
 #include <stddef.h>
+#if defined(__linux__)
+#include "../include/hl/linux.h"
+#include <sys/wait.h>
+#endif
 
 #define CACHE_SZ (64u << 20)
 #define HL_JIT_PREFERRED_RW UINT64_C(0x0000700000000000)
@@ -249,6 +253,57 @@ int HL_TARGET_LOCAL(jit_preferred_mapping_test)(uint64_t *result) {
     if (!exact) return -EADDRNOTAVAIL;
     *result = 5;
     return 0;
+#endif
+}
+
+int HL_TARGET_LOCAL(jit_fork_mapping_ownership_test)(uint64_t *result) {
+#if !defined(__linux__)
+    (void)result;
+    return -ENOTSUP;
+#else
+    enum { TEST_SIZE = 1u << 16 };
+    const uint64_t sentinel_address = HL_JIT_PREFERRED_RW + UINT64_C(510) * HL_JIT_PREFERRED_STRIDE;
+    hl_host_linux *host = NULL;
+    hl_host_services services = {0};
+    hl_host_code_mapping mapping = {0};
+    void *sentinel = MAP_FAILED;
+    int status = 0;
+    int rc = -EIO;
+    if (hl_host_linux_create(&host, &services) != HL_STATUS_OK) return -ENOMEM;
+    if (services.memory->reserve_code(services.context, TEST_SIZE, UINT64_C(4096),
+                                      HL_HOST_CODE_DUAL_ALIAS, &mapping).status != HL_STATUS_OK)
+        goto done;
+    sentinel = mmap((void *)(uintptr_t)sentinel_address, TEST_SIZE, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (sentinel != (void *)(uintptr_t)sentinel_address) goto done;
+    *(volatile uint8_t *)(uintptr_t)mapping.writable_address = UINT8_C(0x7b);
+    *(volatile uint8_t *)sentinel = UINT8_C(0x5a);
+    mapping.content_size = 1;
+    pid_t child = fork();
+    if (child < 0) goto done;
+    if (child == 0) {
+        uint64_t rw = mapping.writable_address;
+        uint64_t rx = mapping.executable_address;
+        int child_rc = services.memory->repair_code_after_fork(services.context, &mapping, 0).status == HL_STATUS_OK &&
+                               mapping.writable_address == rw && mapping.executable_address == rx &&
+                               *(volatile uint8_t *)(uintptr_t)rw == 0 &&
+                               *(volatile uint8_t *)(uintptr_t)rx == 0 &&
+                               *(volatile uint8_t *)sentinel == UINT8_C(0x5a)
+                           ? 0
+                           : 1;
+        _exit(child_rc);
+    }
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) goto done;
+    if (*(volatile uint8_t *)(uintptr_t)mapping.writable_address != UINT8_C(0x7b) ||
+        *(volatile uint8_t *)sentinel != UINT8_C(0x5a))
+        goto done;
+    *result = 2;
+    rc = 0;
+done:
+    if (sentinel == (void *)(uintptr_t)sentinel_address) (void)munmap(sentinel, TEST_SIZE);
+    if (mapping.handle != 0) (void)services.memory->release(services.context, mapping.handle);
+    hl_host_linux_destroy(host);
+    return rc;
 #endif
 }
 #endif
