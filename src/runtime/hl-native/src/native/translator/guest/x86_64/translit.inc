@@ -5349,6 +5349,7 @@ static int translit_riprel_load_bridge_gate_test(void) {
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
     uint16_t counts[7] = {0};
     int execution_exact = 1, execution_error = 0;
+    struct interp_block *last_matrix_block = NULL;
     for (int mode = 0; mode < 7; ++mode) {
         if (mprotect(guest + 4096, 4096, mode == 2 ? PROT_READ : PROT_READ | PROT_WRITE) != 0) {
             execution_exact = 0;
@@ -5415,6 +5416,7 @@ static int translit_riprel_load_bridge_gate_test(void) {
                 hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
                 struct interp_block *block = (struct interp_block *)arena;
                 void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+                last_matrix_block = block;
                 if (body == NULL || block->profile_insns != 1) {
                     execution_exact = 0;
                 } else {
@@ -5467,6 +5469,16 @@ static int translit_riprel_load_bridge_gate_test(void) {
                 if (context != NULL) hl_x86_hot_context_destroy(context);
             }
         }
+    }
+    if (execution_exact && last_matrix_block != NULL) {
+        map_put(source, last_matrix_block->guest_start, last_matrix_block->guest_end,
+                last_matrix_block, last_matrix_block);
+        execution_exact &= map_body(source) == last_matrix_block;
+        int saved_rwx_guest = g_rwx_guest;
+        g_rwx_guest = 1;
+        jit86_drop_range_translations(source, source + 1);
+        g_rwx_guest = saved_rwx_guest;
+        execution_exact &= map_body(source) == NULL;
     }
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
     (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
