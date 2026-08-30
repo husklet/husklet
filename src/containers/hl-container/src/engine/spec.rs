@@ -39,6 +39,18 @@ impl TryFrom<&ProcessConfig> for Spec {
             "HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST",
             std::env::var_os("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST").is_some(),
         )?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT",
+            std::env::var_os("HL_TRANSLIT").is_some_and(|value| value == "1"),
+        )?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_RIPREL_READONLY",
+            std::env::var_os("HL_TRANSLIT_RIPREL_READONLY").is_some_and(|value| value == "1"),
+        )?;
         Self::flag(&mut options, "HL_CHECKPOINT", launch.checkpoint.is_some())?;
         Self::flag(
             &mut options,
