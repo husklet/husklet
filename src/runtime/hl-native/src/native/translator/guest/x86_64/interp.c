@@ -670,6 +670,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         cpu->reason = R_BRANCH;
         return;
     }
+#if defined(HL_NATIVE_TEST_HOOKS)
     if (g_coldprof && block->host_entry_off == 0) {
         uint16_t ordinal = INTERP_BLOCK_PCACHE_ORDINAL(block);
         if (ordinal != UINT16_MAX) {
@@ -678,6 +679,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
                 translit_pcache_census_order[ordinal] = ++translit_pcache_census_sequence;
         }
     }
+#endif
     // Guest-fault landing pad. savemask=0 -- this is the hottest line in the engine (once per guest block)
     // and savemask=1 makes glibc issue a real rt_sigprocmask here. interp_restore_handler_mask does the
     // restore on the fault path instead, where it is paid once per fault rather than once per block.

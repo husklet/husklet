@@ -1162,7 +1162,7 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
 
 static void *map_body(uint64_t gpc) {
     int i = map_idx(gpc);
-    return i >= 0 ? g_map[i].body : NULL;
+    return i < 0 ? NULL : g_map[i].body;
 }
 
 static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body) {
