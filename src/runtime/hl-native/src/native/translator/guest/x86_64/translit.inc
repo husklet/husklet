@@ -7106,7 +7106,8 @@ static int translit_report(char *out, size_t size) {
                         " mixed_sse_encounters=%llu mixed_sse_admitted=%llu mixed_sse_transitions=%llu"
                         " mixed_sse_executed=%llu mixed_sse_executed_transitions=%llu"
                         " mixed_sse_disabled_boundaries=%llu body_owner_low_rotations=%llu"
-                        " body_owner_low_retranslations=%llu\n",
+                        " body_owner_low_retranslations=%llu"
+                        TRANSLIT_FS_BRIDGE_PROFILE "\n",
                         (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                         (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                         (unsigned long long)mixed_sse_encounters, (unsigned long long)mixed_sse_admitted,
@@ -7114,7 +7115,7 @@ static int translit_report(char *out, size_t size) {
                         (unsigned long long)mixed_sse_executed_transitions,
                         (unsigned long long)mixed_sse_disabled_boundaries,
                         (unsigned long long)body_owner_low_rotations,
-                        (unsigned long long)body_owner_low_retranslations);
+                        (unsigned long long)body_owner_low_retranslations TRANSLIT_FS_BRIDGE_ARGUMENTS);
     return snprintf(out, size,
                     "[prof] translit: blocks=%llu entries=%llu declined=%llu stitch_candidates=%llu"
                     " stitch_admitted=%llu rip_indirect_lowered=%llu provenance_fallback=%llu"

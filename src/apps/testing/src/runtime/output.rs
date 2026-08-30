@@ -791,7 +791,7 @@ fn valid_profile_line(line: &str) -> bool {
     let Some(fields) = line.strip_prefix("[prof] ") else {
         return false;
     };
-    fields.split_whitespace().any(|field| {
+    let summary = fields.split_whitespace().any(|field| {
         field
             .strip_prefix("crossings=")
             .is_some_and(|value| value.parse::<u64>().is_ok())
@@ -799,7 +799,19 @@ fn valid_profile_line(line: &str) -> bool {
         field
             .strip_prefix("translations=")
             .is_some_and(|value| value.parse::<u64>().is_ok())
-    })
+    });
+    let translit = fields.strip_prefix("translit: ").is_some_and(|fields| {
+        ["blocks", "entries", "declined", "fs_load_bridge_admitted"]
+            .iter()
+            .all(|wanted| {
+                fields.split_whitespace().any(|field| {
+                    field
+                        .split_once('=')
+                        .is_some_and(|(name, value)| name == *wanted && value.parse::<u64>().is_ok())
+                })
+            })
+    });
+    summary || translit
 }
 
 /// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
@@ -875,7 +887,12 @@ mod tests {
         assert_eq!(shape["direct_call_ibtc_fills"], 2);
         assert_eq!(shape["direct_call_ibtc_invalid_refusals"], 0);
         let missing = SHAPE.replacen(" direct_call_ibtc_emitted=1", "", 1);
-        assert!(backend_shape(&missing).unwrap_err().to_string().contains("omitted field"));
+        assert!(
+            backend_shape(&missing)
+                .unwrap_err()
+                .to_string()
+                .contains("omitted field")
+        );
         let digest = backend_tree_digest(census().as_bytes());
         assert!(digest.contains("claimed=3 completed=1"), "{digest}");
         assert!(
@@ -1218,6 +1235,12 @@ mod tests {
             b"[prof] crossings=41 translations=7\n[prof] dispatcher crossings=42 translations=8\n"
         );
         assert!(valid_profile_line("[prof] crossings=41 translations=7"));
+        assert!(valid_profile_line(
+            "[prof] translit: blocks=3 entries=4 declined=0 fs_load_bridge_admitted=1"
+        ));
+        assert!(!valid_profile_line(
+            "[prof] translit: blocks=3 entries=4 declined=0 fs_load_bridge_admitted=forged"
+        ));
         assert!(!valid_profile_line("[prof] forged guest text"));
         assert_eq!(
             guest_stderr("guest warning\n[diag] boundary samples=7\n[prof] crossings=41 translations=7\n"),
