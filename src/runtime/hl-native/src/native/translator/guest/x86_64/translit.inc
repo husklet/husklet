@@ -518,6 +518,7 @@ static uint32_t translit_test_last_fall_marker;
 static int translit_test_fall_marker_seen;
 static int translit_fall_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_fixture_test(unsigned scenario);
+static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
@@ -858,12 +859,13 @@ static void translit_perf_map_publish_helper(const char *name, const uint8_t *st
 }
 
 static void translit_perf_map_publish(const struct interp_block *block, const uint8_t *start, uint32_t host_len,
-                                      uint32_t instruction_count) {
+                                      uint32_t instruction_count, uint32_t readonly_riprel_count) {
     const char *fingerprint = hl_c_backend_build_fingerprint();
     uint64_t guest_length = block->guest_end >= block->gpc ? block->guest_end - block->gpc : 0;
     char name[256];
-    int length = snprintf(name, sizeof name, "hl_tl_%s_g%llx_gl%llu_i%u", fingerprint,
-                          (unsigned long long)block->gpc, (unsigned long long)guest_length, instruction_count);
+    int length = snprintf(name, sizeof name, "hl_tl_%s_g%llx_gl%llu_i%u_rr%u", fingerprint,
+                          (unsigned long long)block->gpc, (unsigned long long)guest_length, instruction_count,
+                          readonly_riprel_count);
     if (length <= 0 || (size_t)length >= sizeof name) return;
     translit_perf_map_publish_named(name, start, host_len);
 }
@@ -2815,7 +2817,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         readonly_output.cursor = emitted;
         return !translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &op_end) ? 0 : 222;
     }
-    if (scenario >= 160 && scenario <= 161) return translit_riprel_readonly_fixture_test(scenario);
+    if (scenario >= 160 && scenario <= 162) return translit_riprel_readonly_fixture_test(scenario);
+    if (scenario >= 163 && scenario <= 169) return translit_riprel_readonly_rejection_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4009,6 +4012,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
+    uint32_t readonly_riprel_count = 0;
     int previous_kind = TL_NO;
     uint64_t mixed_sse_transition_count = 0;
     int mixed_sse_boundary_stopped = 0;
@@ -4145,7 +4149,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
                     break;
                 }
-                if (readonly_lowered) preserve_register = HL_X64_R11;
+                if (readonly_lowered) {
+                    preserve_register = HL_X64_R11;
+                    readonly_riprel_count++;
+                }
                 uint64_t *counter = insn.op == 0x8D && !insn.two
                                         ? (g_nonpie_lo ? &translit_displaced_lea_lowered
                                                        : &translit_natural_lea_lowered)
@@ -4793,7 +4800,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     block->guest_start = linked_page_lo < gpc ? linked_page_lo : gpc;
     block->guest_end = linked_page_hi > pc ? linked_page_hi : pc;
     block->profile_insns = (uint16_t)count;
-    translit_perf_map_publish(block, start, block->host_len, (uint32_t)count);
+    translit_perf_map_publish(block, start, block->host_len, (uint32_t)count, readonly_riprel_count);
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
 #endif
@@ -4832,7 +4839,8 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
         return 229;
     }
     memset(guest, 0x0f, 8192);
-    const size_t source_offset = 128, target_offset = 4096;
+    const size_t source_offset = scenario == 162 ? 4093 : 128;
+    const size_t target_offset = scenario == 162 ? 8191 : 4096;
     int compare = scenario == 161;
     uint8_t opcode = compare ? 0x80 : 0xF6;
     uint8_t modrm = compare ? 0x3D : 0x05;
@@ -4902,6 +4910,67 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     else if (source_preserve != (1u << HL_X64_R11)) result = 240;
     else if (restore_preserve != (1u << HL_X64_R11)) result = 241;
 
+    (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_nonpie_lo = saved_nonpie_lo;
+    g_nonpie_hi = saved_nonpie_hi;
+    g_nonpie_bias = saved_nonpie_bias;
+    munmap(guest, 8192);
+    munmap(arena, arena_size);
+    return result;
+}
+
+static int translit_riprel_readonly_rejection_test(unsigned scenario) {
+    static const uint8_t prefixes[] = {0x67, 0x64, 0xF0, 0xF3, 0xF2, 0x66, 0x40};
+    const size_t arena_size = 8192;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, 8192, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, arena_size);
+        if (guest != MAP_FAILED) munmap(guest, 8192);
+        return 247;
+    }
+    memset(guest, 0x0f, 8192);
+    const size_t source_offset = 128, target_offset = 4096;
+    guest[source_offset] = prefixes[scenario - 163];
+    guest[source_offset + 1] = 0xF6;
+    guest[source_offset + 2] = 0x05;
+    int32_t displacement = (int32_t)(target_offset - source_offset - 8);
+    memcpy(guest + source_offset + 3, &displacement, sizeof displacement);
+    guest[source_offset + 7] = 0xA5;
+    guest[target_offset] = 0xA5;
+
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    uint64_t saved_nonpie_lo = g_nonpie_lo, saved_nonpie_hi = g_nonpie_hi, saved_nonpie_bias = g_nonpie_bias;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - scenario;
+    g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    map_clear();
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = 8192;
+    translit_test_last_fall_marker = 0;
+    translit_test_fall_marker_seen = 0;
+    (void)hl_option_set("HL_TRANSLIT_RIPREL_READONLY", "1", 1);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *block = (struct interp_block *)arena;
+    uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+    void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+    int result = body == NULL || block->profile_insns == 0 ? 0 : 248;
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
     translit_fall_fixture_bytes = NULL;
     if (context != NULL) hl_x86_hot_context_destroy(context);

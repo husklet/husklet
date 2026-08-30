@@ -370,6 +370,11 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--translit-direct-jmp-ibtc is available only in the x86-64 worker".to_owned(),
         ));
     }
+    if launch.translit_riprel_readonly && guest != Guest::X86_64 {
+        return Err(Failure::Request(
+            "--translit-riprel-readonly is available only in the x86-64 worker".to_owned(),
+        ));
+    }
     if launch.rootfs.is_none() && (launch.diagnostics || launch.translit || launch.native_supervised) {
         return Err(Failure::Request(
             "--diagnostics, --translit and --native-supervised require --rootfs; raw host-path launches do not carry launch options"
@@ -823,6 +828,33 @@ mod tests {
             &launch(&[
                 "--translit",
                 "--translit-direct-jmp-ibtc=off",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert!(reason(&failure).contains("available only in the x86-64 worker"));
+    }
+
+    #[test]
+    fn readonly_riprel_lowering_is_x86_transliteration_only() {
+        assert!(
+            LaunchArguments::try_parse_from([
+                "hl-x86_64",
+                "--translit-riprel-readonly",
+                "--rootfs",
+                "/image",
+                "bin/program",
+            ])
+            .is_err(),
+            "accepted the lowering without --translit"
+        );
+        let failure = execute(
+            Guest::Aarch64,
+            &launch(&[
+                "--translit",
+                "--translit-riprel-readonly",
                 "--rootfs",
                 "/image",
                 "bin/program",
