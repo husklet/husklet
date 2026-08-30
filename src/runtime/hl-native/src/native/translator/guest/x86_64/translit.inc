@@ -2691,17 +2691,17 @@ static int translit_fix_riprel(struct translit_builder *b, const struct insn *in
 }
 
 enum { TL_SUCCESSOR_OK, TL_SUCCESSOR_DECODE_REFUSED, TL_SUCCESSOR_PAGE_REFUSED };
+static int gnx_hit(uint64_t, uint64_t);
+static int jit86_load_has_exec_alias(uint64_t, size_t);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static void jit_guest_soft_test_set(int);
 static void jit_guest_bus_test_set(int);
 static const int g_translit_greg[16];
 static int translit_test_deliver_guest_fault(struct cpu *, ucontext_t *, uint64_t);
 static void record_guest_fault_state(struct cpu *, int, siginfo_t *);
-static int gnx_hit(uint64_t, uint64_t);
 static void gnx_add(uint64_t, uint64_t);
 static void gnx_clear(uint64_t, uint64_t);
 static void filemap_register(uint64_t, uint64_t, int, uint64_t, int, int);
-static int jit86_load_has_exec_alias(uint64_t, size_t);
 
 static int translit_test_deliver_guest_fault(struct cpu *cpu, ucontext_t *context, uint64_t address) {
     siginfo_t info = {0};
