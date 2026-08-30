@@ -507,14 +507,17 @@ int main(void) {
                 read_only_root: false,
                 network_isolated: true,
                 seccomp_baseline: hl_container::SeccompBaseline::Container,
-            });
+        });
         containers.create(repeat).await?;
+        let repeat_started = Instant::now();
         containers.start("pcache-profile-repeat").await?;
         let repeat_status = containers.wait("pcache-profile-repeat").await?;
+        let repeat_elapsed = repeat_started.elapsed();
         let repeat_logs = containers.logs("pcache-profile-repeat").await?;
         containers.remove("pcache-profile-repeat").await?;
         require(repeat_status == ExitStatus::Code(0), "repeated compiler process failed")?;
         require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
+        eprintln!("pcache-profile authority_hit_elapsed_us={}", repeat_elapsed.as_micros());
     }
     benchmark_barrier("done", "finish")?;
     if status != ExitStatus::Code(0) {
