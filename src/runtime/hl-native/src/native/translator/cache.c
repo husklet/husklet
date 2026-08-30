@@ -43,6 +43,9 @@ static hl_emit_state g_emit;
 #define g_dualmap g_emit.dual_alias
 #define g_wx_toggles g_emit.wx_toggles
 #define g_code_mapping g_emit.mapping
+#if defined(__linux__) && defined(HL_NATIVE_TEST_HOOKS)
+static void *g_preferred_collision_sentinel;
+#endif
 
 // ---- dual-mapped (W^X-toggle-free) code cache ----
 // g_cache/g_cp are the RW (writer) alias; the engine EXECUTES through an RX alias of the
@@ -341,6 +344,14 @@ static int jit_cache_init(void) {
 #else
 #if defined(HL_NATIVE_TEST_HOOKS)
     int force_single = hl_option_flag_value("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST", 0);
+    if (hl_option_flag_value("HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST", 0)) {
+        uint64_t collision = HL_JIT_PREFERRED_RW + HL_JIT_PREFERRED_STRIDE;
+        g_preferred_collision_sentinel = mmap((void *)(uintptr_t)collision, CACHE_SZ,
+                                              PROT_READ | PROT_WRITE,
+                                              MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (g_preferred_collision_sentinel == (void *)(uintptr_t)collision)
+            *(volatile uint8_t *)g_preferred_collision_sentinel = UINT8_C(0x5a);
+    }
 #else
     int force_single = 0;
 #endif

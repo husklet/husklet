@@ -30,6 +30,7 @@ enum Mode {
     CacheThreadCold,
     CacheThreadValid,
     CacheValid,
+    CachePreferredCollision,
     CacheAuthorityReuse,
     CacheUpperOverride,
     CacheBitflip,
@@ -60,6 +61,7 @@ impl Mode {
             "cache-thread-cold" => Ok(Self::CacheThreadCold),
             "cache-thread-valid" => Ok(Self::CacheThreadValid),
             "cache-valid" => Ok(Self::CacheValid),
+            "cache-preferred-collision" => Ok(Self::CachePreferredCollision),
             "cache-authority-reuse" => Ok(Self::CacheAuthorityReuse),
             "cache-upper-override" => Ok(Self::CacheUpperOverride),
             "cache-bitflip" => Ok(Self::CacheBitflip),
@@ -119,6 +121,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     } else if matches!(
         mode,
         Mode::CacheValid
+            | Mode::CachePreferredCollision
             | Mode::CacheBitflip
             | Mode::CacheTruncated
             | Mode::CacheSemanticMap
@@ -712,6 +715,26 @@ int main(void) {
                 }),
                 "fresh generation did not publish an exact relocation-ledger receipt",
             )?,
+            Mode::CachePreferredCollision => {
+                let receipt = entries
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(21)
+                            .any(|part| part == b".preferred-collision-")
+                    })
+                    .ok_or("preferred-address collision emitted no clean-MISS receipt")?;
+                let state = fs::read(receipt.path())?;
+                require(state.len() == 32, "preferred-address collision receipt has wrong size")?;
+                let word = |offset| u64::from_le_bytes(state[offset..offset + 8].try_into().unwrap());
+                require(
+                    word(0) == 0x5a && word(8) != word(16) && word(24) == word(16),
+                    "preferred-address collision replaced its sentinel or did not fall back",
+                )?;
+                require(!cache_loaded, "preferred-address collision restored a fixed-image HIT")?;
+            }
             Mode::CacheSemanticMap
             | Mode::CacheSemanticOwner
             | Mode::CacheSemanticDuplicate

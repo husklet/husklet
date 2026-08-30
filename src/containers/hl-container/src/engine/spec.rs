@@ -59,6 +59,12 @@ impl TryFrom<&ProcessConfig> for Spec {
             "HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN",
             std::env::var_os("HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN").is_some(),
         )?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST",
+            std::env::var_os("HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST").is_some(),
+        )?;
         Self::flag(&mut options, "HL_CHECKPOINT", launch.checkpoint.is_some())?;
         Self::flag(
             &mut options,

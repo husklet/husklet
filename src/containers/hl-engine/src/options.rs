@@ -316,6 +316,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only invalidate one restored direct-chain target before warm execution",
         Flag
     ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST",
+        "test-only occupy the reusable fixed-image address",
+        Flag
+    ),
     internal!("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", Flag),
     internal!(
         "HL_PCACHE_EXEC_AUTHORITY",

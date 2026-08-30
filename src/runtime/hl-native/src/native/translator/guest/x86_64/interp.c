@@ -2812,6 +2812,24 @@ static int pcache_load(uint64_t entry_jump) {
        that process must treat a fixed-image artifact as a clean miss rather than relocate or replace it. */
     if (x64_pc_get64(bytes + 248) != (uint64_t)(uintptr_t)g_cache ||
         x64_pc_get64(bytes + 256) != (uint64_t)(uintptr_t)J_RX(g_cache)) {
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(__linux__)
+        if (hl_option_get("HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST") != NULL &&
+            g_preferred_collision_sentinel != NULL) {
+            uint64_t state[4] = {
+                *(volatile uint8_t *)g_preferred_collision_sentinel,
+                (uint64_t)(uintptr_t)g_cache,
+                x64_pc_get64(bytes + 248),
+                (uint64_t)(uintptr_t)g_preferred_collision_sentinel,
+            };
+            char receipt[1024];
+            int length = snprintf(receipt, sizeof receipt, "%s.preferred-collision-%lld", path,
+                                  (long long)getpid());
+            if (length > 0 && (size_t)length < sizeof receipt)
+                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+            (void)munmap(g_preferred_collision_sentinel, CACHE_SZ);
+            g_preferred_collision_sentinel = NULL;
+        }
+#endif
         free(allocation);
         return 0;
     }
@@ -3331,6 +3349,14 @@ static void pcache_save(void) {
             int length = snprintf(receipt, sizeof receipt, "%s.warm-stats-%lld", base, (long long)getpid());
             if (length > 0 && (size_t)length < sizeof receipt)
                 (void)hl_persist_store_at(&g_x64_pc_directory, receipt, stats, sizeof stats);
+            if (hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST") != NULL && g_cache_gen != 1) {
+                length = snprintf(receipt, sizeof receipt, "%s.rollover-preserved-%lld", base,
+                                  (long long)getpid());
+                uint64_t state[3] = {g_cache_gen, (uint64_t)(uintptr_t)g_cache,
+                                     (uint64_t)(uintptr_t)J_RX(g_cache)};
+                if (length > 0 && (size_t)length < sizeof receipt)
+                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+            }
         }
         return;
     }
@@ -3344,7 +3370,25 @@ static void pcache_save(void) {
     /* The reusable artifact describes the deterministic first post-exec generation. Capacity/SMC rollovers
        intentionally use other preferred slots; never let one replace the last known reusable image. Warm
        runs returned above after reporting their receipt and never rewrite the authoritative artifact. */
-    if (g_cache_gen != 1) return;
+    uint64_t reusable_rw = HL_JIT_PREFERRED_RW + HL_JIT_PREFERRED_STRIDE;
+    uint64_t reusable_rx = g_dualmap ? reusable_rw + CACHE_SZ : reusable_rw;
+    if (g_cache_gen != 1 || (uint64_t)(uintptr_t)g_cache != reusable_rw ||
+        (uint64_t)(uintptr_t)J_RX(g_cache) != reusable_rx) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if (hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST") != NULL) {
+            char base[1024], receipt[1024];
+            if (x64_pc_file(base, sizeof base)) {
+                int length = snprintf(receipt, sizeof receipt, "%s.rollover-preserved-%lld", base,
+                                      (long long)getpid());
+                uint64_t state[3] = {g_cache_gen, (uint64_t)(uintptr_t)g_cache,
+                                     (uint64_t)(uintptr_t)J_RX(g_cache)};
+                if (length > 0 && (size_t)length < sizeof receipt)
+                    (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+            }
+        }
+#endif
+        return;
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (g_x64_pc_forked) {
         char base[1024], receipt[1024];
