@@ -388,7 +388,7 @@ struct interp_block {
     // Immutable translated instruction count. Production diagnostics aggregate this at execution time;
     // zero retains the interpreter-descriptor meaning without a separate side table or policy decision.
     uint16_t profile_insns;
-#if !defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS)
     uint16_t pcache_observe_ordinal;
 #endif
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -399,11 +399,11 @@ struct interp_block {
 };
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-#define INTERP_BLOCK_PCACHE_ORDINAL(block) UINT16_MAX
-#define INTERP_BLOCK_PCACHE_SET_ORDINAL(block, value) ((void)(block), (void)(value))
-#else
 #define INTERP_BLOCK_PCACHE_ORDINAL(block) ((block)->pcache_observe_ordinal)
 #define INTERP_BLOCK_PCACHE_SET_ORDINAL(block, value) ((block)->pcache_observe_ordinal = (value))
+#else
+#define INTERP_BLOCK_PCACHE_ORDINAL(block) UINT16_MAX
+#define INTERP_BLOCK_PCACHE_SET_ORDINAL(block, value) ((void)0)
 #endif
 
 static void *translate_block(hl_x86_hot_context *context, uint64_t gpc);
