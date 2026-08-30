@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt as _, path::Pa
 type Error = Box<dyn std::error::Error>;
 
 const UNIT_127_ASSEMBLY: &str = "a1d41926570d6ddfee050116a5698a9e5f7d2b7accf0dcfce685e46c707a7265";
+const CC1: &str = "/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -29,6 +30,7 @@ enum Mode {
     CacheThreadValid,
     CacheValid,
     CacheAuthorityReuse,
+    CacheUpperOverride,
     CacheBitflip,
     CacheTruncated,
     ForkNoExec,
@@ -57,6 +59,7 @@ impl Mode {
             "cache-thread-valid" => Ok(Self::CacheThreadValid),
             "cache-valid" => Ok(Self::CacheValid),
             "cache-authority-reuse" => Ok(Self::CacheAuthorityReuse),
+            "cache-upper-override" => Ok(Self::CacheUpperOverride),
             "cache-bitflip" => Ok(Self::CacheBitflip),
             "cache-truncated" => Ok(Self::CacheTruncated),
             "fork-no-exec" => Ok(Self::ForkNoExec),
@@ -98,8 +101,14 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     require(cache.is_absolute(), "profile cache is not absolute")?;
     if matches!(
         mode,
-        Mode::CacheCold | Mode::CacheAuthorityReuse | Mode::CacheThreadCold | Mode::CacheFreshRollover |
-            Mode::ForkNoExec | Mode::ForkExec | Mode::RelocationMissing
+        Mode::CacheCold
+            | Mode::CacheAuthorityReuse
+            | Mode::CacheUpperOverride
+            | Mode::CacheThreadCold
+            | Mode::CacheFreshRollover
+            | Mode::ForkNoExec
+            | Mode::ForkExec
+            | Mode::RelocationMissing
     ) {
         require(
             !cache.exists() || cache.read_dir()?.next().is_none(),
@@ -446,6 +455,18 @@ int main(void) {
     }
 
     let root = images.roots().fork_overlay(unpacked.snapshot())?;
+    if mode == Mode::CacheUpperOverride {
+        let view = images.roots().open_overlay(&root)?;
+        let host = view.lower().join(CC1.trim_start_matches('/'));
+        let authority = images.roots().executable_digest_authority(unpacked.snapshot());
+        let digest = authority
+            .authenticate(Path::new(CC1), &host)?
+            .ok_or("immutable image executable had no snapshot digest authority")?;
+        require(
+            digest.bytes_hashed != 0 && digest.bytes_hashed == digest.size,
+            "immutable image executable did not hash all positive image bytes",
+        )?;
+    }
     // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
     // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
     let process = if mode == Mode::ForkNoExec {
@@ -455,7 +476,7 @@ int main(void) {
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
         Process::new("/work/thread_warm")
     } else {
-        Process::new("/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1").args([
+        Process::new(CC1).args([
             "-quiet",
             "/work/src/unit_127.c",
             "-quiet",
@@ -489,7 +510,7 @@ int main(void) {
             seccomp_baseline: hl_container::SeccompBaseline::Container,
     });
     containers.create(spec).await?;
-    if mode != Mode::CacheAuthorityReuse {
+    if !matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
         benchmark_barrier("ready", "release")?;
     }
     let started = Instant::now();
@@ -498,8 +519,24 @@ int main(void) {
     let elapsed = started.elapsed();
     let logs = containers.logs("pcache-profile").await?;
     containers.remove("pcache-profile").await?;
-    if mode == Mode::CacheAuthorityReuse {
+    if matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
         let repeat_root = images.roots().fork_overlay(unpacked.snapshot())?;
+        if mode == Mode::CacheUpperOverride {
+            let view = images.roots().open_overlay(&repeat_root)?;
+            let relative = CC1.trim_start_matches('/');
+            let lower = view.lower().join(relative);
+            let upper = view.upper().join(relative);
+            fs::create_dir_all(upper.parent().ok_or("upper executable has no parent")?)?;
+            let mut replacement = fs::read(&lower)?;
+            replacement.push(0);
+            fs::write(&upper, &replacement)?;
+            fs::set_permissions(&upper, fs::Permissions::from_mode(0o755))?;
+            let authority = images.roots().executable_digest_authority(unpacked.snapshot());
+            require(
+                authority.authenticate(Path::new(CC1), &upper)?.is_none(),
+                "writable upper executable retained immutable snapshot digest authority",
+            )?;
+        }
         let repeat = ContainerSpec::new(repeat_root, repeat_process)
             .name("pcache-profile-repeat")
             .guest(Guest::X86_64)
@@ -511,7 +548,9 @@ int main(void) {
                 seccomp_baseline: hl_container::SeccompBaseline::Container,
         });
         containers.create(repeat).await?;
-        benchmark_barrier("ready", "release")?;
+        if mode == Mode::CacheAuthorityReuse {
+            benchmark_barrier("ready", "release")?;
+        }
         let repeat_started = Instant::now();
         containers.start("pcache-profile-repeat").await?;
         let repeat_status = containers.wait("pcache-profile-repeat").await?;
@@ -556,13 +595,40 @@ int main(void) {
                     .iter()
                     .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
                     && (!cfg!(feature = "native-test-hooks") || entries.iter().any(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(11)
+                                .any(|part| part == b".published-")
+                    })),
+                "cold arm did not publish a cache artifact (and hook receipt when enabled)",
+            )?,
+            Mode::CacheUpperOverride => require(
+                entries
+                    .iter()
+                    .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                    .count()
+                    >= 2
+                    && !entries.iter().any(|entry| {
                         entry
                             .file_name()
                             .as_encoded_bytes()
-                            .windows(11)
-                            .any(|part| part == b".published-")
-                    })),
-                "cold arm did not publish a cache artifact (and hook receipt when enabled)",
+                            .windows(5)
+                            .any(|part| part == b".hit-")
+                    })
+                    && (!cfg!(feature = "native-test-hooks")
+                        || entries
+                            .iter()
+                            .filter(|entry| {
+                                entry
+                                    .file_name()
+                                    .as_encoded_bytes()
+                                    .windows(11)
+                                    .any(|part| part == b".published-")
+                            })
+                            .count()
+                            >= 2),
+                "upper executable override reused snapshot authority or restored a cache HIT",
             )?,
             Mode::CacheFreshRollover => require(
                 entries.iter().any(|entry| {
