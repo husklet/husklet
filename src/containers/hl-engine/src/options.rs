@@ -311,6 +311,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only exercise warm-cache rollback through the single-map W^X arena",
         Flag
     ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN",
+        "test-only invalidate one restored direct-chain target before warm execution",
+        Flag
+    ),
     internal!("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", Flag),
     internal!(
         "HL_PCACHE_EXEC_AUTHORITY",

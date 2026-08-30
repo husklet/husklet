@@ -176,6 +176,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only fail one same-ISA warm-cache reconstruction stage", HL_OPTION_TEXT),
     HL_INJECTION_OPTION("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
                         "test-only exercise warm-cache rollback through the single-map W^X arena", HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN",
+                        "test-only invalidate one restored direct-chain target before warm execution", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_PCACHE_EXEC_AUTHORITY", "snapshot-authenticated executable content identities",
                        HL_OPTION_RECORDS),

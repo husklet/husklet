@@ -48,6 +48,7 @@ static uint64_t g_fast_count;
 static uint64_t x64_pcache_codegen_modes(void);
 static void x64_pc_thread_start_abandon(void);
 static void x64_pc_restored_abandon_range(uint64_t lo, uint64_t hi);
+static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi);
 static int g_x64_pc_control_loaded_empty;
 
 static void s1_calibrate(void) {
@@ -61,7 +62,10 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
     if (g_x64_pc_control_loaded_empty)
         fprintf(stderr, "[pcache-control] loaded-policy=invalidate-range\n");
-    if (__builtin_expect(g_pcache_loaded, 0)) x64_pc_restored_abandon_range(lo, hi);
+    if (__builtin_expect(g_pcache_loaded, 0)) {
+        x64_pc_restored_unlink_targets(lo, hi);
+        x64_pc_restored_abandon_range(lo, hi);
+    }
     uint64_t range[1][2];
     range[0][0] = lo;
     range[0][1] = hi;
@@ -2358,6 +2362,16 @@ static void x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
     }
 }
 
+static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi) {
+    if (hi <= lo || g_x64_pc_chain_count == 0) return;
+    if (!jit_wprot(0)) return;
+    for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
+        translit_chain_site *chain = &g_x64_pc_chains[i];
+        if (chain->target >= lo && chain->target < hi) x64_pc_chain_patch(chain, 0);
+    }
+    (void)jit_wprot(1);
+}
+
 static void x64_pc_pristine_rewind(void) {
     translit_cache_rewind_in_place();
     map_clear();
@@ -2722,8 +2736,13 @@ static int pcache_load(uint64_t entry_jump) {
                 uint32_t site = x64_pc_get32(chain), fallback = x64_pc_get32(chain + 4);
                 uint64_t slice_start = x64_pc_get64(map + 24);
                 uint64_t slice_end = i + 1 < maps ? x64_pc_get64(map + X64_PC_MAP_SIZE + 24) : arena;
+                int32_t displacement;
+                memcpy(&displacement, arena_bytes + site + 1, sizeof displacement);
+                int64_t destination = (int64_t)site + 5 + displacement;
                 valid = site >= slice_start && site <= slice_end && slice_end - site >= 5 &&
-                        fallback >= slice_start && fallback < slice_end;
+                        fallback < arena && destination >= 0 && (uint64_t)destination < arena &&
+                        x64_pc_get64(chain + 8) >= x64_pc_get64(map + 8) &&
+                        x64_pc_get64(chain + 8) < x64_pc_get64(map + 16);
             }
         }
         if (valid) semantic_stage = 7;
@@ -2869,6 +2888,39 @@ static int pcache_load(uint64_t entry_jump) {
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
     free(g_x64_pc_chains); g_x64_pc_chains = fixed_chains; g_x64_pc_chain_count = chains;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_option_get("HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN") != NULL) {
+        uint64_t selected = UINT64_MAX, before = UINT64_MAX, after = UINT64_MAX, fallback = UINT64_MAX;
+        for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
+            int32_t displacement;
+            memcpy(&displacement, g_cache + g_x64_pc_chains[i].site_offset + 1, sizeof displacement);
+            uint64_t destination = g_x64_pc_chains[i].site_offset + 5 + (int64_t)displacement;
+            if (destination != g_x64_pc_chains[i].fallback_offset) {
+                selected = i;
+                before = destination;
+                fallback = g_x64_pc_chains[i].fallback_offset;
+                uint64_t dirty[1][2] = {{g_x64_pc_chains[i].target,
+                                         g_x64_pc_chains[i].target + 1}};
+                x64_pc_restored_unlink_targets(dirty[0][0], dirty[0][1]);
+                (void)map_invalidate_source_ranges((const uint64_t (*)[2])dirty, 1);
+                memcpy(&displacement, g_cache + g_x64_pc_chains[i].site_offset + 1, sizeof displacement);
+                after = g_x64_pc_chains[i].site_offset + 5 + (int64_t)displacement;
+                break;
+            }
+        }
+        char cache_path[1024], receipt[1024];
+        if (x64_pc_file(cache_path, sizeof cache_path)) {
+            int length = snprintf(receipt, sizeof receipt, "%s.chain-invalidate-%lld", cache_path,
+                                  (long long)getpid());
+            uint64_t state[5] = {g_x64_pc_chain_count, selected, before, after, fallback};
+            if (length > 0 && (size_t)length < sizeof receipt)
+                (void)hl_persist_store_at(&g_x64_pc_directory, receipt, state, sizeof state);
+        }
+        if (selected == UINT64_MAX || after != fallback) {
+            x64_pc_pristine_rewind(); free(allocation); return 0;
+        }
+    }
+#endif
     g_x64_pc_restored_maps = g_x64_pc_restored_live = maps;
     g_x64_pc_activated_maps = 0;
     g_x64_pc_lib_count = (uint32_t)libraries;
@@ -3497,9 +3549,18 @@ static void pcache_save(void) {
         while (chain_map_at + 1 < map_count && chain.site_offset >= saved_maps[chain_map_at + 1].host)
             chain_map_at++;
         uint64_t slice_end = chain_map_at + 1 < map_count ? saved_maps[chain_map_at + 1].host : used;
+        int32_t displacement;
+        memcpy(&displacement, g_cache + chain.site_offset + 1, sizeof displacement);
+        int64_t destination = (int64_t)chain.site_offset + 5 + displacement;
+        struct interp_block *target_block = map_host(chain.target);
+        uint64_t target_offset = target_block == NULL ? UINT64_MAX :
+            (uint64_t)((uint8_t *)target_block + target_block->host_entry_off - g_cache);
         if (chain_map_at >= map_count || chain.site_offset < saved_maps[chain_map_at].host ||
-            chain.site_offset >= slice_end || chain.fallback_offset < saved_maps[chain_map_at].host ||
-            chain.fallback_offset >= slice_end) {
+            chain.site_offset >= slice_end || chain.fallback_offset >= used || destination < 0 ||
+            (uint64_t)destination >= used ||
+            chain.source < g_map_metadata[saved_maps[chain_map_at].index].guest_start ||
+            chain.source >= g_map_metadata[saved_maps[chain_map_at].index].guest_end ||
+            ((uint64_t)destination != chain.fallback_offset && (uint64_t)destination != target_offset)) {
 #if defined(HL_NATIVE_TEST_HOOKS)
             char invalid_path[1024], invalid_receipt[1024];
             if (x64_pc_file(invalid_path, sizeof invalid_path)) {
