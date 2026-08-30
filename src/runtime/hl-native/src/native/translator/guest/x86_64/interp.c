@@ -1947,6 +1947,11 @@ static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity
 #define PC_LIB_BASE X64_PC_LIB_BASE
 #define PC_LIB_SPAN X64_PC_LIB_SPAN
 #define PCACHE_MMAP_HINT 1
+#if defined(__linux__)
+#define X64_PC_FIXED_IMAGE_SUPPORTED 1
+#else
+#define X64_PC_FIXED_IMAGE_SUPPORTED 0
+#endif
 
 static void x64_pc_put16(uint8_t **p, uint16_t v) { (*p)[0] = (uint8_t)v; (*p)[1] = (uint8_t)(v >> 8); *p += 2; }
 static void x64_pc_put32(uint8_t **p, uint32_t v) { for (unsigned i = 0; i < 4; i++) (*p)[i] = (uint8_t)(v >> (8*i)); *p += 4; }
@@ -2470,6 +2475,7 @@ static int x64_pc_file(char *path, size_t size) {
 }
 
 static int pcache_load(uint64_t entry_jump) {
+    if (!X64_PC_FIXED_IMAGE_SUPPORTED) return 0;
     uint64_t load_generation = ++g_x64_pc_load_generation;
     g_pcache_loaded = 0;
     x64_pc_restored_clear();
@@ -3269,6 +3275,7 @@ static int pcache_load(uint64_t entry_jump) {
 }
 
 static void pcache_save(void) {
+    if (!X64_PC_FIXED_IMAGE_SUPPORTED) return;
     if (g_x64_pc_control_loaded_empty)
         fprintf(stderr, "[pcache-control] loaded-policy=save\n");
     if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||

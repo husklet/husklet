@@ -640,8 +640,16 @@ int main(void) {
     } else {
         require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
     }
+    let mut cache_loaded = false;
     if mode.cached() {
         let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
+        cache_loaded = entries.iter().any(|entry| {
+            entry
+                .file_name()
+                .as_encoded_bytes()
+                .windows(17)
+                .any(|part| part == b".hit-fixed-image-")
+        });
         require(!entries.is_empty(), "cache arm published no entries")?;
         require(
             entries.iter().all(|entry| {
@@ -970,7 +978,7 @@ int main(void) {
         "pcache-profile mode={} elapsed_us={} cache_loaded={} output={}",
         std::env::var("HL_PCACHE_PROFILE_MODE")?,
         elapsed.as_micros(),
-        0,
+        u8::from(cache_loaded),
         hex(&output)
     );
     Ok(())

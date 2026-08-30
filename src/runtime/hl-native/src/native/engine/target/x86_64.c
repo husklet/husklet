@@ -1831,7 +1831,9 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         jit_guest_bus_arm_latched();
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
-        if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT (translation skipped)" : "MISS", g_nreloc);
+        if (g_coldprof)
+            fprintf(stderr, "[pcache] %s patches=%u\n", hit ? "HIT (translation skipped)" : "MISS",
+                    translit_external_absolute_count);
         if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
             g_engine_result_status = hl_fatal_status(&g_jit_fatal);
             pcache_directory_close();
