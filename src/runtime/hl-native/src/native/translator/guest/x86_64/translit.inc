@@ -2852,7 +2852,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 251;
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
-    if (scenario >= 175 && scenario <= 182) return translit_fs_load_bridge_fixture_test(scenario);
+    if (scenario >= 175 && scenario <= 183) return translit_fs_load_bridge_fixture_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -7345,7 +7345,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = 4096;
     (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
-    if (scenario <= 180) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
+    if (scenario <= 180 || scenario == 183) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
     if (scenario == 182) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "0", 1);
     if (scenario == 180) (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", "1", 1);
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
@@ -7361,7 +7361,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
     struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
     uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
-    int rejected = destination == HL_X64_RSP || scenario >= 180;
+    int rejected = destination == HL_X64_RSP || (scenario >= 180 && scenario != 183);
     int signal_exact = rejected;
     if (entry != NULL && !rejected) {
         const uint64_t canonical = UINT64_C(0x0102030405060708);
@@ -7393,9 +7393,39 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
         exact = exact && block->profile_insns == 1 && cpu.rip == source + 1;
     } else {
         exact = exact && block->profile_insns == 3 && cpu.r[destination] == first && cpu.rip == source + 11;
-        memset(&cpu, 0, sizeof cpu); cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&second;
-        run_block(context, &cpu, block);
-        exact = exact && cpu.r[destination] == second && cpu.rip == source + 11;
+        if (scenario == 183) {
+            uint64_t values[2] = {first, second};
+            memset(&cpu, 0, sizeof cpu); cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)values;
+            run_block(context, &cpu, block);
+            exact = exact && cpu.r[destination] == values[0] && cpu.rip == source + 11;
+            map_put(source, block->guest_start, block->guest_end, block, block);
+            exact = exact && map_body(source) == block;
+            guest[6] = 8;
+            int saved_rwx_guest = g_rwx_guest;
+            g_rwx_guest = 1;
+            jit86_drop_range_translations(source, source + 11);
+            g_rwx_guest = saved_rwx_guest;
+            exact = exact && map_body(source) == NULL;
+            hl_x86_hot_context_destroy(context);
+            context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+            while ((uintptr_t)g_cp & 15) g_cp++;
+            struct interp_block *replacement = (struct interp_block *)g_cp;
+            g_cp += sizeof *replacement;
+            memset(replacement, 0, sizeof *replacement);
+            void *replacement_body = context == NULL ? NULL : translit_build(context, replacement, source, NULL);
+            replacement->magic = INTERP_BLOCK_MAGIC;
+            replacement->gpc = source;
+            if (replacement_body != NULL)
+                map_put(source, replacement->guest_start, replacement->guest_end, replacement, replacement);
+            memset(&cpu, 0, sizeof cpu); cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)values;
+            if (replacement_body != NULL) run_block(context, &cpu, replacement);
+            exact = exact && replacement_body != NULL && map_body(source) == replacement &&
+                    cpu.r[destination] == values[1] && cpu.rip == source + 11;
+        } else {
+            memset(&cpu, 0, sizeof cpu); cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&second;
+            run_block(context, &cpu, block);
+            exact = exact && cpu.r[destination] == second && cpu.rip == source + 11;
+        }
         if (scenario == 175) {
             translit_fs_bridge_thread_case cases[2] = {
                 {context, block, source, UINT64_C(0x1111111122222222), destination, 0},
@@ -7428,7 +7458,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
     munmap(guest, 4096); munmap(arena, 8192);
     if (!exact) return 256;
-    return scenario >= 181 ? (int)(emitted_hash & UINT64_C(0x7fffffff)) : 0;
+    return scenario == 181 || scenario == 182 ? (int)(emitted_hash & UINT64_C(0x7fffffff)) : 0;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

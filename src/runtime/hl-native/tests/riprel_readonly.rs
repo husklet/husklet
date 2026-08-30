@@ -77,3 +77,9 @@ fn fs_load_bridge_absent_and_explicit_off_emit_identical_baseline_body() {
     // compared only between these adjacent builds because it contains emitted process addresses and
     // therefore is not stable across ASLR placements.
 }
+
+#[test]
+fn fs_load_bridge_range_invalidation_retranslates_changed_source() {
+    let _guard = native_globals();
+    assert_eq!(hl_native::x86_64_translit_displaced_test(183), 0);
+}
