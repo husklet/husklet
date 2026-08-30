@@ -487,9 +487,11 @@ int main(void) {
             read_only_root: false,
             network_isolated: true,
             seccomp_baseline: hl_container::SeccompBaseline::Container,
-        });
+    });
     containers.create(spec).await?;
-    benchmark_barrier("ready", "release")?;
+    if mode != Mode::CacheAuthorityReuse {
+        benchmark_barrier("ready", "release")?;
+    }
     let started = Instant::now();
     containers.start("pcache-profile").await?;
     let status = containers.wait("pcache-profile").await?;
@@ -509,6 +511,7 @@ int main(void) {
                 seccomp_baseline: hl_container::SeccompBaseline::Container,
         });
         containers.create(repeat).await?;
+        benchmark_barrier("ready", "release")?;
         let repeat_started = Instant::now();
         containers.start("pcache-profile-repeat").await?;
         let repeat_status = containers.wait("pcache-profile-repeat").await?;
