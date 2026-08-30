@@ -262,10 +262,7 @@ static inline void dispatch_interrupt_rearm(struct cpu *c) {
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define REDISPATCH_COUNT(kind) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed)
 #else
-#define REDISPATCH_COUNT(kind)                                                                                         \
-    do {                                                                                                              \
-        if (g_prof) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed);                 \
-    } while (0)
+#define REDISPATCH_COUNT(kind) ((void)0)
 #endif
 
 static void run_guest(struct cpu *c) {
@@ -577,6 +574,13 @@ redispatch_execute:
             else if (signal_deliverable_for_cpu(c))
                 REDISPATCH_COUNT(REDISPATCH_SIGNAL);
             else {
+                if (profile_reason_open) {
+                    hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start,
+                                              now_ns());
+                    profile_reason_open = 0;
+                }
+                profile_sample = hl_dispatch_profile_sample(&g_dispatch_profile);
+                profile_map_start = profile_sample ? now_ns() : 0;
                 void *next_code = G_MAP_HOST(map_cache, G_PC(c));
                 void *next_rx;
                 uint64_t next_generation;

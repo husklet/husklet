@@ -306,7 +306,7 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (unsigned long long)atomic_load_explicit(&g_exec_bytes_unstable, memory_order_acquire));
             if (profile_size > 0 && (size_t)profile_size < sizeof profile)
                 (void)profile_record_write(profile, (size_t)profile_size);
-#if defined(HL_TRANSLATOR_GUEST_X86_64_CPU_H)
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_TRANSLATOR_GUEST_X86_64_CPU_H)
             char redispatch[512];
             int redispatch_size = snprintf(
                 redispatch, sizeof redispatch,

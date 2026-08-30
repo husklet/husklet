@@ -23,6 +23,7 @@ typedef struct hl_dispatch_profile {
     uint64_t reason_ns;
 } hl_dispatch_profile;
 
+#if defined(HL_NATIVE_TEST_HOOKS)
 enum dispatch_redispatch_counter {
     REDISPATCH_ATTEMPTED,
     REDISPATCH_HIT,
@@ -38,6 +39,8 @@ enum dispatch_redispatch_counter {
     REDISPATCH_COUNTER_COUNT,
 };
 static _Atomic uint64_t g_dispatch_redispatch[REDISPATCH_COUNTER_COUNT];
+#endif
+
 
 enum {
     /* Native reason values outside the compact stable 0..15 range are deliberately collapsed. */
