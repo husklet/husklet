@@ -596,7 +596,10 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
         jump = interpreter_loaded.entry;
         at_base = interpreter_loaded.base;
     }
-    g_cp = g_cache;
+    /* Exec reuses the arena from offset zero.  Advance the cache generation through the
+       architecture lifecycle hook so body-owner and generated-stub provenance cannot
+       describe bytes the new image is about to overwrite. */
+    G_CACHE_REWIND();
     map_clear();
     pend_reset();
     memset(g_ibtc, 0, sizeof g_ibtc);
