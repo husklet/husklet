@@ -51,6 +51,12 @@ impl TryFrom<&ProcessConfig> for Spec {
             "HL_TRANSLIT_RIPREL_READONLY",
             std::env::var_os("HL_TRANSLIT_RIPREL_READONLY").is_some_and(|value| value == "1"),
         )?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_FS_LOAD_BRIDGE",
+            std::env::var_os("HL_TRANSLIT_FS_LOAD_BRIDGE").is_some_and(|value| value == "1"),
+        )?;
         Self::flag(&mut options, "HL_CHECKPOINT", launch.checkpoint.is_some())?;
         Self::flag(
             &mut options,

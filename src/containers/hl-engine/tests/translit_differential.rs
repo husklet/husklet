@@ -122,6 +122,7 @@ struct Backend {
     sse2_movhlps_admitted: u64,
     fs_mem_admitted: u64,
     fs_fixture_admitted: u64,
+    fs_load_bridge_admitted: u64,
     translations: u64,
     unsupported_total: u64,
     unsupported_keyed: u64,
@@ -531,6 +532,7 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_movhlps_admitted: counter("sse2_movhlps_admitted="),
         fs_mem_admitted: counter("fs_mem_admitted="),
         fs_fixture_admitted: counter("fs_fixture_admitted="),
+        fs_load_bridge_admitted: counter("fs_load_bridge_admitted="),
         translations,
         unsupported_total: unsupported_counter("total="),
         unsupported_keyed: unsupported_counter("keyed="),
@@ -1240,6 +1242,7 @@ fn run_with_arguments_internal(
     force_fs_authority: bool,
     disable_mixed_sse: bool,
     force_body_owner_rotation: bool,
+    fs_load_bridge: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -1269,6 +1272,11 @@ fn run_with_arguments_internal(
         options
             .set("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST", "1", true)
             .expect("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
+    }
+    if fs_load_bridge {
+        options
+            .set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", true)
+            .expect("HL_TRANSLIT_FS_LOAD_BRIDGE");
     }
     let plan = RuntimePlan {
         rootfs: None,
@@ -1309,11 +1317,16 @@ fn run_with_arguments(
         force_fs_authority,
         disable_mixed_sse,
         false,
+        false,
     )
 }
 
 fn run_with_body_owner_rotation(executable: &Path) -> (Vec<u8>, i32, Backend) {
-    run_with_arguments_internal(executable, "1", &[], false, false, false, false, true)
+    run_with_arguments_internal(executable, "1", &[], false, false, false, false, true, false)
+}
+
+fn run_with_fs_load_bridge(executable: &Path) -> (Vec<u8>, i32, Backend) {
+    run_with_arguments_internal(executable, "1", &[], false, false, false, false, false, true)
 }
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
@@ -2019,6 +2032,17 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
         tree.tree_line
     );
     assert_eq!(tree.reason_total, tree.crossings, "{}", tree.tree_line);
+}
+
+#[test]
+fn fs_load_bridge_survives_threads_fork_and_exec() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "procs");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, backend) = run_with_fs_load_bridge(&executable);
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert!(backend.fs_load_bridge_admitted > 0, "{}", backend.line);
+    assert_eq!(backend.redispatch_stale_hits, 0, "{}", backend.line);
 }
 
 /// RIP-relative operands, indirect terminators, string operations and deep call/ret.

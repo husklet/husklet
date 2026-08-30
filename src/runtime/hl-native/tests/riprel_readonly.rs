@@ -64,3 +64,15 @@ fn fs_load_bridge_handles_destination_encoding_and_context_reuse() {
         assert_eq!(hl_native::x86_64_translit_displaced_test(scenario), 0, "scenario {scenario}");
     }
 }
+
+#[test]
+fn fs_load_bridge_absent_and_explicit_off_emit_identical_baseline_body() {
+    let _guard = native_globals();
+    let absent = hl_native::x86_64_translit_displaced_test(181);
+    let off = hl_native::x86_64_translit_displaced_test(182);
+    assert_eq!(absent, off);
+    // Frozen alongside scenarios 170..=172, whose larger option-OFF body is byte-identical to exact
+    // c8da42dfd. This fixture adds the FS boundary itself: absent and explicit zero must both stop after
+    // the preceding NOP with the same one-instruction profile and emitted body.
+    assert_eq!(absent, 999_912_242);
+}

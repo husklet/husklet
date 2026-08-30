@@ -491,6 +491,9 @@ static uint64_t translit_mixed_sse_transitions;
 static uint64_t translit_mixed_sse_executed;
 static uint64_t translit_mixed_sse_executed_transitions;
 static uint64_t translit_mixed_sse_disabled_boundaries;
+// Non-perturbing production receipt: unlike lossless diagnostics, reading this counter does not change
+// selector admission. It proves a timed or product run actually emitted the option-gated bridge.
+static uint64_t translit_fs_load_bridge_admitted;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_body_owner_published;
 static uint64_t translit_sse2_runs_admitted;
@@ -578,6 +581,8 @@ static _Atomic uint32_t translit_unsupported_pause_stage, translit_unsupported_p
 #define TRANSLIT_FS_PROFILE ""
 #define TRANSLIT_FS_ARGUMENTS
 #endif
+#define TRANSLIT_FS_BRIDGE_PROFILE " fs_load_bridge_admitted=%llu"
+#define TRANSLIT_FS_BRIDGE_ARGUMENTS , (unsigned long long)fs_load_bridge_admitted
 static uint64_t translit_displaced_entries;
 static uint64_t translit_displaced_operand_declined;
 static uint64_t translit_displaced_sse2_memory_declined;
@@ -2847,7 +2852,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 251;
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
-    if (scenario >= 175 && scenario <= 180) return translit_fs_load_bridge_fixture_test(scenario);
+    if (scenario >= 175 && scenario <= 182) return translit_fs_load_bridge_fixture_test(scenario);
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4867,6 +4872,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #else
     (void)jcc_link_admitted;
 #endif
+    if (fs_load_bridged)
+        (void)__atomic_fetch_add(&translit_fs_load_bridge_admitted, 1, __ATOMIC_RELAXED);
     block->host_entry_off = (uint32_t)(start - (uint8_t *)block);
     block->host_len = (uint32_t)(a->cursor - start);
     block->guest_start = linked_page_lo < gpc ? linked_page_lo : gpc;
@@ -6955,6 +6962,8 @@ static int translit_report(char *out, size_t size) {
         __atomic_load_n(&translit_mixed_sse_executed_transitions, __ATOMIC_RELAXED);
     uint64_t mixed_sse_disabled_boundaries =
         __atomic_load_n(&translit_mixed_sse_disabled_boundaries, __ATOMIC_RELAXED);
+    uint64_t fs_load_bridge_admitted =
+        __atomic_load_n(&translit_fs_load_bridge_admitted, __ATOMIC_RELAXED);
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t body_owner_published = __atomic_load_n(&translit_body_owner_published, __ATOMIC_RELAXED);
     uint64_t body_owner_low_rotations = g_body_owner_low_test_rotations;
@@ -7035,6 +7044,7 @@ static int translit_report(char *out, size_t size) {
         sse2_movhlps_admitted = UINT64_MAX;
         fs_mem_admitted = UINT64_MAX;
         fs_fixture_admitted = UINT64_MAX;
+        fs_load_bridge_admitted = UINT64_MAX;
         displaced_blocks = displaced_entries = displaced_operand_declined = UINT64_MAX;
         displaced_sse2_memory_declined = displaced_riprel_projected = displaced_lea_low = UINT64_MAX;
         displaced_riprel_unreachable = displaced_riprel_lowered = displaced_scratch_lowered = UINT64_MAX;
@@ -7118,6 +7128,7 @@ static int translit_report(char *out, size_t size) {
                     TRANSLIT_PUNPCKLQDQ_PROFILE
                     TRANSLIT_MOVD_PROFILE
                     TRANSLIT_FS_PROFILE
+                    TRANSLIT_FS_BRIDGE_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
                     " natural_lea_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
@@ -7139,7 +7150,8 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)sse2_store_movdqu,
                     (unsigned long long)sse2_store_family_runs,
                     (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted
-                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS TRANSLIT_FS_ARGUMENTS,
+                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS TRANSLIT_FS_ARGUMENTS
+                            TRANSLIT_FS_BRIDGE_ARGUMENTS,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
                     (unsigned long long)displaced_lea_lowered,
@@ -7299,7 +7311,7 @@ static void *translit_fs_bridge_thread(void *opaque) {
 
 static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     const int destinations[] = {HL_X64_RAX, 8, 12, 13, HL_X64_RSP};
-    int destination = scenario == 180 ? HL_X64_RAX : destinations[scenario - 175];
+    int destination = scenario >= 180 ? HL_X64_RAX : destinations[scenario - 175];
     uint8_t *arena = mmap(NULL, 8192, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uint8_t *guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
@@ -7330,7 +7342,9 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     translit_fall_fixture_bytes = guest;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = 4096;
-    (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
+    (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
+    if (scenario <= 180) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", 1);
+    if (scenario == 182) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "0", 1);
     if (scenario == 180) (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", "1", 1);
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     struct interp_block *block = (struct interp_block *)arena;
@@ -7340,7 +7354,7 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     uint64_t first = UINT64_C(0x1122334455667788), second = UINT64_C(0x8877665544332211);
     struct cpu cpu = {0}; cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&first;
     uint8_t *entry = body == NULL ? NULL : (uint8_t *)block + block->host_entry_off;
-    int rejected = destination == HL_X64_RSP || scenario == 180;
+    int rejected = destination == HL_X64_RSP || scenario >= 180;
     int signal_exact = rejected;
     if (entry != NULL && !rejected) {
         const uint64_t canonical = UINT64_C(0x0102030405060708);
@@ -7399,13 +7413,19 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
                     WIFEXITED(status) && WEXITSTATUS(status) == 0;
         }
     }
+    uint64_t hash = UINT64_C(1469598103934665603);
+    if (body != NULL) {
+        uint8_t *byte = (uint8_t *)block + block->host_entry_off;
+        while (byte < g_cp) { hash ^= *byte++; hash *= UINT64_C(1099511628211); }
+    }
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context); (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
     (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
     map_clear(); g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx;
     g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
     munmap(guest, 4096); munmap(arena, 8192);
-    return exact ? 0 : 256;
+    if (!exact) return 256;
+    return scenario >= 181 ? (int)(hash & UINT64_C(0x7fffffff)) : 0;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

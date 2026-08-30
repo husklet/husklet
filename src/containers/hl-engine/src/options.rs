@@ -306,6 +306,11 @@ const DEFINITIONS: &[Definition] = &[
         "lower selected read-only RIP-relative byte operations in the same-ISA backend",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_FS_LOAD_BRIDGE",
+        "bridge selected read-only FS loads in the same-ISA backend",
+        Flag
+    ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
     debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
 ];

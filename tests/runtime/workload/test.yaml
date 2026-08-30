@@ -116,6 +116,15 @@ cases:
     artifact: { destination: /opt/husklet/workload/riprel-readonly-smc }
     run: []
     expect: { exit: 0, stdout: golden/riprel_readonly_smc.out }
+  - id: runtime/workload/fs-load-bridge-smc
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: fs_load_bridge_smc.c, output: fs-load-bridge-smc, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/workload/fs-load-bridge-smc }
+    run: []
+    expect: { exit: 0, stdout: golden/fs_load_bridge_smc.out }
   - id: runtime/workload/decoder-authority-anon-exec
     targets: [amd64]
     status: active
