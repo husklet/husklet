@@ -56,3 +56,69 @@ int x64_pc_header_validate(const uint8_t *bytes, size_t size, uint64_t abi, uint
     }
     return valid;
 }
+
+static int x64_pc_scaled(uint64_t count, uint64_t width, uint64_t *bytes) {
+    if (count > UINT64_MAX / width) return 0;
+    *bytes = count * width;
+    return 1;
+}
+
+int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_format_limits *limits,
+                           x64_pc_format_layout *layout, uint64_t matches[8]) {
+    *layout = (x64_pc_format_layout){
+        .arena = x64_pc_get64(bytes + 88),
+        .maps = x64_pc_get64(bytes + 96),
+        .owners = x64_pc_get64(bytes + 104),
+        .helper_relocations = x64_pc_get64(bytes + 112),
+        .relocations = x64_pc_get64(bytes + 184),
+        .image_lo = x64_pc_get64(bytes + 200),
+        .image_hi = x64_pc_get64(bytes + 208),
+        .interpreter_lo = x64_pc_get64(bytes + 216),
+        .interpreter_hi = x64_pc_get64(bytes + 224),
+        .libraries = x64_pc_get64(bytes + 232),
+        .chains = x64_pc_get64(bytes + 240),
+    };
+    int scaled = x64_pc_scaled(layout->maps, X64_PC_MAP_SIZE, &layout->map_bytes) &&
+                 x64_pc_scaled(layout->owners, X64_PC_OWNER_SIZE, &layout->owner_bytes) &&
+                 x64_pc_scaled(layout->relocations, X64_PC_RELOC_SIZE, &layout->relocation_bytes) &&
+                 x64_pc_scaled(layout->helper_relocations, X64_PC_HELPER_RELOC_SIZE,
+                               &layout->helper_relocation_bytes) &&
+                 x64_pc_scaled(layout->libraries, X64_PC_LIB_SIZE, &layout->library_bytes) &&
+                 x64_pc_scaled(layout->chains, X64_PC_CHAIN_SIZE, &layout->chain_bytes);
+    uint64_t total = X64_PC_HEADER_SIZE;
+    uint64_t sections[] = {layout->map_bytes, layout->owner_bytes, layout->relocation_bytes,
+                           layout->helper_relocation_bytes, layout->library_bytes,
+                           layout->chain_bytes, layout->arena};
+    int sized = scaled;
+    for (unsigned i = 0; sized && i < sizeof sections / sizeof sections[0]; i++) {
+        sized = sections[i] <= UINT64_MAX - total;
+        if (sized) total += sections[i];
+    }
+    uint64_t local[8] = {
+        layout->arena != 0 && layout->arena <= limits->arena_bytes,
+        layout->maps != 0 && layout->maps <= limits->maps,
+        layout->owners <= limits->owners,
+        layout->helper_relocations <= limits->helper_relocations,
+        layout->relocations <= limits->relocations,
+        layout->libraries <= limits->libraries,
+        layout->chains <= limits->chains,
+        sized && total == size,
+    };
+    int valid = scaled;
+    for (unsigned i = 0; i < 8; i++) {
+        if (matches != NULL) matches[i] = local[i];
+        valid = valid && local[i];
+    }
+    valid = valid && layout->image_lo < layout->image_hi &&
+            layout->interpreter_lo < layout->interpreter_hi && layout->image_hi <= layout->interpreter_lo &&
+            layout->image_hi <= UINT64_C(0x0000800000000000) &&
+            layout->interpreter_hi <= UINT64_C(0x0000800000000000);
+    for (unsigned group = 0; valid && group < 2; group++) {
+        unsigned offset = 120 + group * 32;
+        uint64_t entry = x64_pc_get64(bytes + offset), rsp = x64_pc_get64(bytes + offset + 8);
+        uint64_t flags = x64_pc_get64(bytes + offset + 16), end = x64_pc_get64(bytes + offset + 24);
+        valid = (entry == UINT64_MAX && rsp == UINT64_MAX && flags == UINT64_MAX && end == UINT64_MAX) ||
+                (entry < rsp && rsp <= flags && flags < end && end <= layout->arena);
+    }
+    return valid;
+}

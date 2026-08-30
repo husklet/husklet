@@ -2470,47 +2470,11 @@ static int pcache_load(uint64_t entry_jump) {
     }
 #endif
     if (valid) {
-        uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
-        uint64_t helper_relocs = x64_pc_get64(bytes + 112);
-        uint64_t relocs = x64_pc_get64(bytes + 184), libraries = x64_pc_get64(bytes + 232);
-        uint64_t chains = x64_pc_get64(bytes + 240);
-        uint64_t map_bytes = maps <= UINT64_MAX / X64_PC_MAP_SIZE ? maps * X64_PC_MAP_SIZE : UINT64_MAX;
-        uint64_t owner_bytes = owners <= UINT64_MAX / X64_PC_OWNER_SIZE ? owners * X64_PC_OWNER_SIZE : UINT64_MAX;
-        uint64_t reloc_bytes = relocs <= UINT64_MAX / X64_PC_RELOC_SIZE ? relocs * X64_PC_RELOC_SIZE : UINT64_MAX;
-        uint64_t helper_reloc_bytes = helper_relocs <= UINT64_MAX / X64_PC_HELPER_RELOC_SIZE
-            ? helper_relocs * X64_PC_HELPER_RELOC_SIZE : UINT64_MAX;
-        uint64_t library_bytes = libraries <= UINT64_MAX / X64_PC_LIB_SIZE ? libraries * X64_PC_LIB_SIZE : UINT64_MAX;
-        uint64_t chain_bytes = chains <= UINT64_MAX / X64_PC_CHAIN_SIZE ? chains * X64_PC_CHAIN_SIZE : UINT64_MAX;
-        valid = arena != 0 && arena <= CACHE_SZ && maps != 0 && maps <= JIT_MAP_N &&
-                owners <= JIT_BODY_OWNER_N && helper_relocs <= TL_HELPER_RELATIVE_N &&
-                relocs <= TL_EXTERNAL_ABSOLUTE_N && libraries <= X64_PC_LIB_MAX && chains <= TL_CHAIN_SITE_N &&
-                map_bytes != UINT64_MAX && reloc_bytes != UINT64_MAX && helper_reloc_bytes != UINT64_MAX && library_bytes != UINT64_MAX &&
-                owner_bytes != UINT64_MAX && X64_PC_HEADER_SIZE + map_bytes <= SIZE_MAX - owner_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes <= SIZE_MAX - reloc_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes <= SIZE_MAX - helper_reloc_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + helper_reloc_bytes <= SIZE_MAX - library_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + helper_reloc_bytes + library_bytes <= SIZE_MAX - chain_bytes &&
-                X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + helper_reloc_bytes + library_bytes + chain_bytes <= SIZE_MAX - arena &&
-                size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + helper_reloc_bytes + library_bytes + chain_bytes + arena;
-        uint64_t image_lo = x64_pc_get64(bytes + 200), image_hi = x64_pc_get64(bytes + 208);
-        uint64_t interp_lo = x64_pc_get64(bytes + 216), interp_hi = x64_pc_get64(bytes + 224);
-        valid = valid && image_lo < image_hi && interp_lo < interp_hi && image_hi <= interp_lo &&
-                image_hi <= UINT64_C(0x0000800000000000) && interp_hi <= UINT64_C(0x0000800000000000);
-#if defined(HL_NATIVE_TEST_HOOKS)
-        uint64_t structural_state[8] = {arena != 0 && arena <= CACHE_SZ,
-            maps != 0 && maps <= JIT_MAP_N, owners <= JIT_BODY_OWNER_N,
-            helper_relocs <= TL_HELPER_RELATIVE_N, relocs <= TL_EXTERNAL_ABSOLUTE_N,
-            libraries <= X64_PC_LIB_MAX, chains <= TL_CHAIN_SITE_N,
-            size == X64_PC_HEADER_SIZE + map_bytes + owner_bytes + reloc_bytes + helper_reloc_bytes +
-                        library_bytes + chain_bytes + arena};
-#endif
-        for (unsigned group = 0; valid && group < 2; group++) {
-            unsigned offset = 120 + group * 32;
-            uint64_t entry = x64_pc_get64(bytes + offset), rsp = x64_pc_get64(bytes + offset + 8);
-            uint64_t flags = x64_pc_get64(bytes + offset + 16), end = x64_pc_get64(bytes + offset + 24);
-            valid = (entry == UINT64_MAX && rsp == UINT64_MAX && flags == UINT64_MAX && end == UINT64_MAX) ||
-                    (entry < rsp && rsp <= flags && flags < end && end <= arena);
-        }
+        const x64_pc_format_limits limits = {CACHE_SZ, JIT_MAP_N, JIT_BODY_OWNER_N,
+            TL_EXTERNAL_ABSOLUTE_N, TL_HELPER_RELATIVE_N, X64_PC_LIB_MAX, TL_CHAIN_SITE_N};
+        x64_pc_format_layout layout;
+        uint64_t structural_state[8];
+        valid = x64_pc_layout_validate(bytes, size, &limits, &layout, structural_state);
 #if defined(HL_NATIVE_TEST_HOOKS)
         if (!valid) {
             char structural_receipt[1024];

@@ -30,4 +30,17 @@ int x64_pc_header_validate(const uint8_t *bytes, size_t size, uint64_t abi, uint
                            uint64_t map_slots, const uint8_t identity[32], uint64_t entry,
                            uint64_t modes, uint64_t matches[10]);
 
+typedef struct x64_pc_format_limits {
+    uint64_t arena_bytes, maps, owners, relocations, helper_relocations, libraries, chains;
+} x64_pc_format_limits;
+
+typedef struct x64_pc_format_layout {
+    uint64_t arena, maps, owners, relocations, helper_relocations, libraries, chains;
+    uint64_t map_bytes, owner_bytes, relocation_bytes, helper_relocation_bytes, library_bytes, chain_bytes;
+    uint64_t image_lo, image_hi, interpreter_lo, interpreter_hi;
+} x64_pc_format_layout;
+
+int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_format_limits *limits,
+                           x64_pc_format_layout *layout, uint64_t matches[8]);
+
 #endif
