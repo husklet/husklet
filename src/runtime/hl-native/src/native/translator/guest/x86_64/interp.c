@@ -69,7 +69,7 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
 // abi.h's G_THREAD_START_FLUSH / G_SHARED_MAP_BARRIERS. No block here has its x86-TSO barriers elided, so
 // there is nothing to flush. Must return nonzero -- the clone path reads 0 as a clone failure.
 static int hl_x86_flush_for_thread_start(void) {
-    x64_pc_thread_start_abandon();
+    if (__builtin_expect(g_pcache, 0)) x64_pc_thread_start_abandon();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);
     return 1;
@@ -2765,6 +2765,7 @@ static void pcache_save(void) {
 }
 
 static void x64_pc_after_fork(void) {
+    if (!g_pcache) return;
     g_x64_pc_forked = 1;
     free(g_x64_pc_deferred);
     free(g_x64_pc_chains);
@@ -2823,6 +2824,7 @@ static void pcache_directory_close(void) {
 }
 
 static void pcache_note_fixed_img(uint64_t base, uint64_t span) {
+    if (!g_pcache) return;
     uint64_t end;
     if (!x64_pc_span(base, span, &end)) {
         g_force_base_failed = 1;

@@ -461,6 +461,7 @@ mod tests {
             work: root.path().join("work"),
         });
         launch.executable_digest_authority = Some(authority);
+        launch.translation_cache = Some(root.path().join("translation-cache"));
 
         let spec = Spec::try_from(&launch).unwrap();
         assert!(!spec.plan.box_policy.executable_digests.is_empty());

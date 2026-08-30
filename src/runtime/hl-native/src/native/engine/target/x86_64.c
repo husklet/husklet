@@ -1612,7 +1612,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         }
         placement = &main_placement;
     }
-    g_pcache_authorized_guest_path = g_exe_path;
+    if (g_pcache) g_pcache_authorized_guest_path = g_exe_path;
     load_elf(prog_host, lm, placement, NULL);
     g_loadbase = lm->base;
     *jump = lm->entry;
@@ -1630,7 +1630,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         g_initial_executable_image = g_initial_interpreter_image;
         g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
-        g_pcache_authorized_guest_path = interp;
+        if (g_pcache) g_pcache_authorized_guest_path = interp;
         load_elf(interp_host, li, NULL, NULL);
         g_initial_executable_image = NULL;
         g_initial_executable_size = 0;
@@ -1773,14 +1773,16 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     if (rdir != NULL) return hl_vfs_cursor_state_finish(ckpt_restore_tree(rootfs));
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
-    g_coldprof = hl_option_flag_value("HL_PCACHE_OBSERVE", 0);
-    g_pcache_identity_ns = 0;
-    g_pcache_identity_bytes = 0;
-    g_pcache_identity_files = 0;
     /* Diagnostic stubs embed fork-shared counter addresses. They are launch-private and deliberately have
        no persistent-cache relocation: diagnostics therefore disables restore/save before cache lookup. */
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_pcache = hl_option_get("HL_PCACHE") != NULL && !g_prof;
+    g_coldprof = g_pcache && hl_option_flag_value("HL_PCACHE_OBSERVE", 0);
+    if (g_pcache) {
+        g_pcache_identity_ns = 0;
+        g_pcache_identity_bytes = 0;
+        g_pcache_identity_files = 0;
+    }
     if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
     int rc = engine_global_init();
     if (rc) return hl_vfs_cursor_state_finish(rc);
@@ -1837,7 +1839,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         }
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
-    if (hl_fatal_status(&g_jit_fatal) == HL_STATUS_OK)
+    if (__builtin_expect(g_pcache, 0) && hl_fatal_status(&g_jit_fatal) == HL_STATUS_OK)
         pcache_save(); // exit via syscall 93 returns here; syscall 94 saves before _exit (idempotent atomic rename)
     if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
         g_engine_result_status = hl_fatal_status(&g_jit_fatal);

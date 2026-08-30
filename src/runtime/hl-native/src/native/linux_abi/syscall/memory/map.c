@@ -350,7 +350,7 @@ case 222: {
             filemap_register((uint64_t)r, (uint64_t)a1, (int)a4, (uint64_t)a5, (a3 & 0x01) != 0,
                              off_emul == 2 && !logical_committed);
 #ifdef PCACHE_MMAP_HINT
-        if ((a2 & PROT_EXEC) != 0 && ((pc_hint != 0 && (uint64_t)(uintptr_t)r == pc_hint) ||
+        if (g_pcache && (a2 & PROT_EXEC) != 0 && ((pc_hint != 0 && (uint64_t)(uintptr_t)r == pc_hint) ||
              ((uint64_t)(uintptr_t)r >= PC_LIB_BASE &&
               (uint64_t)(uintptr_t)r < PC_LIB_BASE + PC_LIB_SPAN)) &&
             g_host_services != NULL && g_host_services->file != NULL &&

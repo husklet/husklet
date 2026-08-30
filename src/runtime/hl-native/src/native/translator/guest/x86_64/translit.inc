@@ -1561,7 +1561,8 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
     hl_x64_patch_rel32(a, irq, a->cursor);
     uint8_t *fallback = a->cursor;
-    translit_chain_site_note(chain, fallback, source, target);
+    if (__builtin_expect(g_pcache, 0))
+        translit_chain_site_note(chain, fallback, source, target);
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_irq_fallback);
 #endif

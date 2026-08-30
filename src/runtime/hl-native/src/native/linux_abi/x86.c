@@ -166,10 +166,11 @@ static int x86_pcache_hex(char value) {
 }
 
 static int x86_pcache_authority(uint64_t size, hl_identity_digest *digest) {
+    if (!g_pcache) return 0;
     const char *path = g_pcache_authorized_guest_path;
     const char *records = hl_option_get("HL_PCACHE_EXEC_AUTHORITY");
     g_pcache_authorized_guest_path = NULL;
-    if (!g_pcache || path == NULL || records == NULL) return 0;
+    if (path == NULL || records == NULL) return 0;
     for (const char *record = records; *record;) {
         const char *end = strchr(record, '\n');
         if (end == NULL) end = record + strlen(record);

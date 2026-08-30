@@ -67,32 +67,35 @@ impl TryFrom<&ProcessConfig> for Spec {
             .chain(launch.overlay.iter().map(|overlay| overlay.lower.clone()))
             .collect::<Vec<_>>();
         let executable = GuestPath::host_executable(std::path::Path::new(&guest_program), &roots);
-        let mut executable_digests = match (&launch.executable_digest_authority, &executable) {
-            (Some(authority), Some(host)) if std::path::Path::new(&guest_program).is_absolute() => authority
-                .authenticate(std::path::Path::new(&guest_program), host)?
-                .into_iter()
-                .map(|digest| hl_engine::launcher::plan::ExecutableDigestAuthority {
-                    snapshot: digest.snapshot.into_bytes(),
-                    guest_path: digest.guest_path.into_bytes(),
-                    size: digest.size,
-                    sha256: digest.sha256,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        #[cfg(unix)]
-        if let (Some(authority), Some(host)) = (&launch.executable_digest_authority, &executable) {
-            if let Some(interpreter) = GuestPath::interpreter(host, isa)
-                .map_err(|_| Error::Runtime("cannot inspect executable interpreter".into()))?
-            {
-                if let Some(interpreter_host) = GuestPath::host_executable(&interpreter, &roots) {
-                    if let Some(digest) = authority.authenticate(&interpreter, &interpreter_host)? {
-                        executable_digests.push(hl_engine::launcher::plan::ExecutableDigestAuthority {
-                            snapshot: digest.snapshot.into_bytes(),
-                            guest_path: digest.guest_path.into_bytes(),
-                            size: digest.size,
-                            sha256: digest.sha256,
-                        });
+        let mut executable_digests = Vec::new();
+        if launch.translation_cache.is_some() {
+            executable_digests = match (&launch.executable_digest_authority, &executable) {
+                (Some(authority), Some(host)) if std::path::Path::new(&guest_program).is_absolute() => authority
+                    .authenticate(std::path::Path::new(&guest_program), host)?
+                    .into_iter()
+                    .map(|digest| hl_engine::launcher::plan::ExecutableDigestAuthority {
+                        snapshot: digest.snapshot.into_bytes(),
+                        guest_path: digest.guest_path.into_bytes(),
+                        size: digest.size,
+                        sha256: digest.sha256,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            #[cfg(unix)]
+            if let (Some(authority), Some(host)) = (&launch.executable_digest_authority, &executable) {
+                if let Some(interpreter) = GuestPath::interpreter(host, isa)
+                    .map_err(|_| Error::Runtime("cannot inspect executable interpreter".into()))?
+                {
+                    if let Some(interpreter_host) = GuestPath::host_executable(&interpreter, &roots) {
+                        if let Some(digest) = authority.authenticate(&interpreter, &interpreter_host)? {
+                            executable_digests.push(hl_engine::launcher::plan::ExecutableDigestAuthority {
+                                snapshot: digest.snapshot.into_bytes(),
+                                guest_path: digest.guest_path.into_bytes(),
+                                size: digest.size,
+                                sha256: digest.sha256,
+                            });
+                        }
                     }
                 }
             }
