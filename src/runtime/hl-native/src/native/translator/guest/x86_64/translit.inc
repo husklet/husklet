@@ -7278,6 +7278,25 @@ static int translit_fs_partial_spill_signal_test(void) {
     return exact ? 0 : 254;
 }
 
+typedef struct {
+    hl_x86_hot_context *context;
+    struct interp_block *block;
+    uint64_t source;
+    uint64_t value;
+    int destination;
+    int exact;
+} translit_fs_bridge_thread_case;
+
+static void *translit_fs_bridge_thread(void *opaque) {
+    translit_fs_bridge_thread_case *test = opaque;
+    struct cpu cpu = {0};
+    cpu.rip = test->source;
+    cpu.fs_base = (uint64_t)(uintptr_t)&test->value;
+    run_block(test->context, &cpu, test->block);
+    test->exact = cpu.r[test->destination] == test->value && cpu.rip == test->source + 11;
+    return NULL;
+}
+
 static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     const int destinations[] = {HL_X64_RAX, 8, 12, 13, HL_X64_RSP};
     int destination = scenario == 180 ? HL_X64_RAX : destinations[scenario - 175];
@@ -7356,6 +7375,29 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
         memset(&cpu, 0, sizeof cpu); cpu.rip = source; cpu.fs_base = (uint64_t)(uintptr_t)&second;
         run_block(context, &cpu, block);
         exact = exact && cpu.r[destination] == second && cpu.rip == source + 11;
+        if (scenario == 175) {
+            translit_fs_bridge_thread_case cases[2] = {
+                {context, block, source, UINT64_C(0x1111111122222222), destination, 0},
+                {context, block, source, UINT64_C(0x3333333344444444), destination, 0},
+            };
+            pthread_t threads[2];
+            int started0 = pthread_create(&threads[0], NULL, translit_fs_bridge_thread, &cases[0]) == 0;
+            int started1 = pthread_create(&threads[1], NULL, translit_fs_bridge_thread, &cases[1]) == 0;
+            if (started0) pthread_join(threads[0], NULL);
+            if (started1) pthread_join(threads[1], NULL);
+            exact = exact && started0 && started1 && cases[0].exact && cases[1].exact;
+            pid_t child = fork();
+            if (child == 0) {
+                struct cpu forked = {0};
+                uint64_t child_value = UINT64_C(0x5555555566666666);
+                forked.rip = source; forked.fs_base = (uint64_t)(uintptr_t)&child_value;
+                run_block(context, &forked, block);
+                _exit(forked.r[destination] == child_value && forked.rip == source + 11 ? 0 : 1);
+            }
+            int status = 0;
+            exact = exact && child > 0 && waitpid(child, &status, 0) == child &&
+                    WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
     }
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context); (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
