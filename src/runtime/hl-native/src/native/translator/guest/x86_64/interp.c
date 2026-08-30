@@ -2491,70 +2491,24 @@ static int pcache_load(uint64_t entry_jump) {
         validation = valid ? 1 : 3; /* authenticated or checksum mismatch */
     }
     if (valid) {
-        uint64_t arena = x64_pc_get64(bytes + 88), maps = x64_pc_get64(bytes + 96), owners = x64_pc_get64(bytes + 104);
-        uint64_t helper_relocs = x64_pc_get64(bytes + 112);
-        uint64_t relocs = x64_pc_get64(bytes + 184), libraries = x64_pc_get64(bytes + 232);
-        uint64_t chains = x64_pc_get64(bytes + 240);
-        const uint8_t *record = bytes + X64_PC_HEADER_SIZE;
-        uint64_t *seen_gpc = calloc(JIT_MAP_N, sizeof *seen_gpc);
-        semantic_stage = 1;
-        uint8_t *seen_used = calloc(JIT_MAP_N, 1);
-        if (seen_gpc == NULL || seen_used == NULL) valid = 0;
-        for (uint64_t i = 0; valid && i < maps; i++, record += X64_PC_MAP_SIZE) {
-            uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
-            uint64_t block = x64_pc_get64(record + 40);
-            uint32_t entry = x64_pc_get32(record + 72), length = x64_pc_get32(record + 76);
-            uint64_t gpc = x64_pc_get64(record), start = x64_pc_get64(record + 8), end = x64_pc_get64(record + 16);
-            valid = host < arena && body < arena && host == body && block == body && start <= gpc && gpc < end &&
-                    x64_pc_get64(record + 48) == INTERP_BLOCK_MAGIC && x64_pc_get64(record + 56) == gpc &&
-                    entry <= length && entry <= arena && host <= arena - entry && length <= arena - host &&
+        const x64_pc_semantic_policy policy = {
+            INTERP_BLOCK_MAGIC, UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX, JIT_MAP_N,
 #if defined(HL_NATIVE_TEST_HOOKS)
-                    x64_pc_get16(record + 82) == UINT16_MAX &&
+            0,
 #else
-                    (g_coldprof ? x64_pc_get16(record + 82) < UINT16_MAX
-                                : x64_pc_get16(record + 82) == UINT16_MAX) &&
+            g_coldprof != 0,
 #endif
-                    x64_pc_get32(record + 84) <= owners && x64_pc_get32(record + 88) <= owners - x64_pc_get32(record + 84) &&
-                    x64_pc_get32(record + 92) <= chains && x64_pc_get32(record + 96) <= chains - x64_pc_get32(record + 92);
-            if (valid && i != 0) {
-                const uint8_t *prior = record - X64_PC_MAP_SIZE;
-                uint64_t prior_host = x64_pc_get64(prior + 24);
-                uint32_t prior_length = x64_pc_get32(prior + 76);
-                valid = prior_host <= host && prior_length <= host - prior_host;
-            }
-            uint64_t slot = (gpc ^ (gpc >> 32)) % JIT_MAP_N, probes = 0;
-            while (valid && seen_used[slot] && seen_gpc[slot] != gpc && ++probes < JIT_MAP_N)
-                slot = (slot + 1) % JIT_MAP_N;
-            if (valid && seen_used[slot]) valid = 0;
-            if (valid) { seen_used[slot] = 1; seen_gpc[slot] = gpc; }
-        }
-        free(seen_gpc);
-        free(seen_used);
-        if (valid) semantic_stage = 2;
-        record = bytes + X64_PC_HEADER_SIZE + maps * X64_PC_MAP_SIZE;
-        const uint8_t *validated_owner_records = record;
-        for (uint64_t i = 0; valid && i < owners; i++, record += X64_PC_OWNER_SIZE) {
-            uint32_t start = x64_pc_get32(record), end = x64_pc_get32(record + 4);
-            uint32_t preserve = x64_pc_get32(record + 8), reserved = x64_pc_get32(record + 12);
-            uint32_t map_ordinal = x64_pc_get32(record + 24);
-            valid = start < end && end <= arena && reserved == 0 &&
-                    (preserve & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) == 0 &&
-                    (map_ordinal == UINT32_MAX || map_ordinal < maps);
-            if (valid && i != 0) valid = x64_pc_get32(record - X64_PC_OWNER_SIZE + 4) <= start;
-            if (valid && map_ordinal != UINT32_MAX) {
-                const uint8_t *map = bytes + X64_PC_HEADER_SIZE + (uint64_t)map_ordinal * X64_PC_MAP_SIZE;
-                uint64_t host = x64_pc_get64(map + 24);
-                uint64_t slice_end = map_ordinal + 1 < maps ? x64_pc_get64(map + X64_PC_MAP_SIZE + 24) : arena;
-                valid = start >= host && end <= slice_end &&
-                        i >= x64_pc_get32(map + 84) &&
-                        i < (uint64_t)x64_pc_get32(map + 84) + x64_pc_get32(map + 88);
-            }
-        }
-        record = bytes + X64_PC_HEADER_SIZE + maps * X64_PC_MAP_SIZE + owners * X64_PC_OWNER_SIZE;
-        const uint8_t *helper_reloc_records = record + relocs * X64_PC_RELOC_SIZE;
-        const uint8_t *library_records = helper_reloc_records + helper_relocs * X64_PC_HELPER_RELOC_SIZE;
-        const uint8_t *chain_records = library_records + libraries * X64_PC_LIB_SIZE;
-        const uint8_t *arena_bytes = chain_records + chains * X64_PC_CHAIN_SIZE;
+        };
+        valid = x64_pc_validate_maps_owners(&layout, &policy, &semantic_stage);
+        uint64_t arena = layout.arena, maps = layout.maps, owners = layout.owners;
+        uint64_t helper_relocs = layout.helper_relocations, relocs = layout.relocations;
+        uint64_t libraries = layout.libraries, chains = layout.chains;
+        const uint8_t *record = layout.relocation_records;
+        const uint8_t *validated_owner_records = layout.owner_records;
+        const uint8_t *helper_reloc_records = layout.helper_relocation_records;
+        const uint8_t *library_records = layout.library_records;
+        const uint8_t *chain_records = layout.chain_records;
+        const uint8_t *arena_bytes = layout.arena_bytes;
         uint32_t prior = 0;
         if (valid) semantic_stage = 3;
         for (uint64_t i = 0; valid && i < relocs; i++, record += X64_PC_RELOC_SIZE) {

@@ -1,6 +1,7 @@
 #include "persistence.h"
 #include "../../../digest.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 void x64_pc_put16(uint8_t **cursor, uint16_t value) {
@@ -150,4 +151,67 @@ int x64_pc_checksum_validate(const uint8_t *bytes, size_t size) {
 void x64_pc_checksum_write(uint8_t *bytes, size_t size) {
     uint8_t *cursor = bytes + X64_PC_CHECKSUM_OFFSET;
     x64_pc_put64(&cursor, x64_pc_checksum(bytes, size));
+}
+
+int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
+                                const x64_pc_semantic_policy *policy, unsigned *stage) {
+    uint64_t *seen_gpc = calloc(policy->map_slots, sizeof *seen_gpc);
+    uint8_t *seen_used = calloc(policy->map_slots, 1);
+    int valid = seen_gpc != NULL && seen_used != NULL;
+    if (stage != NULL) *stage = 1;
+    for (uint64_t i = 0; valid && i < layout->maps; i++) {
+        const uint8_t *record = layout->map_records + i * X64_PC_MAP_SIZE;
+        uint64_t host = x64_pc_get64(record + 24), body = x64_pc_get64(record + 32);
+        uint64_t block = x64_pc_get64(record + 40), gpc = x64_pc_get64(record);
+        uint64_t start = x64_pc_get64(record + 8), end = x64_pc_get64(record + 16);
+        uint32_t entry = x64_pc_get32(record + 72), length = x64_pc_get32(record + 76);
+        uint16_t ordinal = x64_pc_get16(record + 82);
+        valid = host < layout->arena && body < layout->arena && host == body && block == body &&
+                start <= gpc && gpc < end && x64_pc_get64(record + 48) == policy->block_magic &&
+                x64_pc_get64(record + 56) == gpc && entry <= length && entry <= layout->arena &&
+                host <= layout->arena - entry && length <= layout->arena - host &&
+                (policy->require_census_ordinal ? ordinal < UINT16_MAX : ordinal == UINT16_MAX) &&
+                x64_pc_get32(record + 84) <= layout->owners &&
+                x64_pc_get32(record + 88) <= layout->owners - x64_pc_get32(record + 84) &&
+                x64_pc_get32(record + 92) <= layout->chains &&
+                x64_pc_get32(record + 96) <= layout->chains - x64_pc_get32(record + 92);
+        if (valid && i != 0) {
+            const uint8_t *prior = record - X64_PC_MAP_SIZE;
+            uint64_t prior_host = x64_pc_get64(prior + 24);
+            uint32_t prior_length = x64_pc_get32(prior + 76);
+            valid = prior_host <= host && prior_length <= host - prior_host;
+        }
+        uint64_t slot = (gpc ^ (gpc >> 32)) % policy->map_slots, probes = 0;
+        while (valid && seen_used[slot] && seen_gpc[slot] != gpc && ++probes < policy->map_slots)
+            slot = (slot + 1) % policy->map_slots;
+        if (valid && seen_used[slot]) valid = 0;
+        if (valid) {
+            seen_used[slot] = 1;
+            seen_gpc[slot] = gpc;
+        }
+    }
+    free(seen_gpc);
+    free(seen_used);
+    if (valid && stage != NULL) *stage = 2;
+    for (uint64_t i = 0; valid && i < layout->owners; i++) {
+        const uint8_t *record = layout->owner_records + i * X64_PC_OWNER_SIZE;
+        uint32_t start = x64_pc_get32(record), end = x64_pc_get32(record + 4);
+        uint32_t preserve = x64_pc_get32(record + 8), reserved = x64_pc_get32(record + 12);
+        uint32_t map_ordinal = x64_pc_get32(record + 24);
+        valid = start < end && end <= layout->arena && reserved == 0 &&
+                (preserve & ~policy->owner_preserve_mask) == 0 &&
+                (map_ordinal == UINT32_MAX || map_ordinal < layout->maps);
+        if (valid && i != 0)
+            valid = x64_pc_get32(record - X64_PC_OWNER_SIZE + 4) <= start;
+        if (valid && map_ordinal != UINT32_MAX) {
+            const uint8_t *map = layout->map_records + (uint64_t)map_ordinal * X64_PC_MAP_SIZE;
+            uint64_t host = x64_pc_get64(map + 24);
+            uint64_t slice_end = map_ordinal + 1 < layout->maps
+                                     ? x64_pc_get64(map + X64_PC_MAP_SIZE + 24)
+                                     : layout->arena;
+            valid = start >= host && end <= slice_end && i >= x64_pc_get32(map + 84) &&
+                    i < (uint64_t)x64_pc_get32(map + 84) + x64_pc_get32(map + 88);
+        }
+    }
+    return valid;
 }

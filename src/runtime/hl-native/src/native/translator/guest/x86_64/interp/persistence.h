@@ -47,4 +47,14 @@ int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_forma
 int x64_pc_checksum_validate(const uint8_t *bytes, size_t size);
 void x64_pc_checksum_write(uint8_t *bytes, size_t size);
 
+typedef struct x64_pc_semantic_policy {
+    uint64_t block_magic;
+    uint32_t owner_preserve_mask;
+    uint64_t map_slots;
+    int require_census_ordinal;
+} x64_pc_semantic_policy;
+
+int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
+                                const x64_pc_semantic_policy *policy, unsigned *stage);
+
 #endif
