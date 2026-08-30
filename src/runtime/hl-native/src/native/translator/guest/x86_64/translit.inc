@@ -639,10 +639,30 @@ extern const char *hl_c_backend_build_fingerprint(void);
 static _Atomic uint64_t translit_profile_helper_slow_paths;
 #endif
 
-static int translit_profile_publication_enabled(void) {
+typedef struct translit_profile_execution_options {
+    char directory[PATH_MAX];
+    int enabled, symbolize;
+} translit_profile_execution_options;
+static translit_profile_execution_options translit_profile_options;
+
+/* Launch options are immutable while an execution is live.  Snapshot the two profiling controls at
+   that boundary: helper probes and block publication are hot enough that resolving their names for
+   every translated transition costs more than disabled profiling should. */
+static void translit_profile_options_refresh(void) {
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
-    const int symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
-    return (g_prof || symbolize) && directory != NULL && directory[0] != '\0';
+    size_t length = directory == NULL ? 0 : strnlen(directory, sizeof translit_profile_options.directory);
+    translit_profile_options.symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
+    translit_profile_options.enabled =
+        (g_prof || translit_profile_options.symbolize) && length != 0 &&
+        length < sizeof translit_profile_options.directory;
+    if (translit_profile_options.enabled)
+        memcpy(translit_profile_options.directory, directory, length + 1u);
+    else
+        translit_profile_options.directory[0] = '\0';
+}
+
+static int translit_profile_publication_enabled(void) {
+    return translit_profile_options.enabled;
 }
 
 static void translit_profile_stream_close(FILE **stream) {
@@ -789,9 +809,9 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
 }
 
 static void translit_perf_map_publish_named(const char *name, const uint8_t *start, uint32_t host_len) {
-    const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
-    const int symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
-    if ((!g_prof && !symbolize) || directory == NULL || directory[0] == '\0' || host_len == 0) return;
+    const char *directory = translit_profile_options.directory;
+    const int symbolize = translit_profile_options.symbolize;
+    if (!translit_profile_options.enabled || host_len == 0) return;
     /* Guest exec and the threaded fresh-arena path can replace the arena between
        publications.  Bind the lifecycle identity before validating or naming the
        first record in that arena; otherwise a same-pid child keeps writing (or,
@@ -2812,6 +2832,25 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                        published.pid == 0 && published.start == NULL && published.end == NULL
                    ? 0
                    : 229;
+    }
+    if (scenario == 186) {
+        if (g_prof || hl_option_get("HL_TRANSLIT_PERF_MAP") != NULL ||
+            hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL)
+            return 230;
+        translit_profile_options_refresh();
+        int absent = !translit_profile_options.enabled && !translit_profile_options.symbolize &&
+                     translit_profile_options.directory[0] == '\0';
+        int set = hl_option_set("HL_TRANSLIT_PERF_MAP", "/var/tmp", 1) == 0 &&
+                  hl_option_set("HL_TRANSLIT_SYMBOLIZE", "1", 1) == 0;
+        int remained = !translit_profile_publication_enabled() && !translit_profile_options.symbolize &&
+                       translit_profile_options.directory[0] == '\0';
+        translit_profile_options_refresh();
+        int refreshed = translit_profile_publication_enabled() && translit_profile_options.symbolize &&
+                        strcmp(translit_profile_options.directory, "/var/tmp") == 0;
+        (void)hl_option_unset("HL_TRANSLIT_PERF_MAP");
+        (void)hl_option_unset("HL_TRANSLIT_SYMBOLIZE");
+        translit_profile_options_refresh();
+        return absent && set && remained && refreshed && !translit_profile_options.enabled ? 0 : 231;
     }
     if (scenario == 158 || scenario == 159) {
         struct insn readonly = {.len = 7,

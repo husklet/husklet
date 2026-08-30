@@ -502,6 +502,8 @@ static int translit_enabled(void) {
     return 0;
 }
 
+static void translit_profile_options_refresh(void) {}
+
 static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
 }
@@ -1764,6 +1766,10 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         g_host_launch_monotonic_ns = now.value;
     }
     if (bound_shadow_activate() != 0) return hl_vfs_cursor_state_finish(70);
+    /* Restore enters engine_global_init and translated execution from inside ckpt_restore_tree, so the
+       execution-scoped diagnostic and symbol-publication snapshot must exist before that early return. */
+    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    translit_profile_options_refresh();
     const char *rdir = hl_option_get("HL_RESTORE");
     if (rdir != NULL) return hl_vfs_cursor_state_finish(ckpt_restore_tree(rootfs));
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
@@ -1771,7 +1777,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_coldprof = 0;
     /* Diagnostic stubs embed fork-shared counter addresses. They are launch-private and deliberately have
        no persistent-cache relocation: diagnostics therefore disables restore/save before cache lookup. */
-    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_pcache = hl_option_get("HL_PCACHE") != NULL && !g_prof;
     if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
     int rc = engine_global_init();
