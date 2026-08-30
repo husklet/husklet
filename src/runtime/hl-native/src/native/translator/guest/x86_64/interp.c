@@ -2088,11 +2088,14 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
     map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), g_cache + host, block);
     int index = map_idx(gpc);
     if (index < 0 || g_map[index].body != block) {
-        __atomic_store_n(&g_x64_pc_restored_states[slot->ordinal], 0, __ATOMIC_RELEASE);
+        expected = JIT_RESTORED_ACTIVATING;
+        (void)__atomic_compare_exchange_n(&g_x64_pc_restored_states[slot->ordinal], &expected, 0,
+                                          0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
         return NULL;
     }
+    if (!jit_restored_state_commit(&g_x64_pc_restored_states[slot->ordinal]))
+        return NULL;
     translit_perf_map_publish(block, g_cache + host, block->host_len, block->profile_insns);
-    __atomic_store_n(&g_x64_pc_restored_states[slot->ordinal], JIT_RESTORED_ACTIVE, __ATOMIC_RELEASE);
     g_x64_pc_activated_maps++;
     return block;
 }

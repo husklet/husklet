@@ -349,6 +349,17 @@ static _Thread_local hl_map_host_cache_entry g_map_host_cache[2];
 static void *(*g_map_body_miss_resolver)(uint64_t gpc);
 static void *(*g_map_host_miss_resolver)(uint64_t gpc);
 static int (*g_map_visibility)(uint64_t gpc);
+enum jit_restored_map_state {
+    JIT_RESTORED_DORMANT = 1,
+    JIT_RESTORED_ACTIVATING = 2,
+    JIT_RESTORED_ACTIVE = 3,
+    JIT_RESTORED_INVALIDATING = 4,
+};
+static int jit_restored_state_commit(uint8_t *state) {
+    uint8_t expected = JIT_RESTORED_ACTIVATING;
+    return __atomic_compare_exchange_n(state, &expected, JIT_RESTORED_ACTIVE, 0,
+                                       __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+}
 
 static __attribute__((noinline, noclone)) hl_map_host_cache_entry *map_host_cache_current(void) {
     return g_map_host_cache;
@@ -1254,6 +1265,13 @@ static int map_source_index_test(uint32_t scenario, uint64_t *result) {
         uint64_t dirty[][2] = {{first, first + 1u}};
         *result = map_invalidate_source_ranges(dirty, 1);
         if (*result != 1 || map_body(first) != NULL || map_body(second) == NULL) verdict = -EIO;
+    } else if (scenario == 52) {
+        uint8_t state = JIT_RESTORED_ACTIVATING;
+        __atomic_store_n(&state, JIT_RESTORED_INVALIDATING, __ATOMIC_RELEASE);
+        if (jit_restored_state_commit(&state) ||
+            __atomic_load_n(&state, __ATOMIC_ACQUIRE) != JIT_RESTORED_INVALIDATING)
+            verdict = -EIO;
+        *result = 1;
     } else {
         verdict = -EINVAL;
     }
@@ -1830,12 +1848,6 @@ typedef struct {
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
 typedef uint32_t jit_body_owner_preserve;
 #define JIT_BODY_OWNER_PRESERVE_RET_RAX (1u << 16)
-enum jit_restored_map_state {
-    JIT_RESTORED_DORMANT = 1,
-    JIT_RESTORED_ACTIVATING = 2,
-    JIT_RESTORED_ACTIVE = 3,
-    JIT_RESTORED_INVALIDATING = 4,
-};
 typedef struct {
     uint64_t generation;
     uint8_t *rw;
