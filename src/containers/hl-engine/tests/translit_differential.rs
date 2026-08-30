@@ -1402,12 +1402,20 @@ fn run_with_perf_map(
     (out, exit.guest_status, report)
 }
 
-fn run_with_sampling_symbols(executable: &Path, directory: &Path, fresh_rollover: bool) -> (Vec<u8>, Vec<u8>, i32) {
+fn run_with_sampling_symbols(
+    executable: &Path,
+    directory: &Path,
+    fresh_rollover: bool,
+    riprel_readonly: bool,
+) -> (Vec<u8>, Vec<u8>, i32) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
     options.set("HL_TRANSLIT_SYMBOLIZE", "1", true).unwrap();
     options.set("HL_TRANSLIT_SYMBOL_RECEIPT", "1", true).unwrap();
+    if riprel_readonly {
+        options.set("HL_TRANSLIT_RIPREL_READONLY", "1", true).unwrap();
+    }
     options
         .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
         .unwrap();
@@ -1439,7 +1447,7 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
     let executable = fixture(work.path(), "forward_jump");
     let maps = work.path().join("sampling-maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false);
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false, false);
     assert_eq!(status, 0);
     assert_eq!(output, b"42\n");
     let stderr = String::from_utf8(stderr).unwrap();
@@ -1460,12 +1468,39 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
 }
 
 #[test]
+fn readonly_riprel_fault_recovers_exact_guest_state_and_resumes_the_translated_block() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "riprel_readonly_fault");
+    let maps = work.path().join("riprel-fault-maps");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false, true);
+    assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
+    let output = String::from_utf8(output).unwrap();
+    let entry = output
+        .trim()
+        .strip_prefix("riprel fault recovery ok entry=")
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .unwrap_or_else(|| panic!("missing exact fault-block entry: {output:?}"));
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
+    let maps = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<String>();
+    let guest = format!("_g{entry:x}_");
+    assert!(
+        maps.lines().any(|line| line.contains(&guest) && line.ends_with("_rr1")),
+        "the exact block containing fault_instruction was not admitted by the readonly lowering:\n{maps}"
+    );
+}
+
+#[test]
 fn sampling_symbols_follow_exec_fresh_arena_generations() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "perf_map_fork_exec");
     let maps = work.path().join("sampling-exec-maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, true);
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, true, false);
     assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
     let stderr = String::from_utf8(stderr).unwrap();
     assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
