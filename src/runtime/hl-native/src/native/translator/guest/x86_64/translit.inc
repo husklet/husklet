@@ -5355,6 +5355,55 @@ static int translit_riprel_load_bridge_gate_test(void) {
         }
         if (context != NULL) hl_x86_hot_context_destroy(context);
     }
+    // Exercise the real decoder/builder/body path for both architectural widths and every destination
+    // that can safely be borrowed.  RSP is the sole exclusion because the emitted load cannot use it as
+    // an address temporary without changing the host stack.
+    for (int readonly = 0; execution_exact && readonly <= 1; ++readonly) {
+        if (mprotect(guest + 4096, 4096, readonly ? PROT_READ : PROT_READ | PROT_WRITE) != 0) {
+            execution_exact = 0;
+            break;
+        }
+        for (int width = 4; execution_exact && width <= 8; width += 4) {
+            for (int reg = 0; execution_exact && reg < 16; ++reg) {
+                if (reg == HL_X64_RSP) continue;
+                uint8_t *instruction = guest + source_offset;
+                uint8_t rex = (uint8_t)(0x40 | (width == 8 ? 8 : 0) | (reg >= 8 ? 4 : 0));
+                size_t prefix = rex == 0x40 ? 0 : 1;
+                if (prefix != 0) instruction[0] = rex;
+                instruction[prefix] = 0x8b;
+                instruction[prefix + 1] = (uint8_t)(((reg & 7) << 3) | 5);
+                size_t length = prefix + 6;
+                displacement = (int32_t)(target_offset - source_offset - length);
+                memcpy(instruction + prefix + 2, &displacement, sizeof displacement);
+                instruction[length] = 0x0f;
+                instruction[length + 1] = 0x0b;
+                jit_body_owner_drop_generation(g_cache_gen);
+                map_clear();
+                memset(arena, 0, mapping_size);
+                g_cp = arena + sizeof(struct interp_block);
+                (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+                (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", "0", 1);
+                hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+                struct interp_block *block = (struct interp_block *)arena;
+                void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+                if (body == NULL || block->profile_insns != 1) {
+                    execution_exact = 0;
+                } else {
+                    block->magic = INTERP_BLOCK_MAGIC;
+                    block->gpc = source;
+                    struct cpu cpu = {0};
+                    cpu.rip = source;
+                    cpu.r[reg] = UINT64_C(0xa5a5a5a5a5a5a5a5);
+                    hl_backend_tree_begin(1, effective_host_services());
+                    run_block(context, &cpu, block);
+                    uint64_t expected = width == 8 ? UINT64_C(0x0f0f0f0f0f0f0f5a)
+                                                   : UINT64_C(0x0f0f0f5a);
+                    execution_exact &= cpu.rip == source + length && cpu.r[reg] == expected;
+                }
+                if (context != NULL) hl_x86_hot_context_destroy(context);
+            }
+        }
+    }
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
     (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
     translit_fall_fixture_bytes = NULL;
