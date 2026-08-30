@@ -215,3 +215,106 @@ int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
     }
     return valid;
 }
+
+static int x64_pc_nonempty(const uint8_t *bytes, size_t size) {
+    uint8_t any = 0;
+    for (size_t i = 0; i < size; i++) any |= bytes[i];
+    return any != 0;
+}
+
+static int x64_pc_span_valid(uint64_t base, uint64_t length, uint64_t *end) {
+    if (length == 0 || length > UINT64_MAX - base) return 0;
+    *end = base + length;
+    return 1;
+}
+
+static int x64_pc_inside_span(uint64_t lo, uint64_t hi, uint64_t base, uint64_t length) {
+    uint64_t end;
+    return lo < hi && x64_pc_span_valid(base, length, &end) && lo >= base && hi <= end;
+}
+
+int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
+                                          x64_pc_external_authority external, void *context,
+                                          unsigned *stage) {
+    int valid = 1;
+    uint32_t prior = 0;
+    if (stage != NULL) *stage = 3;
+    for (uint64_t i = 0; valid && i < layout->relocations; i++) {
+        const uint8_t *record = layout->relocation_records + i * X64_PC_RELOC_SIZE;
+        uint32_t offset = x64_pc_get32(record), kind = x64_pc_get32(record + 4);
+        valid = offset <= layout->arena && layout->arena - offset >= 8 && external(context, kind) &&
+                (i == 0 || offset > prior) && offset >= 2 && layout->arena_bytes[offset - 2] == 0x48 &&
+                layout->arena_bytes[offset - 1] == 0xb8;
+        prior = offset;
+    }
+    prior = 0;
+    for (uint64_t i = 0; valid && i < layout->helper_relocations; i++) {
+        const uint8_t *record = layout->helper_relocation_records + i * X64_PC_HELPER_RELOC_SIZE;
+        uint32_t offset = x64_pc_get32(record), kind = x64_pc_get32(record + 4);
+        valid = offset <= layout->arena && layout->arena - offset >= 5 && kind < 2 &&
+                (i == 0 || offset > prior) && layout->arena_bytes[offset] == 0xe9;
+        prior = offset;
+    }
+    if (valid && stage != NULL) *stage = 4;
+    for (uint64_t i = 0; valid && i < layout->libraries; i++) {
+        const uint8_t *record = layout->library_records + i * X64_PC_LIB_SIZE;
+        uint64_t base = x64_pc_get64(record), length = x64_pc_get64(record + 8), end;
+        valid = x64_pc_span_valid(base, length, &end) && base >= X64_PC_LIB_BASE &&
+                end <= X64_PC_LIB_BASE + X64_PC_LIB_SPAN && x64_pc_get64(record + 16) != 0 &&
+                x64_pc_nonempty(record + 24, 32) &&
+                (i == 0 || x64_pc_get64(record - X64_PC_LIB_SIZE) +
+                               x64_pc_get64(record - X64_PC_LIB_SIZE + 8) <= base);
+    }
+    if (valid && stage != NULL) *stage = 5;
+    uint32_t prior_chain = 0;
+    for (uint64_t i = 0; valid && i < layout->chains; i++) {
+        const uint8_t *record = layout->chain_records + i * X64_PC_CHAIN_SIZE;
+        uint32_t site = x64_pc_get32(record), fallback = x64_pc_get32(record + 4);
+        valid = site <= layout->arena && layout->arena - site >= 5 && fallback < layout->arena &&
+                layout->arena_bytes[site] == 0xe9 && (i == 0 || site > prior_chain);
+        prior_chain = site;
+    }
+    if (valid && stage != NULL) *stage = 6;
+    for (uint64_t i = 0; valid && i < layout->maps; i++) {
+        const uint8_t *map = layout->map_records + i * X64_PC_MAP_SIZE;
+        uint32_t owner_start = x64_pc_get32(map + 84), owner_count = x64_pc_get32(map + 88);
+        uint32_t chain_start = x64_pc_get32(map + 92), chain_count = x64_pc_get32(map + 96);
+        if (i != 0) {
+            const uint8_t *previous = map - X64_PC_MAP_SIZE;
+            valid = x64_pc_get32(previous + 84) + x64_pc_get32(previous + 88) <= owner_start &&
+                    x64_pc_get32(previous + 92) + x64_pc_get32(previous + 96) <= chain_start;
+        }
+        for (uint32_t j = 0; valid && j < owner_count; j++)
+            valid = x64_pc_get32(layout->owner_records +
+                                 (uint64_t)(owner_start + j) * X64_PC_OWNER_SIZE + 24) == i;
+        for (uint32_t j = 0; valid && j < chain_count; j++) {
+            const uint8_t *chain = layout->chain_records +
+                                   (uint64_t)(chain_start + j) * X64_PC_CHAIN_SIZE;
+            uint32_t site = x64_pc_get32(chain), fallback = x64_pc_get32(chain + 4);
+            uint64_t slice_start = x64_pc_get64(map + 24);
+            uint64_t slice_end = i + 1 < layout->maps
+                                     ? x64_pc_get64(map + X64_PC_MAP_SIZE + 24)
+                                     : layout->arena;
+            int32_t displacement;
+            memcpy(&displacement, layout->arena_bytes + site + 1, sizeof displacement);
+            int64_t destination = (int64_t)site + 5 + displacement;
+            valid = site >= slice_start && site <= slice_end && slice_end - site >= 5 &&
+                    fallback < layout->arena && destination >= 0 && (uint64_t)destination < layout->arena &&
+                    x64_pc_get64(chain + 8) >= x64_pc_get64(map + 8) &&
+                    x64_pc_get64(chain + 8) < x64_pc_get64(map + 16);
+        }
+    }
+    if (valid && stage != NULL) *stage = 7;
+    for (uint64_t i = 0; valid && i < layout->maps; i++) {
+        const uint8_t *map = layout->map_records + i * X64_PC_MAP_SIZE;
+        uint64_t lo = x64_pc_get64(map + 8), hi = x64_pc_get64(map + 16);
+        int authority = (lo >= layout->image_lo && hi <= layout->image_hi) ||
+                        (lo >= layout->interpreter_lo && hi <= layout->interpreter_hi);
+        for (uint64_t j = 0; !authority && j < layout->libraries; j++) {
+            const uint8_t *library = layout->library_records + j * X64_PC_LIB_SIZE;
+            authority = x64_pc_inside_span(lo, hi, x64_pc_get64(library), x64_pc_get64(library + 8));
+        }
+        valid = authority;
+    }
+    return valid;
+}

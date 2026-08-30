@@ -2003,6 +2003,12 @@ static uint64_t g_x64_pc_observe_library_ns, g_x64_pc_observe_library_bytes, g_x
 static unsigned g_x64_pc_observe_outcome;
 static int x64_pc_file(char *path, size_t size);
 
+static int x64_pc_external_record_authorized(void *context, uint32_t kind) {
+    (void)context;
+    return translit_external_absolute_kind_valid(kind) &&
+           translit_external_absolute_address_for(kind) != 0;
+}
+
 static void x64_pc_restored_clear(void) {
 }
 
@@ -2500,95 +2506,9 @@ static int pcache_load(uint64_t entry_jump) {
 #endif
         };
         valid = x64_pc_validate_maps_owners(&layout, &policy, &semantic_stage);
-        uint64_t arena = layout.arena, maps = layout.maps, owners = layout.owners;
-        uint64_t helper_relocs = layout.helper_relocations, relocs = layout.relocations;
-        uint64_t libraries = layout.libraries, chains = layout.chains;
-        const uint8_t *record = layout.relocation_records;
-        const uint8_t *validated_owner_records = layout.owner_records;
-        const uint8_t *helper_reloc_records = layout.helper_relocation_records;
-        const uint8_t *library_records = layout.library_records;
-        const uint8_t *chain_records = layout.chain_records;
-        const uint8_t *arena_bytes = layout.arena_bytes;
-        uint32_t prior = 0;
-        if (valid) semantic_stage = 3;
-        for (uint64_t i = 0; valid && i < relocs; i++, record += X64_PC_RELOC_SIZE) {
-            uint32_t offset = x64_pc_get32(record), kind = x64_pc_get32(record + 4);
-            valid = offset <= arena && arena - offset >= 8 && translit_external_absolute_kind_valid(kind) &&
-                    translit_external_absolute_address_for(kind) != 0 &&
-                    (i == 0 || offset > prior) && offset >= 2 && arena_bytes[offset - 2] == 0x48 &&
-                    arena_bytes[offset - 1] == 0xb8;
-            prior = offset;
-        }
-        prior = 0;
-        for (uint64_t i = 0; valid && i < helper_relocs; i++) {
-            const uint8_t *helper = helper_reloc_records + i * X64_PC_HELPER_RELOC_SIZE;
-            uint32_t offset = x64_pc_get32(helper), kind = x64_pc_get32(helper + 4);
-            valid = offset <= arena && arena - offset >= 5 && kind < 2 &&
-                    (i == 0 || offset > prior) && arena_bytes[offset] == 0xe9;
-            prior = offset;
-        }
-        if (valid) semantic_stage = 4;
-        for (uint64_t i = 0; valid && i < libraries; i++) {
-            const uint8_t *lib = library_records + i * X64_PC_LIB_SIZE;
-            uint64_t base = x64_pc_get64(lib), len = x64_pc_get64(lib + 8), end;
-            hl_identity_digest content;
-            memcpy(content.bytes, lib + 24, sizeof content.bytes);
-            valid = x64_pc_span(base, len, &end) && base >= X64_PC_LIB_BASE &&
-                    end <= X64_PC_LIB_BASE + X64_PC_LIB_SPAN && x64_pc_get64(lib + 16) != 0 &&
-                    !hl_identity_digest_empty(&content) && (i == 0 || x64_pc_get64(lib - X64_PC_LIB_SIZE) +
-                    x64_pc_get64(lib - X64_PC_LIB_SIZE + 8) <= base);
-        }
-        if (valid) semantic_stage = 5;
-        uint32_t prior_chain_site = 0;
-        for (uint64_t i = 0; valid && i < chains; i++) {
-            const uint8_t *chain = chain_records + i * X64_PC_CHAIN_SIZE;
-            uint32_t site = x64_pc_get32(chain), fallback = x64_pc_get32(chain + 4);
-            valid = site <= arena && arena - site >= 5 && fallback < arena && arena_bytes[site] == 0xe9 &&
-                    (i == 0 || site > prior_chain_site);
-            prior_chain_site = site;
-        }
-        if (valid) semantic_stage = 6;
-        for (uint64_t i = 0; valid && i < maps; i++) {
-            const uint8_t *map = bytes + X64_PC_HEADER_SIZE + i * X64_PC_MAP_SIZE;
-            uint32_t owner_start = x64_pc_get32(map + 84), owner_count = x64_pc_get32(map + 88);
-            uint32_t chain_start = x64_pc_get32(map + 92), chain_count = x64_pc_get32(map + 96);
-            if (i != 0) {
-                const uint8_t *prior_map = map - X64_PC_MAP_SIZE;
-                valid = x64_pc_get32(prior_map + 84) + x64_pc_get32(prior_map + 88) <= owner_start &&
-                        x64_pc_get32(prior_map + 92) + x64_pc_get32(prior_map + 96) <= chain_start;
-            }
-            for (uint32_t j = 0; valid && j < owner_count; j++)
-                valid = x64_pc_get32(validated_owner_records +
-                                     (uint64_t)(owner_start + j) * X64_PC_OWNER_SIZE + 24) == i;
-            for (uint32_t j = 0; valid && j < chain_count; j++) {
-                const uint8_t *chain = chain_records + (uint64_t)(chain_start + j) * X64_PC_CHAIN_SIZE;
-                uint32_t site = x64_pc_get32(chain), fallback = x64_pc_get32(chain + 4);
-                uint64_t slice_start = x64_pc_get64(map + 24);
-                uint64_t slice_end = i + 1 < maps ? x64_pc_get64(map + X64_PC_MAP_SIZE + 24) : arena;
-                int32_t displacement;
-                memcpy(&displacement, arena_bytes + site + 1, sizeof displacement);
-                int64_t destination = (int64_t)site + 5 + displacement;
-                valid = site >= slice_start && site <= slice_end && slice_end - site >= 5 &&
-                        fallback < arena && destination >= 0 && (uint64_t)destination < arena &&
-                        x64_pc_get64(chain + 8) >= x64_pc_get64(map + 8) &&
-                        x64_pc_get64(chain + 8) < x64_pc_get64(map + 16);
-            }
-        }
-        if (valid) semantic_stage = 7;
-        for (uint64_t i = 0; valid && i < maps; i++) {
-            const uint8_t *map = bytes + X64_PC_HEADER_SIZE + i * X64_PC_MAP_SIZE;
-            uint64_t lo = x64_pc_get64(map + 8), hi = x64_pc_get64(map + 16);
-            int authority = (lo >= x64_pc_get64(bytes + 200) && hi <= x64_pc_get64(bytes + 208)) ||
-                            (lo >= x64_pc_get64(bytes + 216) && hi <= x64_pc_get64(bytes + 224));
-            for (uint64_t j = 0; !authority && j < libraries; j++) {
-                const uint8_t *lib = library_records + j * X64_PC_LIB_SIZE;
-                authority = x64_pc_inside(lo, hi, x64_pc_get64(lib), x64_pc_get64(lib + 8));
-            }
-            if (!authority && g_coldprof)
-                fprintf(stderr, "[pcache] semantic authority ordinal=%llu lo=%llx hi=%llx\n",
-                        (unsigned long long)i, (unsigned long long)lo, (unsigned long long)hi);
-            valid = authority;
-        }
+        if (valid)
+            valid = x64_pc_validate_relocations_authority(
+                &layout, x64_pc_external_record_authorized, NULL, &semantic_stage);
         if (!valid) {
             validation = 2;
             if (g_coldprof) fprintf(stderr, "[pcache] semantic validation stage=%u\n", semantic_stage);

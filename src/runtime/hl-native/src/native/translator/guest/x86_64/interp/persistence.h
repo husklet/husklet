@@ -56,5 +56,9 @@ typedef struct x64_pc_semantic_policy {
 
 int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
                                 const x64_pc_semantic_policy *policy, unsigned *stage);
+typedef int (*x64_pc_external_authority)(void *context, uint32_t kind);
+int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
+                                          x64_pc_external_authority external, void *context,
+                                          unsigned *stage);
 
 #endif
