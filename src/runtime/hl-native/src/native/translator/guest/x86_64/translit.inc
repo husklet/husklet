@@ -2572,6 +2572,9 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
     // Natural mode may opt into only the borrowed-destination register-load family below. Stores and
     // RMW forms still require guest-write/SMC mediation and must never reach the displaced moffs spellings.
     if (!displaced && !natural_load_bridge) return 0;
+    // The natural builder currently admits only the one-byte MOV load at this boundary.  Keep the
+    // wider displaced family below unchanged instead of advertising unreachable natural forms.
+    if (!displaced && (insn->two || insn->op != 0x8B)) return 0;
     uint8_t moffs = 0;
     if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
         moffs = 0xA0;
@@ -4288,7 +4291,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 if (!readonly_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
-                                                    context->riprel_load_bridge_enabled,
+                                                    context->riprel_load_bridge_enabled && !direct_data_authority,
                                                     &preserve_register))) {
                     if (g_nonpie_lo)
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
@@ -5321,20 +5324,22 @@ static int translit_riprel_load_bridge_gate_test(void) {
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
     translit_fall_fixture_length = mapping_size;
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
-    uint16_t counts[2] = {0};
-    for (int enabled = 0; enabled <= 1; ++enabled) {
+    uint16_t counts[3] = {0};
+    for (int mode = 0; mode < 3; ++mode) {
         jit_body_owner_drop_generation(g_cache_gen);
         map_clear();
         memset(arena, 0, mapping_size);
         g_cp = arena + sizeof(struct interp_block);
-        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", enabled ? "1" : "0", 1);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", mode != 0 ? "1" : "0", 1);
+        (void)hl_option_set("HL_TRANSLIT_FS_AUTHORITY_TEST", mode == 2 ? "1" : "0", 1);
         hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
         struct interp_block *block = (struct interp_block *)arena;
         void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
-        counts[enabled] = body == NULL ? 0 : block->profile_insns;
+        counts[mode] = body == NULL ? 0 : block->profile_insns;
         if (context != NULL) hl_x86_hot_context_destroy(context);
     }
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+    (void)hl_option_unset("HL_TRANSLIT_FS_AUTHORITY_TEST");
     translit_fall_fixture_bytes = NULL;
     jit_body_owner_drop_generation(g_cache_gen);
     map_clear();
@@ -5347,7 +5352,9 @@ static int translit_riprel_load_bridge_gate_test(void) {
     g_nonpie_bias = saved_nonpie_bias;
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
-    return counts[0] == 0 && counts[1] == 1 ? 0 : (int)((counts[0] << 8) | counts[1]);
+    return counts[0] == 0 && counts[1] == 1 && counts[2] == 0
+               ? 0
+               : (int)((counts[0] << 16) | (counts[1] << 8) | counts[2]);
 }
 
 static int translit_fall_fixture_test(unsigned scenario) {
