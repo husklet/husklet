@@ -2808,6 +2808,13 @@ static int stw_cpu_slot_lifecycle_test(void) {
     stw_after_translated(&cpu);
     if (atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed)) return 32;
 
+    /* A redispatch selected under an older bus/STW epoch must return to the full loop without execution. */
+    uint64_t stale_epoch = atomic_load_explicit(&g_dispatch_request, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_release);
+    if (stw_before_translated(&cpu, stale_epoch) ||
+        atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed))
+        return 36;
+
     /* The unbound/async entry point retains TLS and therefore ignores cpu.stw_slot. */
     stw_dispatch_safepoint();
     if (g_my_stw_slot != -1 || cpu.stw_slot != slot) return 33;
