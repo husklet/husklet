@@ -259,6 +259,26 @@ static inline void dispatch_interrupt_rearm(struct cpu *c) {
 #define G_FAST_REDISPATCH(code) 0
 #endif
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+enum dispatch_redispatch_counter {
+    REDISPATCH_ATTEMPTED,
+    REDISPATCH_HIT,
+    REDISPATCH_MAP_MISS,
+    REDISPATCH_STALE,
+    REDISPATCH_THREADED,
+    REDISPATCH_IRQ,
+    REDISPATCH_SIGNAL,
+    REDISPATCH_FATAL,
+    REDISPATCH_EXITED,
+    REDISPATCH_BUDGET,
+    REDISPATCH_COUNTER_COUNT,
+};
+static _Atomic uint64_t g_dispatch_redispatch[REDISPATCH_COUNTER_COUNT];
+#define REDISPATCH_COUNT(kind) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed)
+#else
+#define REDISPATCH_COUNT(kind) ((void)0)
+#endif
+
 static void run_guest(struct cpu *c) {
     G_HOT_CONTEXT_TYPE *hot_context = G_HOT_CONTEXT_CREATE();
     hl_map_host_cache_entry *map_cache = G_MAP_HOST_CACHE;
@@ -553,19 +573,39 @@ redispatch_execute:
         // handles R_TIER2 itself (with `continue`), so for the x86 engine this line is never reached;
         // it remains the aarch64 path. Both arches define tier2_promote (per-arch).
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
-        if (!c->exited && !g_threaded && c->reason == R_BRANCH && c->irq == 0 && redispatch_chain < 8 &&
-            !signal_deliverable_for_cpu(c) && hl_fatal_status(&g_jit_fatal) == HL_STATUS_OK) {
-            void *next_code = G_MAP_HOST(map_cache, G_PC(c));
-            void *next_rx;
-            uint64_t next_generation;
-            if (next_code != NULL && G_FAST_REDISPATCH(next_code) &&
-                jit_resolve_rw_code(next_code, &next_rx, &next_generation) && next_generation == g_cache_gen) {
-                code = next_code;
-                rxcode = next_rx;
-                selected_cache_gen = next_generation;
-                selected_bus_epoch = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
-                redispatch_chain++;
-                goto redispatch_execute;
+        if (c->reason == R_BRANCH) {
+            REDISPATCH_COUNT(REDISPATCH_ATTEMPTED);
+            if (c->exited)
+                REDISPATCH_COUNT(REDISPATCH_EXITED);
+            else if (g_threaded)
+                REDISPATCH_COUNT(REDISPATCH_THREADED);
+            else if (c->irq != 0)
+                REDISPATCH_COUNT(REDISPATCH_IRQ);
+            else if (redispatch_chain >= 8)
+                REDISPATCH_COUNT(REDISPATCH_BUDGET);
+            else if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK)
+                REDISPATCH_COUNT(REDISPATCH_FATAL);
+            else if (signal_deliverable_for_cpu(c))
+                REDISPATCH_COUNT(REDISPATCH_SIGNAL);
+            else {
+                void *next_code = G_MAP_HOST(map_cache, G_PC(c));
+                void *next_rx;
+                uint64_t next_generation;
+                if (next_code == NULL)
+                    REDISPATCH_COUNT(REDISPATCH_MAP_MISS);
+                else if (!G_FAST_REDISPATCH(next_code) ||
+                         !jit_resolve_rw_code(next_code, &next_rx, &next_generation) ||
+                         next_generation != g_cache_gen)
+                    REDISPATCH_COUNT(REDISPATCH_STALE);
+                else {
+                    REDISPATCH_COUNT(REDISPATCH_HIT);
+                    code = next_code;
+                    rxcode = next_rx;
+                    selected_cache_gen = next_generation;
+                    selected_bus_epoch = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+                    redispatch_chain++;
+                    goto redispatch_execute;
+                }
             }
         }
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
