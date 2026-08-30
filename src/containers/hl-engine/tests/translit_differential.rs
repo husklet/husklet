@@ -59,7 +59,13 @@ struct Backend {
     entries: u64,
     redispatch_attempted: u64,
     redispatch_hits: u64,
+    redispatch_threaded_hits: u64,
     redispatch_threaded: u64,
+    redispatch_budget: u64,
+    redispatch_irq: u64,
+    redispatch_signal: u64,
+    redispatch_map_miss: u64,
+    redispatch_stale: u64,
     declined: u64,
     stitch_candidates: u64,
     stitch_admitted: u64,
@@ -458,8 +464,14 @@ fn backend(stderr: &[u8]) -> Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
         redispatch_attempted: redispatch_field("attempted="),
-        redispatch_hits: redispatch_field("threaded-hit="),
+        redispatch_hits: redispatch_field("hit="),
+        redispatch_threaded_hits: redispatch_field("threaded-hit="),
         redispatch_threaded: redispatch_field("threaded="),
+        redispatch_budget: redispatch_field("budget="),
+        redispatch_irq: redispatch_field("irq="),
+        redispatch_signal: redispatch_field("signal="),
+        redispatch_map_miss: redispatch_field("map-miss="),
+        redispatch_stale: redispatch_field("stale="),
         declined: counter("declined="),
         stitch_candidates: counter("stitch_candidates="),
         stitch_admitted: counter("stitch_admitted="),
@@ -1901,7 +1913,10 @@ fn agrees(name: &str) -> Backend {
 /// program in the corpus byte-identical.
 #[test]
 fn flag_state_survives_every_transliterated_block_boundary() {
-    agrees("flags");
+    let backend = agrees("flags");
+    assert!(backend.redispatch_hits >= 8, "{}", backend.line);
+    assert!(backend.redispatch_budget > 0, "{}", backend.line);
+    assert!(backend.redispatch_map_miss > 0, "{}", backend.line);
 }
 
 #[test]
@@ -1921,13 +1936,15 @@ fn exhausted_body_owner_capacity_falls_back_to_the_interpreter() {
 /// A guest that writes its own code at runtime.
 #[test]
 fn a_guest_that_generates_code_at_runtime_agrees_with_the_interpreter() {
-    agrees("smc");
+    let backend = agrees("smc");
+    assert!(backend.redispatch_stale > 0, "SMC must decline stale descriptors: {}", backend.line);
 }
 
 /// Faults into transliterated frames, including a guest stack overflow onto the alternate stack.
 #[test]
 fn signals_delivered_into_transliterated_frames_agree_with_the_interpreter() {
-    agrees("sigs");
+    let backend = agrees("sigs");
+    assert!(backend.redispatch_irq + backend.redispatch_signal > 0, "{}", backend.line);
 }
 
 /// `%gs` republication for a cloned thread, a fork child, a vfork+execve and a raw clone.
@@ -1936,7 +1953,7 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
     let tree = agrees("procs");
     assert!(tree.redispatch_attempted > 0, "{}", tree.line);
     assert!(tree.redispatch_threaded > 0, "{}", tree.line);
-    assert_eq!(tree.redispatch_hits, 0, "threaded guests must never fast-redispatch: {}", tree.line);
+    assert_eq!(tree.redispatch_threaded_hits, 0, "threaded guests must never fast-redispatch: {}", tree.line);
     assert!(tree.root_pid > 0, "{}", tree.tree_line);
     assert_eq!(tree.claimed, 17, "{}", tree.tree_line);
     assert_eq!(tree.completed, tree.claimed, "{}", tree.tree_line);
