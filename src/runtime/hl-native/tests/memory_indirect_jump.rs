@@ -16,3 +16,12 @@ fn classifier_and_signal_stages_are_exact() {
 fn sampling_exit_waits_for_an_inflight_record_commit() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(151), 0, "sampling publication barrier fixture");
 }
+
+#[test]
+fn disabled_sampling_bypasses_helper_publication_state() {
+    assert_eq!(
+        hl_native::x86_64_translit_displaced_test(185),
+        0,
+        "disabled profiling must stop before process identity and publication state"
+    );
+}

@@ -635,6 +635,15 @@ typedef struct translit_profile_named_range {
 } translit_profile_named_range;
 static translit_profile_named_range translit_profile_jcc_ibtc, translit_profile_direct_jmp_ibtc;
 extern const char *hl_c_backend_build_fingerprint(void);
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic uint64_t translit_profile_helper_slow_paths;
+#endif
+
+static int translit_profile_publication_enabled(void) {
+    const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
+    const int symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
+    return (g_prof || symbolize) && directory != NULL && directory[0] != '\0';
+}
 
 static void translit_profile_stream_close(FILE **stream) {
     if (*stream == NULL) return;
@@ -856,6 +865,10 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
 
 static void translit_perf_map_publish_helper(const char *name, const uint8_t *start, const uint8_t *end,
                                              translit_profile_named_range *published) {
+    if (!translit_profile_publication_enabled()) return;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    atomic_fetch_add_explicit(&translit_profile_helper_slow_paths, 1, memory_order_relaxed);
+#endif
     pid_t pid = getpid();
     if (start == NULL || end <= start ||
         (published->pid == pid && published->start == start && published->end == end))
@@ -868,6 +881,7 @@ static void translit_perf_map_publish_helper(const char *name, const uint8_t *st
 
 static void translit_perf_map_publish(const struct interp_block *block, const uint8_t *start, uint32_t host_len,
                                       uint32_t instruction_count, uint32_t readonly_riprel_count) {
+    if (!translit_profile_publication_enabled()) return;
     const char *fingerprint = hl_c_backend_build_fingerprint();
     uint64_t guest_length = block->guest_end >= block->gpc ? block->guest_end - block->gpc : 0;
     char name[256];
@@ -2785,6 +2799,19 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         translit_sampling_record_count = saved_count;
         translit_sampling_overflow = saved_overflow;
         return !raced && test.done && size > 0 && exact ? 0 : 218;
+    }
+    if (scenario == 185) {
+        if (g_prof || hl_option_get("HL_TRANSLIT_PERF_MAP") != NULL ||
+            hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL)
+            return 228;
+        uint8_t helper[2] = {0};
+        translit_profile_named_range published = {0};
+        uint64_t before = atomic_load_explicit(&translit_profile_helper_slow_paths, memory_order_relaxed);
+        translit_perf_map_publish_helper("hl_tl_disabled_test", helper, helper + sizeof helper, &published);
+        return atomic_load_explicit(&translit_profile_helper_slow_paths, memory_order_relaxed) == before &&
+                       published.pid == 0 && published.start == NULL && published.end == NULL
+                   ? 0
+                   : 229;
     }
     if (scenario == 158 || scenario == 159) {
         struct insn readonly = {.len = 7,
