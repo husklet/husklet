@@ -121,6 +121,9 @@ struct LaunchArguments {
     /// Control read-only RIP-relative lowering (enabled by default for x86-64 transliteration).
     #[arg(long, value_enum, value_name = "on|off", num_args = 0..=1, default_missing_value = "on", require_equals = true, requires = "translit")]
     translit_riprel_readonly: Option<TranslitFeatureControl>,
+    /// Control natural RIP-relative register-load lowering (disabled by default).
+    #[arg(long, value_enum, value_name = "on|off", num_args = 0..=1, default_missing_value = "on", require_equals = true, requires = "translit")]
+    translit_riprel_load_bridge: Option<TranslitFeatureControl>,
     /// Control the strict FS-load bridge (enabled by default for x86-64 transliteration).
     #[arg(long, value_enum, value_name = "on|off", num_args = 0..=1, default_missing_value = "on", require_equals = true, requires = "translit")]
     translit_fs_load_bridge: Option<TranslitFeatureControl>,
@@ -384,6 +387,11 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--translit-riprel-readonly is available only in the x86-64 worker".to_owned(),
         ));
     }
+    if launch.translit_riprel_load_bridge.is_some() && guest != Guest::X86_64 {
+        return Err(Failure::Request(
+            "--translit-riprel-load-bridge is available only in the x86-64 worker".to_owned(),
+        ));
+    }
     if launch.translit_fs_load_bridge.is_some() && guest != Guest::X86_64 {
         return Err(Failure::Request(
             "--translit-fs-load-bridge is available only in the x86-64 worker".to_owned(),
@@ -478,6 +486,7 @@ fn rootfs_plan(
     }
     for (control, name) in [
         (launch.translit_riprel_readonly, "HL_TRANSLIT_RIPREL_READONLY"),
+        (launch.translit_riprel_load_bridge, "HL_TRANSLIT_RIPREL_LOAD_BRIDGE"),
         (launch.translit_fs_load_bridge, "HL_TRANSLIT_FS_LOAD_BRIDGE"),
     ] {
         if let Some(control) = control {

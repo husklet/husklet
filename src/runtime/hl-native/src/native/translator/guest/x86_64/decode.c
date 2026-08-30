@@ -506,6 +506,8 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
             (uint8_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_READONLY", 1);
         context->fs_load_bridge_enabled =
             (uint8_t)hl_option_flag_value("HL_TRANSLIT_FS_LOAD_BRIDGE", 1);
+        context->riprel_load_bridge_enabled =
+            (uint8_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0);
 #if defined(HL_NATIVE_TEST_HOOKS)
         atomic_fetch_add_explicit(&g_hot_context_test_live, 1, memory_order_relaxed);
 #endif

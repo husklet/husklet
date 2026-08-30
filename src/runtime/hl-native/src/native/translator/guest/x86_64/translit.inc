@@ -2520,7 +2520,8 @@ static void translit_xmm_cpu(hl_x64_asm *a, int reg, int load) {
 // without borrowing a guest register, touching the stack, or adding fault-recovery state. LEA is address
 // materialisation rather than a dereference, so an immediate move preserves its low guest identity.
 static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn, uint64_t guest_target,
-                                          uint64_t storage_target, int displaced, int *preserve_register) {
+                                          uint64_t storage_target, int displaced, int natural_load_bridge,
+                                          int *preserve_register) {
     *preserve_register = -1;
     if (insn->op == 0x8D && !insn->two) {
         if (insn->lock || insn->rep || insn->repne ||
@@ -2567,16 +2568,17 @@ static int translit_lower_absolute_riprel(hl_x64_asm *a, const struct insn *insn
         (void)__atomic_fetch_add(&translit_natural_abs32_lowered, 1, __ATOMIC_RELAXED);
         return !a->overflow;
     }
-    // Natural mode never falls into the displaced image's borrowed-register or moffs families.
-    if (!displaced) return 0;
+    // Natural mode may opt into only the borrowed-destination register-load family below. Stores and
+    // RMW forms still require guest-write/SMC mediation and must never reach the displaced moffs spellings.
+    if (!displaced && !natural_load_bridge) return 0;
     uint8_t moffs = 0;
-    if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
+    if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8A)
         moffs = 0xA0;
-    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8B)
+    else if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x8B)
         moffs = 0xA1;
-    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x88)
+    else if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x88)
         moffs = 0xA2;
-    else if (!insn->two && insn->reg == HL_X64_RAX && insn->op == 0x89)
+    else if (displaced && !insn->two && insn->reg == HL_X64_RAX && insn->op == 0x89)
         moffs = 0xA3;
     if (moffs == 0) {
         int family = (!insn->two && (insn->op == 0x8B || insn->op == 0x63)) ||
@@ -2771,6 +2773,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 8},
             {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 9},
+            {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 10},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();
@@ -2922,6 +2925,41 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 174) return translit_fs_partial_spill_signal_test();
     if (scenario >= 175 && scenario <= 184) return translit_fs_load_bridge_fixture_test(scenario);
+    if (scenario == 187) {
+        struct insn load = {.op = 0x8B, .opsize = 8};
+        const uint64_t target = UINT64_C(0x7f0012345678);
+        for (int reg = 0; reg < 16; ++reg) {
+            uint8_t code[32] = {0};
+            hl_x64_asm output = {code, code + sizeof code, 0};
+            int preserve = -1;
+            load.reg = reg;
+            int lowered = translit_lower_absolute_riprel(&output, &load, target, target, 0, 1, &preserve);
+            if ((reg == HL_X64_RSP) == lowered || (lowered && preserve != reg)) return 252 + reg;
+        }
+        uint8_t code[32] = {0};
+        hl_x64_asm output = {code, code + sizeof code, 0};
+        int preserve = -1;
+        load.reg = 1;
+        if (translit_lower_absolute_riprel(&output, &load, target, target, 0, 0, &preserve)) return 269;
+        load.op = 0x89;
+        output = (hl_x64_asm){code, code + sizeof code, 0};
+        return translit_lower_absolute_riprel(&output, &load, target, target, 0, 1, &preserve) ? 270 : 0;
+    }
+    if (scenario == 188) {
+        (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+        hl_x86_hot_context *absent = hl_x86_hot_context_create(NULL, NULL, NULL);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "1", 1);
+        hl_x86_hot_context *on = hl_x86_hot_context_create(NULL, NULL, NULL);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "0", 1);
+        hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
+        int exact = absent != NULL && on != NULL && off != NULL && !absent->riprel_load_bridge_enabled &&
+                    on->riprel_load_bridge_enabled && !off->riprel_load_bridge_enabled;
+        hl_x86_hot_context_destroy(off);
+        hl_x86_hot_context_destroy(on);
+        hl_x86_hot_context_destroy(absent);
+        (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+        return exact ? 0 : 271;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -2957,7 +2995,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8D;
         insn.reg = 9;
         int preserve;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 13;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 13;
         const uint8_t expected[] = {0x49, 0xB9, 0x23, 0x01, 0x40, 0, 0, 0, 0, 0};
         return output.cursor - bytes == (ptrdiff_t)sizeof(expected) && memcmp(bytes, expected, sizeof(expected)) == 0
                    ? 0
@@ -2967,7 +3005,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 11 ? 0x8B : 0x89;
         insn.reg = 0;
         int preserve;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 15;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 15;
         return output.cursor - bytes == 10 && bytes[0] == 0x48 && bytes[1] == (scenario == 11 ? 0xA1 : 0xA3) &&
                        memcmp(bytes + 2, (uint8_t[]){0x23, 0x01, 0x40, 0, 0x01, 0, 0, 0}, 8) == 0
                    ? 0
@@ -2977,7 +3015,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8B;
         insn.reg = 4;
         int preserve;
-        return translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve) ? 17 : 0;
+        return translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve) ? 17 : 0;
     }
     if (scenario >= 14 && scenario <= 16) {
         int preserve;
@@ -2985,7 +3023,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 16 ? 0xBE : 0x8B;
         insn.two = scenario == 16;
         insn.opsize = scenario == 15 ? 4 : 8;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 18;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 18;
         static const uint8_t suffix[][4] = {{0x48, 0x8B, 0x09, 0}, {0x45, 0x8B, 0x6D, 0},
                                              {0x48, 0x0F, 0xBE, 0x12}};
         size_t suffix_size = scenario == 14 ? 3 : 4;
@@ -3002,7 +3040,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = scenario == 18 ? 0xB6 : 0x63;
         insn.two = scenario == 18;
         insn.opsize = scenario == 18 ? 4 : 8;
-        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, &preserve)) return 21;
+        if (!translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + bias + 0x123, 1, 0, &preserve)) return 21;
         const uint8_t *expected = scenario == 18 ? (uint8_t[]){0x45, 0x0F, 0xB6, 0x1B}
                                                  : (uint8_t[]){0x4D, 0x63, 0x36};
         size_t expected_size = scenario == 18 ? 4 : 3;
@@ -3024,7 +3062,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int preserve;
         insn.op = 0x8B;
         insn.reg = 10;
-        int lowered = translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + 0x123, 0, &preserve);
+        int lowered = translit_lower_absolute_riprel(&output, &insn, lo + 0x123, lo + 0x123, 0, 0, &preserve);
         const uint8_t expected[] = {0x67, 0x4C, 0x8B, 0x14, 0x25, 0x23, 0x01, 0x40, 0x00};
         return lowered && preserve == -1 && output.cursor - bytes == (ptrdiff_t)sizeof(expected) &&
                        memcmp(bytes, expected, sizeof(expected)) == 0
@@ -3036,7 +3074,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         insn.op = 0x8D;
         insn.reg = scenario == 22 ? 10 : 9;
         uint64_t target = scenario == 22 ? lo + 0x123 : UINT64_C(0x7f0012345678);
-        int lowered = translit_lower_absolute_riprel(&output, &insn, target, target, 0, &preserve);
+        int lowered = translit_lower_absolute_riprel(&output, &insn, target, target, 0, 0, &preserve);
         const uint8_t *expected = scenario == 22 ? (uint8_t[]){0x41, 0xBA, 0x23, 0x01, 0x40, 0x00}
                                                  : (uint8_t[]){0x49, 0xB9, 0x78, 0x56, 0x34, 0x12,
                                                                0x00, 0x7F, 0x00, 0x00};
@@ -4248,6 +4286,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 if (!readonly_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
+                                                    context->riprel_load_bridge_enabled,
                                                     &preserve_register))) {
                     if (g_nonpie_lo)
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
