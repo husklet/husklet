@@ -315,7 +315,7 @@ static int fdvis_index_contract_test(void) {
     int reuses_tombstone = tombstone == first_entry;
 
     second_entry = fdvis_index_find(second, 0, NULL);
-    second_entry->physical = FDVIS_N;
+    if (second_entry) second_entry->physical = FDVIS_N;
     struct fdvis_slot *stale_result = fdvis_find(second, 22, 0);
     second_entry = fdvis_index_find(second, 0, NULL);
     int stale_rebuild = stale_result == &slots[29] && second_entry && second_entry->physical == 29;
