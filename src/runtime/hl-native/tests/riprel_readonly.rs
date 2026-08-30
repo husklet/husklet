@@ -106,3 +106,9 @@ fn natural_riprel_load_bridge_is_default_off_and_snapshotted_per_context() {
     let _guard = native_globals();
     assert_eq!(hl_native::x86_64_translit_displaced_test(188), 0);
 }
+
+#[test]
+fn natural_riprel_load_bridge_option_reaches_the_block_builder() {
+    let _guard = native_globals();
+    assert_eq!(hl_native::x86_64_translit_displaced_test(189), 0);
+}

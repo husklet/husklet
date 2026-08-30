@@ -523,6 +523,7 @@ static int translit_fall_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
+static int translit_riprel_load_bridge_gate_test(void);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
@@ -2960,6 +2961,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
         return exact ? 0 : 271;
     }
+    if (scenario == 189) return translit_riprel_load_bridge_gate_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -5285,6 +5287,67 @@ static int translit_riprel_readonly_off_receipt_test(unsigned scenario) {
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
     return result;
+}
+
+static int translit_riprel_load_bridge_gate_test(void) {
+    const size_t mapping_size = 8192;
+    uint8_t *arena = mmap((void *)UINT64_C(0x700000000000), mapping_size,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    uint8_t *guest = mmap((void *)UINT64_C(0x600000000000), mapping_size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, mapping_size);
+        if (guest != MAP_FAILED) munmap(guest, mapping_size);
+        return 272;
+    }
+    memset(guest, 0x0f, mapping_size);
+    const size_t source_offset = 128, target_offset = 4096;
+    guest[source_offset] = 0x8b; // mov rax,[rip+disp32]
+    guest[source_offset + 1] = 0x05;
+    int32_t displacement = (int32_t)(target_offset - source_offset - 6);
+    memcpy(guest + source_offset + 2, &displacement, sizeof displacement);
+    guest[target_offset] = 0x5a;
+
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    uint64_t saved_nonpie_lo = g_nonpie_lo, saved_nonpie_hi = g_nonpie_hi, saved_nonpie_bias = g_nonpie_bias;
+    g_cache = arena;
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_C(0xfffffffffffffdff);
+    g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = mapping_size;
+    uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+    uint16_t counts[2] = {0};
+    for (int enabled = 0; enabled <= 1; ++enabled) {
+        jit_body_owner_drop_generation(g_cache_gen);
+        map_clear();
+        memset(arena, 0, mapping_size);
+        g_cp = arena + sizeof(struct interp_block);
+        (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", enabled ? "1" : "0", 1);
+        hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
+        counts[enabled] = body == NULL ? 0 : block->profile_insns;
+        if (context != NULL) hl_x86_hot_context_destroy(context);
+    }
+    (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
+    translit_fall_fixture_bytes = NULL;
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_nonpie_lo = saved_nonpie_lo;
+    g_nonpie_hi = saved_nonpie_hi;
+    g_nonpie_bias = saved_nonpie_bias;
+    munmap(guest, mapping_size);
+    munmap(arena, mapping_size);
+    return counts[0] == 0 && counts[1] == 1 ? 0 : (int)((counts[0] << 8) | counts[1]);
 }
 
 static int translit_fall_fixture_test(unsigned scenario) {
