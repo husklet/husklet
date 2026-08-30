@@ -659,6 +659,7 @@ static uint64_t jit86_store_alias_segment(struct cpu *cpu, uint64_t cursor, uint
 // True when a direct data load overlaps a MAP_SHARED view whose same-backing,
 // same-offset peer is executable. This runs only while building a translation;
 // the emitted load itself remains a plain host load.
+#if !defined(HL_HOST_CPU_AARCH64)
 static int jit86_load_has_exec_alias(uint64_t guest, size_t size) {
     if (size == 0 || guest > UINT64_MAX - size || !filemap_shared_filter_maybe(guest, size)) return 0;
     uint64_t last = guest + size;
@@ -687,6 +688,7 @@ static int jit86_load_has_exec_alias(uint64_t guest, size_t size) {
     pthread_mutex_unlock(&g_filemap_lock);
     return hit;
 }
+#endif
 
 static void jit86_store_alias_changed(uint64_t guest, size_t size) {
     if (size == 0 || guest > UINT64_MAX - size) return;
