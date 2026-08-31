@@ -2760,9 +2760,15 @@ static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct ins
     int high_byte = !insn->has_rex && byte_reg_operand && insn->reg >= 4 && insn->reg <= 7;
     int scratch = high_byte ? (insn->reg == 6 ? 7 : 6)
                             : (insn->reg == HL_X64_R11 ? 10 : HL_X64_R11);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_natural_load_start = a->cursor;
+#endif
     hl_x64_store_gs(a, scratch, R_OFF(scratch));
     *save_end = a->cursor;
     hl_x64_mov_imm64(a, scratch, storage_target);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_natural_load_address_end = a->cursor;
+#endif
 
     int rex_offset = -1;
     for (int i = 0; i < modrm_offset; ++i)
@@ -2787,6 +2793,9 @@ static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct ins
     hl_x64_u8(a, (uint8_t)((bytes[modrm_offset] & 0xF8) | (scratch & 7)));
     for (int i = 0; i < insn->imm_bytes; ++i) hl_x64_u8(a, bytes[modrm_offset + 5 + i]);
     *op_end = a->cursor;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_natural_load_op_end = a->cursor;
+#endif
     hl_x64_load_gs(a, scratch, R_OFF(scratch));
     if (a->overflow) return 0;
     *scratch_out = scratch;
@@ -5244,10 +5253,10 @@ static int translit_riprel_integer_corpus_test(void) {
         {{0x0F,0xC1,0x05},7,0,UINT64_C(0x0000000000000003),UINT64_C(0x8877665544332211)},
     };
     const size_t size = 8192, source_offset = 128, target_offset = 4093;
-    uint8_t *arena = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    uint8_t *guest = mmap(NULL, size, PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *arena = mmap((void *)UINT64_C(0x700000000000), size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    uint8_t *guest = mmap((void *)UINT64_C(0x600000000000), size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (arena == MAP_FAILED || guest == MAP_FAILED) return 300;
     uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
     ptrdiff_t saved_rw2rx = g_rw2rx;
@@ -5293,9 +5302,9 @@ static int translit_riprel_integer_corpus_test(void) {
         }
 
         memcpy(guest + target_offset, &current.target, sizeof current.target);
-        memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+        memset(arena + 4096, 0, 4096); g_cp = arena + 4096 + sizeof(struct interp_block);
         g_cache_gen = UINT64_MAX - 0x400 - index; map_clear();
-        struct interp_block *block = (struct interp_block *)arena;
+        struct interp_block *block = (struct interp_block *)(arena + 4096);
         void *body = translit_build(context, block, source, NULL);
         if (body == NULL || block->profile_insns != 1) { result = 330 + (int)index; break; }
         block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
@@ -5311,6 +5320,40 @@ static int translit_riprel_integer_corpus_test(void) {
             candidate_memory != interpreter_memory ||
             (translit_flags_in(&candidate) & checked_flags) != (interpreter_flags & checked_flags))
             result = 360 + (int)index;
+        jit_body_owner_drop_generation(g_cache_gen); map_clear();
+    }
+    // A qword whose first three bytes are readable and whose remainder crosses into PROT_NONE must
+    // fault at the inaccessible boundary, attribute the fault to the original guest RIP, and recover
+    // the borrowed register from canonical state rather than exposing the materialised address.
+    if (result == 0) {
+        memset(guest, 0x0F, size);
+        uint8_t fault_load[] = {0x48, 0x8B, 0x05, 0, 0, 0, 0, 0x0F, 0x0B};
+        int32_t disp = (int32_t)(target_offset - source_offset - 7);
+        memcpy(fault_load + 3, &disp, 4); memcpy(guest + source_offset, fault_load, sizeof fault_load);
+        memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0x500; map_clear();
+        uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = translit_build(context, block, source, NULL);
+        block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+        struct cpu faulted = {0}; faulted.rip = source;
+        faulted.r[HL_X64_R11] = UINT64_C(0x1122334455667788);
+        if (body == NULL || block->profile_insns != 1) result = 390;
+        else {
+            ucontext_t native = {0};
+            HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_R11] =
+                (greg_t)(uintptr_t)(guest + target_offset);
+            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)translit_test_natural_load_address_end;
+            int saved_selected = translit_selected; translit_selected = 1;
+            int delivered = translit_test_deliver_guest_fault(
+                &faulted, &native, (uint64_t)(uintptr_t)(guest + 4096));
+            translit_selected = saved_selected;
+            if (!delivered) result = 391;
+            else if (faulted.rip != source) result = 392;
+            else if (faulted.r[HL_X64_R11] != UINT64_C(0x1122334455667788)) result = 393;
+            else if (faulted.sync_signal != SIGSEGV) result = 394;
+            else if (faulted.sync_address != (uint64_t)(uintptr_t)(guest + 4096)) result = 395;
+        }
         jit_body_owner_drop_generation(g_cache_gen); map_clear();
     }
     if (context != NULL) hl_x86_hot_context_destroy(context);
