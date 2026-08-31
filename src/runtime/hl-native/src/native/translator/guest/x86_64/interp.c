@@ -1978,6 +1978,7 @@ static int x64_pc_helper_reloc_compare(const void *left, const void *right) {
 }
 
 static int g_x64_pc_forked;
+static uint64_t g_x64_pc_exec_publish_generation;
 static uint64_t g_x64_pc_restored_maps;
 static uint64_t g_x64_pc_restored_live;
 static uint64_t g_x64_pc_activated_maps;
@@ -3096,7 +3097,8 @@ static void pcache_save(void) {
        runs returned above after reporting their receipt and never rewrite the authoritative artifact. */
     uint64_t reusable_rw = HL_JIT_PREFERRED_RW + HL_JIT_PREFERRED_STRIDE;
     uint64_t reusable_rx = g_dualmap ? reusable_rw + CACHE_SZ : reusable_rw;
-    if (g_cache_gen != 1 || (uint64_t)(uintptr_t)g_cache != reusable_rw ||
+    if ((g_cache_gen != 1 && g_cache_gen != g_x64_pc_exec_publish_generation) ||
+        (uint64_t)(uintptr_t)g_cache != reusable_rw ||
         (uint64_t)(uintptr_t)J_RX(g_cache) != reusable_rx) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         if (hl_option_get("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST") != NULL) {
@@ -3482,6 +3484,7 @@ static void pcache_save(void) {
 static void x64_pc_after_fork(void) {
     if (!g_pcache) return;
     g_x64_pc_forked = 1;
+    g_x64_pc_exec_publish_generation = 0;
     x64_pc_restored_detach();
     free(g_x64_pc_deferred);
     free(g_x64_pc_chains);
@@ -3514,6 +3517,7 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_pc_binid = pcache_make_id(program, interpreter, argv0);
     g_pc_entry = jump;
     g_x64_pc_forked = 0;
+    g_x64_pc_exec_publish_generation = g_cache_gen;
     g_pcache_loaded = 0;
     x64_pc_restored_detach();
     free(g_x64_pc_deferred);

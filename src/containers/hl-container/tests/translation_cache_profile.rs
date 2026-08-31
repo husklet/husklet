@@ -540,7 +540,7 @@ int main(void) {
     let process = if mode == Mode::ForkNoExec {
         Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done) & wait"])
     } else if mode == Mode::ForkExec {
-        Process::new("/bin/sh").args(["-c", "/bin/true & wait"])
+        Process::new("/bin/sh").args(["-c", "/bin/true & /bin/true & wait"])
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
         Process::new("/work/thread_warm")
     } else {
@@ -980,8 +980,8 @@ int main(void) {
                             .any(|part| part == b".published-")
                     })
                     .count()
-                    >= 2,
-                "fork+exec did not publish both parent and re-keyed child identities",
+                    >= 3,
+                "concurrent fork+exec children did not publish both re-keyed executions and the unchanged parent",
             )?,
             Mode::RelocationMissing => require(
                 entries.iter().any(|entry| {
