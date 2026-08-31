@@ -563,7 +563,6 @@ static void interp_backend_family_completed(const struct cpu *cpu, const struct 
         hl_backend_tree_family_jmem();
         return;
     }
-    if (translit_classify(insn) != TL_NO) return;
     if ((insn->op != 0xF6 && insn->op != 0xF7) || (operation != 6 && operation != 7)) return;
     unsigned is_signed = operation == 7;
     unsigned expected_reason = is_signed ? R_IDIV : R_DIV;
