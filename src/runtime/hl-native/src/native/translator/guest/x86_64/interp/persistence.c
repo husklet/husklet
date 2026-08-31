@@ -225,7 +225,9 @@ int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
                 (policy->require_census_ordinal ? ordinal < UINT16_MAX : ordinal == UINT16_MAX) &&
                 layout->arena >= 52 && body <= layout->arena - 52 &&
                 x64_pc_get64(layout->arena_bytes + body + 16) == x64_pc_get64(record + 64) &&
-                x64_pc_get16(layout->arena_bytes + body + 50) == ordinal &&
+                (x64_pc_get16(layout->arena_bytes + body + 50) == 0
+                     ? UINT16_MAX
+                     : (uint16_t)(x64_pc_get16(layout->arena_bytes + body + 50) - 1u)) == ordinal &&
                 x64_pc_get32(record + 84) <= layout->owners &&
                 x64_pc_get32(record + 88) <= layout->owners - x64_pc_get32(record + 84) &&
                 x64_pc_get32(record + 92) <= layout->chains &&

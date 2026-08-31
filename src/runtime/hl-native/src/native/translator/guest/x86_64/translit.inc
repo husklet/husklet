@@ -6259,7 +6259,6 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_rw2rx = 0;
     g_cache_gen = UINT64_MAX - scenario;
     struct interp_block *block = (struct interp_block *)arena;
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, UINT16_MAX);
     translit_fall_fixture_bytes = bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
     translit_fall_fixture_length = length;
@@ -6435,7 +6434,6 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     g_cache_gen = UINT64_MAX - scenario;
     map_clear();
     struct interp_block *block = (struct interp_block *)arena;
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, UINT16_MAX);
     translit_fall_fixture_bytes = bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
     translit_fall_fixture_length = length;
@@ -6539,7 +6537,9 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         result = reachable && retained_for_fault && retired ? 0 : 127;
     } else if (scenario == 84) {
         uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
-        int exact = body != NULL && block->profile_insns == TL_MAX_INSNS && published == 2;
+        int exact = body != NULL && block->profile_insns == TL_MAX_INSNS && published == 2 &&
+                    block->pcache_observe_ordinal_plus_one == 0 &&
+                    INTERP_BLOCK_PCACHE_ORDINAL(block) == UINT16_MAX;
         for (uint32_t offset = 0; exact && offset < block->host_len; offset++) {
             uint64_t guest = 0;
             exact = jit_body_owner_lookup((uint64_t)(uintptr_t)body + offset, &guest) &&
@@ -6647,8 +6647,8 @@ static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *con
     struct interp_block *block = (struct interp_block *)g_cp;
     g_cp += sizeof *block;
     memset(block, 0, sizeof *block);
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, translit_test_pcache_ordinals
-        ? translit_test_pcache_next++ : UINT16_MAX);
+    if (translit_test_pcache_ordinals)
+        INTERP_BLOCK_PCACHE_SET_ORDINAL(block, translit_test_pcache_next++);
     block->magic = INTERP_BLOCK_MAGIC;
     block->gpc = guest;
     block->generation = g_cache_gen;
