@@ -688,16 +688,17 @@ int main(void) {
     }
     let started = Instant::now();
     containers.start("pcache-profile").await?;
-    let status = containers.wait("pcache-profile").await?;
+    let activation_close_failure = mode == Mode::CacheStageFailure
+        && std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE").as_deref() == Ok("activation-close");
+    let waited = containers.wait("pcache-profile").await;
     let elapsed = started.elapsed();
     let logs = containers.logs("pcache-profile").await?;
     containers.remove("pcache-profile").await?;
-    if mode == Mode::CacheStageFailure
-        && std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE").as_deref() == Ok("activation-close")
-    {
+    if activation_close_failure {
+        let failure = waited.expect_err("activation close failure returned ordinary guest status");
         let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
         require(
-            status == ExitStatus::Code(70),
+            format!("{failure:?}").contains("NativeRunFailed(12)"),
             "activation close failure resumed guest execution",
         )?;
         require(logs.stdout.is_empty(), "activation close failure produced guest output")?;
@@ -711,6 +712,7 @@ int main(void) {
         )?;
         return Ok(());
     }
+    let status = waited?;
     if matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
         let repeat_root = images.roots().fork_overlay(unpacked.snapshot())?;
         if mode == Mode::CacheUpperOverride {
