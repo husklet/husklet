@@ -381,10 +381,20 @@ static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, i
     int error = hl_vfs_cursor_namespace_root_native_lowers(&root);
     if (error != 0) return error;
     const hl_vfs_cursor *start = &root;
+    hl_vfs_cursor_entry cwd;
+    memset(&cwd, 0, sizeof cwd);
     if (path != NULL && path[0] != '/') {
         if (dirfd == -100) {
-            error = hl_vfs_cwd_cursor_require();
-            if (error == 0) start = g_vfs_cwd_cursor;
+            if (strcmp(g_cwd, "/") != 0) {
+                error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                           &cwd);
+                if (error == 0) {
+                    if (cwd.kind == HL_VFS_CURSOR_DIRECTORY)
+                        start = &cwd.directory;
+                    else
+                        error = -ENOTDIR;
+                }
+            }
         } else {
             start = hl_vfs_fd_cursor_get(dirfd);
             if (start == NULL) error = -EBADF;
@@ -393,6 +403,7 @@ static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, i
     if (error == 0)
         error =
             hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, output);
+    hl_vfs_cursor_entry_release(&cwd);
     hl_vfs_cursor_release(&root);
     return error;
 }
