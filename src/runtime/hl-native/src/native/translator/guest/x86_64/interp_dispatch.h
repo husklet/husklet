@@ -68,6 +68,11 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
         x64_pc_activate_ready((c)->rip);                                                                               \
+        if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {                                                           \
+            (c)->exit_code = 70;                                                                                       \
+            (c)->exited = 1;                                                                                          \
+            continue;                                                                                                 \
+        }                                                                                                             \
         if (g_pending) maybe_deliver_signal(c); /* redirect to the guest handler */                                    \
         if (g_dispatch_diagnostics) {                                                                                  \
             g_prevpc = g_curpc;                                                                                        \

@@ -1999,6 +1999,7 @@ static const uint8_t *g_x64_pc_snapshot_chains, *g_x64_pc_snapshot_arena;
 static uint64_t g_x64_pc_snapshot_maps_count, g_x64_pc_snapshot_owners_count;
 static uint64_t g_x64_pc_snapshot_relocs_count, g_x64_pc_snapshot_helper_relocs_count;
 static uint64_t g_x64_pc_snapshot_chains_count, g_x64_pc_snapshot_arena_size;
+static x64_pc_gpc_index_entry *g_x64_pc_snapshot_gpc_index;
 /* Kept only until the old lifecycle cleanup sites are removed. Fixed-image restore never assigns it. */
 static uint8_t *g_x64_pc_deferred;
 static uint64_t g_x64_pc_deferred_count;
@@ -2383,25 +2384,20 @@ static int x64_pc_saved_offset_library(uint64_t offset, const uint8_t *records, 
     return record == NULL ? -1 : x64_pc_saved_map_library(record);
 }
 
-static int x64_pc_saved_gpc_fixed(uint64_t gpc, const uint8_t *records, uint64_t maps) {
-    for (uint64_t i = 0; i < maps; i++) {
-        const uint8_t *record = records + i * X64_PC_MAP_SIZE;
-        if (x64_pc_get64(record) == gpc)
-            return x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16));
-    }
-    return 0;
+static int x64_pc_saved_gpc_fixed(uint64_t gpc, const uint8_t *records,
+                                  const x64_pc_gpc_index_entry *index, uint64_t maps) {
+    const uint8_t *record = x64_pc_gpc_index_find(gpc, records, index, maps);
+    return record != NULL && x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16));
 }
 
 static const uint8_t *x64_pc_saved_map_for_gpc(uint64_t gpc, const uint8_t *records, uint64_t maps) {
-    for (uint64_t i = 0; i < maps; i++) {
-        const uint8_t *record = records + i * X64_PC_MAP_SIZE;
-        if (x64_pc_get64(record) == gpc) return record;
-    }
-    return NULL;
+    return x64_pc_gpc_index_find(gpc, records, g_x64_pc_snapshot_gpc_index, maps);
 }
 
 static void x64_pc_snapshot_clear(void) {
     free(g_x64_pc_snapshot_allocation);
+    free(g_x64_pc_snapshot_gpc_index);
+    g_x64_pc_snapshot_gpc_index = NULL;
     g_x64_pc_snapshot_allocation = NULL;
     g_x64_pc_snapshot_maps = g_x64_pc_snapshot_owners = NULL;
     g_x64_pc_snapshot_relocs = g_x64_pc_snapshot_helper_relocs = NULL;
@@ -2624,16 +2620,19 @@ static int pcache_load(uint64_t entry_jump) {
         memcpy(g_x64_pc_libs[i].content.bytes, record + 24, sizeof g_x64_pc_libs[i].content.bytes);
         g_x64_pc_lib_state[i] = X64_PC_LIB_DORMANT;
     }
+    x64_pc_gpc_index_entry *gpc_index = maps == 0 ? NULL : malloc((size_t)maps * sizeof *gpc_index);
+    if (maps != 0 && gpc_index == NULL) { free(allocation); return 0; }
+    x64_pc_gpc_index_build(map_records, maps, gpc_index);
     translit_chain_site *fixed_chains = chains == 0 ? NULL : malloc((size_t)chains * sizeof *fixed_chains);
-    if (chains != 0 && fixed_chains == NULL) { free(allocation); return 0; }
+    if (chains != 0 && fixed_chains == NULL) { free(gpc_index); free(allocation); return 0; }
     uint64_t fixed_chain_count = 0;
     for (uint64_t i = 0; i < chains; i++) {
         const uint8_t *record = chain_records + i * X64_PC_CHAIN_SIZE;
         uint64_t source = x64_pc_get64(record + 8), target = x64_pc_get64(record + 16);
-        if (!x64_pc_saved_gpc_fixed(source, map_records, maps)) continue;
+        if (!x64_pc_saved_gpc_fixed(source, map_records, gpc_index, maps)) continue;
         fixed_chains[fixed_chain_count] = (translit_chain_site){x64_pc_get32(record), x64_pc_get32(record + 4),
                                                                 source, target};
-        if (!x64_pc_saved_gpc_fixed(target, map_records, maps)) {
+        if (!x64_pc_saved_gpc_fixed(target, map_records, gpc_index, maps)) {
             int32_t fallback = (int32_t)(fixed_chains[fixed_chain_count].fallback_offset -
                                          (fixed_chains[fixed_chain_count].site_offset + 5));
             memcpy((uint8_t *)arena_bytes + fixed_chains[fixed_chain_count].site_offset + 1,
@@ -2642,7 +2641,7 @@ static int pcache_load(uint64_t entry_jump) {
         fixed_chain_count++;
     }
     x64_pc_pristine_rewind();
-    if (!jit_wprot(0)) { free(fixed_chains); free(allocation); return 0; }
+    if (!jit_wprot(0)) { free(fixed_chains); free(gpc_index); free(allocation); return 0; }
     memset(g_cache, 0, (size_t)arena);
     uint64_t prefix = maps == 0 ? arena : x64_pc_get64(map_records + 24);
     memcpy(g_cache, arena_bytes, (size_t)prefix);
@@ -2669,7 +2668,7 @@ static int pcache_load(uint64_t entry_jump) {
     int fixed_reprotected = jit_wprot(1);
     if (!fixed_reprotected || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
         x64_pc_pristine_rollback(!fixed_reprotected);
-        free(fixed_chains); free(allocation); return 0;
+        free(fixed_chains); free(gpc_index); free(allocation); return 0;
     }
     for (uint64_t i = 0; i < maps; i++) {
         const uint8_t *record = map_records + i * X64_PC_MAP_SIZE;
@@ -2681,13 +2680,13 @@ static int pcache_load(uint64_t entry_jump) {
         fixed_maps++;
     }
     if (g_source_index_overflow) {
-        x64_pc_pristine_rewind(); free(fixed_chains); free(allocation); return 0;
+        x64_pc_pristine_rewind(); free(fixed_chains); free(gpc_index); free(allocation); return 0;
     }
     if (owners != 0) {
         jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
         jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
         if (entries == NULL) {
-            x64_pc_pristine_rewind(); free(fixed_chains); free(allocation); return 0;
+            x64_pc_pristine_rewind(); free(fixed_chains); free(gpc_index); free(allocation); return 0;
         }
         jit_body_owner_preserve *preserves = jit_body_owner_preserves(entries);
         uint32_t live_owners = 0;
@@ -2766,7 +2765,7 @@ static int pcache_load(uint64_t entry_jump) {
                 (void)x64_pc_artifact_store(receipt, state, sizeof state);
         }
         if (selected == UINT64_MAX || after != fallback) {
-            x64_pc_pristine_rewind(); free(allocation); return 0;
+            x64_pc_pristine_rewind(); free(gpc_index); free(allocation); return 0;
         }
     }
 #endif
@@ -2775,6 +2774,7 @@ static int pcache_load(uint64_t entry_jump) {
     g_x64_pc_activated_maps = 0;
     g_x64_pc_deferred_count = maps - fixed_maps;
     x64_pc_snapshot_clear();
+    g_x64_pc_snapshot_gpc_index = gpc_index;
     g_x64_pc_snapshot_allocation = allocation;
     g_x64_pc_snapshot_maps = map_records; g_x64_pc_snapshot_owners = owner_records;
     g_x64_pc_snapshot_relocs = reloc_records; g_x64_pc_snapshot_helper_relocs = helper_reloc_records;
@@ -3810,7 +3810,29 @@ static void x64_pc_activate_ready(uint64_t pc) {
         int32_t encoded = (int32_t)delta;
         memcpy(g_cache + chain.site_offset + 1, &encoded, sizeof encoded);
     }
-    if (!jit_wprot(1) || !jit_publish_code(J_RX(g_cache), (size_t)g_x64_pc_snapshot_arena_size)) goto cold;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (x64_pc_fail_stage("activation-close")) {
+        char close_path[1024], close_receipt[1024];
+        if (x64_pc_file(close_path, sizeof close_path)) {
+            int close_length = snprintf(close_receipt, sizeof close_receipt, "%s.activation-close-attempt-%lld",
+                                        close_path, (long long)getpid());
+            static const uint32_t attempted = 1;
+            if (close_length > 0 && (size_t)close_length < sizeof close_receipt)
+                (void)x64_pc_artifact_store(close_receipt, &attempted, sizeof attempted);
+        }
+    }
+#endif
+    g_pcache_activation_close = 1;
+    int reprotected = jit_wprot(1);
+    g_pcache_activation_close = 0;
+    if (!reprotected) {
+        x64_pc_restored_detach();
+        return;
+    }
+    if (!jit_publish_code(J_RX(g_cache), (size_t)g_x64_pc_snapshot_arena_size)) {
+        x64_pc_restored_detach();
+        return;
+    }
 
     if (g_coldprof) fprintf(stderr, "[pcache] activate phase=publish\n");
     for (uint64_t i = 0; i < g_x64_pc_snapshot_owners_count; i++) {
@@ -3855,7 +3877,7 @@ static void x64_pc_activate_ready(uint64_t pc) {
     for (uint64_t i = 0; i < g_x64_pc_snapshot_chains_count; i++) {
         const uint8_t *saved = g_x64_pc_snapshot_chains + i * X64_PC_CHAIN_SIZE;
         if (x64_pc_saved_gpc_fixed(x64_pc_get64(saved + 8), g_x64_pc_snapshot_maps,
-                                   g_x64_pc_snapshot_maps_count)) continue;
+                                   g_x64_pc_snapshot_gpc_index, g_x64_pc_snapshot_maps_count)) continue;
         g_x64_pc_chains[g_x64_pc_chain_count++] = (translit_chain_site){
             x64_pc_get32(saved), x64_pc_get32(saved + 4), x64_pc_get64(saved + 8), x64_pc_get64(saved + 16)};
     }

@@ -60,6 +60,33 @@ const uint8_t *x64_pc_map_for_offset(uint64_t offset, const uint8_t *records, ui
     return offset < end ? records + ordinal * X64_PC_MAP_SIZE : NULL;
 }
 
+static int x64_pc_gpc_index_compare(const void *left, const void *right) {
+    const x64_pc_gpc_index_entry *a = left, *b = right;
+    return a->gpc < b->gpc ? -1 : a->gpc > b->gpc;
+}
+
+void x64_pc_gpc_index_build(const uint8_t *records, uint64_t maps, x64_pc_gpc_index_entry *index) {
+    for (uint64_t i = 0; i < maps; i++)
+        index[i] = (x64_pc_gpc_index_entry){x64_pc_get64(records + i * X64_PC_MAP_SIZE), i};
+    qsort(index, (size_t)maps, sizeof *index, x64_pc_gpc_index_compare);
+}
+
+const uint8_t *x64_pc_gpc_index_find(uint64_t gpc, const uint8_t *records,
+                                     const x64_pc_gpc_index_entry *index, uint64_t maps) {
+    uint64_t lo = 0, hi = maps;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+#if defined(HL_PCACHE_GPC_BOUNDARY_MUTATION)
+        if (index[mid].gpc <= gpc) lo = mid + 1;
+#else
+        if (index[mid].gpc < gpc) lo = mid + 1;
+#endif
+        else hi = mid;
+    }
+    return lo < maps && index[lo].gpc == gpc
+        ? records + index[lo].ordinal * X64_PC_MAP_SIZE : NULL;
+}
+
 int x64_pc_header_validate(const uint8_t *bytes, size_t size, uint64_t abi, uint64_t cpu_size,
                            uint64_t map_slots, const uint8_t identity[32], uint64_t entry,
                            uint64_t modes, uint64_t matches[10]) {
@@ -263,7 +290,10 @@ static int x64_pc_inside_span(uint64_t lo, uint64_t hi, uint64_t base, uint64_t 
 int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
                                           x64_pc_external_authority external, void *context,
                                           unsigned *stage) {
-    int valid = 1;
+    x64_pc_gpc_index_entry *gpc_index = layout->maps == 0 ? NULL
+        : malloc((size_t)layout->maps * sizeof *gpc_index);
+    int valid = layout->maps == 0 || gpc_index != NULL;
+    if (valid) x64_pc_gpc_index_build(layout->map_records, layout->maps, gpc_index);
     uint32_t prior = 0;
     if (stage != NULL) *stage = 3;
     for (uint64_t i = 0; valid && i < layout->relocations; i++) {
@@ -298,12 +328,9 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
         const uint8_t *record = layout->chain_records + i * X64_PC_CHAIN_SIZE;
         uint32_t site = x64_pc_get32(record), fallback = x64_pc_get32(record + 4);
         uint64_t target = x64_pc_get64(record + 16);
-        uint64_t target_entry = UINT64_MAX;
-        for (uint64_t map = 0; map < layout->maps && target_entry == UINT64_MAX; map++) {
-            const uint8_t *candidate = layout->map_records + map * X64_PC_MAP_SIZE;
-            if (target == x64_pc_get64(candidate))
-                target_entry = x64_pc_get64(candidate + 24) + x64_pc_get32(candidate + 72);
-        }
+        const uint8_t *candidate = x64_pc_gpc_index_find(target, layout->map_records, gpc_index, layout->maps);
+        uint64_t target_entry = candidate == NULL ? UINT64_MAX
+            : x64_pc_get64(candidate + 24) + x64_pc_get32(candidate + 72);
         int32_t displacement = 0;
         if (site <= layout->arena && layout->arena - site >= 5)
             memcpy(&displacement, layout->arena_bytes + site + 1, sizeof displacement);
@@ -362,6 +389,7 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
         }
         valid = authority;
     }
+    free(gpc_index);
     return valid;
 }
 

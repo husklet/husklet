@@ -36,6 +36,7 @@ int main(void) {
     }
     return 0;
 }
+
 "#,
     )
     .expect("pcache offset probe source");
@@ -63,12 +64,10 @@ int main(void) {
         build(&executable, false).success(),
         "pcache offset probe did not compile"
     );
-    assert!(
-        Command::new(&executable)
-            .status()
-            .expect("run pcache offset probe")
-            .success()
-    );
+    assert!(Command::new(&executable)
+        .status()
+        .expect("run pcache offset probe")
+        .success());
     let mutation = scratch.join("offset-mutation");
     assert!(
         build(&mutation, true).success(),
@@ -82,6 +81,74 @@ int main(void) {
         "strict-start mutation did not break an exact map boundary"
     );
     fs::remove_dir_all(scratch).expect("remove pcache offset probe directory");
+}
+
+#[test]
+fn persisted_gpc_lookup_matches_exact_keys_and_gaps() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-pcache-gpc-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("pcache gpc probe directory");
+    let source = scratch.join("gpc.c");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include "translator/guest/x86_64/interp/persistence.h"
+int main(void) {
+    uint8_t records[3 * X64_PC_MAP_SIZE] = {0};
+    const uint64_t keys[] = {40, 10, 70};
+    x64_pc_gpc_index_entry index[3];
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t *cursor = records + i * X64_PC_MAP_SIZE;
+        x64_pc_put64(&cursor, keys[i]);
+    }
+    x64_pc_gpc_index_build(records, 3, index);
+    for (unsigned i = 0; i < 3; i++)
+        if (x64_pc_gpc_index_find(keys[i], records, index, 3) != records + i * X64_PC_MAP_SIZE) return 1;
+    const uint64_t gaps[] = {0, 9, 11, 39, 41, 69, 71, UINT64_MAX};
+    for (unsigned i = 0; i < sizeof gaps / sizeof gaps[0]; i++)
+        if (x64_pc_gpc_index_find(gaps[i], records, index, 3) != 0) return 2;
+    return 0;
+}
+"#,
+    )
+    .expect("pcache gpc probe source");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let build = |output: &Path, mutation: bool| {
+        let mut command = Command::new(&compiler);
+        command
+            .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-Wl,--gc-sections"])
+            .arg(format!("-I{}", native.display()))
+            .arg(format!("-I{}", native.join("include").display()));
+        if mutation {
+            command.arg("-DHL_PCACHE_GPC_BOUNDARY_MUTATION");
+        }
+        command
+            .arg(&source)
+            .arg(native.join("translator/guest/x86_64/interp/persistence.c"))
+            .arg(native.join("translator/digest.c"))
+            .arg("-o")
+            .arg(output)
+            .status()
+            .expect("compile pcache gpc probe")
+    };
+    let executable = scratch.join("gpc");
+    assert!(build(&executable, false).success(), "pcache gpc probe did not compile");
+    assert!(Command::new(&executable)
+        .status()
+        .expect("run pcache gpc probe")
+        .success());
+    let mutation = scratch.join("gpc-mutation");
+    assert!(build(&mutation, true).success(), "pcache gpc mutation did not compile");
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("run pcache gpc mutation")
+            .success(),
+        "upper-bound mutation did not break an exact GPC key"
+    );
+    fs::remove_dir_all(scratch).expect("remove pcache gpc probe directory");
 }
 
 fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
@@ -337,12 +404,10 @@ int main(void) {
         .output()
         .expect("guest pin leak mutation compiler");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    assert!(
-        !Command::new(&mutation)
-            .status()
-            .expect("guest pin leak mutation")
-            .success()
-    );
+    assert!(!Command::new(&mutation)
+        .status()
+        .expect("guest pin leak mutation")
+        .success());
     fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
 }
 

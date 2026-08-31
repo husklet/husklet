@@ -44,6 +44,11 @@ typedef struct x64_pc_format_layout {
     const uint8_t *library_records, *chain_records, *arena_bytes;
 } x64_pc_format_layout;
 
+typedef struct x64_pc_gpc_index_entry { uint64_t gpc, ordinal; } x64_pc_gpc_index_entry;
+void x64_pc_gpc_index_build(const uint8_t *records, uint64_t maps, x64_pc_gpc_index_entry *index);
+const uint8_t *x64_pc_gpc_index_find(uint64_t gpc, const uint8_t *records,
+                                     const x64_pc_gpc_index_entry *index, uint64_t maps);
+
 int x64_pc_layout_validate(const uint8_t *bytes, size_t size, const x64_pc_format_limits *limits,
                            x64_pc_format_layout *layout, uint64_t matches[8]);
 int x64_pc_checksum_validate(const uint8_t *bytes, size_t size);

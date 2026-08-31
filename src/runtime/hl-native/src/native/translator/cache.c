@@ -57,6 +57,7 @@ static void *g_preferred_collision_sentinel;
 // region's W^X per translation/IC-fill (NODUALMAP=1).
 static hl_log_context g_jit_log;
 static hl_fatal_context g_jit_fatal;
+static int g_pcache_activation_close;
 static int cache_oom_fail(void);
 #define J_RX(p) hl_emit_rx(&g_emit, (const void *)(uintptr_t)(p)) // RW alias addr -> RX alias addr
 #define J_RW(p) hl_emit_rw(&g_emit, (const void *)(uintptr_t)(p)) // RX alias addr -> RW alias addr
@@ -77,6 +78,13 @@ static int jit_fail(hl_status status, const char *message, size_t size) {
 
 static inline int jit_wprot(int enable_exec) {
     hl_host_result result;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (enable_exec && g_pcache_activation_close &&
+        hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE") != NULL &&
+        strcmp(hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE"), "activation-close") == 0)
+        return jit_fail(HL_STATUS_PLATFORM_FAILURE, "injected cache activation close failure",
+                        sizeof("injected cache activation close failure") - 1u);
+#endif
     if (g_dualmap) return 1;
     g_wx_toggles++;
     result = enable_exec ? g_jit_services.memory->end_code_write(g_jit_services.context)

@@ -331,6 +331,7 @@ int main(void) {
                 "source-build",
                 "chain-fallback",
                 "manifest-activation",
+                "activation-close",
             ]
             .contains(&stage.as_str()),
             "unknown warm failure stage",
@@ -691,6 +692,25 @@ int main(void) {
     let elapsed = started.elapsed();
     let logs = containers.logs("pcache-profile").await?;
     containers.remove("pcache-profile").await?;
+    if mode == Mode::CacheStageFailure
+        && std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE").as_deref() == Ok("activation-close")
+    {
+        let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
+        require(
+            status == ExitStatus::Code(70),
+            "activation close failure resumed guest execution",
+        )?;
+        require(logs.stdout.is_empty(), "activation close failure produced guest output")?;
+        require(
+            entries.iter().any(|entry| {
+                String::from_utf8_lossy(entry.file_name().as_encoded_bytes()).contains(".activation-close-attempt-")
+            }) && !entries.iter().any(|entry| {
+                String::from_utf8_lossy(entry.file_name().as_encoded_bytes()).contains(".library-activated-")
+            }),
+            "activation close failure was not attempted before publication",
+        )?;
+        return Ok(());
+    }
     if matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
         let repeat_root = images.roots().fork_overlay(unpacked.snapshot())?;
         if mode == Mode::CacheUpperOverride {
@@ -1189,5 +1209,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    if condition { Ok(()) } else { Err(message.into()) }
+    if condition {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
 }
