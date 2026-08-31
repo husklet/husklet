@@ -5320,6 +5320,18 @@ static int translit_riprel_integer_corpus_test(void) {
             candidate_memory != interpreter_memory ||
             (translit_flags_in(&candidate) & checked_flags) != (interpreter_flags & checked_flags))
             result = 360 + (int)index;
+        if (result == 0 && index == 4) {
+            struct cpu retired = {0}; retired.rip = source;
+            retired.r[HL_X64_R11] = UINT64_C(0x1111111111111111);
+            ucontext_t interrupted = {0};
+            HL_HOST_UC_PC(&interrupted) = (greg_t)(uintptr_t)translit_test_natural_load_op_end;
+            int saved_selected = translit_selected; translit_selected = 1;
+            int captured = translit_signal_capture(&retired, &interrupted);
+            translit_selected = saved_selected;
+            if (!captured || retired.rip != source + current.length ||
+                retired.r[HL_X64_R11] != UINT64_C(0x1111111111111111))
+                result = 380;
+        }
         jit_body_owner_drop_generation(g_cache_gen); map_clear();
     }
     // A qword whose first three bytes are readable and whose remainder crosses into PROT_NONE must
