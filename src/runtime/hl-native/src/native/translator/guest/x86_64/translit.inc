@@ -3206,7 +3206,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         }
         return 0;
     }
-    if (scenario == 197) return translit_single_fetch_test();
+    if (scenario == 205) return translit_single_fetch_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4236,19 +4236,19 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 190 && scenario <= 191) {
+    if (scenario >= 198 && scenario <= 199) {
         pid_t child = fork();
         if (child < 0) return 98;
-        if (child == 0) _exit(translit_fallthrough_ibtc_fixture_test(scenario));
+        if (child == 0) _exit(translit_fallthrough_ibtc_fixture_test(scenario - 8));
         int status = 0;
         if (waitpid(child, &status, 0) != child) return 99;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 192 && scenario <= 196) {
+    if (scenario >= 200 && scenario <= 204) {
         pid_t child = fork();
         if (child < 0) return 98;
-        if (child == 0) _exit(translit_indirect_ibtc_fixture_test(scenario));
+        if (child == 0) _exit(translit_indirect_ibtc_fixture_test(scenario - 8));
         int status = 0;
         if (waitpid(child, &status, 0) != child) return 99;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -6491,7 +6491,7 @@ static int translit_single_fetch_test(void) {
     if (arena == MAP_FAILED || guest == MAP_FAILED) {
         if (arena != MAP_FAILED) munmap(arena, arena_size);
         if (guest != MAP_FAILED) munmap(guest, 4096);
-        return 197;
+        return 205;
     }
     guest[0] = 0x90; /* NOP */
     guest[1] = 0xc3; /* RET */
@@ -6506,7 +6506,7 @@ static int translit_single_fetch_test(void) {
     g_rw2rx = 0;
     g_dualmap = 1;
     translit_selected = 1;
-    g_cache_gen = UINT64_MAX - 197;
+    g_cache_gen = UINT64_MAX - 205;
     map_clear();
     translit_fall_fixture_bytes = guest;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
