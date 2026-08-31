@@ -256,6 +256,30 @@ enum NativeSupervisedRequest {
     Off,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeCheckpointIntent {
+    None,
+    FreshCoordinator,
+    DomainMember,
+    Restore,
+    Partial,
+}
+
+fn native_checkpoint_intent(
+    has_sink: bool,
+    has_source: bool,
+    has_channel: bool,
+    restore: bool,
+) -> NativeCheckpointIntent {
+    match (has_sink, has_source, has_channel, restore) {
+        (false, false, false, false) => NativeCheckpointIntent::None,
+        (true, true, false, false) => NativeCheckpointIntent::FreshCoordinator,
+        (false, false, true, false) => NativeCheckpointIntent::DomainMember,
+        (true, true, false, true) => NativeCheckpointIntent::Restore,
+        _ => NativeCheckpointIntent::Partial,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct NativeHostCapabilities {
     linux_x86_64: bool,
@@ -388,14 +412,14 @@ fn native_eligibility_for_request(
     requested: NativeSupervisedRequest,
     isa: crate::activation::GuestIsa,
     plan: &crate::launcher::plan::RuntimePlan,
-    has_checkpoint_services: bool,
+    checkpoint: NativeCheckpointIntent,
     probe: impl FnOnce() -> NativeHostCapabilities,
 ) -> Result<(), NativeSupervisedRefusal> {
     if requested == NativeSupervisedRequest::Off {
         return Err(NativeSupervisedRefusal::Host);
     }
     let host = probe();
-    let eligibility = native_eligibility(isa, plan, has_checkpoint_services, host);
+    let eligibility = native_eligibility(isa, plan, checkpoint, host);
     if requested == NativeSupervisedRequest::Auto {
         native_auto_eligibility(plan, host, eligibility)
     } else {
@@ -449,7 +473,7 @@ fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Opti
 fn native_eligibility(
     isa: crate::activation::GuestIsa,
     plan: &crate::launcher::plan::RuntimePlan,
-    has_checkpoint_services: bool,
+    checkpoint: NativeCheckpointIntent,
     host: NativeHostCapabilities,
 ) -> Result<(), NativeSupervisedRefusal> {
     use NativeSupervisedRefusal as R;
@@ -469,8 +493,13 @@ fn native_eligibility(
     }
     if box_policy.file_owners.is_some() && box_policy.lower_layers.is_none() { return Err(R::Ownership); }
     if !volume_spec_supported(box_policy.volumes.as_deref()) { return Err(R::Volumes); }
-    if has_checkpoint_services || box_policy.checkpoint_mode != 0 || box_policy.checkpoint_policy != 0 ||
-        plan.options.get_bytes("HL_CHECKPOINT").is_some() || plan.options.get_bytes("HL_RESTORE").is_some() {
+    // Keep every configured checkpoint role translated until native late-capture/member lifecycle
+    // fixtures prove the shared trigger across a real product plan. The typed split prevents a future
+    // proof for FreshCoordinator from accidentally admitting Restore or malformed partial services.
+    if checkpoint != NativeCheckpointIntent::None
+        || box_policy.checkpoint_mode & 2 != 0
+        || plan.options.get_bytes("HL_RESTORE").is_some()
+    {
         return Err(R::Checkpoint);
     }
     if plan.options.get_bytes("HL_UNTRUSTED").is_some() { return Err(R::Sandbox); }
@@ -555,7 +584,7 @@ mod native_eligibility_tests {
     }
 
     fn verdict(plan: &crate::launcher::plan::RuntimePlan, host: NativeHostCapabilities) -> Result<(), NativeSupervisedRefusal> {
-        native_eligibility(crate::activation::GuestIsa::X86_64, plan, false, host)
+        native_eligibility(crate::activation::GuestIsa::X86_64, plan, NativeCheckpointIntent::None, host)
     }
 
     #[test]
@@ -566,7 +595,7 @@ mod native_eligibility_tests {
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Host));
         let mut changed = host(); changed.clone3 = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Kernel));
-        assert_eq!(native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), false, host()), Err(NativeSupervisedRefusal::GuestIsa));
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), NativeCheckpointIntent::None, host()), Err(NativeSupervisedRefusal::GuestIsa));
         let mut changed = host(); changed.executable_x86_64 = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Executable));
 
@@ -585,7 +614,7 @@ mod native_eligibility_tests {
         let mut changed = plan(); changed.box_policy.publish.push(crate::config::PortPublication { host_ipv4_be: 0, host_port: 1, guest_port: 1 });
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Network));
         let changed = plan();
-        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &changed, true, host()), Err(NativeSupervisedRefusal::Checkpoint));
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &changed, NativeCheckpointIntent::Restore, host()), Err(NativeSupervisedRefusal::Checkpoint));
         let mut changed = plan(); changed.options.set("HL_UNTRUSTED", "1", true).unwrap();
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Sandbox));
         let mut changed = plan(); changed.options.set("HL_SECCOMP_BASELINE", "default", true).unwrap();
@@ -617,7 +646,7 @@ mod native_eligibility_tests {
             NativeSupervisedRequest::Off,
             crate::activation::GuestIsa::X86_64,
             &plan(),
-            false,
+            NativeCheckpointIntent::None,
             || { probes.set(probes.get() + 1); host() },
         );
         assert_eq!(probes.get(), 0, "explicit OFF performed host/path preflight");
@@ -761,6 +790,31 @@ mod native_eligibility_tests {
         );
         assert_eq!(native_selection(NativeSupervisedRequest::Off, refusal), Ok(false));
     }
+
+    #[test]
+    fn checkpoint_intent_is_typed_but_only_none_is_admitted_without_lifecycle_proof() {
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), NativeCheckpointIntent::None, host()), Ok(()));
+        for intent in [
+            NativeCheckpointIntent::FreshCoordinator,
+            NativeCheckpointIntent::DomainMember,
+            NativeCheckpointIntent::Restore,
+            NativeCheckpointIntent::Partial,
+        ] {
+            let refusal = native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), intent, host());
+            assert_eq!(refusal, Err(NativeSupervisedRefusal::Checkpoint), "{intent:?}");
+            assert_eq!(native_selection(NativeSupervisedRequest::Auto, refusal), Ok(false));
+            assert!(matches!(
+                native_selection(NativeSupervisedRequest::On, refusal),
+                Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Checkpoint)),
+            ));
+        }
+        assert_eq!(native_checkpoint_intent(false, false, false, false), NativeCheckpointIntent::None);
+        assert_eq!(native_checkpoint_intent(true, true, false, false), NativeCheckpointIntent::FreshCoordinator);
+        assert_eq!(native_checkpoint_intent(false, false, true, false), NativeCheckpointIntent::DomainMember);
+        assert_eq!(native_checkpoint_intent(true, true, false, true), NativeCheckpointIntent::Restore);
+        assert_eq!(native_checkpoint_intent(true, false, false, false), NativeCheckpointIntent::Partial);
+        assert_eq!(native_checkpoint_intent(true, true, true, false), NativeCheckpointIntent::Partial);
+    }
 }
 
 impl RuntimeFactory for ProductionFactory {
@@ -768,18 +822,22 @@ impl RuntimeFactory for ProductionFactory {
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
         let requested = native_request(&request.plan.options);
-        let has_checkpoint_services = request.services.checkpoint_sink.is_some()
-            || request.services.checkpoint_source.is_some()
-            || {
+        let checkpoint = native_checkpoint_intent(
+            request.services.checkpoint_sink.is_some(),
+            request.services.checkpoint_source.is_some(),
+            {
                 #[cfg(unix)] { request.services.checkpoint_channel.is_some() }
                 #[cfg(not(unix))] { false }
-            };
+            },
+            request.plan.options.get_bytes("HL_RESTORE").is_some()
+                || request.plan.box_policy.checkpoint_mode & 2 != 0,
+        );
         // OFF is a strict translated path: do not even inspect host paths or probe kernel support.
         let eligibility = native_eligibility_for_request(
             requested,
             request.isa,
             request.plan,
-            has_checkpoint_services,
+            checkpoint,
             || native_host_capabilities(request.plan),
         );
         // A native volume source is authenticated with openat2/open_tree immediately before namespace
