@@ -680,6 +680,61 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
 }
 
 #[test]
+fn supervised_overlay_projector_confines_root_cwd_and_replaces_hostile_proc() {
+    let work = TempDir::new().unwrap();
+    let before = native_overlay_directories();
+    let built = fixture(work.path());
+    let lower = work.path().join("lower");
+    let upper = work.path().join("upper");
+    let overlay_work = work.path().join("work");
+    for path in [
+        lower.join("bin"),
+        lower.join("tmp"),
+        lower.join("proc"),
+        lower.join("etc"),
+        upper.clone(),
+        overlay_work.clone(),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(
+        lower.join("etc/hosts"),
+        b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker",
+    )
+    .unwrap();
+    std::fs::set_permissions(lower.join("etc/hosts"), std::fs::Permissions::from_mode(0o640)).unwrap();
+    std::fs::write(lower.join("proc/hostile"), b"host").unwrap();
+    let executable = lower.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(upper.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"root-contract".to_vec());
+    plan.options
+        .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
+        .unwrap();
+    plan.box_policy.lower_layers = Some(lower.as_os_str().as_encoded_bytes().to_vec());
+    plan.box_policy.working_directory = Some(b"/tmp".to_vec());
+    plan.box_policy.hostname = Some(b"husklet-native".to_vec());
+    plan.box_policy.flags |= 1;
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"root-contract-hostname");
+    assert_eq!(
+        std::fs::read(lower.join("etc/hosts")).unwrap(),
+        b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker"
+    );
+    assert_eq!(native_overlay_directories(), before);
+}
+
+#[test]
 fn supervised_projector_refuses_hostname_hosts_token_injection() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

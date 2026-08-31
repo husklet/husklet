@@ -22,6 +22,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -87,8 +88,11 @@ static int hl_native_supervised_listener_wait(hl_native_supervised_bootstrap *bo
 }
 
 static void hl_native_supervised_projection_cleanup(hl_native_supervised_bootstrap *bootstrap) {
-    if (bootstrap != NULL && atomic_load_explicit(&bootstrap->projected_overlay, memory_order_acquire))
+    if (bootstrap != NULL && atomic_load_explicit(&bootstrap->projected_overlay, memory_order_acquire)) {
         (void)rmdir(bootstrap->projected_root);
+        char *separator = strrchr(bootstrap->projected_root, '/');
+        if (separator != NULL) { *separator = 0; (void)rmdir(bootstrap->projected_root); }
+    }
 }
 
 typedef struct {
@@ -241,6 +245,10 @@ static int hl_native_supervised_overlay_mount(const hl_engine_config *config, co
     if (work == NULL || strchr(lower, '\n') != NULL) return -1;
     if (snprintf(target, PATH_MAX, "/var/tmp/husklet-native-overlay.XXXXXX") >= PATH_MAX || mkdtemp(target) == NULL)
         return -1;
+    size_t parent_length = strlen(target);
+    if (parent_length + sizeof "/root" > PATH_MAX) { rmdir(target); return -1; }
+    memcpy(target + parent_length, "/root", sizeof "/root");
+    if (mkdir(target, 0700) != 0) { target[parent_length] = 0; rmdir(target); return -1; }
     int filesystem = (int)syscall(SYS_fsopen, "overlay", FSOPEN_CLOEXEC);
     int mounted = -1;
     if (filesystem >= 0 && syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "lowerdir", lower, 0) == 0 &&
@@ -256,7 +264,11 @@ static int hl_native_supervised_overlay_mount(const hl_engine_config *config, co
         if (tree >= 0) close(tree);
     }
     if (filesystem >= 0) close(filesystem);
-    if (mounted != 0) rmdir(target);
+    if (mounted != 0) {
+        rmdir(target);
+        target[parent_length] = 0;
+        rmdir(target);
+    }
     return mounted;
 }
 
@@ -414,7 +426,63 @@ static int hl_native_supervised_open_hosts(const char *root) {
     return input;
 }
 
-static int hl_native_supervised_project_hostname(const char *root, const char *hostname, int read_only) {
+static int hl_native_supervised_private_read_only_hosts(const char *root, const char *source, int pinned) {
+    static const char prefix[] = "/var/tmp/husklet-native-overlay.";
+    struct stat root_status, pinned_status, path_status, source_status, mounted_status;
+    struct statx pinned_key, path_key, mounted_key, final_key;
+    const char *separator = strchr(root + sizeof prefix - 1, '/');
+    if (strncmp(root, prefix, sizeof prefix - 1) != 0 || separator == NULL || strcmp(separator, "/root") != 0)
+        return -1;
+    char parent[PATH_MAX];
+    size_t parent_length = (size_t)(separator - root);
+    if (parent_length >= sizeof parent) return -1;
+    memcpy(parent, root, parent_length); parent[parent_length] = 0;
+    if (lstat(parent, &root_status) != 0 || !S_ISDIR(root_status.st_mode) ||
+        (root_status.st_mode & 07777) != 0700 || root_status.st_uid != geteuid() ||
+        fstat(pinned, &pinned_status) != 0 || stat(source, &source_status) != 0 ||
+        syscall(SYS_statx, pinned, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &pinned_key) != 0)
+        return -1;
+    char target[PATH_MAX];
+    if (snprintf(target, sizeof target, "%s/etc/hosts", root) >= (int)sizeof target) return -1;
+    int target_fd = open(target, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    if (target_fd < 0 || fstat(target_fd, &path_status) != 0 ||
+        syscall(SYS_statx, target_fd, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &path_key) != 0 ||
+        path_status.st_dev != pinned_status.st_dev || path_status.st_ino != pinned_status.st_ino ||
+        path_key.stx_ino != pinned_key.stx_ino || path_key.stx_mnt_id != pinned_key.stx_mnt_id) {
+        if (target_fd >= 0) close(target_fd);
+        errno = ESTALE;
+        return -1;
+    }
+    close(target_fd);
+    if (mount(source, target, NULL, MS_BIND, NULL) != 0) return -1;
+    int tree = (int)syscall(SYS_open_tree, AT_FDCWD, target, OPEN_TREE_CLOEXEC);
+    target_fd = open(target, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    if (tree < 0 || target_fd < 0 || fstat(tree, &mounted_status) != 0 ||
+        syscall(SYS_statx, tree, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &mounted_key) != 0 ||
+        syscall(SYS_statx, target_fd, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &final_key) != 0 ||
+        mounted_status.st_dev != source_status.st_dev || mounted_status.st_ino != source_status.st_ino ||
+        mounted_key.stx_ino != final_key.stx_ino || mounted_key.stx_mnt_id != final_key.stx_mnt_id) {
+        if (tree >= 0) close(tree);
+        if (target_fd >= 0) close(target_fd);
+        errno = ESTALE;
+        return -1;
+    }
+    close(target_fd);
+    struct mount_attr attributes = {.attr_set = MOUNT_ATTR_RDONLY};
+    int exact = syscall(SYS_mount_setattr, tree, "", AT_EMPTY_PATH, &attributes, sizeof attributes) == 0;
+    int failure = errno;
+    struct statvfs flags;
+    if (exact && (statvfs(target, &flags) != 0 || (flags.f_flag & ST_RDONLY) == 0)) {
+        exact = 0;
+        failure = errno != 0 ? errno : EROFS;
+    }
+    close(tree);
+    if (!exact) { errno = failure; return -1; }
+    return 0;
+}
+
+static int hl_native_supervised_project_hostname(const char *root, const char *hostname, int read_only,
+                                                 int private_root) {
     char inherited[HOST_NAME_MAX + 1];
     if (hostname == NULL || hostname[0] == 0) {
         if (gethostname(inherited, HOST_NAME_MAX) != 0) return -1;
@@ -472,13 +540,14 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
     free(contents);
     int failure = errno;
     if (close(output) != 0 && exact) { exact = 0; failure = errno; }
-    if (exact) {
+    if (exact && !(read_only && private_root)) {
         /* Mount through the descriptor pinned above: pathname replacement cannot redirect the target. */
         exact = mount(temporary, pinned_target, NULL, MS_BIND, NULL) == 0;
         if (!exact) failure = errno;
     }
     if (exact && read_only) {
-        exact = mount(NULL, pinned_target, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0;
+        exact = private_root ? hl_native_supervised_private_read_only_hosts(root, temporary, input) == 0
+                             : mount(NULL, pinned_target, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0;
         if (!exact) failure = errno;
     }
     close(input);
@@ -503,7 +572,7 @@ HL_API int hl_native_supervised_hostname_projection_test(uint32_t scenario) {
         if (status == 0 && (descriptor < 0 || write(descriptor, original, sizeof original - 1) != sizeof original - 1 ||
                             close(descriptor) != 0 || symlink(outside, etc) != 0)) status = 99;
         errno = 0;
-        if (status == 0 && hl_native_supervised_project_hostname(root, "builder", 0) != -1) status = 100;
+        if (status == 0 && hl_native_supervised_project_hostname(root, "builder", 0, 0) != -1) status = 100;
         char receipt[sizeof original] = {0};
         descriptor = status == 0 ? open(outside_hosts, O_RDONLY | O_CLOEXEC) : -1;
         if (status == 0 && (descriptor < 0 || read(descriptor, receipt, sizeof receipt) != sizeof original - 1 ||
@@ -549,7 +618,7 @@ HL_API int hl_native_supervised_hostname_projection_test(uint32_t scenario) {
                         close(descriptor) != 0)) status = 93;
     if (status == 0 && hl_native_supervised_hostname_valid(hostile[scenario])) status = 96;
     errno = 0;
-    if (status == 0 && (hl_native_supervised_project_hostname(root, hostile[scenario], 0) != -1 || errno != EINVAL))
+    if (status == 0 && (hl_native_supervised_project_hostname(root, hostile[scenario], 0, 0) != -1 || errno != EINVAL))
         status = 94;
     char receipt[sizeof original] = {0};
     descriptor = status == 0 ? open(hosts, O_RDONLY | O_CLOEXEC) : -1;
@@ -623,6 +692,12 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         memcpy(bootstrap->projected_root, projected_root, strlen(projected_root) + 1);
         atomic_store_explicit(&bootstrap->projected_overlay, 1, memory_order_release);
     }
+    int private_setup = projected_overlay &&
+                        atomic_load_explicit(&bootstrap->listener, memory_order_acquire) == -1 &&
+                        atomic_load_explicit(&bootstrap->target_pid, memory_order_acquire) == -1 &&
+                        atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire) == 0 &&
+                        atomic_load_explicit(&bootstrap->clone_stages, memory_order_acquire) == 1;
+    if (projected_overlay && !private_setup) goto projection_failed;
     if (hl_native_supervised_owners_apply(projected_root, box->file_owners) != 0) goto projection_failed;
     char byte;
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
@@ -630,7 +705,8 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
         hl_native_supervised_project_hostname(projected_root, box->hostname,
-                                              (box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0) != 0)
+                                              (box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0,
+                                              private_setup) != 0)
         return -1;
     char proc_target[PATH_MAX];
     if (snprintf(proc_target, sizeof(proc_target), "%s%s", projected_root, "/proc") >= (int)sizeof(proc_target)) return -1;
