@@ -6636,6 +6636,9 @@ done:
     return result;
 }
 
+static int translit_test_pcache_ordinals;
+static uint16_t translit_test_pcache_next;
+
 static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *context, uint64_t guest) {
     if (!translit_jcc_ibtc_stub_init()) return NULL;
     while ((uintptr_t)g_cp & 15)
@@ -6643,7 +6646,8 @@ static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *con
     struct interp_block *block = (struct interp_block *)g_cp;
     g_cp += sizeof *block;
     memset(block, 0, sizeof *block);
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, UINT16_MAX);
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, translit_test_pcache_ordinals
+        ? translit_test_pcache_next++ : UINT16_MAX);
     block->magic = INTERP_BLOCK_MAGIC;
     block->gpc = guest;
     block->generation = g_cache_gen;
@@ -7633,8 +7637,12 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     }
 
     if (scenario == 91) {
+        translit_test_pcache_ordinals = 1;
+        translit_test_pcache_next = 0;
+        translit_pcache_census_count[0] = translit_pcache_census_count[1] = 0;
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+        translit_test_pcache_ordinals = 0;
         struct cpu cpu = {0};
         cpu.rip = source;
         cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
@@ -7642,6 +7650,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         run_block(context, &cpu, source_block);
         result = target_block->host_entry_off != 0 && source_block->host_entry_off != 0 && cpu.r[0] == 42 &&
                          cpu.rip == target + 5 &&
+                         translit_pcache_census_count[0] == 1 && translit_pcache_census_count[1] == 1 &&
                          __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before
                      ? 0
                      : 137;
