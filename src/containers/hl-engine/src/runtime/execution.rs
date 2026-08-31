@@ -434,7 +434,13 @@ fn native_eligibility_for_request(
         return Err(NativeSupervisedRefusal::Host);
     }
     let host = probe();
-    let eligibility = native_eligibility(isa, plan, checkpoint, host);
+    let eligibility = native_eligibility_with_sentry(
+        isa,
+        plan,
+        checkpoint,
+        host,
+        requested == NativeSupervisedRequest::On,
+    );
     if requested == NativeSupervisedRequest::Auto {
         native_auto_eligibility(plan, host, eligibility)
     } else {
@@ -484,11 +490,22 @@ fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Opti
     })
 }
 
+#[cfg(test)]
 fn native_eligibility(
     isa: crate::activation::GuestIsa,
     plan: &crate::launcher::plan::RuntimePlan,
     checkpoint: NativeCheckpointIntent,
     host: NativeHostCapabilities,
+) -> Result<(), NativeSupervisedRefusal> {
+    native_eligibility_with_sentry(isa, plan, checkpoint, host, false)
+}
+
+fn native_eligibility_with_sentry(
+    isa: crate::activation::GuestIsa,
+    plan: &crate::launcher::plan::RuntimePlan,
+    checkpoint: NativeCheckpointIntent,
+    host: NativeHostCapabilities,
+    allow_sentry_only: bool,
 ) -> Result<(), NativeSupervisedRefusal> {
     use NativeSupervisedRefusal as R;
     if !host.linux_x86_64 || !host.root { return Err(R::Host); }
@@ -518,7 +535,11 @@ fn native_eligibility(
     {
         return Err(R::Checkpoint);
     }
-    if plan.options.get_bytes("HL_UNTRUSTED").is_some() { return Err(R::Sandbox); }
+    if plan.options.get_bytes("HL_SANDBOX").is_some()
+        || (plan.options.get_bytes("HL_UNTRUSTED").is_some() && !allow_sentry_only)
+    {
+        return Err(R::Sandbox);
+    }
     if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
     if translated_backend_control(plan).is_some() { return Err(R::BackendControl); }
     let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
@@ -672,6 +693,48 @@ mod native_eligibility_tests {
         );
         assert_eq!(probes.get(), 0, "explicit OFF performed host/path preflight");
         assert_eq!(native_selection(NativeSupervisedRequest::Off, eligibility), Ok(false));
+    }
+
+    #[test]
+    fn explicit_on_accepts_only_sentry_only_in_an_isolated_network() {
+        let mut sentry = plan();
+        sentry.options.set("HL_UNTRUSTED", "1", true).unwrap();
+        sentry.box_policy.network_mode = 0;
+        sentry.box_policy.flags |= BOX_NETWORK_ISOLATED;
+        sentry.box_policy.network_namespace = Some(b"ephemeral-pane".to_vec());
+
+        assert_eq!(
+            native_eligibility_for_request(
+                NativeSupervisedRequest::On,
+                crate::activation::GuestIsa::X86_64,
+                &sentry,
+                NativeCheckpointIntent::None,
+                host,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            native_eligibility_for_request(
+                NativeSupervisedRequest::Auto,
+                crate::activation::GuestIsa::X86_64,
+                &sentry,
+                NativeCheckpointIntent::None,
+                host,
+            ),
+            Err(NativeSupervisedRefusal::Sandbox)
+        );
+
+        sentry.options.set("HL_SANDBOX", "1", true).unwrap();
+        assert_eq!(
+            native_eligibility_for_request(
+                NativeSupervisedRequest::On,
+                crate::activation::GuestIsa::X86_64,
+                &sentry,
+                NativeCheckpointIntent::None,
+                host,
+            ),
+            Err(NativeSupervisedRefusal::Sandbox)
+        );
     }
 
     #[test]
