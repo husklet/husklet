@@ -1264,7 +1264,9 @@ mod tests {
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
-        assert_eq!(on["jcc_ibtc_hits"], 1);
+        // A guard hit transfers directly to the target body and therefore does
+        // not enter (or increment) the shared miss helper's hit path.
+        assert_eq!(on["jcc_ibtc_hits"], 0);
         assert_eq!(on["jcc_ibtc_misses"], 1);
         assert_eq!(on["jcc_ibtc_irq"], 0);
         assert_eq!(on["jcc_ibtc_fills"], 1);
