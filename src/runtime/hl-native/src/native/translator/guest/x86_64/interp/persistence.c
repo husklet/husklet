@@ -219,8 +219,9 @@ int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
         uint16_t ordinal = x64_pc_get16(record + 82);
         valid = host < layout->arena && body < layout->arena && host == body && block == body &&
                 start <= gpc && gpc < end && x64_pc_get64(record + 48) == policy->block_magic &&
-                x64_pc_get64(record + 56) == gpc && entry <= length && entry <= layout->arena &&
-                host <= layout->arena - entry && length <= layout->arena - host &&
+                x64_pc_get64(record + 56) == gpc && ((entry == 0) == (length == 0)) &&
+                (entry == 0 || entry >= 52) && host <= layout->arena && entry <= layout->arena - host &&
+                length <= layout->arena - host - entry &&
                 (policy->require_census_ordinal ? ordinal < UINT16_MAX : ordinal == UINT16_MAX) &&
                 layout->arena >= 52 && body <= layout->arena - 52 &&
                 x64_pc_get64(layout->arena_bytes + body + 16) == x64_pc_get64(record + 64) &&
@@ -233,7 +234,10 @@ int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
             const uint8_t *prior = record - X64_PC_MAP_SIZE;
             uint64_t prior_host = x64_pc_get64(prior + 24);
             uint32_t prior_length = x64_pc_get32(prior + 76);
-            valid = prior_host <= host && prior_length <= host - prior_host;
+            uint32_t prior_entry = x64_pc_get32(prior + 72);
+            uint64_t delta = host - prior_host;
+            valid = prior_host < host && delta >= 52 && prior_entry <= delta &&
+                    prior_length <= delta - prior_entry;
         }
         uint64_t slot = (gpc ^ (gpc >> 32)) % policy->map_slots, probes = 0;
         while (valid && seen_used[slot] && seen_gpc[slot] != gpc && ++probes < policy->map_slots)
