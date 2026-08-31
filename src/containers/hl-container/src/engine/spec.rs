@@ -128,34 +128,35 @@ impl TryFrom<&ProcessConfig> for Spec {
                 _ => Vec::new(),
             };
             #[cfg(unix)]
-            if let (Some(authority), Some(host)) = (&launch.executable_digest_authority, &executable) {
-                if let Some(interpreter) = GuestPath::interpreter(host, isa)
+            if let (Some(authority), Some(host)) = (&launch.executable_digest_authority, &executable)
+                && let Some(interpreter) = GuestPath::interpreter(host, isa)
                     .map_err(|_| Error::Runtime("cannot inspect executable interpreter".into()))?
-                {
-                    if let Some(interpreter_host) = GuestPath::host_executable(&interpreter, &roots) {
-                        if let Some(digest) = authority.authenticate(&interpreter, &interpreter_host)? {
-                            executable_digests.push(hl_engine::launcher::plan::ExecutableDigestAuthority {
-                                snapshot: digest.snapshot.into_bytes(),
-                                guest_path: digest.guest_path.into_bytes(),
-                                size: digest.size,
-                                sha256: digest.sha256,
-                            });
-                        }
-                    }
-                }
+                && let Some(interpreter_host) = GuestPath::host_executable(&interpreter, &roots)
+                && let Some(digest) = authority.authenticate(&interpreter, &interpreter_host)?
+            {
+                executable_digests.push(hl_engine::launcher::plan::ExecutableDigestAuthority {
+                    snapshot: digest.snapshot.into_bytes(),
+                    guest_path: digest.guest_path.into_bytes(),
+                    size: digest.size,
+                    sha256: digest.sha256,
+                });
             }
         }
         if !executable_digests.is_empty() {
             let records = executable_digests
                 .iter()
                 .map(|digest| {
+                    use std::fmt::Write as _;
+
                     let snapshot = std::str::from_utf8(&digest.snapshot).expect("snapshot identity is UTF-8");
                     let path = std::str::from_utf8(&digest.guest_path).expect("normalized guest path is UTF-8");
-                    let sha256 = digest
-                        .sha256
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>();
+                    let sha256 = digest.sha256.iter().fold(
+                        String::with_capacity(digest.sha256.len() * 2),
+                        |mut output, byte| {
+                            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+                            output
+                        },
+                    );
                     format!("{snapshot}\t{path}\t{}\t{sha256}", digest.size)
                 })
                 .collect::<Vec<_>>()
