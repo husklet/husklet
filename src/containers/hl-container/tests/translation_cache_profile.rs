@@ -423,12 +423,16 @@ int main(void) {
             }
             Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
             Mode::CacheSemanticRelocation => {
-                require(
-                    relocations != 0,
-                    "semantic relocation corruption has no relocation record",
-                )?;
-                let offset = relocations_at + 4;
-                bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+                if helper_relocations != 0 {
+                    // Helper records carry an authenticated instruction form in
+                    // their high bits. No unknown form may reach relocation.
+                    let offset = helper_relocations_at + 4;
+                    bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+                } else {
+                    require(relocations != 0, "semantic relocation corruption has no relocation record")?;
+                    let offset = relocations_at + 4;
+                    bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+                }
             }
             Mode::CacheSemanticLibrary => {
                 require(libraries != 0, "semantic library corruption has no manifest record")?;
