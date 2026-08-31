@@ -3,7 +3,8 @@
 use hl_engine::{
     activation::GuestIsa,
     composition::{
-        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams,
+        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams, Terminal,
+        TerminalPort,
     },
     engine::ExitKind,
     launcher::plan::{RuntimeBoxPolicy, RuntimePlan},
@@ -15,7 +16,7 @@ use std::net::TcpListener;
 use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use tempfile::TempDir;
 
 fn native_overlay_directories() -> std::collections::BTreeSet<PathBuf> {
@@ -63,6 +64,36 @@ impl StandardStreamPort for Output {
         Ok(input.len())
     }
     fn close(&self) {}
+}
+
+#[derive(Default)]
+struct PaneTerminal {
+    closed: Mutex<bool>,
+    bytes: Mutex<Vec<u8>>,
+    changed: Condvar,
+}
+
+impl TerminalPort for PaneTerminal {
+    fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
+        let mut closed = self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !*closed {
+            closed = self.changed.wait(closed).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        Ok(0)
+    }
+
+    fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+        self.bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(input);
+        Ok(input.len())
+    }
+
+    fn close(&self) {
+        *self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.changed.notify_all();
+    }
 }
 
 fn fixture(directory: &Path) -> PathBuf {
@@ -731,6 +762,56 @@ fn supervised_overlay_projector_confines_root_cwd_and_replaces_hostile_proc() {
         std::fs::read(lower.join("etc/hosts")).unwrap(),
         b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker"
     );
+    assert_eq!(native_overlay_directories(), before);
+}
+
+#[test]
+fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentry() {
+    let work = TempDir::new().unwrap();
+    let before = native_overlay_directories();
+    let built = fixture(work.path());
+    let lower = work.path().join("lower");
+    let upper = work.path().join("upper");
+    let overlay_work = work.path().join("work");
+    let source = work.path().join("source");
+    let output_directory = work.path().join("output");
+    for path in [
+        lower.join("bin"),
+        lower.join("tmp"),
+        lower.join("proc"),
+        lower.join("src"),
+        lower.join("out"),
+        upper.clone(),
+        overlay_work.clone(),
+        source.clone(),
+        output_directory.clone(),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let executable = lower.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let terminal = Arc::new(PaneTerminal::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(upper.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"secure-jail".to_vec());
+    plan.options
+        .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
+        .unwrap();
+    plan.box_policy.lower_layers = Some(lower.as_os_str().as_encoded_bytes().to_vec());
+    plan.box_policy.working_directory = Some(b"/tmp".to_vec());
+    plan.box_policy.hostname = Some(b"husklet-native".to_vec());
+    plan.box_policy.uid = 1234;
+    plan.box_policy.gid = 2345;
+    plan.box_policy.volumes =
+        Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
+    let streams = StandardStreams::default()
+        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert!(text.windows(b"secure-jail".len()).any(|window| window == b"secure-jail"), "pty={text:?}");
     assert_eq!(native_overlay_directories(), before);
 }
 
