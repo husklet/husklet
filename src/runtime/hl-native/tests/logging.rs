@@ -20,6 +20,23 @@ fn sampling_exit_flush_joins_translation_serialization() {
 }
 
 #[test]
+fn restored_sampling_maps_start_at_translated_entries() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let source = fs::read_to_string(native.join("translator/guest/x86_64/interp.c"))
+        .expect("read interpreter cache restore paths");
+    let entry_publish = "translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,";
+    assert_eq!(
+        source.matches(entry_publish).count(),
+        3,
+        "every restored sampling-map path must publish the translated entry"
+    );
+    assert!(
+        !source.contains("translit_perf_map_publish(block, (uint8_t *)block, block->host_len"),
+        "a restored sampling map still includes its interpreter descriptor"
+    );
+}
+
+#[test]
 fn x86_restore_snapshots_translation_profile_options_before_its_early_return() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let source = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
