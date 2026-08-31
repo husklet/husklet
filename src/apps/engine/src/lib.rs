@@ -545,15 +545,13 @@ fn rootfs_plan(
                 ))
             })?;
     }
-    // Direct-JMP late linking remains opt-in until its CLONE_VM|CLONE_VFORK
-    // child-exec path has the same compatibility evidence as direct launch.
-    // Store both answers explicitly: "0" makes typed ON shadow a contradictory
-    // ambient disable value, while absence at the native boundary stays OFF.
+    // Store both answers explicitly so the typed launch policy shadows any
+    // contradictory ambient value while preserving an explicit OFF override.
     if launch.translit {
-        let disabled = if launch.translit_direct_jmp_ibtc == Some(DirectJmpIbtcControl::On) {
-            "0"
-        } else {
+        let disabled = if launch.translit_direct_jmp_ibtc == Some(DirectJmpIbtcControl::Off) {
             "1"
+        } else {
+            "0"
         };
         options
             .set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", disabled, true)
@@ -1413,7 +1411,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             translit_default.options.get("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE"),
-            Some("1")
+            Some("0")
         );
         // These positive feature controls stay absent from the plan when the caller accepts the
         // native default.  The x86 hot context and cache identity both interpret absence as ON;

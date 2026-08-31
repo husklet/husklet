@@ -1896,7 +1896,7 @@ static uint64_t x64_pcache_codegen_modes(void) {
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0) << 1) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0) << 2) |
            ((uint64_t)(g_prof != 0) << 3) |
-           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1) << 4) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0) << 4) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_FS_AUTHORITY_TEST", 0) << 5) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_PROVENANCE_FALLBACK", 0) << 6) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_BODY_OWNER_EXHAUST", 0) << 7) |

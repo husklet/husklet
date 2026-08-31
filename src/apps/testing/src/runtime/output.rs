@@ -4,6 +4,26 @@ use std::io::Write;
 
 const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
 const BACKEND_SHAPE_PREFIX: &str = "[diag] backend-shape ";
+const X86_EXIT_FAMILY_PREFIX: &str = "[diag] x86-exit-family ";
+const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
+    "version",
+    "translated_entries",
+    "total",
+    "t_fallthrough",
+    "t_jcc_taken",
+    "t_jcc_fall",
+    "t_direct_jmp",
+    "t_direct_call",
+    "t_ret",
+    "t_jmp_reg",
+    "t_jmp_mem",
+    "t_call_reg",
+    "t_call_mem",
+    "t_syscall",
+    "t_irq",
+    "t_fault",
+    "t_other",
+];
 const BACKEND_SHAPE_PRODUCT_FIELDS: &[&str] = &[
     "version",
     "available",
@@ -308,7 +328,12 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
     let product = std::str::from_utf8(stderr).is_ok_and(|text| {
         text.lines()
             .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
-            .any(|record| record.split_whitespace().any(|field| field == "version=3"))
+            .filter_map(|record| {
+                record
+                    .split_whitespace()
+                    .find_map(|field| field.strip_prefix("version=")?.parse::<u64>().ok())
+            })
+            .any(|version| version >= 4)
     });
     let records = stderr
         .split(|byte| *byte == b'\n')
@@ -662,7 +687,7 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             }
         }
     }
-    if fields["version"] != 4 && fields["version"] != 5 && fields["version"] != 6 {
+    if fields["version"] != 4 && fields["version"] != 5 && fields["version"] != 6 && fields["version"] != 7 {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
     if fields["available"] != 1 {
@@ -719,6 +744,68 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
         .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_irq"]));
     if direct_dynamic.is_none() || (direct_dynamic != Some(0) && fields["direct_jmp_ibtc_emitted"] == 0) {
         return Err("backend-shape product direct-JMP IBTC execution has no emitted site".into());
+    }
+    if version >= 7 {
+        let exits = x86_exit_family(stderr.as_bytes(), true)?.expect("enabled exit-family record");
+        if exits["translated_entries"] != fields["translated_entries"] {
+            return Err("x86 exit-family entries do not match backend-shape product entries".into());
+        }
+    }
+    Ok(Some(fields))
+}
+
+pub(crate) fn x86_exit_family(stderr: &[u8], enabled: bool) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+    let stderr = std::str::from_utf8(stderr).map_err(|_| "x86 exit-family diagnostic is not UTF-8")?;
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(X86_EXIT_FAMILY_PREFIX))
+        .collect::<Vec<_>>();
+    if !enabled {
+        return if records.is_empty() {
+            Ok(None)
+        } else {
+            Err(format!(
+                "x86 exit-family diagnostic appeared {} times, expected 0",
+                records.len()
+            )
+            .into())
+        };
+    }
+    if records.len() != 1 {
+        return Err(format!(
+            "x86 exit-family diagnostic appeared {} times, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let mut fields = BTreeMap::new();
+    for field in records[0].split_whitespace() {
+        let Some((name, value)) = field.split_once('=') else {
+            return Err(format!("x86 exit-family diagnostic has malformed field {field:?}").into());
+        };
+        if !X86_EXIT_FAMILY_FIELDS.contains(&name) {
+            return Err(format!("x86 exit-family diagnostic has unknown field {name:?}").into());
+        }
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| format!("x86 exit-family field {name:?} is not an integer"))?;
+        if fields.insert(name, value).is_some() {
+            return Err(format!("x86 exit-family diagnostic duplicates field {name:?}").into());
+        }
+    }
+    for name in X86_EXIT_FAMILY_FIELDS {
+        if !fields.contains_key(name) {
+            return Err(format!("x86 exit-family diagnostic omitted field {name:?}").into());
+        }
+    }
+    if fields["version"] != 1 {
+        return Err("x86 exit-family diagnostic has invalid version".into());
+    }
+    let total = X86_EXIT_FAMILY_FIELDS[3..]
+        .iter()
+        .try_fold(0_u64, |total, name| total.checked_add(fields[name]));
+    if total != Some(fields["total"]) || total != Some(fields["translated_entries"]) {
+        return Err("x86 exit-family totals do not reconcile with translated entries".into());
     }
     Ok(Some(fields))
 }
@@ -869,6 +956,9 @@ mod tests {
 
     const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
     const PRODUCT_SHAPE_ON: &str = "[diag] backend-shape version=4 available=1 mixed_sse_executed=0 mixed_sse_executed_transitions=0 mixed_sse_disabled_boundaries=0 jcc_ibtc_enabled=1 jcc_ibtc_emitted=1 jcc_ibtc_hits=1 jcc_ibtc_misses=1 jcc_ibtc_irq=0 jcc_ibtc_fills=1 jcc_ibtc_suppressed=0 jcc_ibtc_invalid_refusals=0 direct_jmp_ibtc_enabled=1 direct_jmp_ibtc_emitted=1 direct_jmp_ibtc_hits=1 direct_jmp_ibtc_misses=1 direct_jmp_ibtc_irq=0 direct_jmp_ibtc_fills=1 direct_jmp_ibtc_suppressed=0 direct_jmp_ibtc_invalid_refusals=0\n";
+    const EXIT_FAMILY: &str = "[diag] x86-exit-family version=1 translated_entries=105 total=105 \
+        t_fallthrough=1 t_jcc_taken=2 t_jcc_fall=3 t_direct_jmp=4 t_direct_call=5 t_ret=6 \
+        t_jmp_reg=7 t_jmp_mem=8 t_call_reg=9 t_call_mem=10 t_syscall=11 t_irq=12 t_fault=13 t_other=14\n";
     const PRODUCT_SHAPE_OFF: &str = "[diag] backend-shape version=4 available=1 mixed_sse_executed=0 mixed_sse_executed_transitions=0 mixed_sse_disabled_boundaries=0 jcc_ibtc_enabled=0 jcc_ibtc_emitted=1 jcc_ibtc_hits=0 jcc_ibtc_misses=2 jcc_ibtc_irq=0 jcc_ibtc_fills=0 jcc_ibtc_suppressed=2 jcc_ibtc_invalid_refusals=0 direct_jmp_ibtc_enabled=0 direct_jmp_ibtc_emitted=1 direct_jmp_ibtc_hits=0 direct_jmp_ibtc_misses=2 direct_jmp_ibtc_irq=0 direct_jmp_ibtc_fills=0 direct_jmp_ibtc_suppressed=2 direct_jmp_ibtc_invalid_refusals=0\n";
     const SHAPE: &str = "[diag] backend-shape version=1 translated_entries=2 translated_transfers=5 t_fallthrough=1 t_cond_taken=1 t_cond_not_taken=0 t_direct_jump=0 t_direct_call=0 t_return=0 t_indirect_branch=0 t_indirect_call=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0 fall_total=1 fall_cap=0 fall_decode=0 fall_normal_to_sse2=0 fall_sse2_to_normal=0 fall_normal_to_fs=0 fall_fs_to_normal=0 fall_sse2_to_fs=0 fall_fs_to_sse2=0 fall_tl_no=1 fall_displaced=0 fall_fetch=0 fall_riprel=0 fall_fs_transaction=0 fall_sse_riprel=0 fall_other=0 stitch_jmp=1 stitch_cond_fall=2 e_fall_total=1 e_fall_mapped=1 e_fall_unmapped=0 e_fall_interrupted=0 e_fall_chained=0 e_fall_dispatcher=1 e_jt_total=1 e_jt_mapped=1 e_jt_unmapped=0 e_jt_interrupted=0 e_jt_chained=0 e_jt_dispatcher=1 e_jn_total=0 e_jn_mapped=0 e_jn_unmapped=0 e_jn_interrupted=0 e_jn_chained=0 e_jn_dispatcher=0 e_jmp_total=0 e_jmp_mapped=0 e_jmp_unmapped=0 e_jmp_interrupted=0 e_jmp_chained=0 e_jmp_dispatcher=0 e_call_total=0 e_call_mapped=0 e_call_unmapped=0 e_call_interrupted=0 e_call_chained=0 e_call_dispatcher=0 jt_same_page=1 jt_cross_page=0 jt_target_translated=1 jt_target_interpreted=0 jt_generation_current=1 jt_generation_retired=0 jt_rel32=1 jt_rel32_unreachable=0 jt_eligible=1 jt_ineligible=0 interpreted_entries=3 i_disabled=0 i_image=0 i_decode=0 i_unsupported=2 i_authority=0 i_resource=0 i_emit=0 i_runtime_image=1 i_runtime_bind=0 i_other=0 s_fallthrough=0 s_cond_taken=0 s_cond_not_taken=0 s_direct_jump=0 s_direct_call=1 s_return=0 s_indirect_branch=0 s_indirect_call=0 s_syscall=0 s_irq=0 s_fault=1 s_service=1 s_other=0 fallback_total=2 fallback_unique=1 fallback_overflow=0 stop_total=3 stop_unique=3 stop_overflow=0 family_jmem=1 family_div_total=3 family_div_inline=1 family_div_service64=1 family_div_service64_completed=1 family_div_de=1 family_idiv_total=3 family_idiv_inline=1 family_idiv_service64=1 family_idiv_service64_completed=1 family_idiv_de=1 family_total=7 mixed_sse_executed=2 mixed_sse_executed_transitions=3 mixed_sse_disabled_boundaries=0 fallback0_key=17 fallback0_count=2 fallback1_key=0 fallback1_count=0 fallback2_key=0 fallback2_count=0 fallback3_key=0 fallback3_count=0 fallback4_key=0 fallback4_count=0 fallback5_key=0 fallback5_count=0 fallback6_key=0 fallback6_count=0 fallback7_key=0 fallback7_count=0 stop0_key=1 stop0_count=1 stop1_key=2 stop1_count=1 stop2_key=3 stop2_count=1 stop3_key=0 stop3_count=0 stop4_key=0 stop4_count=0 stop5_key=0 stop5_count=0 stop6_key=0 stop6_count=0 stop7_key=0 stop7_count=0 direct_call_ibtc_emitted=1 direct_call_ibtc_hits=2 direct_call_ibtc_misses=3 direct_call_ibtc_irq=1 direct_call_ibtc_fills=2 direct_call_ibtc_invalid_refusals=0\n";
 
@@ -973,6 +1063,64 @@ mod tests {
                 .contains("expected 0")
         );
         assert!(validate_backend_tree(format!("{TREE}{PRODUCT_SHAPE_ON}").as_bytes(), true).is_err());
+    }
+
+    #[test]
+    fn x86_exit_family_is_exact_typed_and_reconciled() {
+        let fields = x86_exit_family(EXIT_FAMILY.as_bytes(), true).unwrap().unwrap();
+        for (index, name) in X86_EXIT_FAMILY_FIELDS[3..].iter().enumerate() {
+            assert_eq!(fields[name], index as u64 + 1, "family {name} was collapsed");
+        }
+        x86_exit_family(b"ordinary guest stderr\n", false).unwrap();
+
+        for name in &X86_EXIT_FAMILY_FIELDS[3..] {
+            let needle = format!(" {name}={}", fields[name]);
+            let collapsed = EXIT_FAMILY.replacen(&needle, " t_other=0", 1);
+            let error = x86_exit_family(collapsed.as_bytes(), true).unwrap_err().to_string();
+            assert!(
+                error.contains("duplicates field")
+                    || error.contains("omitted field")
+                    || error.contains("do not reconcile"),
+                "collapsing {name} escaped the strict parser: {error}"
+            );
+        }
+        for (needle, replacement, message) in [
+            (" total=105", " total=104", "do not reconcile"),
+            (" t_ret=6", " t_ret=notdecimal", "not an integer"),
+            (" t_ret=6", " t_ret=6 unknown=0", "unknown field"),
+        ] {
+            let record = EXIT_FAMILY.replacen(needle, replacement, 1);
+            let error = x86_exit_family(record.as_bytes(), true).unwrap_err().to_string();
+            assert!(error.contains(message), "{error}");
+        }
+        assert!(x86_exit_family(format!("{EXIT_FAMILY}{EXIT_FAMILY}").as_bytes(), true).is_err());
+        assert!(x86_exit_family(EXIT_FAMILY.as_bytes(), false).is_err());
+    }
+
+    #[test]
+    fn product_v7_requires_the_exact_exit_family_record() {
+        let mut product = PRODUCT_SHAPE_ON.trim_end().replace("version=4", "version=7");
+        for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA
+            .iter()
+            .chain(BACKEND_SHAPE_PRODUCT_V6_EXTRA)
+        {
+            product.push_str(&format!(" {name}=0"));
+        }
+        for rank in 0..16 {
+            product.push_str(&format!(" executed_form{rank}_key=0 executed_form{rank}_count=0"));
+        }
+        product.push('\n');
+        const ZERO_EXITS: &str = "[diag] x86-exit-family version=1 translated_entries=0 total=0 \
+            t_fallthrough=0 t_jcc_taken=0 t_jcc_fall=0 t_direct_jmp=0 t_direct_call=0 t_ret=0 \
+            t_jmp_reg=0 t_jmp_mem=0 t_call_reg=0 t_call_mem=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0\n";
+        product.push_str(ZERO_EXITS);
+        backend_shape_product(product.as_bytes(), true).unwrap();
+        validate_backend_tree(product.as_bytes(), true).unwrap();
+
+        let missing = product.replace(ZERO_EXITS, "");
+        assert!(backend_shape_product(missing.as_bytes(), true).is_err());
+        let disagreement = product.replacen(" translated_entries=0 total=0", " translated_entries=1 total=0", 1);
+        assert!(backend_shape_product(disagreement.as_bytes(), true).is_err());
     }
 
     #[test]

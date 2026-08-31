@@ -631,6 +631,8 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
 static int translit_riprel_load_bridge_gate_test(void);
+static int translit_riprel_integer_corpus_test(void);
+static int interp_step(struct cpu *, struct insn *, uint64_t, uint64_t);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
@@ -2315,7 +2317,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     int direct_jmp = miss_kind == TL_DIRECT_JMP_IBTC_MISS;
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
     int disabled = actual_miss && (fallthrough ? 0
-                                             : direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)
+                                             : direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)
                                              : direct_call ? 0
                                                            : hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0));
     if (disabled) {
@@ -2853,6 +2855,72 @@ static int translit_lower_natural_riprel_readonly(hl_x64_asm *a, const struct in
     return !a->overflow;
 }
 
+// Lower any ordinary integer RIP-relative memory operand through a borrowed guest register.  The
+// register is first copied to the canonical cpu image; owner ranges make the memory instruction the
+// precise fault point and retire it at op_end, while preserving the borrowed value until restoration.
+// Rebuilding only the addressing tail retains every legacy prefix, opcode, immediate, LOCK semantics,
+// operand width and flag effect of the decoder-approved instruction.
+static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct insn *insn,
+                                                  const uint8_t *bytes, uint64_t storage_target,
+                                                  int *scratch_out, uint8_t **save_end,
+                                                  uint8_t **op_end) {
+    if (!insn->has_modrm || !insn->is_mem || !insn->rip_rel || insn->mod != 0 || insn->rm != 5 ||
+        insn->addr32 || insn->seg || insn->vex || insn->evex || insn->map3)
+        return 0;
+    int modrm_offset = insn->len - insn->imm_bytes - 5;
+    if (modrm_offset < 1 || modrm_offset + 5 + insn->imm_bytes != insn->len) return 0;
+
+    // Adding a REX prefix would rename AH/CH/DH/BH. In that one encoding family borrow RSI/RDI so the
+    // rebuilt operation remains prefix-free; otherwise R10/R11 have no implicit integer role.
+    int byte_reg_operand = !insn->two &&
+                           ((insn->op < 0x40 && (insn->op & 7) <= 3) || insn->op == 0x84 ||
+                            insn->op == 0x86 || insn->op == 0x88 || insn->op == 0x8A);
+    int high_byte = !insn->has_rex && byte_reg_operand && insn->reg >= 4 && insn->reg <= 7;
+    int scratch = high_byte ? (insn->reg == 6 ? 7 : 6)
+                            : (insn->reg == HL_X64_R11 ? 10 : HL_X64_R11);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_natural_load_start = a->cursor;
+#endif
+    hl_x64_store_gs(a, scratch, R_OFF(scratch));
+    *save_end = a->cursor;
+    hl_x64_mov_imm64(a, scratch, storage_target);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_natural_load_address_end = a->cursor;
+#endif
+
+    int legacy_end = 0;
+    while (legacy_end < modrm_offset) {
+        uint8_t byte = bytes[legacy_end];
+        if (byte != 0xF0 && byte != 0xF2 && byte != 0xF3 && byte != 0x66 &&
+            byte != 0x2E && byte != 0x36 && byte != 0x3E && byte != 0x26 &&
+            byte != 0x64 && byte != 0x65)
+            break;
+        ++legacy_end;
+    }
+    int rex_offset = legacy_end < modrm_offset && (bytes[legacy_end] & 0xF0) == 0x40
+                         ? legacy_end
+                         : -1;
+    if (rex_offset < 0 && scratch >= 8) {
+        int prefix_end = legacy_end;
+        for (int i = 0; i < prefix_end; ++i) hl_x64_u8(a, bytes[i]);
+        hl_x64_u8(a, 0x41); // REX.B selects R10/R11 without changing operand width
+        for (int i = prefix_end; i < modrm_offset; ++i) hl_x64_u8(a, bytes[i]);
+    } else {
+        for (int i = 0; i < modrm_offset; ++i)
+            hl_x64_u8(a, (uint8_t)(bytes[i] | (i == rex_offset && scratch >= 8 ? 1 : 0)));
+    }
+    hl_x64_u8(a, (uint8_t)((bytes[modrm_offset] & 0xF8) | (scratch & 7)));
+    for (int i = 0; i < insn->imm_bytes; ++i) hl_x64_u8(a, bytes[modrm_offset + 5 + i]);
+    *op_end = a->cursor;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_natural_load_op_end = a->cursor;
+#endif
+    hl_x64_load_gs(a, scratch, R_OFF(scratch));
+    if (a->overflow) return 0;
+    *scratch_out = scratch;
+    return 1;
+}
+
 static int translit_fix_riprel(struct translit_builder *b, const struct insn *insn, uint64_t guest_next,
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
@@ -2991,7 +3059,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 150) {
         static const struct { const char *name; int missing; unsigned bit; } modes[] = {
             {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
-            {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
+            {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 9},
@@ -3202,6 +3270,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 271;
     }
     if (scenario == 189) return translit_riprel_load_bridge_gate_test();
+    if (scenario == 192) {
+        pid_t child = fork();
+        if (child < 0) return 398;
+        if (child == 0) _exit(translit_riprel_integer_corpus_test());
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 399;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 399;
+    }
     if (scenario == 190) {
         // F6 supplies byte width regardless of the decoder's canonical opsize. F7 spans the three
         // prefix-selected integer widths. Exercise both register and memory ModRM forms for DIV and
@@ -4544,13 +4621,20 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                        translit_lower_natural_riprel_readonly(a, &insn, storage_target,
                                                                               &riprel_readonly_save_end,
                                                                               &riprel_readonly_op_end);
+                int integer_lowered = 0;
+                if (!readonly_lowered && !g_nonpie_lo && !direct_data_authority &&
+                    !(context->riprel_load_bridge_enabled && !insn.two && insn.op == 0x8B) &&
+                    !(insn.op == 0x8D && !insn.two))
+                    integer_lowered = translit_lower_natural_riprel_integer(
+                        a, &insn, bytes, storage_target, &preserve_register,
+                        &riprel_readonly_save_end, &riprel_readonly_op_end);
                 int executable_target = !g_nonpie_lo &&
                                         gnx_hit(storage_target, insn.opsize == 8 ? 8 : 4);
                 int executable_alias = !g_nonpie_lo &&
                                        jit86_load_has_exec_alias(storage_target, insn.opsize == 8 ? 8 : 4);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
-                if (!readonly_lowered &&
+                if (!readonly_lowered && !integer_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
                                                     context->riprel_load_bridge_enabled &&
@@ -4896,7 +4980,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                 (unsigned)jcc_fall_stitched, source_page_delta);
 #endif
             if (translit_direct_jmp_ibtc_stub_entry != NULL &&
-                !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)) {
+                !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)) {
                 ibtc_site = translit_emit_direct_jmp_ibtc(a, next + (uint64_t)insn.imm);
                 direct_jmp_ibtc_sites++;
             } else {
@@ -5292,6 +5376,199 @@ static int translit_fall_fixture_fetch(void *opaque, uint64_t guest, void *desti
     return 0;
 }
 
+static uint64_t translit_riprel_native_call(void *entry, uint64_t rax, uint64_t input_flags,
+                                             uint64_t *flags) {
+    uint64_t captured;
+    __asm__ volatile("push %3\n\tpopfq\n\tcall *%2\n\tpushfq\n\tpop %1"
+                     : "+a"(rax), "=r"(captured)
+                     : "r"(entry), "r"(input_flags)
+                     : "cc", "memory");
+    *flags = captured;
+    return rax;
+}
+
+static int translit_test_condition_true(unsigned condition, uint64_t flags) {
+    int cf = (flags & 1) != 0, pf = (flags & 4) != 0, zf = (flags & 0x40) != 0;
+    int sf = (flags & 0x80) != 0, of = (flags & 0x800) != 0;
+    static const uint8_t invert[16] = {0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1};
+    int base = condition < 2 ? of : condition < 4 ? cf : condition < 6 ? zf : condition < 8 ? (cf || zf)
+             : condition < 10 ? sf : condition < 12 ? pf : condition < 14 ? (sf != of)
+             : (zf || sf != of);
+    return base ^ invert[condition & 15];
+}
+
+static int translit_riprel_integer_corpus_test(void) {
+    struct corpus_case { uint8_t bytes[12]; uint8_t length, immediate; uint64_t rax, target; };
+    static const struct corpus_case cases[] = {
+        {{0x8A,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x66,0x8B,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x8B,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x48,0x8B,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x89,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0xC6,0x05,0,0,0,0,0x5A},7,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x83,0x05,0,0,0,0,0x03},7,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0xF0,0x83,0x05,0,0,0,0,0x03},8,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0xFE,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x48,0x31,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x80,0x3D,0,0,0,0,0x44},7,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x88,0x25},6,0,UINT64_C(0x0000000000005A00),UINT64_C(0x8877665544332211)},
+        {{0x0F,0xB6,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x0F,0xC1,0x05},7,0,UINT64_C(0x0000000000000003),UINT64_C(0x8877665544332211)},
+        {{0x66,0x0F,0x44,0x05},8,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x48,0x0F,0x44,0x05},8,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x41,0x0F,0x44,0x05},8,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x44,0x0F,0x44,0x05},8,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+#define TL_CMOV_PAIR(c) \
+        {{0x0F,(uint8_t)(0x40+(c)),0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)}, \
+        {{0x0F,(uint8_t)(0x40+(c)),0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)}
+        TL_CMOV_PAIR(0), TL_CMOV_PAIR(1), TL_CMOV_PAIR(2), TL_CMOV_PAIR(3),
+        TL_CMOV_PAIR(4), TL_CMOV_PAIR(5), TL_CMOV_PAIR(6), TL_CMOV_PAIR(7),
+        TL_CMOV_PAIR(8), TL_CMOV_PAIR(9), TL_CMOV_PAIR(10), TL_CMOV_PAIR(11),
+        TL_CMOV_PAIR(12), TL_CMOV_PAIR(13), TL_CMOV_PAIR(14), TL_CMOV_PAIR(15),
+#undef TL_CMOV_PAIR
+    };
+    const size_t size = 8192, source_offset = 128, target_offset = 4093;
+    uint8_t *arena = mmap((void *)UINT64_C(0x700000000000), size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    uint8_t *guest = mmap((void *)UINT64_C(0x600000000000), size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    uint8_t *guard = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED || guard == MAP_FAILED) return 300;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen, saved_lo = g_nonpie_lo,
+             saved_hi = g_nonpie_hi, saved_bias = g_nonpie_bias;
+    g_cache = arena; g_rw2rx = 0; g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = size;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    int result = context == NULL ? 301 : 0;
+    for (unsigned index = 0; result == 0 && index < sizeof cases / sizeof cases[0]; ++index) {
+        struct corpus_case current = cases[index];
+        uint64_t initial_flags = UINT64_C(0x202);
+        if (index >= 14 && index < 18) initial_flags = UINT64_C(0x242);
+        if (index >= 18) {
+            unsigned condition = (index - 18) / 2, want = ((index - 18) & 1) == 0;
+            for (uint64_t bits = 0; bits < 32; ++bits) {
+                uint64_t flags = UINT64_C(0x202) | (bits & 1) | (bits & 2 ? 4 : 0) |
+                                 (bits & 4 ? 0x40 : 0) | (bits & 8 ? 0x80 : 0) |
+                                 (bits & 16 ? 0x800 : 0);
+                if ((unsigned)translit_test_condition_true(condition, flags) == want) {
+                    initial_flags = flags; break;
+                }
+            }
+        }
+        memset(guest, 0x0F, size);
+        memcpy(guest + source_offset, current.bytes, current.length);
+        int disp_offset = current.length - current.immediate - 4;
+        int32_t disp = (int32_t)(target_offset - source_offset - current.length);
+        memcpy(guest + source_offset + disp_offset, &disp, 4);
+        guest[source_offset + current.length] = 0xC3;
+        memcpy(guest + target_offset, &current.target, sizeof current.target);
+        if (mprotect(guest, size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) { result = 299; break; }
+        uint64_t native_flags = 0;
+        uint64_t native_rax = translit_riprel_native_call(guest + source_offset, current.rax,
+                                                           initial_flags, &native_flags);
+        uint64_t native_memory; memcpy(&native_memory, guest + target_offset, 8);
+        guest[source_offset + current.length] = 0x0F; guest[source_offset + current.length + 1] = 0x0B;
+        memcpy(guest + target_offset, &current.target, sizeof current.target);
+        uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+        struct insn decoded;
+        if (hl_x86_decode_context(context, source, &decoded) <= 0 || decoded.len != current.length) {
+            result = 302 + (int)index; break;
+        }
+        struct cpu interpreted = {0}; interpreted.rip = source; interpreted.r[HL_X64_RAX] = current.rax;
+        interpreted.r[10] = UINT64_C(0x1010101010101010);
+        interpreted.r[HL_X64_R11] = UINT64_C(0x1111111111111111);
+        interpreted.r[3] = (uint64_t)(uintptr_t)guard;
+        translit_flags_out(&interpreted, initial_flags);
+        (void)interp_step(&interpreted, &decoded, source, source + current.length);
+        uint64_t interpreter_memory; memcpy(&interpreter_memory, guest + target_offset, 8);
+        uint64_t interpreter_flags = translit_flags_in(&interpreted);
+        uint64_t checked_flags = UINT64_C(0xCD5);
+        if (native_rax != interpreted.r[HL_X64_RAX] || native_memory != interpreter_memory ||
+            (native_flags & checked_flags) != (interpreter_flags & checked_flags)) {
+            result = 315 + (int)index; break;
+        }
+
+        memcpy(guest + target_offset, &current.target, sizeof current.target);
+        memset(arena + 4096, 0, 4096); g_cp = arena + 4096 + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0x400 - index; map_clear();
+        struct interp_block *block = (struct interp_block *)(arena + 4096);
+        void *body = translit_build(context, block, source, NULL);
+        if (body == NULL || block->profile_insns != 1) { result = 330 + (int)index; break; }
+        block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+        struct cpu candidate = {0}; candidate.rip = source; candidate.r[HL_X64_RAX] = current.rax;
+        candidate.r[10] = UINT64_C(0x1010101010101010);
+        candidate.r[HL_X64_R11] = UINT64_C(0x1111111111111111);
+        candidate.r[3] = (uint64_t)(uintptr_t)guard;
+        translit_flags_out(&candidate, initial_flags);
+        hl_backend_tree_begin(1, effective_host_services()); run_block(context, &candidate, block);
+        uint64_t candidate_memory; memcpy(&candidate_memory, guest + target_offset, 8);
+        if (candidate.rip != source + current.length || candidate.r[HL_X64_RAX] != interpreted.r[HL_X64_RAX] ||
+            candidate.r[10] != interpreted.r[10] ||
+            candidate.r[HL_X64_R11] != interpreted.r[HL_X64_R11] ||
+            candidate_memory != interpreter_memory ||
+            (translit_flags_in(&candidate) & checked_flags) != (interpreter_flags & checked_flags))
+            result = 360 + (int)index;
+        for (int reg = 0; result == 0 && reg < 16; ++reg)
+            if (candidate.r[reg] != interpreted.r[reg]) result = 360 + (int)index;
+        if (result == 0 && index == 4) {
+            struct cpu retired = {0}; retired.rip = source;
+            retired.r[HL_X64_R11] = UINT64_C(0x1111111111111111);
+            ucontext_t interrupted = {0};
+            HL_HOST_UC_PC(&interrupted) = (greg_t)(uintptr_t)translit_test_natural_load_op_end;
+            int saved_selected = translit_selected; translit_selected = 1;
+            int captured = translit_signal_capture(&retired, &interrupted);
+            translit_selected = saved_selected;
+            if (!captured || retired.rip != source + current.length ||
+                retired.r[HL_X64_R11] != UINT64_C(0x1111111111111111))
+                result = 380;
+        }
+        jit_body_owner_drop_generation(g_cache_gen); map_clear();
+    }
+    // A CMOV dword whose first three bytes are readable and whose remainder crosses into PROT_NONE must
+    // fault at the inaccessible boundary, attribute the fault to the original guest RIP, and recover
+    // the borrowed register from canonical state rather than exposing the materialised address.
+    if (result == 0) {
+        memset(guest, 0x0F, size);
+        uint8_t fault_load[] = {0x0F, 0x44, 0x05, 0, 0, 0, 0, 0x0F, 0x0B};
+        int32_t disp = (int32_t)(target_offset - source_offset - 7);
+        memcpy(fault_load + 3, &disp, 4); memcpy(guest + source_offset, fault_load, sizeof fault_load);
+        memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0x500; map_clear();
+        uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = translit_build(context, block, source, NULL);
+        block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+        struct cpu faulted = {0}; faulted.rip = source;
+        faulted.r[HL_X64_R11] = UINT64_C(0x1122334455667788);
+        if (body == NULL || block->profile_insns != 1) result = 390;
+        else {
+            ucontext_t native = {0};
+            HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_R11] =
+                (greg_t)(uintptr_t)(guest + target_offset);
+            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)translit_test_natural_load_address_end;
+            int saved_selected = translit_selected; translit_selected = 1;
+            int delivered = translit_test_deliver_guest_fault(
+                &faulted, &native, (uint64_t)(uintptr_t)(guest + 4096));
+            translit_selected = saved_selected;
+            if (!delivered) result = 391;
+            else if (faulted.rip != source) result = 392;
+            else if (faulted.r[HL_X64_R11] != UINT64_C(0x1122334455667788)) result = 393;
+            else if (faulted.sync_signal != SIGSEGV) result = 394;
+            else if (faulted.sync_address != (uint64_t)(uintptr_t)(guest + 4096)) result = 395;
+        }
+        jit_body_owner_drop_generation(g_cache_gen); map_clear();
+    }
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    translit_fall_fixture_bytes = NULL; g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
+    munmap(guard, 4096); munmap(guest, size); munmap(arena, size);
+    return result;
+}
+
 static int translit_riprel_readonly_fixture_test(unsigned scenario) {
     const size_t arena_size = 8192;
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -5461,7 +5738,8 @@ static int translit_riprel_readonly_rejection_test(unsigned scenario) {
     struct interp_block *block = (struct interp_block *)arena;
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
     void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
-    int result = body == NULL || block->profile_insns == 0 ? 0 : 248;
+    int admitted = body != NULL && block->profile_insns == 1;
+    int result = scenario <= 164 ? (admitted ? 248 : 0) : (admitted ? 0 : 248);
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
     translit_fall_fixture_bytes = NULL;
     if (context != NULL) hl_x86_hot_context_destroy(context);
@@ -5831,7 +6109,7 @@ static int translit_riprel_load_bridge_gate_test(void) {
     g_nonpie_bias = saved_nonpie_bias;
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
-    return execution_exact && shared_alias_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
+    return execution_exact && shared_alias_exact && counts[0] == 1 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
                    counts[4] == 0 && counts[5] == 0 && counts[6] == 0 && counts[7] == 0
                ? 0
                : (int)((execution_error << 28) | (counts[0] << 24) | (counts[1] << 16) |
@@ -6393,9 +6671,9 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     uint32_t source_owner_count =
         source_owners == NULL ? 0 : atomic_load_explicit(&source_owners->count, memory_order_acquire);
     if (source_block == NULL || source_block->host_entry_off == 0 || source_block->host_len >= TL_MAX_BYTES ||
-        source_owner_count != (scenario == 110 ? 7 : 9) ||
+        source_owner_count != 9 ||
         __atomic_load_n(&translit_direct_jmp_ibtc_emitted, __ATOMIC_RELAXED) !=
-            emitted_before + (scenario == 110 ? 0 : 1))
+            emitted_before + 1)
         goto done_direct_ibtc;
     if (scenario == 101 && !translit_jcc_ibtc_signal_stage_test(1)) {
         result = 167;
@@ -6415,16 +6693,6 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     cpu.v[0] = UINT64_C(0x8877665544332211);
     cpu.ibtc_base = (uint64_t)g_ibtc;
     run_block(context, &cpu, source_block);
-    if (scenario == 110) {
-        result = cpu.rip == target && cpu.reason == R_BRANCH && cpu.jcc_ibtc_miss == 0 &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_miss, __ATOMIC_RELAXED) == miss_before &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_fill_count, __ATOMIC_RELAXED) == fill_before
-                     ? 0
-                     : 196;
-        goto done_direct_ibtc;
-    }
     if (scenario == 109) {
         if (cpu.rip != target) result = 169;
         else if (cpu.reason != R_BRANCH) result = 170;

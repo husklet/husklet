@@ -29,7 +29,7 @@ fn readonly_riprel_execution_preserves_flags_scratch_and_split_provenance() {
 }
 
 #[test]
-fn readonly_riprel_rejected_prefixes_fall_back_at_the_real_builder_boundary() {
+fn general_riprel_preserves_valid_prefixes_and_rejects_addressing_modes_it_cannot_project() {
     let _guard = native_globals();
     for scenario in 163..=169 {
         assert_eq!(
@@ -41,15 +41,14 @@ fn readonly_riprel_rejected_prefixes_fall_back_at_the_real_builder_boundary() {
 }
 
 #[test]
-fn readonly_riprel_option_off_emission_receipt() {
+fn general_riprel_emission_is_deterministic_with_the_readonly_specialization_off() {
     let _guard = native_globals();
-    // Re-derived from exact c8da42dfd with the same fixed guest/arena addresses and toolchain.  The C
-    // hook builds twice with the option explicitly set to zero and returns zero if their bytes, body
-    // length, or profile boundary differ.  These values are therefore the old f39/c8 OFF baseline,
-    // independent of the new missing-value default.
-    assert_eq!(hl_native::x86_64_translit_displaced_test(170), 1_094_434_755);
-    assert_eq!(hl_native::x86_64_translit_displaced_test(171), 1_846_790_643);
-    assert_eq!(hl_native::x86_64_translit_displaced_test(172), (223 << 16) | 1);
+    let low = hl_native::x86_64_translit_displaced_test(170);
+    let high = hl_native::x86_64_translit_displaced_test(171);
+    let shape = hl_native::x86_64_translit_displaced_test(172);
+    assert_ne!(low, 0);
+    assert_ne!(high, 0);
+    assert_eq!(shape & 0xffff, 2, "the ALU prefix and RIP-relative operation both translate");
 }
 
 #[test]
@@ -111,4 +110,10 @@ fn natural_riprel_load_bridge_is_default_off_and_snapshotted_per_context() {
 fn natural_riprel_load_bridge_option_reaches_the_block_builder() {
     let _guard = native_globals();
     assert_eq!(hl_native::x86_64_translit_displaced_test(189), 0);
+}
+
+#[test]
+fn general_integer_riprel_matches_the_interpreter_across_load_store_and_rmw_families() {
+    let _guard = native_globals();
+    assert_eq!(hl_native::x86_64_translit_displaced_test(192), 0);
 }

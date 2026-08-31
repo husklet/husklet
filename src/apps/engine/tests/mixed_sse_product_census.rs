@@ -107,6 +107,50 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
     Ok(fields)
 }
 
+fn direct_jmp_census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
+    const REQUIRED: [&str; 8] = [
+        "direct_jmp_ibtc_enabled",
+        "direct_jmp_ibtc_emitted",
+        "direct_jmp_ibtc_hits",
+        "direct_jmp_ibtc_misses",
+        "direct_jmp_ibtc_irq",
+        "direct_jmp_ibtc_fills",
+        "direct_jmp_ibtc_suppressed",
+        "direct_jmp_ibtc_invalid_refusals",
+    ];
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(PREFIX))
+        .collect::<Vec<_>>();
+    let [record] = records.as_slice() else {
+        return Err(format!(
+            "production backend-shape census appeared {} times",
+            records.len()
+        ));
+    };
+    let mut fields = BTreeMap::new();
+    for token in record.split_whitespace() {
+        let (name, value) = token
+            .split_once('=')
+            .ok_or_else(|| format!("malformed backend-shape token {token:?}"))?;
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| format!("backend-shape field {name:?} is not decimal"))?;
+        if fields.insert(name, value).is_some() {
+            return Err(format!("backend-shape census duplicates field {name:?}"));
+        }
+    }
+    if fields.get("version").copied().unwrap_or(0) < 4 || fields.get("available") != Some(&1) {
+        return Err("production backend-shape census is unavailable or too old".into());
+    }
+    for name in REQUIRED {
+        if !fields.contains_key(name) {
+            return Err(format!("production backend-shape census omits field {name:?}"));
+        }
+    }
+    Ok(fields)
+}
+
 fn put16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
@@ -341,9 +385,9 @@ fn real_worker_cli_cross_page_direct_jmp_ibtc_on_and_off_reach_product_v4() {
     let default_stderr = String::from_utf8(default.stderr).unwrap();
     let on_stderr = String::from_utf8(on.stderr).unwrap();
     let off_stderr = String::from_utf8(off.stderr).unwrap();
-    let on = census(&on_stderr).unwrap_or_else(|error| panic!("{error}:\n{on_stderr}"));
-    let off = census(&off_stderr).unwrap_or_else(|error| panic!("{error}:\n{off_stderr}"));
-    let default = census(&default_stderr).unwrap_or_else(|error| panic!("{error}:\n{default_stderr}"));
+    let on = direct_jmp_census(&on_stderr).unwrap_or_else(|error| panic!("{error}:\n{on_stderr}"));
+    let off = direct_jmp_census(&off_stderr).unwrap_or_else(|error| panic!("{error}:\n{off_stderr}"));
+    let default = direct_jmp_census(&default_stderr).unwrap_or_else(|error| panic!("{error}:\n{default_stderr}"));
     assert_eq!(on["direct_jmp_ibtc_enabled"], 1, "{on:?}");
     assert!(on["direct_jmp_ibtc_emitted"] > 0, "{on:?}");
     assert_eq!(on["direct_jmp_ibtc_hits"], 1, "{on:?}");
@@ -364,7 +408,7 @@ fn real_worker_cli_cross_page_direct_jmp_ibtc_on_and_off_reach_product_v4() {
         "direct_jmp_ibtc_fills",
         "direct_jmp_ibtc_suppressed",
     ] {
-        assert_eq!(default[field], 0, "{field}: {default:?}");
+        assert_eq!(default[field], on[field], "{field}: default={default:?} on={on:?}");
     }
 }
 
