@@ -847,6 +847,33 @@ fn supervised_terminal_has_a_controlling_session_before_guest_exec() {
 }
 
 #[test]
+fn supervised_terminal_refuses_an_image_supplied_non_tty_character_device() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("dev")).unwrap();
+    std::fs::create_dir_all(root.join("proc")).unwrap();
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    assert!(std::process::Command::new("mknod")
+        .arg(root.join("dev/tty"))
+        .args(["c", "1", "3"])
+        .status()
+        .unwrap()
+        .success());
+    let terminal = Arc::new(PaneTerminal::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"pty-session".to_vec());
+    let streams = StandardStreams::default().with_terminal(Terminal::new(terminal, 37, 111).unwrap());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    assert!(engine.wait().is_err());
+    engine.destroy().unwrap();
+}
+
+#[test]
 fn supervised_projector_refuses_hostname_hosts_token_injection() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

@@ -331,7 +331,12 @@ static int hl_native_supervised_terminal_mount(const char *rootfs) {
         if (root >= 0) close(root);
         return -1;
     }
-    if (S_ISCHR(target_status.st_mode)) { close(target); close(root); return 0; }
+    if (S_ISCHR(target_status.st_mode)) {
+        int canonical = target_status.st_rdev == makedev(5, 0);
+        close(target); close(root);
+        if (!canonical) errno = EPERM;
+        return canonical ? 0 : -1;
+    }
     char target_path[PATH_MAX];
     if (snprintf(target_path, sizeof target_path, "%s/dev/tty", rootfs) >= (int)sizeof target_path) {
         close(target); close(root); return -1;
@@ -357,6 +362,7 @@ static int hl_native_supervised_terminal_mount(const char *rootfs) {
         errno = EXDEV;
         exact = 0;
     }
+    if (exact && (mounted_status.st_mode & 07777) != 0600) { errno = EPERM; exact = 0; }
     if (exact && syscall(SYS_statx, mounted, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &mounted_key) != 0) exact = 0;
     if (exact && mounted_key.stx_ino == target_key.stx_ino) { errno = ESTALE; exact = 0; }
     if (mounted >= 0) close(mounted);
