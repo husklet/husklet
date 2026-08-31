@@ -384,13 +384,7 @@ static int hl_native_supervised_loopback_up(void) {
  * Keep its own hostname local, as the translated network does, without
  * modifying the image's identity file: bind a mode/owner-preserving copy over
  * the existing /etc/hosts only inside this mount namespace. */
-static int hl_native_supervised_project_hostname(const char *root, const char *hostname, int read_only) {
-    char inherited[HOST_NAME_MAX + 1];
-    if (hostname == NULL || hostname[0] == 0) {
-        if (gethostname(inherited, HOST_NAME_MAX) != 0) return -1;
-        inherited[HOST_NAME_MAX] = 0;
-        hostname = inherited;
-    }
+static int hl_native_supervised_hostname_valid(const char *hostname) {
     size_t hostname_length = strlen(hostname);
     int valid_hostname = hostname_length > 0 && hostname_length <= HOST_NAME_MAX;
     for (size_t index = 0; valid_hostname && index < hostname_length; ++index) {
@@ -403,7 +397,17 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
         if (byte == '.' && (index == 0 || index + 1 == hostname_length || hostname[index - 1] == '.' ||
                             hostname[index - 1] == '-')) valid_hostname = 0;
     }
-    if (!valid_hostname) {
+    return valid_hostname;
+}
+
+static int hl_native_supervised_project_hostname(const char *root, const char *hostname, int read_only) {
+    char inherited[HOST_NAME_MAX + 1];
+    if (hostname == NULL || hostname[0] == 0) {
+        if (gethostname(inherited, HOST_NAME_MAX) != 0) return -1;
+        inherited[HOST_NAME_MAX] = 0;
+        hostname = inherited;
+    }
+    if (!hl_native_supervised_hostname_valid(hostname)) {
         errno = EINVAL;
         return -1;
     }
@@ -466,6 +470,36 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
     if (!exact) { errno = failure; return -1; }
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
+HL_API int hl_native_supervised_hostname_projection_test(uint32_t scenario) {
+    static const char *const hostile[] = {"line\nbreak", "white space", "under_score", "control\001byte"};
+    if (scenario >= sizeof hostile / sizeof hostile[0]) return 90;
+    char root[] = "/var/tmp/husklet-hostname-hook.XXXXXX";
+    if (mkdtemp(root) == NULL) return 91;
+    char etc[PATH_MAX], hosts[PATH_MAX];
+    int status = 0;
+    if (snprintf(etc, sizeof etc, "%s/etc", root) >= (int)sizeof etc || mkdir(etc, 0700) != 0 ||
+        snprintf(hosts, sizeof hosts, "%s/hosts", etc) >= (int)sizeof hosts) status = 92;
+    int descriptor = status == 0 ? open(hosts, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0640) : -1;
+    static const char original[] = "127.0.0.1\toriginal\n";
+    if (status == 0 && (descriptor < 0 || write(descriptor, original, sizeof original - 1) != sizeof original - 1 ||
+                        close(descriptor) != 0)) status = 93;
+    if (status == 0 && hl_native_supervised_hostname_valid(hostile[scenario])) status = 96;
+    errno = 0;
+    if (status == 0 && (hl_native_supervised_project_hostname(root, hostile[scenario], 0) != -1 || errno != EINVAL))
+        status = 94;
+    char receipt[sizeof original] = {0};
+    descriptor = status == 0 ? open(hosts, O_RDONLY | O_CLOEXEC) : -1;
+    if (status == 0 && (descriptor < 0 || read(descriptor, receipt, sizeof receipt) != sizeof original - 1 ||
+                        memcmp(receipt, original, sizeof original) != 0)) status = 95;
+    if (descriptor >= 0) close(descriptor);
+    unlink(hosts);
+    rmdir(etc);
+    rmdir(root);
+    return status;
+}
+#endif
 
 static int hl_native_supervised_limit_resource(const char *name) {
     static const struct { const char *name; int resource; } resources[] = {

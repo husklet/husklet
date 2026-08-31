@@ -16,6 +16,12 @@ pub(crate) fn x86_64_translit_displaced_test(scenario: u32) -> i32 {
     unsafe { (test_api().x86_64_translit_displaced)(scenario) }
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn native_supervised_hostname_projection_test(scenario: u32) -> i32 {
+    // SAFETY: the hook owns and removes its temporary root before returning.
+    unsafe { (test_api().native_supervised_hostname_projection)(scenario) }
+}
+
 /// Defines one call into a feature-gated native test hook.
 ///
 /// These share a safety argument distinct from `engine_entry!`: `test_api()` resolves the hook
