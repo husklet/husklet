@@ -1594,6 +1594,25 @@ enum {
 };
 
 enum {
+    HL_BACKEND_FALL_CAP,
+    HL_BACKEND_FALL_DECODE,
+    HL_BACKEND_FALL_NORMAL_TO_SSE2,
+    HL_BACKEND_FALL_SSE2_TO_NORMAL,
+    HL_BACKEND_FALL_NORMAL_TO_FS,
+    HL_BACKEND_FALL_FS_TO_NORMAL,
+    HL_BACKEND_FALL_SSE2_TO_FS,
+    HL_BACKEND_FALL_FS_TO_SSE2,
+    HL_BACKEND_FALL_TL_NO,
+    HL_BACKEND_FALL_DISPLACED_UNSAFE,
+    HL_BACKEND_FALL_FETCH,
+    HL_BACKEND_FALL_RIPREL_LOWER,
+    HL_BACKEND_FALL_FS_TRANSACTION,
+    HL_BACKEND_FALL_SSE_RIPREL_LOWER,
+    HL_BACKEND_FALL_OTHER,
+    HL_BACKEND_FALL_COUNT,
+};
+
+enum {
     HL_BACKEND_SHAPE_S_FALLTHROUGH,
     HL_BACKEND_SHAPE_S_COND_TAKEN,
     HL_BACKEND_SHAPE_S_COND_NOT_TAKEN,
@@ -1653,6 +1672,7 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    _Atomic uint64_t translated_fall_stop[HL_BACKEND_FALL_COUNT];
     _Atomic uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
     _Atomic uint64_t call_sim_eligible;
     _Atomic uint64_t call_sim_hit;
@@ -2093,6 +2113,40 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CROSSING("t_irq", census->translated_exit, HL_BACKEND_SHAPE_T_IRQ);
     HL_APPEND_CROSSING("t_fault", census->translated_exit, HL_BACKEND_SHAPE_T_FAULT);
     HL_APPEND_CROSSING("t_other", census->translated_exit, HL_BACKEND_SHAPE_T_OTHER);
+    uint64_t fall_total = 0;
+    for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
+        fall_total += atomic_load_explicit(&census->translated_fall_stop[reason], memory_order_relaxed);
+    added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                     " fall_total=%llu fall_mismatch=%lld",
+                     (unsigned long long)fall_total,
+                     fall_total <= atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+                                                        memory_order_relaxed)
+                         ? (long long)(atomic_load_explicit(
+                                           &census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+                                           memory_order_relaxed) -
+                                       fall_total)
+                         : -(long long)(fall_total - atomic_load_explicit(
+                                                        &census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+                                                        memory_order_relaxed)));
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    formatted += added;
+#define HL_APPEND_FALL(name, reason) HL_APPEND_CROSSING(name, census->translated_fall_stop, reason)
+    HL_APPEND_FALL("fall_cap", HL_BACKEND_FALL_CAP);
+    HL_APPEND_FALL("fall_decode", HL_BACKEND_FALL_DECODE);
+    HL_APPEND_FALL("fall_normal_to_sse2", HL_BACKEND_FALL_NORMAL_TO_SSE2);
+    HL_APPEND_FALL("fall_sse2_to_normal", HL_BACKEND_FALL_SSE2_TO_NORMAL);
+    HL_APPEND_FALL("fall_normal_to_fs", HL_BACKEND_FALL_NORMAL_TO_FS);
+    HL_APPEND_FALL("fall_fs_to_normal", HL_BACKEND_FALL_FS_TO_NORMAL);
+    HL_APPEND_FALL("fall_sse2_to_fs", HL_BACKEND_FALL_SSE2_TO_FS);
+    HL_APPEND_FALL("fall_fs_to_sse2", HL_BACKEND_FALL_FS_TO_SSE2);
+    HL_APPEND_FALL("fall_tl_no", HL_BACKEND_FALL_TL_NO);
+    HL_APPEND_FALL("fall_displaced", HL_BACKEND_FALL_DISPLACED_UNSAFE);
+    HL_APPEND_FALL("fall_fetch", HL_BACKEND_FALL_FETCH);
+    HL_APPEND_FALL("fall_riprel", HL_BACKEND_FALL_RIPREL_LOWER);
+    HL_APPEND_FALL("fall_fs_transaction", HL_BACKEND_FALL_FS_TRANSACTION);
+    HL_APPEND_FALL("fall_sse_riprel", HL_BACKEND_FALL_SSE_RIPREL_LOWER);
+    HL_APPEND_FALL("fall_other", HL_BACKEND_FALL_OTHER);
+#undef HL_APPEND_FALL
     HL_APPEND_CROSSING("i_fallthrough", census->interpreter_stop, HL_BACKEND_SHAPE_S_FALLTHROUGH);
     HL_APPEND_CROSSING("i_jcc_taken", census->interpreter_stop, HL_BACKEND_SHAPE_S_COND_TAKEN);
     HL_APPEND_CROSSING("i_jcc_fall", census->interpreter_stop, HL_BACKEND_SHAPE_S_COND_NOT_TAKEN);
@@ -2208,7 +2262,11 @@ static inline void hl_backend_tree_call_sim_count(enum hl_backend_call_sim_count
     }
     if (counter != NULL) atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
-#define hl_backend_tree_translated_fall_stop(reason) ((void)0)
+static inline void hl_backend_tree_translated_fall_stop(unsigned reason) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL && reason < HL_BACKEND_FALL_COUNT)
+        atomic_fetch_add_explicit(&census->translated_fall_stop[reason], 1, memory_order_relaxed);
+}
 static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census == NULL) return;

@@ -2247,31 +2247,43 @@ static void translit_jcc_ibtc_finalize_cpu(struct cpu *cpu) {
 }
 
 enum {
-    TL_MIXED_PROFILE_MAGIC = 0x4d530000u, // "MS", version 0
-    TL_MIXED_PROFILE_MAGIC_MASK = 0xffff0000u,
+    TL_MIXED_PROFILE_MAGIC = 0x4d500000u, // "MP", version 1
+    TL_MIXED_PROFILE_MAGIC_MASK = 0xfff00000u,
     TL_MIXED_PROFILE_TRANSITIONS_MASK = 0xffu,
     TL_MIXED_PROFILE_DISABLED_BOUNDARY = 1u << 8,
     TL_MIXED_PROFILE_KIND_SHIFT = 9,
     TL_MIXED_PROFILE_KIND_MASK = 0xfu,
+    TL_MIXED_PROFILE_FALL_SHIFT = 13,
+    TL_MIXED_PROFILE_FALL_MASK = 0xfu,
 };
 
 _Static_assert(TL_MAX_INSNS <= TL_MIXED_PROFILE_TRANSITIONS_MASK,
                "profile marker must represent every mixed transition in one block");
+_Static_assert(HL_BACKEND_FALL_COUNT <= TL_MIXED_PROFILE_FALL_MASK,
+               "profile marker must represent every fall reason plus its zero sentinel");
 _Static_assert(TL_MAX_OWNER_RANGES == JIT_BODY_OWNER_BLOCK_HEADROOM,
                "dispatcher owner rotation headroom must cover one worst-case block");
 
 // Production diagnostics need execution proof without growing the stable descriptor. Diagnostic builds
 // emit this flag-neutral GS store into existing CPU alignment padding; every terminal pays the same store,
 // while the value says whether this completed body crossed a mixed boundary or stopped at typed OFF.
-static void translit_mixed_profile_terminal(hl_x64_asm *a, uint64_t transitions, int disabled_boundary,
-                                             unsigned kind) {
+static void translit_mixed_profile_terminal_with_fall(hl_x64_asm *a, uint64_t transitions, int disabled_boundary,
+                                                       unsigned kind, unsigned fall_reason) {
     if (g_prof) {
         uint32_t marker = TL_MIXED_PROFILE_MAGIC |
                           ((uint32_t)transitions & TL_MIXED_PROFILE_TRANSITIONS_MASK) |
                           (disabled_boundary ? TL_MIXED_PROFILE_DISABLED_BOUNDARY : 0u) |
-                          ((kind & TL_MIXED_PROFILE_KIND_MASK) << TL_MIXED_PROFILE_KIND_SHIFT);
+                          ((kind & TL_MIXED_PROFILE_KIND_MASK) << TL_MIXED_PROFILE_KIND_SHIFT) |
+                          (((fall_reason + 1) & TL_MIXED_PROFILE_FALL_MASK) << TL_MIXED_PROFILE_FALL_SHIFT);
         hl_x64_store_gs_imm32(a, (int32_t)marker, OFF_MIXED_PROFILE);
     }
+}
+
+static void translit_mixed_profile_terminal(hl_x64_asm *a, uint64_t transitions, int disabled_boundary,
+                                             unsigned kind) {
+    // COUNT is one past the last reason, so encoded +1 wraps to the zero “not a fallthrough” sentinel.
+    translit_mixed_profile_terminal_with_fall(a, transitions, disabled_boundary, kind,
+                                               HL_BACKEND_FALL_COUNT);
 }
 
 static void translit_mixed_profile_completed(uint32_t marker) {
@@ -2281,6 +2293,9 @@ static void translit_mixed_profile_completed(uint32_t marker) {
 #if !defined(HL_NATIVE_TEST_HOOKS)
     unsigned kind = (marker >> TL_MIXED_PROFILE_KIND_SHIFT) & TL_MIXED_PROFILE_KIND_MASK;
     hl_backend_tree_translated_exit_count(kind);
+    unsigned encoded_fall = (marker >> TL_MIXED_PROFILE_FALL_SHIFT) & TL_MIXED_PROFILE_FALL_MASK;
+    if (kind == HL_BACKEND_SHAPE_T_FALLTHROUGH && encoded_fall != 0)
+        hl_backend_tree_translated_fall_stop(encoded_fall - 1);
 #endif
     hl_backend_tree_mixed_sse_completed(transitions, disabled_boundary);
     if (disabled_boundary) {
@@ -4219,9 +4234,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int previous_kind = TL_NO;
     uint64_t mixed_sse_transition_count = 0;
     int mixed_sse_boundary_stopped = 0;
+    unsigned fall_stop = HL_BACKEND_FALL_OTHER;
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t sse2_instruction_count = 0;
-    unsigned fall_stop = HL_BACKEND_FALL_OTHER;
     uint64_t sse2_signature = 0;
     uint64_t sse2_store_count = 0;
     uint64_t sse2_store_movups = 0, sse2_store_movaps = 0, sse2_store_movdqu = 0;
@@ -4255,22 +4270,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
         if (hl_x86_decode_context(context, pc, &insn) <= 0) {
-#if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_DECODE;
-#endif
             break;
         }
         int kind = translit_classify(&insn);
         if (kind == TL_NO) {
-#if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_TL_NO;
-#endif
             break;
         }
         if (kind == TL_JMP_MEM && direct_data_authority) {
-#if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_TL_NO;
-#endif
             break;
         }
         int fs_load_bridge = !fs_run && kind == TL_FS_MEM && context->fs_load_bridge_enabled &&
@@ -4278,13 +4287,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                              translit_fs_load_bridge_candidate(&insn);
         if (fs_load_bridged && kind == TL_SSE2) break;
         if (((fs_run && kind != TL_FS_MEM) || (!fs_run && kind == TL_FS_MEM)) && !fs_load_bridge) {
-#if defined(HL_NATIVE_TEST_HOOKS)
             if (fs_run)
                 fall_stop = kind == TL_SSE2 ? HL_BACKEND_FALL_FS_TO_SSE2 : HL_BACKEND_FALL_FS_TO_NORMAL;
             else
                 fall_stop = previous_kind == TL_SSE2 ? HL_BACKEND_FALL_SSE2_TO_FS
                                                       : HL_BACKEND_FALL_NORMAL_TO_FS;
-#endif
             break;
         }
         int previous_sse2 = previous_kind == TL_SSE2;
@@ -4292,10 +4299,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (previous_kind != TL_NO && previous_sse2 != current_sse2) {
             TL_ATTEMPT_ADD(translit_mixed_sse_encounters, mixed_encounters);
             if (!mixed_sse_enabled) {
-#if defined(HL_NATIVE_TEST_HOOKS)
                 fall_stop = current_sse2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2
                                          : HL_BACKEND_FALL_SSE2_TO_NORMAL;
-#endif
                 mixed_sse_boundary_stopped = 1;
                 break;
             }
@@ -4305,15 +4310,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             TL_ATTEMPT_ADD(translit_declined, declined);
             TL_ATTEMPT_ADD(translit_displaced_operand_declined, displaced_operand_declined);
             translit_count_displaced_refusal(&insn);
-#if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;
-#endif
             break;
         }
         if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) {
-#if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_FETCH;
-#endif
             break;
         }
 
@@ -4355,9 +4356,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         TL_ATTEMPT_ADD(translit_displaced_riprel_unreachable, displaced_riprel_unreachable);
                     if (g_nonpie_lo) translit_count_displaced_refusal(&insn);
                     a->cursor = instruction_start; // un-emit: the block ends before this instruction
-#if defined(HL_NATIVE_TEST_HOOKS)
                     fall_stop = HL_BACKEND_FALL_RIPREL_LOWER;
-#endif
                     break;
                 }
                 if (readonly_lowered) {
@@ -4488,9 +4487,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             pc = next;
             count++;
             previous_kind = kind;
-#if defined(HL_NATIVE_TEST_HOOKS)
             fall_stop = HL_BACKEND_FALL_FS_TRANSACTION;
-#endif
             break; // one transaction per descriptor keeps the persistent owner map exact and bounded
         }
 
@@ -4520,9 +4517,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (a->overflow) break;
             if (insn.rip_rel && !translit_fix_riprel(&builder, &insn, next, guest_instruction)) {
                 a->cursor = instruction_start;
-#if defined(HL_NATIVE_TEST_HOOKS)
                 fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;
-#endif
                 break;
             }
             if (!sse2_store && insn.op != 0x7E) translit_xmm_cpu(a, destination, 0);
@@ -4928,12 +4923,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         return NULL;
     }
     if (!terminated) {
-#if defined(HL_NATIVE_TEST_HOOKS)
         if (count == TL_MAX_INSNS) fall_stop = HL_BACKEND_FALL_CAP;
-#endif
         uint8_t *tail = a->cursor;
-        translit_mixed_profile_terminal(a, mixed_sse_transition_count, mixed_sse_boundary_stopped,
-                                         HL_BACKEND_SHAPE_T_FALLTHROUGH);
+        translit_mixed_profile_terminal_with_fall(a, mixed_sse_transition_count, mixed_sse_boundary_stopped,
+                                                   HL_BACKEND_SHAPE_T_FALLTHROUGH, fall_stop);
 #if defined(HL_NATIVE_TEST_HOOKS)
         would_link_marker = translit_shape_fall_exit(a, (unsigned)direct_jmp_stitched,
                                                      (unsigned)jcc_fall_stitched,

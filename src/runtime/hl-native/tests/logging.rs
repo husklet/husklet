@@ -85,6 +85,23 @@ fn product_dispatch_return_census_is_complete_and_bound_to_map_misses() {
         "t_irq",
         "t_fault",
         "t_other",
+        "fall_total",
+        "fall_mismatch",
+        "fall_cap",
+        "fall_decode",
+        "fall_normal_to_sse2",
+        "fall_sse2_to_normal",
+        "fall_normal_to_fs",
+        "fall_fs_to_normal",
+        "fall_sse2_to_fs",
+        "fall_fs_to_sse2",
+        "fall_tl_no",
+        "fall_displaced",
+        "fall_fetch",
+        "fall_riprel",
+        "fall_fs_transaction",
+        "fall_sse_riprel",
+        "fall_other",
     ] {
         assert!(backend.contains(field), "product dispatcher census omits {field}");
     }
