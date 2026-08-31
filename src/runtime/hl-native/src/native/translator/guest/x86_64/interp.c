@@ -1922,7 +1922,8 @@ static uint64_t pcache_engine_id(void) {
 static hl_identity_digest pcache_translator_identity(void) {
     static const char tag[] = __DATE__ " " __TIME__;
     uint64_t modes = x64_pcache_codegen_modes();
-    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, modes);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, modes,
+                                     hl_c_backend_build_fingerprint());
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,

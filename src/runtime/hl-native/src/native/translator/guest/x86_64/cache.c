@@ -166,7 +166,8 @@ static hl_identity_digest pcache_translator_identity(void) {
     static const char tag[] = __DATE__ " " __TIME__;
     uint64_t modes = (uint64_t)(g_fastsys != 0) | ((uint64_t)(g_fastclk != 0) << 1) |
                      ((uint64_t)(g_siginline != 0) << 2) | ((uint64_t)(slimsys_on() != 0) << 3);
-    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 2, HL_HOST_CPU_ISA, modes);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 2, HL_HOST_CPU_ISA, modes,
+                                     hl_c_backend_build_fingerprint());
 }
 
 // hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs a DIFFERENT
