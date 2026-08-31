@@ -239,6 +239,8 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
     _Atomic uint64_t translated_fall_stop[HL_BACKEND_FALL_COUNT];
+    _Atomic uint64_t fallthrough_ibtc_fs_transaction_hits;
+    _Atomic uint64_t fallthrough_ibtc_normal_to_fs_hits;
     _Atomic uint64_t translated_stitch_jmp;
     _Atomic uint64_t translated_stitch_cond_fall;
     _Atomic uint64_t interpreter_entry[HL_BACKEND_SHAPE_I_COUNT];
@@ -667,6 +669,7 @@ static inline void hl_backend_tree_translation(void) {
 static inline void hl_backend_tree_map_hit(void) {
     if (g_backend_tree_self != NULL) atomic_fetch_add_explicit(&g_backend_tree_self->map_hits, 1, memory_order_relaxed);
 }
+static inline void hl_backend_tree_map_miss(void) {}
 
 static inline void hl_backend_tree_stw_retry(void) {
     if (g_backend_tree_self != NULL)
@@ -1593,6 +1596,25 @@ enum {
 };
 
 enum {
+    HL_BACKEND_FALL_CAP,
+    HL_BACKEND_FALL_DECODE,
+    HL_BACKEND_FALL_NORMAL_TO_SSE2,
+    HL_BACKEND_FALL_SSE2_TO_NORMAL,
+    HL_BACKEND_FALL_NORMAL_TO_FS,
+    HL_BACKEND_FALL_FS_TO_NORMAL,
+    HL_BACKEND_FALL_SSE2_TO_FS,
+    HL_BACKEND_FALL_FS_TO_SSE2,
+    HL_BACKEND_FALL_TL_NO,
+    HL_BACKEND_FALL_DISPLACED_UNSAFE,
+    HL_BACKEND_FALL_FETCH,
+    HL_BACKEND_FALL_RIPREL_LOWER,
+    HL_BACKEND_FALL_FS_TRANSACTION,
+    HL_BACKEND_FALL_SSE_RIPREL_LOWER,
+    HL_BACKEND_FALL_OTHER,
+    HL_BACKEND_FALL_COUNT,
+};
+
+enum {
     HL_BACKEND_SHAPE_S_FALLTHROUGH,
     HL_BACKEND_SHAPE_S_COND_TAKEN,
     HL_BACKEND_SHAPE_S_COND_NOT_TAKEN,
@@ -1644,6 +1666,7 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t interpreted_entries;
     _Atomic uint64_t translated_steps;
     _Atomic uint64_t interpreted_steps;
+    _Atomic uint64_t map_misses;
     _Atomic uint64_t executed_form_total;
     _Atomic uint64_t executed_form_unique;
     _Atomic uint64_t executed_form_overflow;
@@ -1651,6 +1674,9 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
+    _Atomic uint64_t translated_fall_stop[HL_BACKEND_FALL_COUNT];
+    _Atomic uint64_t fallthrough_ibtc_fs_transaction_hits;
+    _Atomic uint64_t fallthrough_ibtc_normal_to_fs_hits;
     _Atomic uint64_t interpreter_stop[HL_BACKEND_SHAPE_S_COUNT];
     _Atomic uint64_t call_sim_eligible;
     _Atomic uint64_t call_sim_hit;
@@ -1897,7 +1923,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    char record[4096];
+    char record[8192];
     int formatted = snprintf(record, sizeof record,
                              "[diag] backend-shape version=6 available=%d crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
@@ -2054,6 +2080,32 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
         formatted += added;                                                                                           \
     } while (0)
+    uint64_t translated_return_total = 0;
+    for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
+        translated_return_total += atomic_load_explicit(&census->translated_exit[kind], memory_order_relaxed);
+    uint64_t interpreted_return_total = 0;
+    for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_S_COUNT; ++kind)
+        interpreted_return_total += atomic_load_explicit(&census->interpreter_stop[kind], memory_order_relaxed);
+    uint64_t translated_entries = atomic_load_explicit(&census->translated_entries, memory_order_relaxed);
+    uint64_t interpreted_entries = atomic_load_explicit(&census->interpreted_entries, memory_order_relaxed);
+    int added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                         " dispatch_translation_miss=%llu dispatch_interpreted=%llu"
+                         " dispatch_translated_return_total=%llu dispatch_translated_return_mismatch=%lld"
+                         " dispatch_interpreted_return_total=%llu dispatch_interpreted_return_mismatch=%lld",
+                         (unsigned long long)atomic_load_explicit(&census->map_misses, memory_order_relaxed),
+                         (unsigned long long)interpreted_entries, (unsigned long long)translated_return_total,
+                         translated_entries >= translated_return_total
+                             ? (long long)(translated_entries - translated_return_total)
+                             : -(long long)(translated_return_total - translated_entries),
+                         (unsigned long long)interpreted_return_total,
+                         interpreted_entries >= interpreted_return_total
+                             ? (long long)(interpreted_entries - interpreted_return_total)
+                             : -(long long)(interpreted_return_total - interpreted_entries));
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    formatted += added;
+    HL_APPEND_CROSSING("t_fallthrough", census->translated_exit, HL_BACKEND_SHAPE_T_FALLTHROUGH);
+    HL_APPEND_CROSSING("t_jcc_taken", census->translated_exit, HL_BACKEND_SHAPE_T_COND_TAKEN);
+    HL_APPEND_CROSSING("t_jcc_fall", census->translated_exit, HL_BACKEND_SHAPE_T_COND_NOT_TAKEN);
     HL_APPEND_CROSSING("t_direct_jmp", census->translated_exit, HL_BACKEND_SHAPE_T_DIRECT_JUMP);
     HL_APPEND_CROSSING("t_direct_call", census->translated_exit, HL_BACKEND_SHAPE_T_DIRECT_CALL);
     HL_APPEND_CROSSING("t_ret", census->translated_exit, HL_BACKEND_SHAPE_T_RETURN);
@@ -2064,6 +2116,52 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CROSSING("t_syscall", census->translated_exit, HL_BACKEND_SHAPE_T_SYSCALL);
     HL_APPEND_CROSSING("t_irq", census->translated_exit, HL_BACKEND_SHAPE_T_IRQ);
     HL_APPEND_CROSSING("t_fault", census->translated_exit, HL_BACKEND_SHAPE_T_FAULT);
+    HL_APPEND_CROSSING("t_other", census->translated_exit, HL_BACKEND_SHAPE_T_OTHER);
+    uint64_t fall_total = 0;
+    for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
+        fall_total += atomic_load_explicit(&census->translated_fall_stop[reason], memory_order_relaxed);
+    added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                     " fall_total=%llu fall_mismatch=%lld",
+                     (unsigned long long)fall_total,
+                     fall_total <= atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+                                                        memory_order_relaxed)
+                         ? (long long)(atomic_load_explicit(
+                                           &census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+                                           memory_order_relaxed) -
+                                       fall_total)
+                         : -(long long)(fall_total - atomic_load_explicit(
+                                                        &census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+                                                        memory_order_relaxed)));
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    formatted += added;
+#define HL_APPEND_FALL(name, reason) HL_APPEND_CROSSING(name, census->translated_fall_stop, reason)
+    HL_APPEND_FALL("fall_cap", HL_BACKEND_FALL_CAP);
+    HL_APPEND_FALL("fall_decode", HL_BACKEND_FALL_DECODE);
+    HL_APPEND_FALL("fall_normal_to_sse2", HL_BACKEND_FALL_NORMAL_TO_SSE2);
+    HL_APPEND_FALL("fall_sse2_to_normal", HL_BACKEND_FALL_SSE2_TO_NORMAL);
+    HL_APPEND_FALL("fall_normal_to_fs", HL_BACKEND_FALL_NORMAL_TO_FS);
+    HL_APPEND_FALL("fall_fs_to_normal", HL_BACKEND_FALL_FS_TO_NORMAL);
+    HL_APPEND_FALL("fall_sse2_to_fs", HL_BACKEND_FALL_SSE2_TO_FS);
+    HL_APPEND_FALL("fall_fs_to_sse2", HL_BACKEND_FALL_FS_TO_SSE2);
+    HL_APPEND_FALL("fall_tl_no", HL_BACKEND_FALL_TL_NO);
+    HL_APPEND_FALL("fall_displaced", HL_BACKEND_FALL_DISPLACED_UNSAFE);
+    HL_APPEND_FALL("fall_fetch", HL_BACKEND_FALL_FETCH);
+    HL_APPEND_FALL("fall_riprel", HL_BACKEND_FALL_RIPREL_LOWER);
+    HL_APPEND_FALL("fall_fs_transaction", HL_BACKEND_FALL_FS_TRANSACTION);
+    HL_APPEND_FALL("fall_sse_riprel", HL_BACKEND_FALL_SSE_RIPREL_LOWER);
+    HL_APPEND_FALL("fall_other", HL_BACKEND_FALL_OTHER);
+#undef HL_APPEND_FALL
+    added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                     " fall_chain_fs_transaction_hits=%llu fall_chain_normal_to_fs_hits=%llu",
+                     (unsigned long long)atomic_load_explicit(
+                         &census->fallthrough_ibtc_fs_transaction_hits, memory_order_relaxed),
+                     (unsigned long long)atomic_load_explicit(
+                         &census->fallthrough_ibtc_normal_to_fs_hits, memory_order_relaxed));
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    formatted += added;
+    HL_APPEND_CROSSING("i_fallthrough", census->interpreter_stop, HL_BACKEND_SHAPE_S_FALLTHROUGH);
+    HL_APPEND_CROSSING("i_jcc_taken", census->interpreter_stop, HL_BACKEND_SHAPE_S_COND_TAKEN);
+    HL_APPEND_CROSSING("i_jcc_fall", census->interpreter_stop, HL_BACKEND_SHAPE_S_COND_NOT_TAKEN);
     HL_APPEND_CROSSING("i_direct_jmp", census->interpreter_stop, HL_BACKEND_SHAPE_S_DIRECT_JUMP);
     HL_APPEND_CROSSING("i_direct_call", census->interpreter_stop, HL_BACKEND_SHAPE_S_DIRECT_CALL);
     HL_APPEND_CROSSING("i_ret", census->interpreter_stop, HL_BACKEND_SHAPE_S_RETURN);
@@ -2075,6 +2173,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CROSSING("i_service", census->interpreter_stop, HL_BACKEND_SHAPE_S_SERVICE);
     HL_APPEND_CROSSING("i_irq", census->interpreter_stop, HL_BACKEND_SHAPE_S_IRQ);
     HL_APPEND_CROSSING("i_fault", census->interpreter_stop, HL_BACKEND_SHAPE_S_FAULT);
+    HL_APPEND_CROSSING("i_other", census->interpreter_stop, HL_BACKEND_SHAPE_S_OTHER);
 #define HL_APPEND_CALL_SIM(name, field)                                                                                \
     do {                                                                                                               \
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
@@ -2127,6 +2226,10 @@ static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
 }
+static inline void hl_backend_tree_map_miss(void) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL) atomic_fetch_add_explicit(&census->map_misses, 1, memory_order_relaxed);
+}
 static inline void hl_backend_tree_reason(unsigned reason) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census == NULL) return;
@@ -2171,7 +2274,20 @@ static inline void hl_backend_tree_call_sim_count(enum hl_backend_call_sim_count
     }
     if (counter != NULL) atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
-#define hl_backend_tree_translated_fall_stop(reason) ((void)0)
+static inline void hl_backend_tree_translated_fall_stop(unsigned reason) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census != NULL && reason < HL_BACKEND_FALL_COUNT)
+        atomic_fetch_add_explicit(&census->translated_fall_stop[reason], 1, memory_order_relaxed);
+}
+static uintptr_t hl_backend_tree_fallthrough_ibtc_hit_counter_address(unsigned reason) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return 0;
+    if (reason == HL_BACKEND_FALL_FS_TRANSACTION)
+        return (uintptr_t)&census->fallthrough_ibtc_fs_transaction_hits;
+    if (reason == HL_BACKEND_FALL_NORMAL_TO_FS)
+        return (uintptr_t)&census->fallthrough_ibtc_normal_to_fs_hits;
+    return 0;
+}
 static inline void hl_backend_tree_mixed_sse_completed(uint64_t transitions, int disabled_boundary) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census == NULL) return;
@@ -2374,6 +2490,7 @@ static void hl_backend_tree_ret_fast_ibtc_add(enum hl_backend_ret_fast_ibtc_coun
 #define hl_backend_tree_family_div_service64_completed(is_signed) ((void)0)
 #define hl_backend_tree_translation() ((void)0)
 #define hl_backend_tree_map_hit() ((void)0)
+#define hl_backend_tree_map_miss() ((void)0)
 #define hl_backend_tree_stw_retry() ((void)0)
 #define hl_backend_tree_irq_pending() ((void)0)
 static _Noreturn void hl_backend_tree_abnormal_exit(int status) {

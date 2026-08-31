@@ -380,6 +380,7 @@ static void run_guest(struct cpu *c) {
         hl_dispatch_profile_map(&g_dispatch_profile, code != NULL);
         if (code != NULL) hl_backend_tree_map_hit();
         if (!code) {
+            hl_backend_tree_map_miss();
 #if defined(HL_NATIVE_TEST_HOOKS)
             jit_body_owner_low_test_seed();
 #endif

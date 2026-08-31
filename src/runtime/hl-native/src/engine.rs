@@ -545,6 +545,19 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn translated_fallthrough_chains_preserve_fs_transactions_and_irq_polling() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in 190..=191 {
+            // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
+            assert_eq!(unsafe { hook(scenario) }, 0, "fallthrough IBTC scenario {scenario}");
+        }
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn persistent_cache_codegen_modes_are_canonical() {
         let _serial = engine_test_lock();
         let hook = crate::loader::tests()
