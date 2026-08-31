@@ -34,10 +34,32 @@ impl TryFrom<&ProcessConfig> for Spec {
             std::env::var_os("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST").is_some(),
         )?;
         #[cfg(feature = "native-test-hooks")]
+        if let Some(mutation) = std::env::var_os("HL_TRANSLIT_PCACHE_MUTATION_TEST") {
+            Self::set(
+                &mut options,
+                "HL_TRANSLIT_PCACHE_MUTATION_TEST",
+                mutation.as_encoded_bytes(),
+            )?;
+        }
+        #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
             "HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST",
             std::env::var_os("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST").is_some(),
+        )?;
+        #[cfg(feature = "native-test-hooks")]
+        if let Some(stage) = std::env::var_os("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE") {
+            Self::set(
+                &mut options,
+                "HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE",
+                stage.as_encoded_bytes(),
+            )?;
+        }
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
+            std::env::var_os("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST").is_some(),
         )?;
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
@@ -48,8 +70,20 @@ impl TryFrom<&ProcessConfig> for Spec {
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
+            "HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN",
+            std::env::var_os("HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN").is_some(),
+        )?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
             "HL_TRANSLIT_RIPREL_READONLY",
             std::env::var_os("HL_TRANSLIT_RIPREL_READONLY").is_some_and(|value| value == "1"),
+        )?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST",
+            std::env::var_os("HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST").is_some(),
         )?;
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
@@ -77,6 +111,56 @@ impl TryFrom<&ProcessConfig> for Spec {
             .chain(launch.overlay.iter().map(|overlay| overlay.lower.clone()))
             .collect::<Vec<_>>();
         let executable = GuestPath::host_executable(std::path::Path::new(&guest_program), &roots);
+        let mut executable_digests = Vec::new();
+        if launch.translation_cache.is_some() {
+            executable_digests = match (&launch.executable_digest_authority, &executable) {
+                (Some(authority), Some(host)) if std::path::Path::new(&guest_program).is_absolute() => authority
+                    .authenticate(std::path::Path::new(&guest_program), host)?
+                    .into_iter()
+                    .map(|digest| hl_engine::launcher::plan::ExecutableDigestAuthority {
+                        snapshot: digest.snapshot.into_bytes(),
+                        guest_path: digest.guest_path.into_bytes(),
+                        size: digest.size,
+                        sha256: digest.sha256,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            #[cfg(unix)]
+            if let (Some(authority), Some(host)) = (&launch.executable_digest_authority, &executable) {
+                if let Some(interpreter) = GuestPath::interpreter(host, isa)
+                    .map_err(|_| Error::Runtime("cannot inspect executable interpreter".into()))?
+                {
+                    if let Some(interpreter_host) = GuestPath::host_executable(&interpreter, &roots) {
+                        if let Some(digest) = authority.authenticate(&interpreter, &interpreter_host)? {
+                            executable_digests.push(hl_engine::launcher::plan::ExecutableDigestAuthority {
+                                snapshot: digest.snapshot.into_bytes(),
+                                guest_path: digest.guest_path.into_bytes(),
+                                size: digest.size,
+                                sha256: digest.sha256,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if !executable_digests.is_empty() {
+            let records = executable_digests
+                .iter()
+                .map(|digest| {
+                    let snapshot = std::str::from_utf8(&digest.snapshot).expect("snapshot identity is UTF-8");
+                    let path = std::str::from_utf8(&digest.guest_path).expect("normalized guest path is UTF-8");
+                    let sha256 = digest
+                        .sha256
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>();
+                    format!("{snapshot}\t{path}\t{}\t{sha256}", digest.size)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Self::set(&mut options, "HL_PCACHE_EXEC_AUTHORITY", records)?;
+        }
         let arguments = std::iter::once(launch.process.program.as_bytes().to_vec())
             .chain(launch.process.args.iter().map(|argument| argument.as_bytes().to_vec()))
             .collect();
@@ -103,6 +187,11 @@ impl TryFrom<&ProcessConfig> for Spec {
                 .translation_cache
                 .as_ref()
                 .map(|cache| cache.as_os_str().as_encoded_bytes().to_vec()),
+            translation_symbols: launch
+                .translation_symbols
+                .as_ref()
+                .map(|directory| directory.as_os_str().as_encoded_bytes().to_vec()),
+            executable_digests,
             lower_layers: launch
                 .overlay
                 .as_ref()
@@ -285,6 +374,15 @@ impl Spec {
         if let Some(cache) = &launch.translation_cache {
             Self::set(options, "HL_PCACHE", b"1")?;
             Self::set(options, "HL_PCACHE_DIR", cache.as_os_str().as_encoded_bytes())?;
+        }
+        Self::flag(options, "HL_PCACHE_OBSERVE", launch.translation_cache_observability)?;
+        if let Some(directory) = &launch.translation_symbols {
+            Self::set(options, "HL_TRANSLIT_SYMBOLIZE", b"1")?;
+            Self::set(
+                options,
+                "HL_TRANSLIT_PERF_MAP",
+                directory.as_os_str().as_encoded_bytes(),
+            )?;
         }
         if let Some(overlay) = &launch.overlay {
             Self::set(options, "HL_LOWER", overlay.lower.as_os_str().as_encoded_bytes())?;

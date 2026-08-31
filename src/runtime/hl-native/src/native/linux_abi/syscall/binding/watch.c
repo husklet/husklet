@@ -790,8 +790,9 @@ static int64_t bound_mmap_file(const hl_linux_fd_snapshot *file, uint64_t addres
 #ifdef PCACHE_MMAP_HINT
     /* A hint is advisory. Publish the identity only after the provider reports that exact
      * address, otherwise this run cannot safely restore translations for the mapping. */
-    if (pc_hint != 0 && mapped.address == pc_hint && (protection & 4u) != 0)
-        pcache_note_libmap(mapped.address, size, &metadata);
+    if (g_pcache && (protection & 4u) != 0 && ((pc_hint != 0 && mapped.address == pc_hint) ||
+        (mapped.address >= PC_LIB_BASE && mapped.address < PC_LIB_BASE + PC_LIB_SPAN)))
+        pcache_note_libmap(mapped.address, size, file->host_handle, &metadata);
 #endif
     pthread_mutex_unlock(&g_bound_mapping_lock);
     pthread_mutex_unlock(&g_bound_mapping_gate);

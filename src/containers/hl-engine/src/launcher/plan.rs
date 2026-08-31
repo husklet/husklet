@@ -44,6 +44,9 @@ pub struct RuntimeBoxPolicy {
     pub limits: Option<Vec<u8>>,
     pub network_namespace: Option<Vec<u8>>,
     pub translation_cache: Option<Vec<u8>>,
+    pub translation_symbols: Option<Vec<u8>>,
+    /// Daemon-authenticated executable identities. This has no public Config projection.
+    pub executable_digests: Vec<ExecutableDigestAuthority>,
     pub network_bridge: Option<Vec<u8>>,
     pub ip: Option<Vec<u8>>,
     pub filesystem_generation: Option<Vec<u8>>,
@@ -53,6 +56,14 @@ pub struct RuntimeBoxPolicy {
     pub checkpoint_policy: u32,
     pub network_mode: u32,
     pub network_interfaces: Vec<NetworkInterface>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutableDigestAuthority {
+    pub snapshot: Vec<u8>,
+    pub guest_path: Vec<u8>,
+    pub size: u64,
+    pub sha256: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +89,8 @@ impl Default for RuntimeBoxPolicy {
             limits: None,
             network_namespace: None,
             translation_cache: None,
+            translation_symbols: None,
+            executable_digests: Vec::new(),
             network_bridge: None,
             ip: None,
             filesystem_generation: None,
@@ -113,6 +126,8 @@ impl RuntimeBoxPolicy {
             limits: nonempty(&config.limits),
             network_namespace,
             translation_cache: nonempty(&config.translation_cache),
+            translation_symbols: None,
+            executable_digests: Vec::new(),
             network_bridge: nonempty(&config.network_bridge),
             ip: nonempty(&config.ip),
             filesystem_generation: nonempty(&config.filesystem_generation),

@@ -158,7 +158,8 @@ hl_identity_digest hl_identity_image_digest(const void *bytes, size_t size) {
 }
 
 hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build_tag_size, uint64_t translator_abi,
-                                             uint32_t guest_isa, uint32_t host_isa, uint64_t modes) {
+                                             uint32_t guest_isa, uint32_t host_isa, uint64_t modes,
+                                             const char *build_fingerprint) {
     static const uint8_t domain[] = "husklet-pcache-translator-v1";
     sha256_state state;
     sha256_init(&state);
@@ -168,6 +169,9 @@ hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build
     sha256_update(&state, &guest_isa, sizeof guest_isa);
     sha256_update(&state, &host_isa, sizeof host_isa);
     sha256_update(&state, &modes, sizeof modes);
+    size_t fingerprint_size = build_fingerprint == NULL ? 0 : strlen(build_fingerprint);
+    sha256_update(&state, &fingerprint_size, sizeof fingerprint_size);
+    if (fingerprint_size != 0) sha256_update(&state, build_fingerprint, fingerprint_size);
     return sha256_finish(&state);
 }
 

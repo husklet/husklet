@@ -31,7 +31,8 @@ static hl_identity_digest pcache_translator_identity(void) {
                      ((uint64_t)(g_noibslim != 0) << 2) | ((uint64_t)(g_mtibtc != 0) << 3) |
                      ((uint64_t)(g_no_stw_reclaim != 0) << 4) | ((uint64_t)(g_prof != 0) << 5) |
                      ((uint64_t)(a64_soft_shared_resolver() != 0) << 6) | ((uint64_t)(uint32_t)g_fwdskip << 32);
-    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 1, HL_HOST_CPU_ISA, modes);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 1, HL_HOST_CPU_ISA, modes,
+                                     hl_c_backend_build_fingerprint());
 }
 
 // Hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs DIFFERENT code

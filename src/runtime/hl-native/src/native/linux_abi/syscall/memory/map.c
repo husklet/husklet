@@ -349,6 +349,22 @@ case 222: {
         if (!(a3 & 0x20) && (int)a4 >= 0)
             filemap_register((uint64_t)r, (uint64_t)a1, (int)a4, (uint64_t)a5, (a3 & 0x01) != 0,
                              off_emul == 2 && !logical_committed);
+#ifdef PCACHE_MMAP_HINT
+        if (g_pcache && (a2 & PROT_EXEC) != 0 && ((pc_hint != 0 && (uint64_t)(uintptr_t)r == pc_hint) ||
+             ((uint64_t)(uintptr_t)r >= PC_LIB_BASE &&
+              (uint64_t)(uintptr_t)r < PC_LIB_BASE + PC_LIB_SPAN)) &&
+            g_host_services != NULL && g_host_services->file != NULL &&
+            g_host_services->file->metadata != NULL) {
+            hl_host_handle pc_handle;
+            hl_host_file_metadata pc_metadata;
+            if (hl_fdhandle_lookup((int)a4, &pc_handle)) {
+                hl_host_result pc_status = g_host_services->file->metadata(g_host_services->context, pc_handle,
+                                                                           &pc_metadata);
+                if (pc_status.status == HL_STATUS_OK)
+                    pcache_note_libmap((uint64_t)(uintptr_t)r, (uint64_t)a1, pc_handle, &pc_metadata);
+            }
+        }
+#endif
         // Shared-futex key (thread.c): a file-backed MAP_SHARED region (memfd/shm, mapped independently
         // by each peer at its own VA) must key its futex words by the shared object identity, not the VA,
         // so a cross-process/cross-mapping FUTEX_WAKE reaches a FUTEX_WAIT (Wall 7). Record its VA range

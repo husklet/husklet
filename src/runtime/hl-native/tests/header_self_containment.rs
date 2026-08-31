@@ -5,6 +5,258 @@ use std::{
     process::Command,
 };
 
+#[test]
+fn persisted_map_offset_lookup_matches_slice_boundaries() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-pcache-offset-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("pcache offset probe directory");
+    let source = scratch.join("offset.c");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <string.h>
+#include "translator/guest/x86_64/interp/persistence.h"
+int main(void) {
+    uint8_t records[3 * X64_PC_MAP_SIZE] = {0};
+    uint8_t *cursor;
+    const uint64_t starts[] = {10, 30, 60};
+    for (unsigned i = 0; i < 3; i++) {
+        cursor = records + i * X64_PC_MAP_SIZE + 24;
+        x64_pc_put64(&cursor, starts[i]);
+    }
+    for (uint64_t offset = 0; offset < 100; offset++) {
+        const uint8_t *expected = NULL;
+        for (unsigned i = 0; i < 3; i++) {
+            uint64_t end = i + 1 < 3 ? starts[i + 1] : 90;
+            if (offset >= starts[i] && offset < end) expected = records + i * X64_PC_MAP_SIZE;
+        }
+        if (x64_pc_map_for_offset(offset, records, 3, 90) != expected) return 1;
+    }
+    return 0;
+}
+
+"#,
+    )
+    .expect("pcache offset probe source");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let build = |output: &Path, mutation: bool| {
+        let mut command = Command::new(&compiler);
+        command
+            .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-Wl,--gc-sections"])
+            .arg(format!("-I{}", native.display()))
+            .arg(format!("-I{}", native.join("include").display()));
+        if mutation {
+            command.arg("-DHL_PCACHE_OFFSET_BOUNDARY_MUTATION");
+        }
+        command
+            .arg(&source)
+            .arg(native.join("translator/guest/x86_64/interp/persistence.c"))
+            .arg(native.join("translator/digest.c"))
+            .arg("-o")
+            .arg(output)
+            .status()
+            .expect("compile pcache offset probe")
+    };
+    let executable = scratch.join("offset");
+    assert!(
+        build(&executable, false).success(),
+        "pcache offset probe did not compile"
+    );
+    assert!(Command::new(&executable)
+        .status()
+        .expect("run pcache offset probe")
+        .success());
+    let mutation = scratch.join("offset-mutation");
+    assert!(
+        build(&mutation, true).success(),
+        "pcache offset mutation did not compile"
+    );
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("run pcache offset mutation")
+            .success(),
+        "strict-start mutation did not break an exact map boundary"
+    );
+    fs::remove_dir_all(scratch).expect("remove pcache offset probe directory");
+}
+
+#[test]
+fn persisted_gpc_lookup_matches_exact_keys_and_gaps() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-pcache-gpc-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("pcache gpc probe directory");
+    let source = scratch.join("gpc.c");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include "translator/guest/x86_64/interp/persistence.h"
+int main(void) {
+    uint8_t records[3 * X64_PC_MAP_SIZE] = {0};
+    const uint64_t keys[] = {40, 10, 70};
+    x64_pc_gpc_index_entry index[3];
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t *cursor = records + i * X64_PC_MAP_SIZE;
+        x64_pc_put64(&cursor, keys[i]);
+    }
+    x64_pc_gpc_index_build(records, 3, index);
+    for (unsigned i = 0; i < 3; i++)
+        if (x64_pc_gpc_index_find(keys[i], records, index, 3) != records + i * X64_PC_MAP_SIZE) return 1;
+    const uint64_t gaps[] = {0, 9, 11, 39, 41, 69, 71, UINT64_MAX};
+    for (unsigned i = 0; i < sizeof gaps / sizeof gaps[0]; i++)
+        if (x64_pc_gpc_index_find(gaps[i], records, index, 3) != 0) return 2;
+    return 0;
+}
+"#,
+    )
+    .expect("pcache gpc probe source");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let build = |output: &Path, mutation: bool| {
+        let mut command = Command::new(&compiler);
+        command
+            .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-Wl,--gc-sections"])
+            .arg(format!("-I{}", native.display()))
+            .arg(format!("-I{}", native.join("include").display()));
+        if mutation {
+            command.arg("-DHL_PCACHE_GPC_BOUNDARY_MUTATION");
+        }
+        command
+            .arg(&source)
+            .arg(native.join("translator/guest/x86_64/interp/persistence.c"))
+            .arg(native.join("translator/digest.c"))
+            .arg("-o")
+            .arg(output)
+            .status()
+            .expect("compile pcache gpc probe")
+    };
+    let executable = scratch.join("gpc");
+    assert!(build(&executable, false).success(), "pcache gpc probe did not compile");
+    assert!(Command::new(&executable)
+        .status()
+        .expect("run pcache gpc probe")
+        .success());
+    let mutation = scratch.join("gpc-mutation");
+    assert!(build(&mutation, true).success(), "pcache gpc mutation did not compile");
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("run pcache gpc mutation")
+            .success(),
+        "upper-bound mutation did not break an exact GPC key"
+    );
+    fs::remove_dir_all(scratch).expect("remove pcache gpc probe directory");
+}
+
+#[test]
+fn authenticated_map_body_bounds_reject_malformed_records() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-pcache-body-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("pcache body probe directory");
+    let source = scratch.join("body.c");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include "translator/guest/x86_64/interp/persistence.h"
+
+enum { ARENA = 200, MAPS = 2, TOTAL = X64_PC_HEADER_SIZE + MAPS * X64_PC_MAP_SIZE + ARENA };
+
+static void put64(uint8_t *at, uint64_t value) { x64_pc_put64(&at, value); }
+static void put32(uint8_t *at, uint32_t value) { x64_pc_put32(&at, value); }
+static void put16(uint8_t *at, uint16_t value) { x64_pc_put16(&at, value); }
+
+static void make_artifact(uint8_t bytes[TOTAL]) {
+    memset(bytes, 0, TOTAL);
+    put64(bytes + 88, ARENA); put64(bytes + 96, MAPS);
+    put64(bytes + 200, 0x1000); put64(bytes + 208, 0x2000);
+    put64(bytes + 216, 0x3000); put64(bytes + 224, 0x4000);
+    for (unsigned group = 0; group < 2; group++)
+        for (unsigned field = 0; field < 4; field++)
+            put64(bytes + 120 + group * 32 + field * 8, UINT64_MAX);
+    uint8_t *arena = bytes + X64_PC_HEADER_SIZE + MAPS * X64_PC_MAP_SIZE;
+    const uint64_t hosts[MAPS] = {0, 70};
+    for (unsigned i = 0; i < MAPS; i++) {
+        uint8_t *map = bytes + X64_PC_HEADER_SIZE + i * X64_PC_MAP_SIZE;
+        put64(map, 0x1000 + i); put64(map + 8, 0x1000 + i); put64(map + 16, 0x1001 + i);
+        put64(map + 24, hosts[i]); put64(map + 32, hosts[i]); put64(map + 40, hosts[i]);
+        put64(map + 48, UINT64_C(0x1122334455667788));
+        put64(map + 56, 0x1000 + i); put64(map + 64, 7 + i);
+        put32(map + 72, 52); put32(map + 76, 10); put16(map + 82, UINT16_MAX);
+        put64(arena + hosts[i] + 16, 7 + i); put16(arena + hosts[i] + 50, 0);
+    }
+    x64_pc_checksum_write(bytes, TOTAL);
+}
+
+static int validate(uint8_t bytes[TOTAL], int expected) {
+    x64_pc_checksum_write(bytes, TOTAL);
+    if (!x64_pc_checksum_validate(bytes, TOTAL)) return 90;
+    x64_pc_format_limits limits = {.arena_bytes=ARENA, .maps=MAPS};
+    x64_pc_format_layout layout;
+    if (!x64_pc_layout_validate(bytes, TOTAL, &limits, &layout, 0)) return 91;
+    x64_pc_semantic_policy policy = {.block_magic=UINT64_C(0x1122334455667788), .map_slots=8};
+    return x64_pc_validate_maps_owners(&layout, &policy, 0) == expected ? 0 : 92;
+}
+
+static int malformed(unsigned which) {
+    uint8_t bytes[TOTAL]; make_artifact(bytes);
+    uint8_t *first = bytes + X64_PC_HEADER_SIZE;
+    uint8_t *second = first + X64_PC_MAP_SIZE;
+    switch (which) {
+    case 0: put32(first + 72, 0); put32(first + 76, 0); return validate(bytes, 1);
+    case 1: put32(first + 72, 0); break;
+    case 2: put32(first + 76, 0); break;
+    case 3: put32(first + 72, 51); break;
+    case 4: put32(second + 72, 150); break;
+    case 5: put32(second + 76, 100); break;
+    case 6: put64(second + 24, 0); put64(second + 32, 0); put64(second + 40, 0); break;
+    case 7: put64(second + 24, 40); put64(second + 32, 40); put64(second + 40, 40); break;
+    case 8: put32(first + 72, 71); break;
+    case 9: put32(first + 76, 19); break;
+    default: return 93;
+    }
+    return validate(bytes, 0);
+}
+
+int main(void) {
+    for (unsigned i = 0; i < 10; i++) {
+        int result = malformed(i);
+        if (result != 0) return 10 + i;
+    }
+    return 0;
+}
+"#,
+    )
+    .expect("pcache body probe source");
+    let executable = scratch.join("body");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let built = Command::new(&compiler)
+        .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-Wl,--gc-sections"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("translator/guest/x86_64/interp/persistence.c"))
+        .arg(native.join("translator/digest.c"))
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .expect("compile pcache body probe");
+    assert!(built.success(), "pcache body probe did not compile");
+    assert!(
+        Command::new(&executable)
+            .status()
+            .expect("run pcache body probe")
+            .success()
+    );
+    fs::remove_dir_all(scratch).expect("remove pcache body probe directory");
+}
+
 fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).expect("native header directory") {
         let path = entry.expect("native header entry").path();
@@ -258,12 +510,10 @@ int main(void) {
         .output()
         .expect("guest pin leak mutation compiler");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    assert!(
-        !Command::new(&mutation)
-            .status()
-            .expect("guest pin leak mutation")
-            .success()
-    );
+    assert!(!Command::new(&mutation)
+        .status()
+        .expect("guest pin leak mutation")
+        .success());
     fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
 }
 
@@ -302,7 +552,9 @@ int main(void) {
     if (hl_identity_digest_equal(&pinned, &same)) return 4;
 
     hl_identity_digest none = {0};
-    hl_identity_digest engine = hl_identity_engine_digest("build", 5, 7, 1, 1, 0);
+    hl_identity_digest engine = hl_identity_engine_digest("build", 5, 7, 1, 1, 0, "fingerprint-a");
+    hl_identity_digest other = hl_identity_engine_digest("build", 5, 7, 1, 1, 0, "fingerprint-b");
+    if (hl_identity_digest_equal(&engine, &other)) return 8;
     hl_identity_digest first_key = hl_identity_digest_mix(pinned, none, engine, "applet");
     hl_identity_digest replacement_key = hl_identity_digest_mix(changed, none, engine, "applet");
     if (hl_identity_digest_equal(&first_key, &replacement_key)) return 5;

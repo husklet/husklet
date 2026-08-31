@@ -26,6 +26,7 @@ extern uint64_t g_repmovs_n;
 extern uint64_t g_repstos_n;
 extern hl_x86_ibtc_entry g_xibtc[XIBTC_SETS * XIBTC_WAYS];
 extern int g_coldprof;
+extern uint64_t g_pcache_identity_ns, g_pcache_identity_bytes, g_pcache_identity_files;
 extern int g_pcache;
 extern int g_pcache_loaded;
 extern hl_identity_digest g_pc_binid;

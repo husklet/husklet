@@ -29,7 +29,7 @@ static uint64_t pcache_engine_id(void) {
 static hl_identity_digest pcache_translator_identity(void) {
     static const char tag[] = __DATE__ " " __TIME__;
     return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_AARCH64, HL_HOST_CPU_ISA_AARCH64,
-                                     HL_HOST_CPU_ISA, 1u);
+                                     HL_HOST_CPU_ISA, 1u, hl_c_backend_build_fingerprint());
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,

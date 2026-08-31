@@ -72,7 +72,7 @@ impl Service {
     }
 
     pub(super) async fn rootfs_path(&self, rootfs: &Rootfs) -> Result<std::path::PathBuf> {
-        self.rootfs_launch(rootfs).await.map(|(path, _, _)| path)
+        self.rootfs_launch(rootfs).await.map(|(path, _, _, _)| path)
     }
 
     pub(super) async fn rootfs_launch(
@@ -82,9 +82,10 @@ impl Service {
         std::path::PathBuf,
         Option<crate::service::OverlayConfig>,
         Vec<(std::path::PathBuf, u32, u32)>,
+        Option<hl_images::rootfs::ExecutableDigestAuthority>,
     )> {
         match rootfs {
-            Rootfs::Directory(path) => Ok((path.clone(), None, Vec::new())),
+            Rootfs::Directory(path) => Ok((path.clone(), None, Vec::new(), None)),
             Rootfs::Image(reference) => {
                 let manager = self
                     .rootfs
@@ -105,7 +106,9 @@ impl Service {
                                 upper: handle.upper().to_owned(),
                                 work: handle.work().to_owned(),
                             };
-                            (overlay.upper.clone(), Some(overlay), owners)
+                            let authority = manager
+                                .executable_digest_authority(reference.overlay().expect("overlay checked").lower());
+                            (overlay.upper.clone(), Some(overlay), owners, Some(authority))
                         });
                     }
                     manager.open(&reference).map(|handle| {
@@ -114,7 +117,7 @@ impl Service {
                             .iter()
                             .map(|(path, owner)| (path.to_owned(), owner.uid, owner.gid))
                             .collect();
-                        (handle.path().to_owned(), None, owners)
+                        (handle.path().to_owned(), None, owners, None)
                     })
                 })
                 .await

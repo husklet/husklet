@@ -11,6 +11,8 @@ use crate::{
 
 mod tree;
 use tree::{Changes, Tree};
+mod executable_digest;
+pub use executable_digest::{ExecutableDigest, ExecutableDigestAuthority};
 
 /// Durable identity of a pinned root filesystem. Persist this with container metadata.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -217,6 +219,16 @@ impl Roots {
     #[must_use]
     pub fn new(snapshots: Snapshots, leases: Leases) -> Self {
         Self { snapshots, leases }
+    }
+
+    /// Construct the digest authority owned by an immutable snapshot.
+    #[must_use]
+    pub fn executable_digest_authority(&self, snapshot: &Id) -> ExecutableDigestAuthority {
+        ExecutableDigestAuthority::new(
+            snapshot.as_str(),
+            self.snapshots.root().join("committed").join(snapshot.as_str()),
+            self.snapshots.root().join("executable-digests"),
+        )
     }
 
     /// # Errors

@@ -143,6 +143,18 @@ fn jit_rollover_falls_back_to_an_executable_single_mapping() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn preferred_code_mapping_is_exact_and_never_replaces_an_occupied_alias() {
+    assert_eq!(exec_page_cache_test(2, 53), Ok(5));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fork_repair_replaces_only_the_owned_inherited_code_aliases() {
+    assert_eq!(exec_page_cache_test(2, 54), Ok(2));
+}
+
 #[test]
 fn fetch_span_hits_reuse_the_authoritative_execute_page_verdict() {
     for isa in [1, 2] {

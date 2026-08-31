@@ -8,6 +8,7 @@ uint64_t g_repmovs_n;
 uint64_t g_repstos_n;
 hl_x86_ibtc_entry g_xibtc[XIBTC_SETS * XIBTC_WAYS];
 int g_coldprof;
+uint64_t g_pcache_identity_ns, g_pcache_identity_bytes, g_pcache_identity_files;
 int g_pcache;
 int g_pcache_loaded;
 hl_identity_digest g_pc_binid;

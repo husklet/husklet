@@ -388,12 +388,26 @@ struct interp_block {
     // Immutable translated instruction count. Production diagnostics aggregate this at execution time;
     // zero retains the interpreter-descriptor meaning without a separate side table or policy decision.
     uint16_t profile_insns;
+    // Stored plus one so a zero-initialized descriptor is uninstrumented. Logical ordinals are
+    // 0..UINT16_MAX-1; UINT16_MAX remains the public disabled sentinel and is never indexed.
+    uint16_t pcache_observe_ordinal_plus_one;
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint8_t profile_jcc_fall_stitches;
     uint8_t profile_fallback_kind;
     uint64_t profile_fallback_form;
 #endif
 };
+
+_Static_assert(UINT16_MAX == 65535u, "cache census ordinal encoding requires 16-bit uint16_t");
+static uint16_t interp_block_pcache_ordinal(const struct interp_block *block) {
+    return block->pcache_observe_ordinal_plus_one == 0
+        ? UINT16_MAX : (uint16_t)(block->pcache_observe_ordinal_plus_one - 1u);
+}
+static void interp_block_pcache_set_ordinal(struct interp_block *block, uint16_t value) {
+    block->pcache_observe_ordinal_plus_one = value == UINT16_MAX ? 0 : (uint16_t)(value + 1u);
+}
+#define INTERP_BLOCK_PCACHE_ORDINAL(block) interp_block_pcache_ordinal(block)
+#define INTERP_BLOCK_PCACHE_SET_ORDINAL(block, value) interp_block_pcache_set_ordinal(block, value)
 
 static void *translate_block(hl_x86_hot_context *context, uint64_t gpc);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -440,6 +454,8 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->host_entry_off = 0;
     block->host_len = 0;
     block->profile_insns = 0;
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, g_coldprof && translit_pcache_census_next != UINT16_MAX
+                                              ? translit_pcache_census_next++ : UINT16_MAX);
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;

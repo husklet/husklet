@@ -15,8 +15,15 @@
 #include "guest_fetch.h"
 
 #include <stddef.h>
+#if defined(__linux__)
+#include "../include/hl/linux.h"
+#include <sys/wait.h>
+#endif
 
 #define CACHE_SZ (64u << 20)
+#define HL_JIT_PREFERRED_RW UINT64_C(0x0000700000000000)
+#define HL_JIT_PREFERRED_STRIDE (UINT64_C(2) * CACHE_SZ)
+#define HL_JIT_PREFERRED_SLOTS 512u
 _Static_assert(CACHE_SZ <= INT32_MAX,
                "every source and target in one immutable cache generation must be rel32-reachable");
 /* A stitched AArch64 region may contain 4096 guest instructions.  When a
@@ -36,6 +43,9 @@ static hl_emit_state g_emit;
 #define g_dualmap g_emit.dual_alias
 #define g_wx_toggles g_emit.wx_toggles
 #define g_code_mapping g_emit.mapping
+#if defined(__linux__) && defined(HL_NATIVE_TEST_HOOKS)
+static void *g_preferred_collision_sentinel;
+#endif
 
 // ---- dual-mapped (W^X-toggle-free) code cache ----
 // g_cache/g_cp are the RW (writer) alias; the engine EXECUTES through an RX alias of the
@@ -47,6 +57,7 @@ static hl_emit_state g_emit;
 // region's W^X per translation/IC-fill (NODUALMAP=1).
 static hl_log_context g_jit_log;
 static hl_fatal_context g_jit_fatal;
+static int g_pcache_activation_close;
 static int cache_oom_fail(void);
 #define J_RX(p) hl_emit_rx(&g_emit, (const void *)(uintptr_t)(p)) // RW alias addr -> RX alias addr
 #define J_RW(p) hl_emit_rw(&g_emit, (const void *)(uintptr_t)(p)) // RX alias addr -> RW alias addr
@@ -67,6 +78,13 @@ static int jit_fail(hl_status status, const char *message, size_t size) {
 
 static inline int jit_wprot(int enable_exec) {
     hl_host_result result;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (enable_exec && g_pcache_activation_close &&
+        hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE") != NULL &&
+        strcmp(hl_option_get("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE"), "activation-close") == 0)
+        return jit_fail(HL_STATUS_PLATFORM_FAILURE, "injected cache activation close failure",
+                        sizeof("injected cache activation close failure") - 1u);
+#endif
     if (g_dualmap) return 1;
     g_wx_toggles++;
     result = enable_exec ? g_jit_services.memory->end_code_write(g_jit_services.context)
@@ -111,6 +129,22 @@ static int code_mapping_reserve(hl_host_code_mapping *mapping, int dual_alias) {
     alignment = (uint64_t)hl_host_page_size();
     if (alignment == 0 || (alignment & (alignment - 1)) != 0) alignment = 16384u;
     return hl_arena_reserve(&g_jit_services, CACHE_SZ, alignment, dual_alias, mapping);
+}
+
+static int code_mapping_reserve_preferred_address(hl_host_code_mapping *mapping, int dual_alias,
+                                                  uint64_t writable, uint64_t executable) {
+    uint64_t alignment = (uint64_t)hl_host_page_size();
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) alignment = 16384u;
+    memset(mapping, 0, sizeof *mapping);
+    mapping->writable_address = writable;
+    mapping->executable_address = executable;
+    return g_jit_services.memory
+                       ->reserve_code(g_jit_services.context, CACHE_SZ, alignment,
+                                      (dual_alias ? HL_HOST_CODE_DUAL_ALIAS : 0) | HL_HOST_CODE_PREFERRED,
+                                      mapping)
+                       .status == HL_STATUS_OK
+               ? 0
+               : -1;
 }
 
 /* A dual alias is an optimization, not an allocation invariant.  Apply the same fallback at every
@@ -177,6 +211,124 @@ int HL_TARGET_LOCAL(jit_rollover_mapping_test)(uint64_t *result) {
     *result = (uint64_t)rollover_mapping_test_entry();
     return *result == 42 ? 0 : -EUCLEAN;
 }
+
+int HL_TARGET_LOCAL(jit_preferred_mapping_test)(uint64_t *result) {
+#if !defined(__linux__)
+    (void)result;
+    return -ENOTSUP;
+#else
+    const uint64_t rw = HL_JIT_PREFERRED_RW + UINT64_C(500) * HL_JIT_PREFERRED_STRIDE;
+    const uint64_t rx = rw + CACHE_SZ;
+    hl_host_linux *host = NULL;
+    hl_host_services services = {0};
+    hl_host_code_mapping mapping = {0};
+    if (hl_host_linux_create(&host, &services) != HL_STATUS_OK) return -ENOMEM;
+    void *sentinel = mmap((void *)(uintptr_t)rw, CACHE_SZ, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (sentinel != (void *)(uintptr_t)rw) {
+        if (sentinel != MAP_FAILED) (void)munmap(sentinel, CACHE_SZ);
+        hl_host_linux_destroy(host);
+        return -EADDRINUSE;
+    }
+    *(volatile uint8_t *)(uintptr_t)rw = UINT8_C(0x5a);
+    mapping.writable_address = rw;
+    mapping.executable_address = rx;
+    hl_host_result collision = services.memory->reserve_code(
+        services.context, CACHE_SZ, UINT64_C(4096), HL_HOST_CODE_DUAL_ALIAS | HL_HOST_CODE_PREFERRED, &mapping);
+    int intact = *(volatile uint8_t *)(uintptr_t)rw == UINT8_C(0x5a);
+    int released = munmap(sentinel, CACHE_SZ);
+    if (collision.status == HL_STATUS_OK) (void)services.memory->release(services.context, mapping.handle);
+    if (collision.status == HL_STATUS_OK || !intact || released != 0) {
+        hl_host_linux_destroy(host);
+        return -EUCLEAN;
+    }
+
+    sentinel = mmap((void *)(uintptr_t)rx, CACHE_SZ, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (sentinel != (void *)(uintptr_t)rx) {
+        if (sentinel != MAP_FAILED) (void)munmap(sentinel, CACHE_SZ);
+        hl_host_linux_destroy(host);
+        return -EADDRINUSE;
+    }
+    *(volatile uint8_t *)(uintptr_t)rx = UINT8_C(0xa5);
+    memset(&mapping, 0, sizeof mapping);
+    mapping.writable_address = rw;
+    mapping.executable_address = rx;
+    collision = services.memory->reserve_code(
+        services.context, CACHE_SZ, UINT64_C(4096), HL_HOST_CODE_DUAL_ALIAS | HL_HOST_CODE_PREFERRED, &mapping);
+    intact = *(volatile uint8_t *)(uintptr_t)rx == UINT8_C(0xa5);
+    released = munmap(sentinel, CACHE_SZ);
+    if (collision.status == HL_STATUS_OK) (void)services.memory->release(services.context, mapping.handle);
+    if (collision.status == HL_STATUS_OK || !intact || released != 0) {
+        hl_host_linux_destroy(host);
+        return -EUCLEAN;
+    }
+
+    memset(&mapping, 0, sizeof mapping);
+    mapping.writable_address = rw;
+    mapping.executable_address = rx;
+    hl_host_result exact_result = services.memory->reserve_code(
+        services.context, CACHE_SZ, UINT64_C(4096), HL_HOST_CODE_DUAL_ALIAS | HL_HOST_CODE_PREFERRED, &mapping);
+    int exact = exact_result.status == HL_STATUS_OK && mapping.writable_address == rw &&
+                mapping.executable_address == rx;
+    if (exact_result.status == HL_STATUS_OK) (void)services.memory->release(services.context, mapping.handle);
+    hl_host_linux_destroy(host);
+    if (!exact) return -EADDRNOTAVAIL;
+    *result = 5;
+    return 0;
+#endif
+}
+
+int HL_TARGET_LOCAL(jit_fork_mapping_ownership_test)(uint64_t *result) {
+#if !defined(__linux__)
+    (void)result;
+    return -ENOTSUP;
+#else
+    enum { TEST_SIZE = 1u << 16 };
+    const uint64_t sentinel_address = HL_JIT_PREFERRED_RW + UINT64_C(510) * HL_JIT_PREFERRED_STRIDE;
+    hl_host_linux *host = NULL;
+    hl_host_services services = {0};
+    hl_host_code_mapping mapping = {0};
+    void *sentinel = MAP_FAILED;
+    int status = 0;
+    int rc = -EIO;
+    if (hl_host_linux_create(&host, &services) != HL_STATUS_OK) return -ENOMEM;
+    if (services.memory->reserve_code(services.context, TEST_SIZE, UINT64_C(4096),
+                                      HL_HOST_CODE_DUAL_ALIAS, &mapping).status != HL_STATUS_OK)
+        goto done;
+    sentinel = mmap((void *)(uintptr_t)sentinel_address, TEST_SIZE, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (sentinel != (void *)(uintptr_t)sentinel_address) goto done;
+    *(volatile uint8_t *)(uintptr_t)mapping.writable_address = UINT8_C(0x7b);
+    *(volatile uint8_t *)sentinel = UINT8_C(0x5a);
+    mapping.content_size = 1;
+    pid_t child = fork();
+    if (child < 0) goto done;
+    if (child == 0) {
+        uint64_t rw = mapping.writable_address;
+        uint64_t rx = mapping.executable_address;
+        int child_rc = services.memory->repair_code_after_fork(services.context, &mapping, 0).status == HL_STATUS_OK &&
+                               mapping.writable_address == rw && mapping.executable_address == rx &&
+                               *(volatile uint8_t *)(uintptr_t)rw == 0 &&
+                               *(volatile uint8_t *)(uintptr_t)rx == 0 &&
+                               *(volatile uint8_t *)sentinel == UINT8_C(0x5a)
+                           ? 0
+                           : 1;
+        _exit(child_rc);
+    }
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) goto done;
+    if (*(volatile uint8_t *)(uintptr_t)mapping.writable_address != UINT8_C(0x7b) ||
+        *(volatile uint8_t *)sentinel != UINT8_C(0x5a))
+        goto done;
+    *result = 2;
+    rc = 0;
+done:
+    if (sentinel == (void *)(uintptr_t)sentinel_address) (void)munmap(sentinel, TEST_SIZE);
+    if (mapping.handle != 0) (void)services.memory->release(services.context, mapping.handle);
+    hl_host_linux_destroy(host);
+    return rc;
+#endif
+}
 #endif
 
 static int jit_cache_init(void) {
@@ -198,7 +350,40 @@ static int jit_cache_init(void) {
         return -1;
     }
 #else
-    if (code_mapping_reserve_preferred(&g_code_mapping, 1) != 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    int force_single = hl_option_flag_value("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST", 0);
+    if (hl_option_flag_value("HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST", 0)) {
+        uint64_t collision = HL_JIT_PREFERRED_RW + HL_JIT_PREFERRED_STRIDE;
+        g_preferred_collision_sentinel = mmap((void *)(uintptr_t)collision, CACHE_SZ,
+                                              PROT_READ | PROT_WRITE,
+                                              MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (g_preferred_collision_sentinel == (void *)(uintptr_t)collision)
+            *(volatile uint8_t *)g_preferred_collision_sentinel = UINT8_C(0x5a);
+    }
+#else
+    int force_single = 0;
+#endif
+    /* A stable first choice lets an authenticated code image retain every intra-arena displacement.
+       MAP_FIXED_NOREPLACE makes occupancy a clean miss, never permission to replace another mapping. */
+    const uint64_t preferred_rw = HL_JIT_PREFERRED_RW;
+    int reserve_failed;
+#if defined(HL_PCACHE_IDENTITY_OBSERVE)
+    if (!g_pcache) {
+        reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
+                                      : code_mapping_reserve_preferred(&g_code_mapping, 1);
+    } else {
+        reserve_failed = force_single
+            ? code_mapping_reserve_preferred_address(&g_code_mapping, 0, preferred_rw, preferred_rw)
+            : code_mapping_reserve_preferred_address(&g_code_mapping, 1, preferred_rw, preferred_rw + CACHE_SZ);
+        if (reserve_failed != 0)
+            reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
+                                          : code_mapping_reserve_preferred(&g_code_mapping, 1);
+    }
+#else
+    reserve_failed = force_single ? code_mapping_reserve(&g_code_mapping, 0)
+                                  : code_mapping_reserve_preferred(&g_code_mapping, 1);
+#endif
+    if (reserve_failed != 0) {
         (void)cache_oom_fail();
         return -1;
     }
@@ -853,9 +1038,10 @@ static int map_idx(uint64_t gpc) {
     return -1;
 }
 
-static void *map_host_cached(hl_map_host_cache_entry cache[2], uint64_t gpc) {
+static inline __attribute__((always_inline)) void *map_host_cached(hl_map_host_cache_entry cache[2], uint64_t gpc) {
     uint64_t generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_ACQUIRE);
-    if (cache[0].generation == generation && cache[0].gpc == gpc) return cache[0].host;
+    if (cache[0].generation == generation && cache[0].gpc == gpc)
+        return cache[0].host;
     if (cache[1].generation == generation && cache[1].gpc == gpc) {
         hl_map_host_cache_entry hit = cache[1];
         cache[1] = cache[0];
@@ -1796,7 +1982,7 @@ static int jit_host_to_rwpc(uint64_t host_pc, uint64_t *rwpc) {
 // is no longer pinned or reachable.  Exhaustion declines the optional emitted body rather than overwriting
 // a live owner.
 #define JIT_BODY_OWNER_N 1398101u
-#define JIT_BODY_OWNER_BLOCK_HEADROOM 217u
+#define JIT_BODY_OWNER_BLOCK_HEADROOM 224u
 // Reserved non-canonical guest PCs for generated shared stubs.  The interrupted
 // task's architectural RIP is already in cpu->rip; the second form additionally
 // says TL_MM_FLAGS, rather than the transient host flags, is authoritative.
@@ -1809,6 +1995,10 @@ typedef struct {
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
 typedef uint32_t jit_body_owner_preserve;
 #define JIT_BODY_OWNER_PRESERVE_RET_RAX (1u << 16)
+#define JIT_BODY_OWNER_FLAGS_FROM_CPU (1u << 17)
+_Static_assert((JIT_BODY_OWNER_PRESERVE_RET_RAX & UINT16_MAX) == 0 &&
+               (JIT_BODY_OWNER_FLAGS_FROM_CPU & (UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) == 0,
+               "body owner metadata must not collide with the GPR preserve mask");
 typedef struct {
     uint64_t generation;
     uint8_t *rw;
@@ -1999,7 +2189,8 @@ static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
     uint32_t previous_end = token == 0 ? 0 : entries[token - 1].rw_end;
     for (uint32_t i = 0; i < wanted; i++) {
         if (range[i].hi <= range[i].lo || range[i].lo < base || range[i].hi > base + CACHE_SZ ||
-            (range[i].preserve_registers & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) != 0)
+            (range[i].preserve_registers & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX |
+                                             JIT_BODY_OWNER_FLAGS_FROM_CPU)) != 0)
             return 0;
         uint32_t start = (uint32_t)(range[i].lo - base), end = (uint32_t)(range[i].hi - base);
         if ((token != 0 || i != 0) && previous_end > start) return 0;
@@ -2699,7 +2890,21 @@ static int jit_flush_to_fresh(int retain_map_generations) {
     if (retain_generations && g_cache_gen >= 3) (void)map_invalidate_cache_generation(g_cache_gen - 3);
 #endif
     reclaim_retired(); // free retired caches no peer is still in -> bound VA + free space for the new alloc
-    if (code_mapping_reserve_preferred(&mapping, g_dualmap) != 0) return cache_oom_fail();
+    int reserve_failed;
+#if defined(HL_PCACHE_IDENTITY_OBSERVE)
+    if (!g_pcache) {
+        reserve_failed = code_mapping_reserve_preferred(&mapping, g_dualmap);
+    } else {
+        uint64_t preferred_rw = HL_JIT_PREFERRED_RW +
+            ((g_cache_gen + 1) % HL_JIT_PREFERRED_SLOTS) * HL_JIT_PREFERRED_STRIDE;
+        reserve_failed = code_mapping_reserve_preferred_address(
+            &mapping, g_dualmap, preferred_rw, preferred_rw + (g_dualmap ? CACHE_SZ : 0));
+        if (reserve_failed != 0) reserve_failed = code_mapping_reserve_preferred(&mapping, g_dualmap);
+    }
+#else
+    reserve_failed = code_mapping_reserve_preferred(&mapping, g_dualmap);
+#endif
+    if (reserve_failed != 0) return cache_oom_fail();
     if (!retire_current()) {
         hl_arena_release(&g_jit_services, mapping.handle);
         return 0;

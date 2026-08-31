@@ -55,7 +55,8 @@ _Static_assert(TL_MAX_INSNS < 256,
 #ifndef TL_STITCH_MAX_JMPS
 #define TL_STITCH_MAX_JMPS 8
 #endif
-#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 1)
+#define TL_PCACHE_CENSUS_OWNER_RANGES 7u
+#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 1 + TL_PCACHE_CENSUS_OWNER_RANGES)
 
 // ---- the host<->guest boundary
 //
@@ -397,13 +398,27 @@ enum translit_external_absolute_kind {
     TL_EXT_CALL_HIT = 0x400, TL_EXT_CALL_MISS, TL_EXT_CALL_IRQ,
     TL_EXT_HOOK_LINK_TAKEN = 0x500, TL_EXT_HOOK_LINK_IRQ, TL_EXT_HOOK_LINK_DISPATCH,
     TL_EXT_HOOK_JCC_SHAPE, TL_EXT_HOOK_CALL_HIT, TL_EXT_HOOK_CALL_MISS,
+    TL_EXT_FALL_FS_TRANSACTION = 0x600, TL_EXT_FALL_NORMAL_TO_FS,
+    TL_EXT_PCACHE_CENSUS_BASE = 0x10000,
 };
 typedef struct { uint32_t offset; uint32_t kind; } translit_external_absolute;
-#define TL_EXTERNAL_ABSOLUTE_N 65536u
+#define TL_EXTERNAL_ABSOLUTE_N 262144u
 static translit_external_absolute translit_external_absolutes[TL_EXTERNAL_ABSOLUTE_N];
 static uint32_t translit_external_absolute_count;
 static uint32_t translit_external_absolute_emitted;
 static int translit_external_absolute_unclassified;
+static uint64_t translit_pcache_census_count[UINT16_MAX];
+static uint64_t translit_pcache_census_order[UINT16_MAX];
+static uint64_t translit_pcache_census_sequence;
+static uint16_t translit_pcache_census_next;
+typedef struct {
+    uint32_t site_offset, fallback_offset;
+    uint64_t source, target;
+} translit_chain_site;
+#define TL_CHAIN_SITE_N 65536u
+static translit_chain_site translit_chain_sites[TL_CHAIN_SITE_N];
+static uint32_t translit_chain_site_count;
+static int translit_chain_site_overflow;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int translit_test_drop_external_absolute;
 static int translit_test_dropped_external_absolute;
@@ -419,12 +434,34 @@ static void translit_external_absolute_generation_reset(void) {
     translit_external_absolute_count = 0;
     translit_external_absolute_emitted = 0;
     translit_external_absolute_unclassified = 0;
+    translit_chain_site_count = 0;
+    translit_chain_site_overflow = 0;
+    translit_pcache_census_next = 0;
+    translit_pcache_census_sequence = 0;
+    memset(translit_pcache_census_count, 0, sizeof translit_pcache_census_count);
+    memset(translit_pcache_census_order, 0, sizeof translit_pcache_census_order);
 #if defined(HL_NATIVE_TEST_HOOKS)
     translit_test_dropped_external_absolute = 0;
 #endif
 }
 
+static void translit_chain_site_note(uint8_t *site, uint8_t *fallback, uint64_t source, uint64_t target) {
+    if (__builtin_expect(!g_pcache, 1)) return;
+    uintptr_t base = (uintptr_t)g_cache, s = (uintptr_t)site, f = (uintptr_t)fallback;
+    if (s < base || f < base || s - base > UINT32_MAX || f - base > UINT32_MAX ||
+        translit_chain_site_count >= TL_CHAIN_SITE_N) {
+        translit_chain_site_overflow = 1;
+        return;
+    }
+    translit_chain_sites[translit_chain_site_count++] = (translit_chain_site){
+        (uint32_t)(s - base), (uint32_t)(f - base), source, target};
+}
+
 static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
+    uintptr_t census = (uintptr_t)translit_pcache_census_count;
+    if (address >= census && address < census + sizeof translit_pcache_census_count &&
+        (address - census) % sizeof(uint64_t) == 0)
+        return TL_EXT_PCACHE_CENSUS_BASE + (uint32_t)((address - census) / sizeof(uint64_t));
     static const enum translit_ret_fast_ibtc_counter ret[] = {
         TL_RET_FAST_IBTC_HIT, TL_RET_FAST_IBTC_MISS, TL_RET_FAST_IBTC_IRQ};
     for (uint32_t i = 0; i < 3; i++)
@@ -441,6 +478,10 @@ static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
         TL_DIRECT_CALL_IBTC_COUNT_HIT, TL_DIRECT_CALL_IBTC_COUNT_MISS, TL_DIRECT_CALL_IBTC_COUNT_IRQ};
     for (uint32_t i = 0; i < 3; i++)
         if (address == translit_direct_call_ibtc_dynamic_counter(call[i])) return TL_EXT_CALL_HIT + i;
+    if (address == translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_FS_TRANSACTION))
+        return TL_EXT_FALL_FS_TRANSACTION;
+    if (address == translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_NORMAL_TO_FS))
+        return TL_EXT_FALL_NORMAL_TO_FS;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (address == (uintptr_t)&translit_jcc_link_taken) return TL_EXT_HOOK_LINK_TAKEN;
     if (address == (uintptr_t)&translit_jcc_link_irq_fallback) return TL_EXT_HOOK_LINK_IRQ;
@@ -454,15 +495,91 @@ static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
     return TL_EXT_NONE;
 }
 
+static uintptr_t translit_external_absolute_address_for(uint32_t kind) {
+    if (kind >= TL_EXT_PCACHE_CENSUS_BASE && kind < TL_EXT_PCACHE_CENSUS_BASE + UINT16_MAX)
+        return (uintptr_t)&translit_pcache_census_count[kind - TL_EXT_PCACHE_CENSUS_BASE];
+    static const enum translit_ret_fast_ibtc_counter ret[] = {
+        TL_RET_FAST_IBTC_HIT, TL_RET_FAST_IBTC_MISS, TL_RET_FAST_IBTC_IRQ};
+    if (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ)
+        return translit_ret_fast_ibtc_dynamic_counter(ret[kind - TL_EXT_RET_HIT]);
+    static const enum translit_jcc_ibtc_counter jcc[] = {
+        TL_JCC_IBTC_COUNT_HIT, TL_JCC_IBTC_COUNT_MISS, TL_JCC_IBTC_COUNT_IRQ};
+    if (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ)
+        return translit_jcc_ibtc_dynamic_counter(jcc[kind - TL_EXT_JCC_HIT]);
+    static const enum translit_direct_jmp_ibtc_counter jmp[] = {
+        TL_DIRECT_JMP_IBTC_COUNT_HIT, TL_DIRECT_JMP_IBTC_COUNT_MISS, TL_DIRECT_JMP_IBTC_COUNT_IRQ};
+    if (kind >= TL_EXT_JMP_HIT && kind <= TL_EXT_JMP_IRQ)
+        return translit_direct_jmp_ibtc_dynamic_counter(jmp[kind - TL_EXT_JMP_HIT]);
+    static const enum translit_direct_call_ibtc_counter call[] = {
+        TL_DIRECT_CALL_IBTC_COUNT_HIT, TL_DIRECT_CALL_IBTC_COUNT_MISS, TL_DIRECT_CALL_IBTC_COUNT_IRQ};
+    if (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ)
+        return translit_direct_call_ibtc_dynamic_counter(call[kind - TL_EXT_CALL_HIT]);
+    if (kind == TL_EXT_FALL_FS_TRANSACTION)
+        return translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_FS_TRANSACTION);
+    if (kind == TL_EXT_FALL_NORMAL_TO_FS)
+        return translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_NORMAL_TO_FS);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    switch (kind) {
+    case TL_EXT_HOOK_LINK_TAKEN: return (uintptr_t)&translit_jcc_link_taken;
+    case TL_EXT_HOOK_LINK_IRQ: return (uintptr_t)&translit_jcc_link_irq_fallback;
+    case TL_EXT_HOOK_LINK_DISPATCH: return (uintptr_t)&translit_jcc_link_dispatcher;
+    case TL_EXT_HOOK_JCC_SHAPE: return hl_backend_tree_jcc_link_counter_address();
+    case TL_EXT_HOOK_CALL_HIT:
+        return hl_backend_tree_direct_call_ibtc_dynamic_counter_address(HL_BACKEND_DIRECT_CALL_IBTC_HIT);
+    case TL_EXT_HOOK_CALL_MISS:
+        return hl_backend_tree_direct_call_ibtc_dynamic_counter_address(HL_BACKEND_DIRECT_CALL_IBTC_MISS);
+    default: break;
+    }
+#endif
+    return 0;
+}
+
 static int translit_external_absolute_kind_valid(uint32_t kind) {
-    return (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ) ||
+    return (kind >= TL_EXT_PCACHE_CENSUS_BASE && kind < TL_EXT_PCACHE_CENSUS_BASE + UINT16_MAX) ||
+           (kind >= TL_EXT_RET_HIT && kind <= TL_EXT_RET_IRQ) ||
            (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ) ||
            (kind >= TL_EXT_JMP_HIT && kind <= TL_EXT_JMP_IRQ) ||
            (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ) ||
+           (kind >= TL_EXT_FALL_FS_TRANSACTION && kind <= TL_EXT_FALL_NORMAL_TO_FS) ||
            (kind >= TL_EXT_HOOK_LINK_TAKEN && kind <= TL_EXT_HOOK_CALL_MISS);
 }
 
+static void translit_emit_spill(hl_x64_asm *a);
+static void translit_emit_reload(hl_x64_asm *a);
+static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind);
+
+typedef struct translit_pcache_census_ranges {
+    uint8_t *start, *rax_canonical, *rsp_canonical, *flags_canonical, *atomic_end;
+    uint8_t *flags_live, *rax_live, *rsp_live;
+} translit_pcache_census_ranges;
+
+static translit_pcache_census_ranges translit_emit_pcache_census(hl_x64_asm *a, uint16_t ordinal) {
+    translit_pcache_census_ranges ranges = {.start = a->cursor};
+    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.rax_canonical = a->cursor;
+    hl_x64_store_gs(a, HL_X64_RSP, 4 * 8);
+    ranges.rsp_canonical = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RSP, OFF_HSP);
+    hl_x64_pushfq(a);
+    hl_x64_pop(a, HL_X64_RAX);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    ranges.flags_canonical = a->cursor;
+    hl_x64_cld(a);
+    hl_x64_atomic_inc_abs_kind(a, (uintptr_t)&translit_pcache_census_count[ordinal],
+                               TL_EXT_PCACHE_CENSUS_BASE + ordinal);
+    ranges.atomic_end = a->cursor;
+    hl_x64_push_gs(a, TL_MM_FLAGS);
+    hl_x64_popfq(a);
+    ranges.flags_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.rax_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RSP, 4 * 8);
+    ranges.rsp_live = a->cursor;
+    return ranges;
+}
+
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind) {
+    if (__builtin_expect(!g_pcache, 1)) return;
     (void)emitter_kind;
     uintptr_t base = (uintptr_t)g_cache, value = (uintptr_t)slot;
     if (value < base || value - base > CACHE_SZ - sizeof(uint64_t)) return;
@@ -553,6 +670,7 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
 static int translit_ret_signal_stage_test(void);
 static int translit_jmp_mem_signal_stage_test(void);
+static int translit_pcache_census_signal_stage_test(void);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
 static uint64_t translit_fs_fixture_admitted;
@@ -1567,7 +1685,8 @@ static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *
 // returns through the ordinary dispatcher boundary. The clear path reloads the exact image and jumps to
 // an already-published block; cpu->rip is deliberately NOT changed on that path, so a signal/fault uses
 // the target code's instruction provenance rather than a premature architectural store.
-static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_block, uint64_t target) {
+static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_block, uint64_t source,
+                                   uint64_t target) {
     translit_emit_spill(a);
     hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(a, 5); // JNE: dispatcher fallback
@@ -1577,8 +1696,12 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     if (shape_counter != 0) hl_x64_atomic_inc_abs(a, shape_counter);
 #endif
     translit_emit_reload(a);
+    uint8_t *chain = a->cursor;
     hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
     hl_x64_patch_rel32(a, irq, a->cursor);
+    uint8_t *fallback = a->cursor;
+    if (__builtin_expect(g_pcache, 0))
+        translit_chain_site_note(chain, fallback, source, target);
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_irq_fallback);
 #endif
@@ -1625,6 +1748,20 @@ static uint8_t *translit_direct_jmp_ibtc_stub_entry;
 static uint8_t *translit_direct_jmp_ibtc_stub_rsp_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_flags_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_end;
+#define TL_HELPER_RELATIVE_N (JIT_MAP_N * 4u)
+typedef struct { uint32_t offset; uint32_t helper; } translit_helper_relative;
+static translit_helper_relative translit_helper_relatives[TL_HELPER_RELATIVE_N];
+static uint32_t translit_helper_relative_count;
+static uint32_t translit_helper_relative_emitted;
+
+static void translit_helper_jmp(hl_x64_asm *a, uint8_t *target, uint32_t helper) {
+    if (translit_helper_relative_count < TL_HELPER_RELATIVE_N) {
+        translit_helper_relatives[translit_helper_relative_count++] =
+            (translit_helper_relative){(uint32_t)(a->cursor - g_cache), helper};
+    }
+    translit_helper_relative_emitted++;
+    hl_x64_jmp_rel32(a, target);
+}
 #if !defined(HL_NATIVE_TEST_HOOKS)
 static ibtc_ent translit_call_sim_ibtc[IBTC_N];
 static _Atomic uint64_t translit_call_sim_generation[IBTC_N];
@@ -1659,6 +1796,8 @@ static void translit_call_sim_publish(uint64_t target, void *body, int call_publ
    first byte is reusable; a later enabled translation republishes pointers
    only after rebuilding the generation-owned header and owner ranges. */
 static void translit_shared_ibtc_stubs_reset(void) {
+    translit_helper_relative_count = 0;
+    translit_helper_relative_emitted = 0;
     translit_jcc_ibtc_stub_entry = NULL;
     translit_jcc_ibtc_stub_rsp_canonical = NULL;
     translit_jcc_ibtc_stub_flags_canonical = NULL;
@@ -2053,7 +2192,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint6
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+    translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -2067,7 +2206,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
     hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
-    hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+    translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -2090,7 +2229,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_constant_ibtc(hl_x64_asm *a, 
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
     hl_x64_store_gs_imm32(a, miss_kind, OFF_JCC_IBTC_MISS);
-    hl_x64_jmp_rel32(a, translit_direct_jmp_ibtc_stub_entry);
+    translit_helper_jmp(a, translit_direct_jmp_ibtc_stub_entry, 1);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -2519,6 +2658,26 @@ static int translit_owner_append(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES
     ranges[(*count)++] = (jit_body_owner_range){(uint64_t)(uintptr_t)lo, (uint64_t)(uintptr_t)hi,
                                                 guest, preserve_registers};
     return 1;
+}
+
+static int translit_owner_append_pcache_census(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES],
+                                                uint32_t *count,
+                                                const translit_pcache_census_ranges *site,
+                                                uint64_t guest) {
+    uint32_t before = *count;
+    const uint32_t rax = 1u << HL_X64_RAX, rsp = 1u << HL_X64_RSP, both = rax | rsp;
+    if (!translit_owner_append(ranges, count, site->start, site->rax_canonical, guest, 0) ||
+        !translit_owner_append(ranges, count, site->rax_canonical, site->rsp_canonical, guest, rax) ||
+        !translit_owner_append(ranges, count, site->rsp_canonical, site->flags_canonical, guest, both) ||
+        !translit_owner_append(ranges, count, site->flags_canonical, site->atomic_end,
+                               guest, both | JIT_BODY_OWNER_FLAGS_FROM_CPU) ||
+        !translit_owner_append(ranges, count, site->atomic_end, site->flags_live,
+                               guest, both | JIT_BODY_OWNER_FLAGS_FROM_CPU) ||
+        !translit_owner_append(ranges, count, site->flags_live, site->rax_live,
+                               guest, both) ||
+        !translit_owner_append(ranges, count, site->rax_live, site->rsp_live,
+                               guest, rsp)) return 0;
+    return *count - before == TL_PCACHE_CENSUS_OWNER_RANGES;
 }
 
 // Ordinary copied instructions use the exact staged instruction map for normal fault provenance. Their
@@ -2961,15 +3120,16 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
     if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
+    if (scenario == 206) return translit_pcache_census_signal_stage_test() ? 0 : 206;
     if (scenario == 150) {
         static const struct { const char *name; int missing; unsigned bit; } modes[] = {
             {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
-            {"HL_TRANSLIT_RIPREL_READONLY", 1, 8},
-            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 9},
-            {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 10},
+            {"HL_TRANSLIT_RIPREL_READONLY", 1, 9},
+            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 10},
+            {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 11},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();
@@ -3151,11 +3311,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "0", 1);
         hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
         uint64_t off_modes = x64_pcache_codegen_modes();
-        int exact = absent != NULL && on != NULL && off != NULL && !absent->riprel_load_bridge_enabled &&
-                    on->riprel_load_bridge_enabled && !off->riprel_load_bridge_enabled &&
-                    (absent_modes & (UINT64_C(1) << 10)) == 0 &&
-                    (on_modes & (UINT64_C(1) << 10)) != 0 &&
-                    (off_modes & (UINT64_C(1) << 10)) == 0;
+        int failure = absent == NULL ? 271 : on == NULL ? 273 : off == NULL ? 274
+            : absent->riprel_load_bridge_enabled ? 275 : !on->riprel_load_bridge_enabled ? 276
+            : off->riprel_load_bridge_enabled ? 277
+            : (absent_modes & (UINT64_C(1) << 11)) != 0 ? 278
+            : (on_modes & (UINT64_C(1) << 11)) == 0 ? 279
+            : (off_modes & (UINT64_C(1) << 11)) != 0 ? 280 : 0;
         hl_x86_hot_context_destroy(off);
         hl_x86_hot_context_destroy(on);
         hl_x86_hot_context_destroy(absent);
@@ -3164,15 +3325,17 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (child == 0) {
             hl_x86_hot_context *inherited = hl_x86_hot_context_create(NULL, NULL, NULL);
             int inherited_exact = inherited != NULL && inherited->riprel_load_bridge_enabled &&
-                                  (x64_pcache_codegen_modes() & (UINT64_C(1) << 10)) != 0;
+                                  (x64_pcache_codegen_modes() & (UINT64_C(1) << 11)) != 0;
             if (inherited != NULL) hl_x86_hot_context_destroy(inherited);
             _exit(inherited_exact ? 0 : 1);
         }
         int status = 0;
-        exact = exact && child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-                WEXITSTATUS(status) == 0;
+        pid_t waited = child > 0 ? waitpid(child, &status, 0) : -1;
+        if (failure == 0 && child <= 0) failure = 281;
+        if (failure == 0 && waited != child) failure = 282;
+        if (failure == 0 && (!WIFEXITED(status) || WEXITSTATUS(status) != 0)) failure = 283;
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
-        return exact ? 0 : 271;
+        return failure;
     }
     if (scenario == 189) return translit_riprel_load_bridge_gate_test();
     if (scenario == 192) {
@@ -4421,6 +4584,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
     struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
+    translit_pcache_census_ranges census_ranges = {0};
+    int census_emitted = INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX;
+    if (INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX) {
+        census_ranges = translit_emit_pcache_census(a, INTERP_BLOCK_PCACHE_ORDINAL(block));
+    }
 
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
@@ -4451,6 +4619,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     jit_body_owner_range instruction_ranges[TL_MAX_OWNER_RANGES];
     uint32_t owner_count = 0;
     uint32_t instruction_range_count = 0;
+    if (census_emitted &&
+        !translit_owner_append_pcache_census(owners, &owner_count, &census_ranges, gpc)) {
+        if (staged_telemetry) translit_attempt_telemetry_discard();
+        return NULL;
+    }
     int owner_normal_pending = 0;
     int jcc_fall_stitched = 0;
     int direct_jmp_stitched = 0;
@@ -4790,7 +4963,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                         (unsigned)jcc_fall_stitched, source_page_delta);
                     if (target_block != NULL) {
-                        translit_emit_jcc_link(a, target_block, target);
+                        translit_emit_jcc_link(a, target_block, pc, target);
                         translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                         jcc_link_admitted++;
                     } else if (translit_jcc_ibtc_candidate(pc, target)) {
@@ -4924,7 +5097,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_COND_TAKEN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             if (target_block != NULL) {
-                translit_emit_jcc_link(a, target_block, target);
+                translit_emit_jcc_link(a, target_block, pc, target);
                 translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                 jcc_link_admitted++;
             } else if (translit_jcc_ibtc_candidate(pc, target)) {
@@ -5076,7 +5249,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             if (translit_jcc_ibtc_stub_entry != NULL)
-                hl_x64_jmp_rel32(a, translit_jcc_ibtc_stub_entry);
+                translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
             else
                 translit_emit_exit_preset(a, R_BRANCH);
             break;
@@ -6367,7 +6540,9 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         result = reachable && retained_for_fault && retired ? 0 : 127;
     } else if (scenario == 84) {
         uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
-        int exact = body != NULL && block->profile_insns == TL_MAX_INSNS && published == 2;
+        int exact = body != NULL && block->profile_insns == TL_MAX_INSNS && published == 2 &&
+                    block->pcache_observe_ordinal_plus_one == 0 &&
+                    INTERP_BLOCK_PCACHE_ORDINAL(block) == UINT16_MAX;
         for (uint32_t offset = 0; exact && offset < block->host_len; offset++) {
             uint64_t guest = 0;
             exact = jit_body_owner_lookup((uint64_t)(uintptr_t)body + offset, &guest) &&
@@ -6465,6 +6640,9 @@ done:
     return result;
 }
 
+static int translit_test_pcache_ordinals;
+static uint16_t translit_test_pcache_next;
+
 static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *context, uint64_t guest) {
     if (!translit_jcc_ibtc_stub_init()) return NULL;
     while ((uintptr_t)g_cp & 15)
@@ -6472,6 +6650,8 @@ static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *con
     struct interp_block *block = (struct interp_block *)g_cp;
     g_cp += sizeof *block;
     memset(block, 0, sizeof *block);
+    if (translit_test_pcache_ordinals)
+        INTERP_BLOCK_PCACHE_SET_ORDINAL(block, translit_test_pcache_next++);
     block->magic = INTERP_BLOCK_MAGIC;
     block->gpc = guest;
     block->generation = g_cache_gen;
@@ -7125,7 +7305,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         if (scenario == 136) {
             uint32_t token;
             jit_body_owner_range invalid = {
-                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 17};
+                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 18};
             return jit_body_owner_reserve_n(g_cache_gen, 1, &token) &&
                            !jit_body_owner_publish_n(g_cache_gen, token, &invalid, 1)
                        ? 0
@@ -7461,8 +7641,12 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     }
 
     if (scenario == 91) {
+        translit_test_pcache_ordinals = 1;
+        translit_test_pcache_next = 0;
+        translit_pcache_census_count[0] = translit_pcache_census_count[1] = 0;
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
+        translit_test_pcache_ordinals = 0;
         struct cpu cpu = {0};
         cpu.rip = source;
         cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
@@ -7470,6 +7654,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         run_block(context, &cpu, source_block);
         result = target_block->host_entry_off != 0 && source_block->host_entry_off != 0 && cpu.r[0] == 42 &&
                          cpu.rip == target + 5 &&
+                         translit_pcache_census_count[0] == 1 && translit_pcache_census_count[1] == 1 &&
                          __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before
                      ? 0
                      : 137;
@@ -8334,6 +8519,10 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         flags_from_cpu = guest_pc == JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS;
         guest_pc = cpu->rip;
     }
+    if (preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_CPU) {
+        flags_from_cpu = 1;
+        preserve_registers &= ~JIT_BODY_OWNER_FLAGS_FROM_CPU;
+    }
     if (preserve_registers & JIT_BODY_OWNER_PRESERVE_RET_RAX) {
         cpu->r[HL_X64_RAX] = cpu->mmscratch[1];
         preserve_registers &= ~JIT_BODY_OWNER_PRESERVE_RET_RAX;
@@ -8587,6 +8776,65 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     return scenario == 181 || scenario == 182 || scenario == 184
                ? (int)(emitted_hash & UINT64_C(0x7fffffff))
                : 0;
+}
+
+static int translit_pcache_census_signal_stage_test(void) {
+    const size_t arena_size = 16384;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 0;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    uint64_t saved_generation = g_cache_gen;
+    int saved_selected = translit_selected;
+    g_cache = arena; g_cp = arena; g_cache_gen = UINT64_MAX - 206; translit_selected = 1;
+    jit_body_owner_drop_generation(g_cache_gen);
+    uint32_t token;
+    int exact = jit_body_owner_reserve_n(g_cache_gen, TL_PCACHE_CENSUS_OWNER_RANGES + 1, &token);
+    hl_x64_asm a = {arena, arena + arena_size, 0};
+    translit_pcache_census_ranges site = translit_emit_pcache_census(&a, 0);
+    jit_body_owner_range ranges[TL_PCACHE_CENSUS_OWNER_RANGES + 1];
+    uint32_t count = 0;
+    const uint64_t guest = UINT64_C(0x401000);
+    exact = exact && translit_owner_append_pcache_census(ranges, &count, &site, guest);
+    uint8_t *body = a.cursor;
+    hl_x64_u8(&a, 0x90);
+    exact = exact && translit_owner_append(ranges, &count, body, a.cursor, guest, 0) &&
+            count == TL_PCACHE_CENSUS_OWNER_RANGES + 1 &&
+            jit_body_owner_publish_n(g_cache_gen, token, ranges, count);
+    struct stage { uint8_t *pc; uint32_t mask; int cpu_flags; } stages[8];
+    unsigned at = 0;
+    const uint32_t rax = 1u << HL_X64_RAX, rsp = 1u << HL_X64_RSP, both = rax | rsp;
+    stages[at++] = (struct stage){site.start, 0, 0};
+    stages[at++] = (struct stage){site.rax_canonical, rax, 0};
+    stages[at++] = (struct stage){site.rsp_canonical, both, 0};
+    stages[at++] = (struct stage){site.flags_canonical, both, 1};
+    stages[at++] = (struct stage){site.atomic_end, both, 1};
+    stages[at++] = (struct stage){site.flags_live, both, 0};
+    stages[at++] = (struct stage){site.rax_live, rsp, 0};
+    stages[at++] = (struct stage){site.rsp_live, 0, 0};
+    exact = exact && at == 8;
+    for (unsigned stage = 0; exact && stage < at; stage++) {
+        struct cpu cpu = {0}, expected_flags_cpu = {0};
+        ucontext_t context; memset(&context, 0, sizeof context);
+        greg_t *gregs = HL_HOST_UC_GREGS(&context);
+        for (unsigned reg = 0; reg < 16; reg++) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        cpu.rip = UINT64_C(0xdead000000000206); cpu.mmscratch[0] = UINT64_C(0x853);
+        gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
+        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == guest && cpu.reason == R_BRANCH;
+        for (unsigned reg = 0; exact && reg < 16; reg++)
+            exact = cpu.r[reg] == ((stages[stage].mask & (1u << reg))
+                    ? UINT64_C(0xc000000000000000) + reg : UINT64_C(0xa000000000000000) + reg);
+        translit_flags_out(&expected_flags_cpu, stages[stage].cpu_flags ? UINT64_C(0x853) : UINT64_C(0xad7));
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
+    }
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
+    munmap(arena, arena_size);
+    return exact;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

@@ -96,15 +96,18 @@ fn main() {
 
     let mut linked_archives = vec![shim_archive];
     for guest in plan.guests {
-        let (target_archive, target_source, lifecycle_archive) = match guest {
+        let (target_archive, target_sources, lifecycle_archive) = match guest {
             GuestIsa::Aarch64 => (
                 "hl_c_backend_target_aarch64",
-                "src/native/engine/target/aarch64.c",
+                vec!["src/native/engine/target/aarch64.c"],
                 "hl_c_backend_lifecycle_aarch64",
             ),
             GuestIsa::X86_64 => (
                 "hl_c_backend_target_x86_64",
-                "src/native/engine/target/x86_64.c",
+                vec![
+                    "src/native/engine/target/x86_64.c",
+                    "src/native/translator/guest/x86_64/interp/persistence.c",
+                ],
                 "hl_c_backend_lifecycle_x86_64",
             ),
         };
@@ -127,7 +130,7 @@ fn main() {
         let target_archive = compiler
             .archive(
                 &archive(&environment, target, sanitizer, target_archive, false)
-                    .sources([target_source])
+                    .sources(target_sources)
                     .definitions(target_definitions),
             )
             .unwrap_or_else(|error| panic!("{error}"));

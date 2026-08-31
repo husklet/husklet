@@ -146,11 +146,26 @@ struct LaunchArguments {
     /// Existing container root used to resolve the guest entry and `PT_INTERP`.
     #[arg(long)]
     rootfs: Option<PathBuf>,
+    /// Durable host directory for translated-code artifacts.
+    #[arg(long, value_name = "DIRECTORY", value_parser = parse_translation_cache)]
+    translation_cache: Option<PathBuf>,
+    /// Emit persistent-cache load/save counters without enabling general engine diagnostics.
+    #[arg(long, requires = "translation_cache")]
+    translation_cache_observe: bool,
     /// Guest entry: a path inside `--rootfs`, or a host path when no rootfs is given.
     executable: PathBuf,
     /// Arguments handed to the guest unchanged.
     #[arg(allow_hyphen_values = true)]
     arguments: Vec<String>,
+}
+
+fn parse_translation_cache(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err("translation cache path must be absolute".to_owned())
+    }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -566,6 +581,11 @@ fn rootfs_plan(
             .set("HL_TRANSLIT_PERF_MAP", &path.to_string_lossy(), false)
             .map_err(|error| Failure::Request(format!("cannot set --translit-perf-map: {error:?}")))?;
     }
+    if launch.translation_cache_observe {
+        options
+            .set("HL_PCACHE_OBSERVE", "1", false)
+            .map_err(|error| Failure::Request(format!("cannot enable translation-cache observability: {error:?}")))?;
+    }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(host.as_os_str().as_encoded_bytes().to_vec()),
@@ -590,7 +610,15 @@ fn rootfs_plan(
         box_policy: hl_engine::launcher::plan::RuntimeBoxPolicy {
             // Native supervision never inherits host networking. Selecting it at this developer CLI
             // boundary is an explicit request for the backend's isolated-network contract.
-            flags: if launch.native_supervised == Some(NativeSupervisedControl::On) { 1 << 2 } else { 0 },
+            flags: if launch.native_supervised == Some(NativeSupervisedControl::On) {
+                1 << 2
+            } else {
+                0
+            },
+            translation_cache: launch
+                .translation_cache
+                .as_ref()
+                .map(|path| path.as_os_str().as_encoded_bytes().to_vec()),
             ..Default::default()
         },
     })
@@ -1047,6 +1075,73 @@ mod tests {
             "program",
         ]);
         assert_eq!(parsed.unwrap_err().kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn translation_cache_parser_distinguishes_absent_absolute_and_relative() {
+        assert_eq!(launch(&["program"]).translation_cache, None);
+        assert_eq!(
+            launch(&["--translation-cache", "/var/tmp/cache", "program"]).translation_cache,
+            Some(std::path::PathBuf::from("/var/tmp/cache"))
+        );
+        assert!(
+            LaunchArguments::try_parse_from(["hl-x86_64", "--translation-cache-observe", "program"]).is_err()
+        );
+        let error = LaunchArguments::try_parse_from(["hl-x86_64", "--translation-cache", "relative/cache", "program"])
+            .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("translation cache path must be absolute"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_plan_projects_translation_cache_into_typed_policy() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("bin/program");
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cache = root.path().join("cache");
+        let plan = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--translation-cache",
+                cache.to_str().unwrap(),
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.box_policy.translation_cache.as_deref(),
+            Some(cache.as_os_str().as_encoded_bytes())
+        );
+        let observed = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--translation-cache",
+                cache.to_str().unwrap(),
+                "--translation-cache-observe",
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(observed.options.get("HL_PCACHE_OBSERVE"), Some("1"));
+        assert_eq!(
+            rootfs_plan(
+                root.path(),
+                &launch(&["--rootfs", root.path().to_str().unwrap(), "bin/program"]),
+            )
+            .unwrap()
+            .box_policy
+            .translation_cache,
+            None
+        );
     }
 
     #[cfg(feature = "native-test-hooks")]

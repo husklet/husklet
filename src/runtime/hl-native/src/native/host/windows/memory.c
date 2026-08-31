@@ -766,7 +766,7 @@ static hl_host_result hl_windows_memory_reserve_code(void *context, uint64_t siz
     HANDLE section = NULL;
     void *writable = NULL;
     void *executable = NULL;
-    if (output == NULL || size == 0 || size > SIZE_MAX || size > INT64_MAX || alignment == 0 ||
+    if (output == NULL || (flags & HL_HOST_CODE_PREFERRED) != 0 || size == 0 || size > SIZE_MAX || size > INT64_MAX || alignment == 0 ||
         (alignment & (alignment - 1u)) != 0 || alignment < HL_WINDOWS_PAGE_SIZE)
         return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     memset(output, 0, sizeof(*output));

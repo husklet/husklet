@@ -302,6 +302,17 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     return Err(3);
 }
 
+/// Inspect one already-resolved host executable and return its guest interpreter path.
+/// This performs the same strict ELF validation used by engine creation.
+#[cfg(unix)]
+pub fn executable_interpreter(path: &std::path::Path, isa: u32) -> Result<Option<Vec<u8>>, Error> {
+    let mut file = File::open(path).map_err(|_| Error::Status(1))?;
+    let length = file.metadata().map_err(|_| Error::Status(1))?.len();
+    validate_elf_image(&mut file, length, isa)
+        .map(|(_, layout)| layout.interpreter)
+        .map_err(Error::Status)
+}
+
 #[cfg(unix)]
 fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
     use std::os::unix::{ffi::OsStrExt as _, fs::OpenOptionsExt as _};
@@ -631,9 +642,19 @@ mod tests {
                 break;
             }
         }
-        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205] {
+        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206] {
             assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn cache_census_prefix_has_exact_signal_stage_ownership() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        assert_eq!(unsafe { hook(206) }, 0, "cache census signal stages");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
@@ -665,7 +686,9 @@ mod tests {
         {
             // SAFETY: the hook accepts one bounded selector and forks before touching simulation state.
             let status = unsafe { hook(scenario) };
-            if status != 0 { failures.push((scenario, status)); }
+            if status != 0 {
+                failures.push((scenario, status));
+            }
         }
         assert!(failures.is_empty(), "RET IBTC scenarios failed: {failures:?}");
     }

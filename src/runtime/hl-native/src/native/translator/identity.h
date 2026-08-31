@@ -19,11 +19,16 @@ typedef struct hl_identity_digest {
     uint8_t bytes[32];
 } hl_identity_digest;
 
+/* Supplied by the integrated backend bridge and mixed into every persisted
+ * translator identity. */
+const char *hl_c_backend_build_fingerprint(void);
+
 uint64_t hl_identity_name(const char *name);
 uint64_t hl_identity_image(const void *bytes, size_t size);
 hl_identity_digest hl_identity_image_digest(const void *bytes, size_t size);
 hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build_tag_size, uint64_t translator_abi,
-                                             uint32_t guest_isa, uint32_t host_isa, uint64_t modes);
+                                             uint32_t guest_isa, uint32_t host_isa, uint64_t modes,
+                                             const char *build_fingerprint);
 hl_identity_digest hl_identity_digest_mix(hl_identity_digest program, hl_identity_digest interpreter,
                                           hl_identity_digest engine, const char *name);
 int hl_identity_digest_equal(const hl_identity_digest *left, const hl_identity_digest *right);

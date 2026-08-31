@@ -295,9 +295,12 @@ mod tests {
             network_namespace: "container-test".to_owned(),
             rootfs: "/rootfs".into(),
             overlay: None,
+            executable_digest_authority: None,
             owners: Vec::new(),
             filesystem_generation: "/generation".into(),
             translation_cache: None,
+            translation_cache_observability: false,
+            translation_symbols: None,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             execution: crate::Execution::default(),
@@ -433,6 +436,37 @@ mod tests {
         );
         assert_eq!(spec.plan.options.get("HL_PCACHE"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_PCACHE_DIR"), Some("/translation-cache"));
+    }
+
+    #[test]
+    fn snapshot_executable_digest_reaches_only_internal_typed_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshots = hl_images::snapshot::Snapshots::open(root.path().join("snapshots")).unwrap();
+        let lower_id = hl_images::snapshot::Id::new("chain-test").unwrap();
+        let draft = snapshots.prepare(lower_id.clone(), None).unwrap();
+        std::fs::create_dir(draft.path().join("bin")).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), draft.path().join("bin/tool")).unwrap();
+        draft.commit(lower_id.clone()).unwrap();
+        let roots =
+            hl_images::rootfs::Roots::new(snapshots, hl_images::Leases::open(root.path().join("leases")).unwrap());
+        let authority = roots.executable_digest_authority(&lower_id);
+        let mut launch = launch();
+        launch.guest = crate::Guest::X86_64;
+        launch.process = crate::Process::new("/bin/tool");
+        launch.rootfs = root.path().join("upper");
+        std::fs::create_dir(&launch.rootfs).unwrap();
+        launch.overlay = Some(crate::service::OverlayConfig {
+            lower: root.path().join("snapshots/committed/chain-test"),
+            upper: launch.rootfs.clone(),
+            work: root.path().join("work"),
+        });
+        launch.executable_digest_authority = Some(authority);
+        launch.translation_cache = Some(root.path().join("translation-cache"));
+
+        let spec = Spec::try_from(&launch).unwrap();
+        assert!(!spec.plan.box_policy.executable_digests.is_empty());
+        assert_eq!(spec.plan.box_policy.executable_digests[0].guest_path, b"/bin/tool");
+        assert!(spec.plan.options.get("HL_PCACHE_EXEC_AUTHORITY").is_some());
     }
 
     #[test]
