@@ -531,11 +531,12 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     if (!S_ISDIR(selected_status.st_mode)) {
         hl_vfs_cursor_authority opened = {0};
         int error = 0;
-        if (path_only_file && probed.kind != HL_VFS_CURSOR_AUTHORITY_INVALID) {
+        const int path_authority = path_only_file || !S_ISREG(selected_status.st_mode);
+        if (path_authority && probed.kind != HL_VFS_CURSOR_AUTHORITY_INVALID) {
             opened = probed;
             probed = (hl_vfs_cursor_authority){0};
         } else {
-            error = path_only_file
+            error = path_authority
                         ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0, &opened)
                         : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 0, &opened);
         }
