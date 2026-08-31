@@ -292,6 +292,7 @@ struct hl_backend_tree_shared {
     _Atomic uint64_t direct_call_ibtc_irq;
     _Atomic uint64_t direct_call_ibtc_fills;
     _Atomic uint64_t direct_call_ibtc_invalid_refusals;
+    _Atomic uint64_t direct_call_ibtc_fast_redispatch;
     struct hl_backend_tree_slot slots[HL_BACKEND_TREE_SLOTS];
 };
 
@@ -1011,7 +1012,8 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "stop4_key=%llu stop4_count=%llu stop5_key=%llu stop5_count=%llu "
         "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu "
         "direct_call_ibtc_emitted=%llu direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
-        "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu direct_call_ibtc_invalid_refusals=%llu\n",
+        "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu direct_call_ibtc_invalid_refusals=%llu "
+        "direct_call_ibtc_fast_redispatch=%llu\n",
         (unsigned long long)summary.translated_entries, (unsigned long long)translated_transfers,
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
@@ -1157,6 +1159,8 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_irq, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_fills, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_invalid_refusals,
+                                                memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_fast_redispatch,
                                                 memory_order_relaxed));
 }
 
@@ -1539,6 +1543,7 @@ enum hl_backend_direct_call_ibtc_counter {
     HL_BACKEND_DIRECT_CALL_IBTC_IRQ,
     HL_BACKEND_DIRECT_CALL_IBTC_FILL,
     HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL,
+    HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH,
 };
 static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     enum hl_backend_direct_call_ibtc_counter kind) {
@@ -1551,6 +1556,7 @@ static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     case HL_BACKEND_DIRECT_CALL_IBTC_IRQ: return &tree->direct_call_ibtc_irq;
     case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &tree->direct_call_ibtc_fills;
     case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &tree->direct_call_ibtc_invalid_refusals;
+    case HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH: return &tree->direct_call_ibtc_fast_redispatch;
     }
     return NULL;
 }

@@ -270,6 +270,9 @@ static inline void dispatch_interrupt_rearm(struct cpu *c) {
 #ifndef G_FAST_REDISPATCH
 #define G_FAST_REDISPATCH(code) 0
 #endif
+#ifndef G_FAST_REDISPATCH_COMMIT
+#define G_FAST_REDISPATCH_COMMIT(c) ((void)0)
+#endif
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define REDISPATCH_COUNT(kind) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed)
@@ -605,6 +608,7 @@ redispatch_execute:
                     REDISPATCH_COUNT(REDISPATCH_STALE);
                 else {
                     REDISPATCH_COUNT(REDISPATCH_HIT);
+                    G_FAST_REDISPATCH_COMMIT(c);
                     if (next_generation != g_cache_gen) REDISPATCH_COUNT(REDISPATCH_STALE_HIT);
                     if (g_threaded) REDISPATCH_COUNT(REDISPATCH_THREADED_HIT);
                     code = next_code;

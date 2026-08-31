@@ -44,6 +44,11 @@ static uint64_t g_prevpc, g_curpc;
 #define G_DISPATCH_ENTER(c) ((c)->ibtc_base = (uint64_t)g_xibtc)
 #define G_MAP_HOST_CACHE map_host_cache_current()
 #define G_FAST_REDISPATCH(code) (1)
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define G_FAST_REDISPATCH_COMMIT(c) translit_jcc_ibtc_fast_redispatch(c)
+#else
+#define G_FAST_REDISPATCH_COMMIT(c) ((void)0)
+#endif
 #define G_MAP_HOST(cache, gpc) map_host_cached((cache), (gpc))
 
 // Top-of-loop instrumentation. x86 checks the async-signal flag at the top of every iteration (the

@@ -588,7 +588,9 @@ pub use spec::{ContainerSpec, Resolver};
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub enum Execution {
     #[default]
+    Auto,
     Interpreted,
+    Translit,
     Native {
         diagnostics: bool,
     },
@@ -609,21 +611,36 @@ impl Execution {
     #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
-            Self::Interpreted => false,
+            Self::Auto | Self::Interpreted | Self::Translit => false,
             Self::Native { diagnostics } => diagnostics,
         }
+    }
+
+    /// Whether this policy selects same-ISA translation for an x86-64 guest on a supported host.
+    #[must_use]
+    pub const fn translit(self, x86_64_guest: bool) -> bool {
+        x86_64_guest
+            && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+            && matches!(self, Self::Auto | Self::Translit)
     }
 }
 
 #[cfg(test)]
 mod execution_tests {
     use super::Execution;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct StoredExecution {
+        #[serde(default)]
+        execution: Execution,
+    }
 
     #[test]
-    fn legacy_execution_encoding_is_unchanged() {
+    fn current_execution_encoding_defaults_to_auto() {
         assert_eq!(
             serde_json::to_string(&Execution::default()).unwrap(),
-            r#"{"backend":"interpreted"}"#
+            r#"{"backend":"auto"}"#
         );
         assert_eq!(
             serde_json::to_string(&Execution::native(true)).unwrap(),
@@ -632,6 +649,17 @@ mod execution_tests {
         assert_eq!(
             serde_json::from_str::<Execution>(r#"{"backend":"native","diagnostics":false}"#).unwrap(),
             Execution::native(false)
+        );
+    }
+
+    #[test]
+    fn legacy_missing_and_interpreted_execution_decode_explicitly() {
+        assert_eq!(serde_json::from_str::<StoredExecution>("{}").unwrap().execution, Execution::Auto);
+        assert_eq!(
+            serde_json::from_str::<StoredExecution>(r#"{"execution":{"backend":"interpreted"}}"#)
+                .unwrap()
+                .execution,
+            Execution::Interpreted
         );
     }
 

@@ -188,6 +188,7 @@ static _Atomic uint64_t translit_direct_call_ibtc_miss;
 static _Atomic uint64_t translit_direct_call_ibtc_irq;
 static _Atomic uint64_t translit_direct_call_ibtc_fill_count;
 static _Atomic uint64_t translit_direct_call_ibtc_invalid_refusal;
+static _Atomic uint64_t translit_direct_call_ibtc_fast_redispatch;
 static _Atomic uint64_t translit_direct_call_ibtc_collision;
 static _Atomic uint64_t translit_ret_ibtc_counters[9];
 static _Atomic uint64_t translit_ret_fast_ibtc_counters[5];
@@ -356,6 +357,7 @@ enum translit_direct_call_ibtc_counter {
     TL_DIRECT_CALL_IBTC_COUNT_IRQ,
     TL_DIRECT_CALL_IBTC_COUNT_FILL,
     TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL,
+    TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH,
 };
 static uintptr_t translit_direct_call_ibtc_dynamic_counter(enum translit_direct_call_ibtc_counter kind) {
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -380,6 +382,7 @@ static void translit_direct_call_ibtc_count(enum translit_direct_call_ibtc_count
     case TL_DIRECT_CALL_IBTC_COUNT_IRQ: counter = &translit_direct_call_ibtc_irq; break;
     case TL_DIRECT_CALL_IBTC_COUNT_FILL: counter = &translit_direct_call_ibtc_fill_count; break;
     case TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL: counter = &translit_direct_call_ibtc_invalid_refusal; break;
+    case TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH: counter = &translit_direct_call_ibtc_fast_redispatch; break;
     }
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
     hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
@@ -1726,6 +1729,13 @@ enum {
     TL_DIRECT_CALL_IBTC_MISS = 4,
     TL_INDIRECT_IBTC_MISS = 5,
 };
+
+static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu) {
+    if (cpu->jcc_ibtc_miss == TL_DIRECT_CALL_IBTC_MISS) {
+        cpu->jcc_ibtc_miss = 0;
+        translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH, 1);
+    }
+}
 
 #define TL_JCC_IBTC_STUB_MAGIC UINT64_C(0x4a43434942544332) // "JCCIBTC2"
 typedef struct {

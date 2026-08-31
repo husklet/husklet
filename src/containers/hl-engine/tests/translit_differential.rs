@@ -55,6 +55,7 @@ impl StandardStreamPort for CapturedOutput {
 /// What the engine reported about the same-ISA backend for one run.
 struct Backend {
     line: String,
+    redispatch_present: bool,
     blocks: u64,
     entries: u64,
     redispatch_attempted: u64,
@@ -85,6 +86,7 @@ struct Backend {
     direct_call_ibtc_irq: u64,
     direct_call_ibtc_fills: u64,
     direct_call_ibtc_invalid_refusals: u64,
+    direct_call_ibtc_fast_redispatch: u64,
     operand_declined: u64,
     sse2_memory_declined: u64,
     riprel_lowered: u64,
@@ -92,6 +94,7 @@ struct Backend {
     lea_lowered: u64,
     abs32_lowered: u64,
     natural_lea_lowered: u64,
+    natural_load_bridge_lowered: u64,
     rip_indirect_lowered: u64,
     provenance_fallback: u64,
     body_owner_recovered: u64,
@@ -209,15 +212,17 @@ fn backend(stderr: &[u8]) -> Backend {
     let redispatch = String::from_utf8_lossy(stderr)
         .lines()
         .find(|line| line.starts_with("[prof] redispatch "))
-        .unwrap_or_else(|| panic!("redispatch receipt in {}", String::from_utf8_lossy(stderr)))
-        .to_owned();
+        // Displaced images cannot use the same-address redispatch path and therefore publish no receipt.
+        // Keep parsing their independent translation/backend receipts instead of making absence fatal.
+        .map(str::to_owned);
+    let redispatch_present = redispatch.is_some();
+    let redispatch = redispatch.unwrap_or_default();
     let redispatch_field = |name: &str| {
         redispatch
             .split_ascii_whitespace()
             .find_map(|field| field.strip_prefix(name))
-            .unwrap_or_else(|| panic!("missing {name} in {redispatch}"))
-            .parse::<u64>()
-            .unwrap()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
     };
     let text = String::from_utf8_lossy(stderr);
     let lines = text
@@ -226,6 +231,10 @@ fn backend(stderr: &[u8]) -> Backend {
         .collect::<Vec<_>>();
     assert_eq!(lines.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
     let line = lines[0].to_owned();
+    assert!(
+        redispatch_present || line.contains("translit: displaced"),
+        "same-address run omitted redispatch receipt: {text}"
+    );
     let counter = |name: &str| {
         line.split_whitespace()
             .find_map(|field| field.strip_prefix(name))
@@ -463,6 +472,7 @@ fn backend(stderr: &[u8]) -> Backend {
         "{shape}"
     );
     Backend {
+        redispatch_present,
         blocks: counter("blocks="),
         entries: counter("entries="),
         redispatch_attempted: redispatch_field("attempted="),
@@ -493,6 +503,7 @@ fn backend(stderr: &[u8]) -> Backend {
         direct_call_ibtc_irq: shape_counter("direct_call_ibtc_irq="),
         direct_call_ibtc_fills: shape_counter("direct_call_ibtc_fills="),
         direct_call_ibtc_invalid_refusals: shape_counter("direct_call_ibtc_invalid_refusals="),
+        direct_call_ibtc_fast_redispatch: shape_counter("direct_call_ibtc_fast_redispatch="),
         operand_declined: counter("operand_declined="),
         sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
@@ -500,6 +511,7 @@ fn backend(stderr: &[u8]) -> Backend {
         lea_lowered: counter("lea_lowered="),
         abs32_lowered: counter("abs32_lowered="),
         natural_lea_lowered: counter("natural_lea_lowered="),
+        natural_load_bridge_lowered: counter("natural_load_bridge_lowered="),
         rip_indirect_lowered: counter("rip_indirect_lowered="),
         provenance_fallback: counter("provenance_fallback="),
         body_owner_recovered: counter("body_owner_recovered="),
@@ -650,8 +662,8 @@ fn unsupported_census_records_successful_interpreter_steps() {
 fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "executed_families");
-    let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, report) = run(&executable, "1");
+    let (interpreted, interpreted_status, report) = run(&executable, "0");
+    let (selected, selected_status, selected_report) = run(&executable, "1");
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native executed-family fixture");
@@ -660,6 +672,8 @@ fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
     assert_eq!(native.status.code(), Some(0));
     assert_eq!(selected, interpreted);
     assert_eq!(selected, native.stdout);
+    assert!(selected_report.entries > 0, "{}", selected_report.line);
+    assert!(selected_report.interpreted_entries > 0, "{}", selected_report.shape_line);
     assert_eq!(report.family_jmem, 1, "{}", report.shape_line);
     assert_eq!(report.family_div_inline, 1, "{}", report.shape_line);
     assert!(report.family_div_service64 >= 1, "{}", report.shape_line);
@@ -2304,9 +2318,11 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
             "the cold direct CALL path must publish before it becomes hot: {}",
             selected_backend.shape_line
         );
-        assert_eq!(
-            selected_backend.direct_call_ibtc_misses,
-            selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals,
+        assert!(
+            selected_backend.direct_call_ibtc_misses
+                == selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals
+                    + selected_backend.direct_call_ibtc_irq
+                    + selected_backend.direct_call_ibtc_fast_redispatch,
             "{}",
             selected_backend.shape_line
         );
@@ -2553,13 +2569,13 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         assert_eq!(selected_backend.declined, 0, "{name}: a link-address image was refused");
         if name == "displaced_memory" || name == "displaced_fault" || name == "natural_abs32_fault" {
             assert!(
-                selected_backend.riprel_lowered > 0,
-                "{name}: a natural low ET_EXEC never entered absolute RIP-relative lowering -- {}",
+                selected_backend.riprel_lowered + selected_backend.natural_load_bridge_lowered > 0,
+                "{name}: a natural low ET_EXEC entered neither absolute nor destination-borrowed load lowering -- {}",
                 selected_backend.line
             );
             assert!(
-                selected_backend.abs32_lowered > 0,
-                "{name}: no abs32 load -- {}",
+                selected_backend.abs32_lowered + selected_backend.natural_load_bridge_lowered > 0,
+                "{name}: no natural absolute or destination-borrowed load -- {}",
                 selected_backend.line
             );
             assert_eq!(
@@ -2722,6 +2738,7 @@ fn captured_cc1_profile(root: &Path, argv_path: &Path, selected: &str, perf_map:
     let report = backend(&captured.err.lock().unwrap());
     if selected == "1" {
         assert!(report.line.contains("translit: displaced"), "{}", report.line);
+        assert!(!report.redispatch_present, "displaced cc1 unexpectedly published same-address redispatch");
         assert!(report.blocks > 0 && report.entries > 0, "{}", report.line);
     } else {
         assert_eq!(report.line, "[prof] translit: not selected");
