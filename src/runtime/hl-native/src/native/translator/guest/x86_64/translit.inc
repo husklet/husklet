@@ -531,6 +531,7 @@ static uint64_t translit_fs_mem_admitted;
 static const uint8_t *translit_fall_fixture_bytes;
 static uint64_t translit_fall_fixture_guest;
 static size_t translit_fall_fixture_length;
+static _Atomic uint64_t translit_fall_direct_fetches;
 static uint32_t translit_test_last_fall_marker;
 static int translit_test_fall_marker_seen;
 static int translit_fall_fixture_test(unsigned scenario);
@@ -2904,6 +2905,8 @@ static void *translit_unsupported_record_thread(void *opaque) {
     return NULL;
 }
 
+static int translit_single_fetch_test(void);
+
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
@@ -3187,6 +3190,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         }
         return 0;
     }
+    if (scenario == 193) return translit_single_fetch_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4333,7 +4337,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     int staged_telemetry = context != NULL && context->authority_state == 1;
     if (staged_telemetry) translit_attempt_telemetry_begin();
     struct insn first_insn;
-    int first_decoded = hl_x86_decode_context(context, gpc, &first_insn);
+    uint8_t first_bytes[HL_X86_MAX_INSN];
+    int first_decoded = hl_x86_decode_context_bytes(context, gpc, &first_insn, first_bytes);
     int first_kind = first_decoded > 0 ? translit_classify(&first_insn) : TL_NO;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (first_decoded <= 0)
@@ -4433,7 +4438,12 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
-        if (hl_x86_decode_context(context, pc, &insn) <= 0) {
+        if (count == 0 && pc == gpc && first_decoded <= 0) {
+            fall_stop = HL_BACKEND_FALL_DECODE;
+            break;
+        } else if (count == 0 && pc == gpc)
+            insn = first_insn;
+        else if (hl_x86_decode_context_bytes(context, pc, &insn, bytes) <= 0) {
             fall_stop = HL_BACKEND_FALL_DECODE;
             break;
         }
@@ -4477,10 +4487,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;
             break;
         }
-        if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) {
-            fall_stop = HL_BACKEND_FALL_FETCH;
-            break;
-        }
+        if (count == 0 && pc == gpc) memcpy(bytes, first_bytes, (size_t)insn.len);
 
         uint64_t next = pc + (uint64_t)insn.len;
         unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
@@ -5246,8 +5253,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic uint64_t translit_fall_fixture_fetches;
+
 static int translit_fall_fixture_fetch(void *opaque, uint64_t guest, void *destination, size_t length) {
     (void)opaque;
+    atomic_fetch_add_explicit(&translit_fall_fixture_fetches, 1, memory_order_relaxed);
     if (translit_fall_fixture_bytes == NULL || guest < translit_fall_fixture_guest ||
         guest - translit_fall_fixture_guest >= translit_fall_fixture_length)
         return -1;
@@ -6420,6 +6430,74 @@ static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *con
     map_put(guest, block->guest_start, block->guest_end, block, block);
     translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_EMITTED, jcc_ibtc_sites);
     return block;
+}
+
+static int translit_single_fetch_test(void) {
+    const size_t arena_size = 65536;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, arena_size);
+        if (guest != MAP_FAILED) munmap(guest, 4096);
+        return 193;
+    }
+    guest[0] = 0x90; /* NOP */
+    guest[1] = 0xc3; /* RET */
+    guest[4095] = 0xc3; /* one-byte instruction at an executable page boundary */
+
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    int saved_dualmap = g_dualmap, saved_selected = translit_selected;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_dualmap = 1;
+    translit_selected = 1;
+    g_cache_gen = UINT64_MAX - 193;
+    map_clear();
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = 4096;
+    atomic_store_explicit(&translit_fall_fixture_fetches, 0, memory_order_relaxed);
+    atomic_store_explicit(&translit_fall_direct_fetches, 0, memory_order_relaxed);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *block = (struct interp_block *)arena;
+    memset(block, 0, sizeof *block);
+    void *body = context == NULL ? NULL : translit_build(context, block, translit_fall_fixture_guest, NULL);
+    uint64_t fetches = atomic_load_explicit(&translit_fall_fixture_fetches, memory_order_relaxed);
+    int exact = body != NULL && block->profile_insns == 2 && fetches == 2 &&
+                atomic_load_explicit(&translit_fall_direct_fetches, memory_order_relaxed) == 0;
+
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    map_clear();
+    g_cp = arena + sizeof(struct interp_block);
+    memset(block, 0, sizeof *block);
+    atomic_store_explicit(&translit_fall_fixture_fetches, 0, memory_order_relaxed);
+    atomic_store_explicit(&translit_fall_direct_fetches, 0, memory_order_relaxed);
+    context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    body = context == NULL ? NULL
+                           : translit_build(context, block, translit_fall_fixture_guest + 4095, NULL);
+    fetches = atomic_load_explicit(&translit_fall_fixture_fetches, memory_order_relaxed);
+    exact = exact && body != NULL && block->profile_insns == 1 && fetches == 1 &&
+            atomic_load_explicit(&translit_fall_direct_fetches, memory_order_relaxed) == 0;
+
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    map_clear();
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    g_dualmap = saved_dualmap;
+    translit_selected = saved_selected;
+    munmap(guest, 4096);
+    munmap(arena, arena_size);
+    return exact ? 0 : 194;
 }
 
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {

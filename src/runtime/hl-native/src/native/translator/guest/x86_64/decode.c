@@ -382,7 +382,7 @@ static int decode_authority_equal(decode_authority left, decode_authority right)
 }
 
 static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I, decode_memo_entry *entries,
-                       hl_x86_context_fetch_fn context_fetch, void *fetch_opaque) {
+                       hl_x86_context_fetch_fn context_fetch, void *fetch_opaque, uint8_t *decoded_bytes) {
     uint8_t bytes[X86_MAX_INSN] = {0};
     decode_memo_entry *memo = &entries[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
     int key_matches = memo->length != 0 && memo->pc == pc;
@@ -395,6 +395,7 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
     }
     if (key_matches && decode_authority_stable(before) && memo->authority_epoch == before) {
         *I = memo->instruction;
+        if (decoded_bytes != NULL) memcpy(decoded_bytes, memo->bytes, memo->length);
         if (context->count_authorized_hits) {
             if (context->authority_state == 1)
                 ++context->authority_logical_generation;
@@ -414,6 +415,7 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
     if (key_matches && FETCH(pc, bytes, memo->length) == 0 &&
         memcmp(bytes, memo->bytes, memo->length) == 0) {
         *I = memo->instruction;
+        if (decoded_bytes != NULL) memcpy(decoded_bytes, bytes, memo->length);
         decode_authority after = decode_authority_sample(context);
         if (decode_authority_stable(before) && decode_authority_equal(before, after))
             memo->authority_epoch = before;
@@ -451,6 +453,7 @@ static int decode_with(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
         memo->instruction = *I;
         memcpy(memo->bytes, bytes, (size_t)length);
         memo->length = (uint8_t)length;
+        if (decoded_bytes != NULL) memcpy(decoded_bytes, bytes, (size_t)length);
         decode_authority after = key_matches ? decode_authority_sample(context) : (decode_authority){0};
         memo->authority_epoch = key_matches && decode_authority_stable(before) && decode_authority_equal(before, after)
                                     ? before
@@ -488,7 +491,7 @@ void hl_x86_decode_set_diagnostics(int enabled) {
 }
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
-    return decode_with(NULL, pc, I, g_decode_memo, NULL, NULL);
+    return decode_with(NULL, pc, I, g_decode_memo, NULL, NULL, NULL);
 }
 
 hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque,
@@ -524,7 +527,12 @@ void hl_x86_hot_context_destroy(hl_x86_hot_context *context) {
 }
 
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I) {
-    return decode_with(context, pc, I, context->memo, context->fetch_fn, context->fetch_opaque);
+    return decode_with(context, pc, I, context->memo, context->fetch_fn, context->fetch_opaque, NULL);
+}
+
+int hl_x86_decode_context_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
+                                uint8_t bytes[HL_X86_MAX_INSN]) {
+    return decode_with(context, pc, I, context->memo, context->fetch_fn, context->fetch_opaque, bytes);
 }
 
 int hl_x86_decode_transaction_begin(hl_x86_hot_context *context) {

@@ -1507,6 +1507,7 @@ static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length
     if (translit_fall_fixture_bytes != NULL && guest >= translit_fall_fixture_guest &&
         length <= translit_fall_fixture_length &&
         guest - translit_fall_fixture_guest <= translit_fall_fixture_length - length) {
+        atomic_fetch_add_explicit(&translit_fall_direct_fetches, 1, memory_order_relaxed);
         memcpy(destination, translit_fall_fixture_bytes + (guest - translit_fall_fixture_guest), length);
         return 0;
     }
