@@ -122,6 +122,10 @@ static struct hl_fdcache g_fdcache = {.resolver_epoch_local = 1,
 /* Compatibility aliases keep the established hot callsites and lock discipline unchanged. */
 #define g_res_epoch_ptr g_fdcache.resolver_epoch_ptr
 #define g_res_epoch (*g_res_epoch_ptr)
+
+uint32_t hl_fdcache_resolution_epoch(void) {
+    return atomic_load_explicit(g_res_epoch_ptr, memory_order_acquire);
+}
 #define g_fs_fgen g_fdcache.fork_generation
 #define g_mc g_fdcache.metadata
 #define g_rl g_fdcache.readlink

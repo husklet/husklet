@@ -313,9 +313,16 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
     prior = 0;
     for (uint64_t i = 0; valid && i < layout->helper_relocations; i++) {
         const uint8_t *record = layout->helper_relocation_records + i * X64_PC_HELPER_RELOC_SIZE;
-        uint32_t offset = x64_pc_get32(record), kind = x64_pc_get32(record + 4);
-        valid = offset <= layout->arena && layout->arena - offset >= 5 && kind < 2 &&
-                (i == 0 || offset > prior) && layout->arena_bytes[offset] == 0xe9;
+        uint32_t offset = x64_pc_get32(record), encoded = x64_pc_get32(record + 4);
+        uint32_t form = encoded & ~UINT32_C(1);
+        uint32_t length = form == 0 ? 5 : form == X64_PC_HELPER_RELOC_LEA ? 7 : 0;
+        valid = length != 0 && offset <= layout->arena && layout->arena - offset >= length &&
+                (i == 0 || offset > prior);
+        if (valid)
+            valid = length == 5
+                        ? layout->arena_bytes[offset] == 0xe9
+                        : layout->arena_bytes[offset] == 0x48 && layout->arena_bytes[offset + 1] == 0x8d &&
+                              layout->arena_bytes[offset + 2] == 0x05;
         prior = offset;
     }
     if (valid && stage != NULL) *stage = 4;

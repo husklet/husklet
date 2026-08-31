@@ -642,7 +642,9 @@ mod tests {
                 break;
             }
         }
-        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206] {
+        for selector in [
+            190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216,
+        ] {
             assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }
     }
@@ -655,6 +657,32 @@ mod tests {
             .expect("native test bridge")
             .x86_64_translit_displaced;
         assert_eq!(unsafe { hook(206) }, 0, "cache census signal stages");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn helper_address_relocation_forms_are_authenticated() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 207 checks fixed local instruction bytes and owns no external state.
+        assert_eq!(unsafe { hook(207) }, 0, "helper relocation scenario 207");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn jcc_shared_guard_preserves_cache_lifecycle_and_signal_contracts() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // Exercise collision first so a weakened target comparison is attributed
+        // to the collision contract rather than crashing on the later cold miss.
+        for selector in [209, 208, 210, 211, 212, 213, 214, 215, 216] {
+            // SAFETY: each selector runs in a fixture-owned subprocess and arena.
+            assert_eq!(unsafe { hook(selector) }, 0, "JCC shared guard scenario {selector}");
+        }
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
@@ -1236,7 +1264,9 @@ mod tests {
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
-        assert_eq!(on["jcc_ibtc_hits"], 1);
+        // A guard hit transfers directly to the target body and therefore does
+        // not enter (or increment) the shared miss helper's hit path.
+        assert_eq!(on["jcc_ibtc_hits"], 0);
         assert_eq!(on["jcc_ibtc_misses"], 1);
         assert_eq!(on["jcc_ibtc_irq"], 0);
         assert_eq!(on["jcc_ibtc_fills"], 1);

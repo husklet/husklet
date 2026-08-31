@@ -20,6 +20,7 @@
 static const char *xresolve_exec(const char *p, char *buf,
                                  // fwd (defined below; overlay uses it for the upper)
                                  size_t n);
+uint32_t hl_fdcache_resolution_epoch(void);
 
 static struct hl_linux_vfs_lower g_lower[HL_LINUX_VFS_LOWER_CAPACITY];
 static hl_host_handle g_lower_handle[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
@@ -194,6 +195,7 @@ static int hl_vfs_cursor_namespace_root_native_lowers(hl_vfs_cursor *output) {
 }
 
 static hl_vfs_cursor *g_vfs_cwd_cursor;
+static uint32_t g_vfs_cwd_cursor_epoch;
 
 static int hl_vfs_cwd_cursor_set(const hl_vfs_cursor *cursor) {
     hl_vfs_cursor *copy = calloc(1, sizeof *copy);
@@ -208,6 +210,7 @@ static int hl_vfs_cwd_cursor_set(const hl_vfs_cursor *cursor) {
         free(g_vfs_cwd_cursor);
     }
     g_vfs_cwd_cursor = copy;
+    g_vfs_cwd_cursor_epoch = hl_fdcache_resolution_epoch();
     return 0;
 }
 
@@ -217,6 +220,7 @@ static void hl_vfs_cursor_state_clear(void) {
         free(g_vfs_cwd_cursor);
         g_vfs_cwd_cursor = NULL;
     }
+    g_vfs_cwd_cursor_epoch = 0;
     hl_vfs_fd_cursor_clear();
 }
 
@@ -259,7 +263,7 @@ static int hl_vfs_cursor_state_finish(int result) {
 }
 
 static int hl_vfs_cwd_cursor_require(void) {
-    if (g_vfs_cwd_cursor != NULL) return 0;
+    if (g_vfs_cwd_cursor != NULL && g_vfs_cwd_cursor_epoch == hl_fdcache_resolution_epoch()) return 0;
     hl_vfs_cursor root;
     int error = hl_vfs_cursor_namespace_root(&root);
     if (error != 0) return error;
