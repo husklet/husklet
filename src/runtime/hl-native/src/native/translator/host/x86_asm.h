@@ -101,6 +101,21 @@ static inline void hl_x64_movq_xmm_to_reg(hl_x64_asm *a, int reg, int xmm) {
     hl_x64_u8(a, (uint8_t)(0xC0 | ((xmm & 7) << 3) | (reg & 7)));
 }
 
+static inline void hl_x64_movq_reg_to_xmm(hl_x64_asm *a, int xmm, int reg) {
+    hl_x64_u8(a, 0x66);
+    hl_x64_u8(a, (uint8_t)(0x48 | ((xmm >= 8) ? 4 : 0) | ((reg >= 8) ? 1 : 0)));
+    hl_x64_u8(a, 0x0F); hl_x64_u8(a, 0x6E);
+    hl_x64_u8(a, (uint8_t)(0xC0 | ((xmm & 7) << 3) | (reg & 7)));
+}
+
+static inline void hl_x64_lea_rip_rel32(hl_x64_asm *a, int reg, const uint8_t *target) {
+    hl_x64_u8(a, (uint8_t)(0x48 | ((reg >= 8) ? 4 : 0)));
+    hl_x64_u8(a, 0x8D); hl_x64_u8(a, (uint8_t)(0x05 | ((reg & 7) << 3)));
+    int64_t delta = target - (a->cursor + 4);
+    if (delta < INT32_MIN || delta > INT32_MAX) { a->overflow = 1; delta = 0; }
+    hl_x64_u32(a, (uint32_t)(int32_t)delta);
+}
+
 static inline void hl_x64_psrldq(hl_x64_asm *a, int xmm, uint8_t bytes) {
     hl_x64_u8(a, 0x66);
     if (xmm >= 8) hl_x64_u8(a, 0x41);

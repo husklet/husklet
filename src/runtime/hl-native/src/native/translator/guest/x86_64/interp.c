@@ -2090,19 +2090,23 @@ static struct interp_block *x64_pc_restored_copy(uint32_t ordinal) {
     }
     for (uint64_t i = 0; i < g_x64_pc_snapshot_helper_reloc_count; i++) {
         const uint8_t *reloc = g_x64_pc_snapshot_helper_relocs + i * X64_PC_HELPER_RELOC_SIZE;
-        uint32_t offset = x64_pc_get32(reloc), helper = x64_pc_get32(reloc + 4);
+        uint32_t offset = x64_pc_get32(reloc), encoded_helper = x64_pc_get32(reloc + 4);
         if (offset < source || offset >= source + length) continue;
         uint8_t *site = destination + offset - source;
+        uint32_t helper, delta_offset, instruction_length;
+        if (!x64_pc_helper_reloc_shape(site, encoded_helper, &helper, &delta_offset, &instruction_length)) {
+            (void)jit_wprot(1); free(ranges); return NULL;
+        }
         uint8_t *target = helper == 0 ? translit_jcc_ibtc_stub_entry : translit_direct_jmp_ibtc_stub_entry;
-        int64_t delta = target - (site + 5);
-        if (site[0] != 0xe9 || target == NULL || delta < INT32_MIN || delta > INT32_MAX) {
+        int64_t delta = target - (site + instruction_length);
+        if (target == NULL || delta < INT32_MIN || delta > INT32_MAX) {
             (void)jit_wprot(1); free(ranges); return NULL;
         }
         int32_t encoded = (int32_t)delta;
-        memcpy(site + 1, &encoded, sizeof encoded);
+        memcpy(site + delta_offset, &encoded, sizeof encoded);
         if (translit_helper_relative_count < TL_HELPER_RELATIVE_N)
             translit_helper_relatives[translit_helper_relative_count++] =
-                (translit_helper_relative){(uint32_t)(destination_offset + offset - source), helper};
+                (translit_helper_relative){(uint32_t)(destination_offset + offset - source), encoded_helper};
         translit_helper_relative_emitted++;
     }
     uint32_t chain_start = x64_pc_get32(record + 92), chain_count = x64_pc_get32(record + 96);
@@ -3293,14 +3297,15 @@ static void pcache_save(void) {
     uint32_t live_helper_relocs = 0;
     for (uint32_t i = 0; i < translit_helper_relative_count; i++) {
         translit_helper_relative relocation = translit_helper_relatives[i];
-        if (relocation.offset > used || used - relocation.offset < 5 || relocation.helper >= 2 ||
-            g_cache[relocation.offset] != 0xe9)
-            continue;
+        if (relocation.offset > used || used - relocation.offset < 3) continue;
+        uint32_t helper, delta_offset, instruction_length;
+        if (!x64_pc_helper_reloc_shape(g_cache + relocation.offset, relocation.helper,
+                                       &helper, &delta_offset, &instruction_length)) continue;
+        if (used - relocation.offset < instruction_length) continue;
         int32_t delta;
-        memcpy(&delta, g_cache + relocation.offset + 1, sizeof delta);
-        uint8_t *target = g_cache + relocation.offset + 5 + delta;
-        uint8_t *expected = relocation.helper == 0 ? translit_jcc_ibtc_stub_entry :
-                                                    translit_direct_jmp_ibtc_stub_entry;
+        memcpy(&delta, g_cache + relocation.offset + delta_offset, sizeof delta);
+        uint8_t *target = g_cache + relocation.offset + instruction_length + delta;
+        uint8_t *expected = helper == 0 ? translit_jcc_ibtc_stub_entry : translit_direct_jmp_ibtc_stub_entry;
         if (target != expected) continue;
         if (live_helper_relocs != 0 &&
             translit_helper_relatives[live_helper_relocs - 1].offset == relocation.offset) {
@@ -3766,12 +3771,15 @@ static void x64_pc_activate_ready(uint64_t pc) {
             g_x64_pc_snapshot_maps, g_x64_pc_snapshot_maps_count, g_x64_pc_snapshot_arena_size) >= 0;
     for (uint64_t i = 0; i < g_x64_pc_snapshot_helper_relocs_count; i++) {
         const uint8_t *record = g_x64_pc_snapshot_helper_relocs + i * X64_PC_HELPER_RELOC_SIZE;
-        uint32_t offset = x64_pc_get32(record), helper = x64_pc_get32(record + 4);
+        uint32_t offset = x64_pc_get32(record), encoded_helper = x64_pc_get32(record + 4);
         if (x64_pc_saved_offset_library(offset, g_x64_pc_snapshot_maps, g_x64_pc_snapshot_maps_count,
                                         g_x64_pc_snapshot_arena_size) < 0) continue;
+        uint32_t helper, delta_offset, instruction_length;
+        if (!x64_pc_helper_reloc_shape(g_cache + offset, encoded_helper,
+                                       &helper, &delta_offset, &instruction_length)) goto cold;
         uint8_t *target = helper == 0 ? translit_jcc_ibtc_stub_entry : translit_direct_jmp_ibtc_stub_entry;
-        int64_t delta = target == NULL ? INT64_MAX : target - (g_cache + offset + 5);
-        if (helper > 1 || target == NULL || delta < INT32_MIN || delta > INT32_MAX) goto cold;
+        int64_t delta = target == NULL ? INT64_MAX : target - (g_cache + offset + instruction_length);
+        if (target == NULL || delta < INT32_MIN || delta > INT32_MAX) goto cold;
         deferred_helpers++;
     }
     if (owner_at > JIT_BODY_OWNER_N - deferred_owners ||
@@ -3806,12 +3814,15 @@ static void x64_pc_activate_ready(uint64_t pc) {
     }
     for (uint64_t i = 0; i < g_x64_pc_snapshot_helper_relocs_count; i++) {
         const uint8_t *record = g_x64_pc_snapshot_helper_relocs + i * X64_PC_HELPER_RELOC_SIZE;
-        uint32_t offset = x64_pc_get32(record), helper = x64_pc_get32(record + 4);
+        uint32_t offset = x64_pc_get32(record), encoded_helper = x64_pc_get32(record + 4);
         if (x64_pc_saved_offset_library(offset, g_x64_pc_snapshot_maps, g_x64_pc_snapshot_maps_count,
                                         g_x64_pc_snapshot_arena_size) < 0) continue;
+        uint32_t helper, delta_offset, instruction_length;
+        if (!x64_pc_helper_reloc_shape(g_cache + offset, encoded_helper,
+                                       &helper, &delta_offset, &instruction_length)) goto cold;
         uint8_t *target = helper == 0 ? translit_jcc_ibtc_stub_entry : translit_direct_jmp_ibtc_stub_entry;
-        int32_t encoded = (int32_t)(target - (g_cache + offset + 5));
-        memcpy(g_cache + offset + 1, &encoded, sizeof encoded);
+        int32_t encoded = (int32_t)(target - (g_cache + offset + instruction_length));
+        memcpy(g_cache + offset + delta_offset, &encoded, sizeof encoded);
     }
     for (uint64_t i = 0; i < g_x64_pc_snapshot_chains_count; i++) {
         const uint8_t *saved = g_x64_pc_snapshot_chains + i * X64_PC_CHAIN_SIZE;

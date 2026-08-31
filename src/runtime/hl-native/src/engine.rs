@@ -642,7 +642,7 @@ mod tests {
                 break;
             }
         }
-        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206] {
+        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207] {
             assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }
     }
@@ -655,6 +655,17 @@ mod tests {
             .expect("native test bridge")
             .x86_64_translit_displaced;
         assert_eq!(unsafe { hook(206) }, 0, "cache census signal stages");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn helper_address_relocation_forms_are_authenticated() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 207 checks fixed local instruction bytes and owns no external state.
+        assert_eq!(unsafe { hook(207) }, 0, "helper relocation scenario 207");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]

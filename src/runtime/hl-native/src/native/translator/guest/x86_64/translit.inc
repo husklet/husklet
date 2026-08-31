@@ -1750,9 +1750,24 @@ static uint8_t *translit_direct_jmp_ibtc_stub_flags_canonical;
 static uint8_t *translit_direct_jmp_ibtc_stub_end;
 #define TL_HELPER_RELATIVE_N (JIT_MAP_N * 4u)
 typedef struct { uint32_t offset; uint32_t helper; } translit_helper_relative;
+#define TL_HELPER_RELATIVE_LEA (UINT32_C(1) << 31)
+#define TL_HELPER_RELATIVE_ID_MASK UINT32_C(1)
 static translit_helper_relative translit_helper_relatives[TL_HELPER_RELATIVE_N];
 static uint32_t translit_helper_relative_count;
 static uint32_t translit_helper_relative_emitted;
+
+static int x64_pc_helper_reloc_shape(const uint8_t *site, uint32_t encoded_helper,
+                                     uint32_t *helper, uint32_t *delta_offset, uint32_t *length) {
+    uint32_t form = encoded_helper & ~TL_HELPER_RELATIVE_ID_MASK;
+    *helper = encoded_helper & TL_HELPER_RELATIVE_ID_MASK;
+    if (form == 0 && site[0] == 0xe9) {
+        *delta_offset = 1; *length = 5; return 1;
+    }
+    if (form == TL_HELPER_RELATIVE_LEA && site[0] == 0x48 && site[1] == 0x8d && site[2] == 0x05) {
+        *delta_offset = 3; *length = 7; return 1;
+    }
+    return 0;
+}
 
 static void translit_helper_jmp(hl_x64_asm *a, uint8_t *target, uint32_t helper) {
     if (translit_helper_relative_count < TL_HELPER_RELATIVE_N) {
@@ -1761,6 +1776,15 @@ static void translit_helper_jmp(hl_x64_asm *a, uint8_t *target, uint32_t helper)
     }
     translit_helper_relative_emitted++;
     hl_x64_jmp_rel32(a, target);
+}
+
+static void translit_helper_lea(hl_x64_asm *a, int reg, uint8_t *target, uint32_t helper) {
+    if (translit_helper_relative_count < TL_HELPER_RELATIVE_N) {
+        translit_helper_relatives[translit_helper_relative_count++] =
+            (translit_helper_relative){(uint32_t)(a->cursor - g_cache), helper | TL_HELPER_RELATIVE_LEA};
+    }
+    translit_helper_relative_emitted++;
+    hl_x64_lea_rip_rel32(a, reg, target);
 }
 #if !defined(HL_NATIVE_TEST_HOOKS)
 static ibtc_ent translit_call_sim_ibtc[IBTC_N];
@@ -3121,6 +3145,19 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
     if (scenario == 206) return translit_pcache_census_signal_stage_test() ? 0 : 206;
+    if (scenario == 207) {
+        uint8_t jump[7] = {0xe9}, lea[7] = {0x48, 0x8d, 0x05}, corrupt[7] = {0x48, 0x8d, 0x0d};
+        uint32_t helper, displacement, length;
+        return x64_pc_helper_reloc_shape(jump, 1, &helper, &displacement, &length) && helper == 1 &&
+                       displacement == 1 && length == 5 &&
+                       x64_pc_helper_reloc_shape(lea, TL_HELPER_RELATIVE_LEA, &helper, &displacement, &length) &&
+                       helper == 0 && displacement == 3 && length == 7 &&
+                       !x64_pc_helper_reloc_shape(corrupt, TL_HELPER_RELATIVE_LEA, &helper, &displacement, &length) &&
+                       !x64_pc_helper_reloc_shape(lea, TL_HELPER_RELATIVE_LEA | 4u,
+                                                  &helper, &displacement, &length)
+                   ? 0
+                   : 207;
+    }
     if (scenario == 150) {
         static const struct { const char *name; int missing; unsigned bit; } modes[] = {
             {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
