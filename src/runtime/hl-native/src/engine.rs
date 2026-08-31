@@ -677,7 +677,9 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for selector in 208..=216 {
+        // Exercise collision first so a weakened target comparison is attributed
+        // to the collision contract rather than crashing on the later cold miss.
+        for selector in [209, 208, 210, 211, 212, 213, 214, 215, 216] {
             // SAFETY: each selector runs in a fixture-owned subprocess and arena.
             assert_eq!(unsafe { hook(selector) }, 0, "JCC shared guard scenario {selector}");
         }
