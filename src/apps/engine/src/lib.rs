@@ -149,6 +149,9 @@ struct LaunchArguments {
     /// Durable host directory for translated-code artifacts.
     #[arg(long, value_name = "DIRECTORY", value_parser = parse_translation_cache)]
     translation_cache: Option<PathBuf>,
+    /// Emit persistent-cache load/save counters without enabling general engine diagnostics.
+    #[arg(long, requires = "translation_cache")]
+    translation_cache_observe: bool,
     /// Guest entry: a path inside `--rootfs`, or a host path when no rootfs is given.
     executable: PathBuf,
     /// Arguments handed to the guest unchanged.
@@ -579,6 +582,11 @@ fn rootfs_plan(
         options
             .set("HL_TRANSLIT_PERF_MAP", &path.to_string_lossy(), false)
             .map_err(|error| Failure::Request(format!("cannot set --translit-perf-map: {error:?}")))?;
+    }
+    if launch.translation_cache_observe {
+        options
+            .set("HL_PCACHE_OBSERVE", "1", false)
+            .map_err(|error| Failure::Request(format!("cannot enable translation-cache observability: {error:?}")))?;
     }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
@@ -1078,6 +1086,9 @@ mod tests {
             launch(&["--translation-cache", "/var/tmp/cache", "program"]).translation_cache,
             Some(std::path::PathBuf::from("/var/tmp/cache"))
         );
+        assert!(
+            LaunchArguments::try_parse_from(["hl-x86_64", "--translation-cache-observe", "program"]).is_err()
+        );
         let error = LaunchArguments::try_parse_from(["hl-x86_64", "--translation-cache", "relative/cache", "program"])
             .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
@@ -1110,6 +1121,19 @@ mod tests {
             plan.box_policy.translation_cache.as_deref(),
             Some(cache.as_os_str().as_encoded_bytes())
         );
+        let observed = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--translation-cache",
+                cache.to_str().unwrap(),
+                "--translation-cache-observe",
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(observed.options.get("HL_PCACHE_OBSERVE"), Some("1"));
         assert_eq!(
             rootfs_plan(
                 root.path(),
