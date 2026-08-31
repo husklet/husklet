@@ -35,6 +35,7 @@ enum Mode {
     CacheThreadCold,
     CacheThreadValid,
     CacheValid,
+    CacheFingerprintMismatch,
     CachePreferredCollision,
     CacheAuthorityReuse,
     CacheUpperOverride,
@@ -71,6 +72,7 @@ impl Mode {
             "cache-thread-cold" => Ok(Self::CacheThreadCold),
             "cache-thread-valid" => Ok(Self::CacheThreadValid),
             "cache-valid" => Ok(Self::CacheValid),
+            "cache-fingerprint-mismatch" => Ok(Self::CacheFingerprintMismatch),
             "cache-preferred-collision" => Ok(Self::CachePreferredCollision),
             "cache-authority-reuse" => Ok(Self::CacheAuthorityReuse),
             "cache-upper-override" => Ok(Self::CacheUpperOverride),
@@ -131,6 +133,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     } else if matches!(
         mode,
         Mode::CacheValid
+            | Mode::CacheFingerprintMismatch
             | Mode::CachePreferredCollision
             | Mode::CacheBitflip
             | Mode::CacheTruncated
@@ -998,6 +1001,26 @@ int main(void) {
                     "warm HIT did not reduce translation count by at least one half",
                 )
             })?,
+            Mode::CacheFingerprintMismatch => require(
+                !cache_loaded
+                    && entries
+                        .iter()
+                        .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                        .count()
+                        >= 2
+                    && entries
+                        .iter()
+                        .filter(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(11)
+                                .any(|part| part == b".published-")
+                        })
+                        .count()
+                        >= 2,
+                "different native fingerprint restored or failed to freshly publish",
+            )?,
             Mode::CacheBitflip => require(
                 entries
                     .iter()
@@ -1090,5 +1113,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    if condition { Ok(()) } else { Err(message.into()) }
+    if condition {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
 }
