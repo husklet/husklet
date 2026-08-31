@@ -228,6 +228,7 @@ pub(crate) struct ProductionFactory;
 const BOX_ROOTFS_READ_ONLY: u32 = 1;
 const BOX_NETWORK_ISOLATED: u32 = 1 << 2;
 const BOX_TRANSLATION_CACHE_DISABLED: u32 = 1 << 4;
+const BOX_SENTRY_ONLY: u32 = 1 << 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeSupervisedRefusal {
@@ -586,7 +587,10 @@ fn native_eligibility_with_sentry(
         box_policy.network_bridge.is_some() || box_policy.ip.is_some() || box_policy.egress_proxy.is_some() {
         return Err(R::Network);
     }
-    let allowed = BOX_ROOTFS_READ_ONLY | BOX_NETWORK_ISOLATED | BOX_TRANSLATION_CACHE_DISABLED;
+    let allowed = BOX_ROOTFS_READ_ONLY
+        | BOX_NETWORK_ISOLATED
+        | BOX_TRANSLATION_CACHE_DISABLED
+        | if allow_sentry_only { BOX_SENTRY_ONLY } else { 0 };
     if box_policy.flags & !allowed != 0 { return Err(R::BoxFlags); }
     Ok(())
 }

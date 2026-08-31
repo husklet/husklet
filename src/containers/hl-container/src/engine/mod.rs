@@ -401,6 +401,38 @@ mod tests {
     }
 
     #[test]
+    fn native_execution_carries_the_typed_isolated_sentry_projection() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let mut launch = launch();
+        launch.guest = crate::Guest::X86_64;
+        launch.execution = crate::Execution::native(false);
+        launch.isolation.network_isolated = true;
+        launch.process.uid = Some(1234);
+        launch.process.gid = Some(2345);
+        launch.process.working_dir = "/work".into();
+        launch.hostname = Some("ephemeral-pane".into());
+        launch.mounts.push(crate::model::ResolvedMount {
+            source: source.path().to_owned(),
+            target: "/etc/hosts".into(),
+            access: crate::Access::ReadWrite,
+        });
+
+        let spec = Spec::try_from(&launch).unwrap();
+
+        assert_eq!(spec.plan.box_policy.flags & ((1 << 2) | (1 << 5)), (1 << 2) | (1 << 5));
+        assert_eq!((spec.plan.box_policy.uid, spec.plan.box_policy.gid), (1234, 2345));
+        assert_eq!(spec.plan.box_policy.working_directory.as_deref(), Some(b"/work".as_slice()));
+        assert_eq!(spec.plan.box_policy.hostname.as_deref(), Some(b"ephemeral-pane".as_slice()));
+        assert!(
+            spec.plan
+                .box_policy
+                .volumes
+                .as_deref()
+                .is_some_and(|volumes| volumes.starts_with(b"rw:/etc/hosts:/"))
+        );
+    }
+
+    #[test]
     fn every_execution_mode_leaves_product_backend_unselected() {
         for execution in [crate::Execution::default(), crate::Execution::native(false)] {
             let mut launch = launch();
