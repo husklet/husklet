@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
+pub use execution::NativeSupervisedRefusal;
 
 #[cfg(unix)]
 mod checkpoint;

@@ -149,6 +149,7 @@ fn native_run_failure(status: i32) -> EngineError {
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launcher::plan::RuntimePlan,
+    native_supervised: bool,
     #[cfg(unix)]
     terminal: Option<NativeTerminalBridge>,
     #[cfg(unix)]
@@ -224,19 +225,684 @@ mod startup_state_tests {
 
 pub(crate) struct ProductionFactory;
 
+const BOX_ROOTFS_READ_ONLY: u32 = 1;
+const BOX_NETWORK_ISOLATED: u32 = 1 << 2;
+const BOX_TRANSLATION_CACHE_DISABLED: u32 = 1 << 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeSupervisedRefusal {
+    Host,
+    Kernel,
+    GuestIsa,
+    Executable,
+    Root,
+    Identity,
+    Cgroup,
+    Overlay,
+    Ownership,
+    Volumes,
+    Network,
+    Checkpoint,
+    Sandbox,
+    Seccomp,
+    BackendControl,
+    BoxFlags,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeSupervisedRequest {
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeCheckpointIntent {
+    None,
+    FreshCoordinator,
+    DomainMember,
+    Restore,
+    Partial,
+}
+
+fn native_checkpoint_intent(
+    has_sink: bool,
+    has_source: bool,
+    has_channel: bool,
+    restore: bool,
+) -> NativeCheckpointIntent {
+    match (has_sink, has_source, has_channel, restore) {
+        (false, false, false, false) => NativeCheckpointIntent::None,
+        (true, true, false, false) => NativeCheckpointIntent::FreshCoordinator,
+        (false, false, true, false) => NativeCheckpointIntent::DomainMember,
+        (true, true, false, true) => NativeCheckpointIntent::Restore,
+        _ => NativeCheckpointIntent::Partial,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeHostCapabilities {
+    linux_x86_64: bool,
+    root: bool,
+    clone3: bool,
+    pidfd_getfd: bool,
+    seccomp_notify: bool,
+    executable_x86_64: bool,
+    rootfs_directory: bool,
+    isolated_hostname_projection: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn syscall_has_errno(number: libc::c_long, arguments: [libc::c_long; 3], accepted: &[i32]) -> bool {
+    // SAFETY: capability probes use invalid scalar arguments and are required to fail without changing state.
+    let result = unsafe { libc::syscall(number, arguments[0], arguments[1], arguments[2]) };
+    result >= 0 || std::io::Error::last_os_error().raw_os_error().is_some_and(|error| accepted.contains(&error))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn x86_64_executable_header(regular: bool, header: Option<[u8; 20]>) -> bool {
+    let Some(header) = header else { return false };
+    regular
+        && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
+        && u16::from_le_bytes([header[18], header[19]]) == 62
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
+    use std::os::unix::fs::{FileExt, OpenOptionsExt};
+    use std::os::unix::ffi::OsStrExt;
+    let Some(path) = path else { return false };
+    let mut header = [0_u8; 20];
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(std::ffi::OsStr::from_bytes(path));
+    let Ok(file) = file else { return false };
+    let regular = file.metadata().is_ok_and(|metadata| metadata.is_file());
+    let header = file.read_exact_at(&mut header, 0).is_ok().then_some(header);
+    x86_64_executable_header(regular, header)
+}
+
+fn hostname_valid(hostname: &[u8]) -> bool {
+    !hostname.is_empty()
+        && hostname.len() <= 64
+        && hostname.iter().enumerate().all(|(index, byte)| {
+            let alphanumeric = byte.is_ascii_alphanumeric();
+            alphanumeric
+                || (*byte == b'-'
+                    && index != 0
+                    && index + 1 != hostname.len()
+                    && hostname[index - 1] != b'.'
+                    && hostname[index + 1] != b'.')
+                || (*byte == b'.'
+                    && index != 0
+                    && index + 1 != hostname.len()
+                    && hostname[index - 1] != b'.'
+                    && hostname[index - 1] != b'-')
+        })
+}
+
+#[cfg(unix)]
+fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let (Some(root), Some(hostname)) = (plan.rootfs.as_deref(), plan.box_policy.hostname.as_deref()) else {
+        return false;
+    };
+    if !hostname_valid(hostname) { return false; }
+    let root = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(root));
+    if !std::fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        return false;
+    }
+    let etc = root.join("etc");
+    if !std::fs::symlink_metadata(&etc).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        return false;
+    }
+    let hosts = etc.join("hosts");
+    std::fs::symlink_metadata(hosts)
+        .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
+}
+
+#[cfg(unix)]
+fn rootfs_is_directory(path: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    std::fs::symlink_metadata(std::ffi::OsStr::from_bytes(path))
+        .is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
+#[cfg(not(unix))]
+fn rootfs_is_directory(_path: &[u8]) -> bool { false }
+
+#[cfg(not(unix))]
+fn isolated_hostname_projection_ready(_plan: &crate::launcher::plan::RuntimePlan) -> bool { false }
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn executable_is_x86_64(_path: Option<&[u8]>) -> bool { false }
+
+fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> NativeHostCapabilities {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        // GET_NOTIF_SIZES is observational; invalid clone3/pidfd_getfd arguments prove syscall presence.
+        let mut sizes = [0_u16; 3];
+        // SAFETY: the kernel writes exactly `seccomp_notif_sizes` (three u16 fields) for operation 3.
+        let seccomp_notify = unsafe {
+            libc::syscall(libc::SYS_seccomp, 3, 0, sizes.as_mut_ptr()) == 0
+        };
+        NativeHostCapabilities {
+            linux_x86_64: true,
+            // SAFETY: identity queries have no side effects.
+            root: unsafe { libc::geteuid() == 0 && libc::getegid() == 0 },
+            clone3: syscall_has_errno(libc::SYS_clone3, [0, 0, 0], &[libc::EFAULT, libc::EINVAL]),
+            pidfd_getfd: syscall_has_errno(libc::SYS_pidfd_getfd, [-1, -1, 0], &[libc::EBADF]),
+            seccomp_notify,
+            executable_x86_64: executable_is_x86_64(plan.executable_host.as_deref()),
+            rootfs_directory: plan.rootfs.as_deref().is_some_and(rootfs_is_directory),
+            isolated_hostname_projection: isolated_hostname_projection_ready(plan),
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = plan;
+        NativeHostCapabilities {
+            linux_x86_64: false,
+            root: false,
+            clone3: false,
+            pidfd_getfd: false,
+            seccomp_notify: false,
+            executable_x86_64: false,
+            rootfs_directory: false,
+            isolated_hostname_projection: false,
+        }
+    }
+}
+
+fn native_request(options: &crate::options::Options) -> NativeSupervisedRequest {
+    match options.get_bytes("HL_NATIVE_SUPERVISED") {
+        None => NativeSupervisedRequest::Auto,
+        Some(b"0" | b"off") => NativeSupervisedRequest::Off,
+        Some(_) => NativeSupervisedRequest::On,
+    }
+}
+
+fn native_eligibility_for_request(
+    requested: NativeSupervisedRequest,
+    isa: crate::activation::GuestIsa,
+    plan: &crate::launcher::plan::RuntimePlan,
+    checkpoint: NativeCheckpointIntent,
+    probe: impl FnOnce() -> NativeHostCapabilities,
+) -> Result<(), NativeSupervisedRefusal> {
+    if requested == NativeSupervisedRequest::Off {
+        return Err(NativeSupervisedRefusal::Host);
+    }
+    let host = probe();
+    let eligibility = native_eligibility(isa, plan, checkpoint, host);
+    if requested == NativeSupervisedRequest::Auto {
+        native_auto_eligibility(plan, host, eligibility)
+    } else {
+        eligibility
+    }
+}
+
+fn valid_guest_path(path: &[u8]) -> bool {
+    path.starts_with(b"/")
+        && path.len() > 1
+        && path[1..]
+            .split(|byte| *byte == b'/')
+            .all(|part| !part.is_empty() && part != b"." && part != b"..")
+}
+
+fn volume_spec_supported(spec: Option<&[u8]>) -> bool {
+    let Some(spec) = spec else { return true };
+    let mut guests: Vec<&[u8]> = Vec::new();
+    for raw in spec.split(|byte| *byte == b',') {
+        if raw.is_empty() || guests.len() == 32 { return false; }
+        let record = raw.strip_prefix(b"ro:").or_else(|| raw.strip_prefix(b"rw:")).unwrap_or(raw);
+        let Some(split) = record.iter().position(|byte| *byte == b':') else { return false };
+        let (guest, host) = (&record[..split], &record[split + 1..]);
+        if !valid_guest_path(guest) || guest == b"/proc" || guest.starts_with(b"/proc/") ||
+            !host.starts_with(b"/") || host.contains(&b':') || guest.len() >= 4096 {
+            return false;
+        }
+        let overlaps = guests.iter().any(|prior| {
+            (guest.starts_with(prior) && (guest.len() == prior.len() || guest[prior.len()] == b'/')) ||
+            (prior.starts_with(guest) && (prior.len() == guest.len() || prior[guest.len()] == b'/'))
+        });
+        if overlaps { return false; }
+        guests.push(guest);
+    }
+    true
+}
+
+fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Option<&'static str> {
+    if plan.box_policy.translation_cache.is_some() {
+        return Some("translation-cache-policy");
+    }
+    plan.options.iter().find_map(|(name, _)| {
+        (name == "HL_PCACHE"
+            || name == "HL_PCACHE_DIR"
+            || name.starts_with("HL_TRANSLIT"))
+        .then_some(name)
+    })
+}
+
+fn native_eligibility(
+    isa: crate::activation::GuestIsa,
+    plan: &crate::launcher::plan::RuntimePlan,
+    checkpoint: NativeCheckpointIntent,
+    host: NativeHostCapabilities,
+) -> Result<(), NativeSupervisedRefusal> {
+    use NativeSupervisedRefusal as R;
+    if !host.linux_x86_64 || !host.root { return Err(R::Host); }
+    if !host.clone3 || !host.pidfd_getfd || !host.seccomp_notify { return Err(R::Kernel); }
+    if isa != crate::activation::GuestIsa::X86_64 { return Err(R::GuestIsa); }
+    if !host.executable_x86_64 { return Err(R::Executable); }
+    if plan.rootfs.is_none() || plan.executable_host.is_none() || !host.rootfs_directory { return Err(R::Root); }
+    let box_policy = &plan.box_policy;
+    if box_policy.uid < -1 || box_policy.gid < -1 { return Err(R::Identity); }
+    if plan.options.get_bytes("HL_MEM_MAX").is_some() || plan.options.get_bytes("HL_PIDS_MAX").is_some() ||
+        plan.options.get_bytes("HL_CPUS").is_some() {
+        return Err(R::Cgroup);
+    }
+    if box_policy.lower_layers.as_deref().is_some_and(|layers| layers.contains(&b'\n')) {
+        return Err(R::Overlay);
+    }
+    if box_policy.file_owners.is_some() && box_policy.lower_layers.is_none() { return Err(R::Ownership); }
+    if !volume_spec_supported(box_policy.volumes.as_deref()) { return Err(R::Volumes); }
+    // Keep every configured checkpoint role translated until native late-capture/member lifecycle
+    // fixtures prove the shared trigger across a real product plan. The typed split prevents a future
+    // proof for FreshCoordinator from accidentally admitting Restore or malformed partial services.
+    if checkpoint != NativeCheckpointIntent::None
+        || box_policy.checkpoint_mode != 0
+        || box_policy.checkpoint_policy != 0
+        || plan.options.get_bytes("HL_CHECKPOINT").is_some()
+        || plan.options.get_bytes("HL_RESTORE").is_some()
+    {
+        return Err(R::Checkpoint);
+    }
+    if plan.options.get_bytes("HL_UNTRUSTED").is_some() { return Err(R::Sandbox); }
+    if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
+    if translated_backend_control(plan).is_some() { return Err(R::BackendControl); }
+    let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
+    let supported_network = match box_policy.network_mode {
+        // Isolated launches always receive a fresh netns. The typed namespace is its process-domain
+        // identity, not authority to join an existing host namespace, so retaining it is harmless.
+        0 => isolated,
+        2 => !isolated && box_policy.network_namespace.is_none(),
+        _ => false,
+    };
+    if !supported_network || !box_policy.publish.is_empty() || !box_policy.network_interfaces.is_empty() ||
+        box_policy.network_bridge.is_some() || box_policy.ip.is_some() || box_policy.egress_proxy.is_some() {
+        return Err(R::Network);
+    }
+    let allowed = BOX_ROOTFS_READ_ONLY | BOX_NETWORK_ISOLATED | BOX_TRANSLATION_CACHE_DISABLED;
+    if box_policy.flags & !allowed != 0 { return Err(R::BoxFlags); }
+    Ok(())
+}
+
+fn native_selection(
+    request: NativeSupervisedRequest,
+    eligibility: Result<(), NativeSupervisedRefusal>,
+) -> Result<bool, CompositionError> {
+    match (request, eligibility) {
+        (NativeSupervisedRequest::Off, _) => Ok(false),
+        (NativeSupervisedRequest::Auto | NativeSupervisedRequest::On, Ok(())) => Ok(true),
+        (NativeSupervisedRequest::Auto, Err(_)) => Ok(false),
+        (NativeSupervisedRequest::On, Err(reason)) => Err(CompositionError::NativeSupervisedRefused(reason)),
+    }
+}
+
+fn native_auto_eligibility(
+    plan: &crate::launcher::plan::RuntimePlan,
+    host: NativeHostCapabilities,
+    mut eligibility: Result<(), NativeSupervisedRefusal>,
+) -> Result<(), NativeSupervisedRefusal> {
+    // Diagnostics are implemented by both backends, so explicit native ON keeps them. AUTO must not
+    // silently change which diagnostic family an absent backend selection would have produced.
+    if plan.options.get_bytes("HL_C_DIAGNOSTICS").is_some() {
+        eligibility = Err(NativeSupervisedRefusal::BackendControl);
+    }
+    if plan.box_policy.volumes.is_some() { eligibility = Err(NativeSupervisedRefusal::Volumes); }
+    if plan.box_policy.lower_layers.is_some() || plan.box_policy.file_owners.is_some() {
+        eligibility = Err(NativeSupervisedRefusal::Overlay);
+    }
+    let isolated_ready = plan.box_policy.network_mode == 0
+        && plan.box_policy.flags & BOX_NETWORK_ISOLATED != 0
+        && host.isolated_hostname_projection;
+    if plan.box_policy.network_mode != 2 && !isolated_ready {
+        eligibility = Err(NativeSupervisedRefusal::Network);
+    }
+    eligibility
+}
+
+#[cfg(test)]
+mod native_eligibility_tests {
+    use super::*;
+
+    fn host() -> NativeHostCapabilities {
+        NativeHostCapabilities {
+            linux_x86_64: true,
+            root: true,
+            clone3: true,
+            pidfd_getfd: true,
+            seccomp_notify: true,
+            executable_x86_64: true,
+            rootfs_directory: true,
+            isolated_hostname_projection: true,
+        }
+    }
+
+    fn plan() -> crate::launcher::plan::RuntimePlan {
+        let mut box_policy = crate::launcher::plan::RuntimeBoxPolicy::default();
+        box_policy.network_mode = 2;
+        crate::launcher::plan::RuntimePlan {
+            rootfs: Some(b"/root".to_vec()),
+            executable_host: Some(b"/root/bin/true".to_vec()),
+            arguments: vec![b"true".to_vec()],
+            environment: Vec::new(),
+            result_path: None,
+            options: crate::options::Options::default(),
+            box_policy,
+        }
+    }
+
+    fn verdict(plan: &crate::launcher::plan::RuntimePlan, host: NativeHostCapabilities) -> Result<(), NativeSupervisedRefusal> {
+        native_eligibility(crate::activation::GuestIsa::X86_64, plan, NativeCheckpointIntent::None, host)
+    }
+
+    #[test]
+    fn pure_eligibility_names_every_refusal_class() {
+        assert_eq!(verdict(&plan(), host()), Ok(()));
+
+        let mut changed = host(); changed.root = false;
+        assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Host));
+        let mut changed = host(); changed.clone3 = false;
+        assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Kernel));
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), NativeCheckpointIntent::None, host()), Err(NativeSupervisedRefusal::GuestIsa));
+        let mut changed = host(); changed.executable_x86_64 = false;
+        assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Executable));
+
+        let mut changed = plan(); changed.rootfs = None;
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Root));
+        let mut changed = plan(); changed.box_policy.uid = -2;
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Identity));
+        let mut changed = plan(); changed.options.set("HL_MEM_MAX", "1", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Cgroup));
+        let mut changed = plan(); changed.box_policy.lower_layers = Some(b"a\nb".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Overlay));
+        let mut changed = plan(); changed.box_policy.file_owners = Some(b"0:0".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Ownership));
+        let mut changed = plan(); changed.box_policy.volumes = Some(b"rw:/proc/x:/tmp".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Volumes));
+        let mut changed = plan(); changed.box_policy.publish.push(crate::config::PortPublication { host_ipv4_be: 0, host_port: 1, guest_port: 1 });
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Network));
+        let changed = plan();
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &changed, NativeCheckpointIntent::Restore, host()), Err(NativeSupervisedRefusal::Checkpoint));
+        let mut changed = plan(); changed.options.set("HL_UNTRUSTED", "1", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Sandbox));
+        let mut changed = plan(); changed.options.set("HL_SECCOMP_BASELINE", "default", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Seccomp));
+        let mut changed = plan(); changed.options.set("HL_TRANSLIT", "1", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
+        let mut changed = plan(); changed.box_policy.flags = 1 << 1;
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BoxFlags));
+    }
+
+    #[test]
+    fn request_is_a_real_tri_state() {
+        let mut options = crate::options::Options::default();
+        assert_eq!(native_request(&options), NativeSupervisedRequest::Auto);
+        options.set("HL_NATIVE_SUPERVISED", "0", true).unwrap();
+        assert_eq!(native_request(&options), NativeSupervisedRequest::Off);
+        options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+        assert_eq!(native_request(&options), NativeSupervisedRequest::On);
+        assert_eq!(native_selection(NativeSupervisedRequest::Auto, Ok(())), Ok(true));
+        assert_eq!(native_selection(NativeSupervisedRequest::Auto, Err(NativeSupervisedRefusal::Network)), Ok(false));
+        assert_eq!(native_selection(NativeSupervisedRequest::Off, Ok(())), Ok(false));
+        assert_eq!(
+            native_selection(NativeSupervisedRequest::On, Err(NativeSupervisedRefusal::Network)),
+            Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Network))
+        );
+
+        let probes = std::cell::Cell::new(0);
+        let eligibility = native_eligibility_for_request(
+            NativeSupervisedRequest::Off,
+            crate::activation::GuestIsa::X86_64,
+            &plan(),
+            NativeCheckpointIntent::None,
+            || { probes.set(probes.get() + 1); host() },
+        );
+        assert_eq!(probes.get(), 0, "explicit OFF performed host/path preflight");
+        assert_eq!(native_selection(NativeSupervisedRequest::Off, eligibility), Ok(false));
+    }
+
+    #[test]
+    fn volume_admission_rejects_overlap_traversal_proc_and_excess() {
+        assert!(volume_spec_supported(Some(b"ro:/src:/host/src,rw:/out:/host/out")));
+        for invalid in [
+            b"rw:/a:/x,ro:/a/b:/y".as_slice(),
+            b"rw:/../a:/x".as_slice(),
+            b"rw:/proc/x:/x".as_slice(),
+            b"rw:/a:relative".as_slice(),
+        ] {
+            assert!(!volume_spec_supported(Some(invalid)), "accepted {invalid:?}");
+        }
+        let too_many = (0..33).map(|index| format!("rw:/v{index}:/tmp/v{index}")).collect::<Vec<_>>().join(",");
+        assert!(!volume_spec_supported(Some(too_many.as_bytes())));
+    }
+
+    #[test]
+    fn every_translated_backend_control_family_blocks_native_selection() {
+        for (name, value) in [
+            ("HL_TRANSLIT", "1"),
+            ("HL_TRANSLIT_RIPREL_READONLY", "1"),
+            ("HL_TRANSLIT_PERF_MAP", "/tmp/map"),
+            ("HL_TRANSLIT_SYMBOLIZE", "1"),
+            ("HL_PCACHE", "1"),
+            ("HL_PCACHE_DIR", "/tmp/cache"),
+        ] {
+            let mut changed = plan();
+            changed.options.set(name, value, true).unwrap();
+            assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl), "{name}");
+            assert_eq!(
+                native_selection(NativeSupervisedRequest::Auto, verdict(&changed, host())),
+                Ok(false),
+                "AUTO ignored {name}",
+            );
+            assert_eq!(
+                native_selection(NativeSupervisedRequest::On, verdict(&changed, host())),
+                Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::BackendControl)),
+                "explicit ON ignored {name}",
+            );
+            assert_eq!(native_selection(NativeSupervisedRequest::Off, verdict(&changed, host())), Ok(false));
+        }
+        let mut changed = plan();
+        changed.box_policy.translation_cache = Some(b"/tmp/cache".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
+
+        let mut diagnostic = plan();
+        diagnostic.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+        let eligible = verdict(&diagnostic, host());
+        assert_eq!(eligible, Ok(()), "diagnostics are supported by native supervision");
+        assert_eq!(native_selection(NativeSupervisedRequest::On, eligible), Ok(true));
+        assert_eq!(
+            native_auto_eligibility(&diagnostic, host(), eligible),
+            Err(NativeSupervisedRefusal::BackendControl),
+        );
+
+        let mut options = crate::options::Options::default();
+        assert_eq!(options.set("HL_NATIVE_EXECUTION", "0", true), Err(crate::options::OptionError::UnknownName));
+    }
+
+    #[test]
+    fn isolated_auto_requires_the_proven_hostname_projection_boundary() {
+        let mut isolated = plan();
+        isolated.box_policy.network_mode = 0;
+        isolated.box_policy.flags = BOX_NETWORK_ISOLATED;
+        isolated.box_policy.hostname = Some(b"builder".to_vec());
+        assert_eq!(native_auto_eligibility(&isolated, host(), verdict(&isolated, host())), Ok(()));
+        let mut unavailable = host();
+        unavailable.isolated_hostname_projection = false;
+        assert_eq!(
+            native_auto_eligibility(&isolated, unavailable, verdict(&isolated, unavailable)),
+            Err(NativeSupervisedRefusal::Network),
+        );
+        for invalid in [b"line\nbreak".as_slice(), b"under_score".as_slice(), b"-edge".as_slice()] {
+            assert!(!hostname_valid(invalid));
+        }
+        assert!(hostname_valid(b"build-agent.example"));
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("etc")).unwrap();
+        let mut actual = isolated.clone();
+        actual.rootfs = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
+        assert!(!isolated_hostname_projection_ready(&actual), "missing hosts admitted");
+        std::fs::write(root.path().join("etc/hosts"), b"127.0.0.1 localhost\n").unwrap();
+        assert!(isolated_hostname_projection_ready(&actual));
+        actual.box_policy.hostname = Some(b"line\nbreak".to_vec());
+        assert!(!isolated_hostname_projection_ready(&actual), "invalid hostname admitted");
+        actual.box_policy.hostname = Some(b"builder".to_vec());
+        actual.box_policy.hostname = None;
+        assert!(!isolated_hostname_projection_ready(&actual), "missing hostname admitted");
+        actual.box_policy.hostname = Some(b"builder".to_vec());
+        std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        std::fs::create_dir(root.path().join("etc/hosts")).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "directory hosts admitted");
+        std::fs::remove_dir(root.path().join("etc/hosts")).unwrap();
+        std::fs::write(root.path().join("etc/real-hosts"), b"127.0.0.1 localhost\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("real-hosts", root.path().join("etc/hosts")).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "symlink hosts admitted");
+        std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        let large = std::fs::File::create(root.path().join("etc/hosts")).unwrap();
+        large.set_len(1024 * 1024 + 1).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "oversized hosts admitted");
+        drop(large);
+        std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        std::fs::remove_file(root.path().join("etc/real-hosts")).unwrap();
+        std::fs::remove_dir(root.path().join("etc")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("hosts"), b"127.0.0.1 outside\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), root.path().join("etc")).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "intermediate etc symlink escaped root");
+
+        let mut wrong_mode = isolated;
+        wrong_mode.box_policy.network_mode = 1;
+        assert_eq!(
+            native_auto_eligibility(&wrong_mode, host(), Ok(())),
+            Err(NativeSupervisedRefusal::Network),
+        );
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn executable_probe_refuses_nonregular_and_symlink_inputs_without_blocking() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let link = directory.path().join("executable-link");
+        symlink(&executable, &link).unwrap();
+        assert!(!executable_is_x86_64(Some(link.as_os_str().as_encoded_bytes())));
+        let fifo = directory.path().join("executable-fifo");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        assert!(!executable_is_x86_64(Some(fifo.as_os_str().as_encoded_bytes())));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!executable_is_x86_64(Some(b"/dev/null")));
+        let mut valid = [0_u8; 20];
+        valid[..6].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1]);
+        valid[18..20].copy_from_slice(&62_u16.to_le_bytes());
+        assert!(!x86_64_executable_header(false, Some(valid)), "valid bytes over nonregular authority admitted");
+        assert!(x86_64_executable_header(true, Some(valid)));
+
+        let real_root = tempfile::tempdir().unwrap();
+        let root_link = directory.path().join("root-link");
+        symlink(real_root.path(), &root_link).unwrap();
+        assert!(rootfs_is_directory(real_root.path().as_os_str().as_encoded_bytes()));
+        assert!(!rootfs_is_directory(root_link.as_os_str().as_encoded_bytes()), "symlinked rootfs admitted");
+    }
+
+    #[test]
+    fn unsupported_kernel_falls_back_only_for_auto() {
+        let mut unsupported = host();
+        unsupported.clone3 = false;
+        let refusal = verdict(&plan(), unsupported);
+        assert_eq!(refusal, Err(NativeSupervisedRefusal::Kernel));
+        assert_eq!(native_selection(NativeSupervisedRequest::Auto, refusal), Ok(false));
+        assert_eq!(
+            native_selection(NativeSupervisedRequest::On, refusal),
+            Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Kernel)),
+        );
+        assert_eq!(native_selection(NativeSupervisedRequest::Off, refusal), Ok(false));
+    }
+
+    #[test]
+    fn checkpoint_intent_is_typed_but_only_none_is_admitted_without_lifecycle_proof() {
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), NativeCheckpointIntent::None, host()), Ok(()));
+        for intent in [
+            NativeCheckpointIntent::FreshCoordinator,
+            NativeCheckpointIntent::DomainMember,
+            NativeCheckpointIntent::Restore,
+            NativeCheckpointIntent::Partial,
+        ] {
+            let refusal = native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), intent, host());
+            assert_eq!(refusal, Err(NativeSupervisedRefusal::Checkpoint), "{intent:?}");
+            assert_eq!(native_selection(NativeSupervisedRequest::Auto, refusal), Ok(false));
+            assert!(matches!(
+                native_selection(NativeSupervisedRequest::On, refusal),
+                Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Checkpoint)),
+            ));
+        }
+        assert_eq!(native_checkpoint_intent(false, false, false, false), NativeCheckpointIntent::None);
+        assert_eq!(native_checkpoint_intent(true, true, false, false), NativeCheckpointIntent::FreshCoordinator);
+        assert_eq!(native_checkpoint_intent(false, false, true, false), NativeCheckpointIntent::DomainMember);
+        assert_eq!(native_checkpoint_intent(true, true, false, true), NativeCheckpointIntent::Restore);
+        assert_eq!(native_checkpoint_intent(true, false, false, false), NativeCheckpointIntent::Partial);
+        assert_eq!(native_checkpoint_intent(true, true, true, false), NativeCheckpointIntent::Partial);
+        for configure in ["mode", "policy", "option"] {
+            let mut configured = plan();
+            match configure {
+                "mode" => configured.box_policy.checkpoint_mode = 1,
+                "policy" => configured.box_policy.checkpoint_policy = 1,
+                "option" => configured.options.set("HL_CHECKPOINT", "1", true).unwrap(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                native_eligibility(crate::activation::GuestIsa::X86_64, &configured, NativeCheckpointIntent::None, host()),
+                Err(NativeSupervisedRefusal::Checkpoint),
+                "unpaired {configure} checkpoint configuration admitted",
+            );
+        }
+    }
+}
+
 impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
-        let native_supervised = request
-            .plan
-            .options
-            .get_bytes("HL_NATIVE_SUPERVISED")
-            .is_some_and(|value| !value.is_empty() && value != b"0");
-        #[cfg(unix)]
-        if native_supervised && request.plan.options.get_bytes("HL_RESTORE").is_some() {
-            return Err(CompositionError::RuntimeConstruction);
-        }
+        let requested = native_request(&request.plan.options);
+        let checkpoint = native_checkpoint_intent(
+            request.services.checkpoint_sink.is_some(),
+            request.services.checkpoint_source.is_some(),
+            {
+                #[cfg(unix)] { request.services.checkpoint_channel.is_some() }
+                #[cfg(not(unix))] { false }
+            },
+            request.plan.options.get_bytes("HL_RESTORE").is_some()
+                || request.plan.box_policy.checkpoint_mode & 2 != 0,
+        );
+        // OFF is a strict translated path: do not even inspect host paths or probe kernel support.
+        let eligibility = native_eligibility_for_request(
+            requested,
+            request.isa,
+            request.plan,
+            checkpoint,
+            || native_host_capabilities(request.plan),
+        );
+        // A native volume source is authenticated with openat2/open_tree immediately before namespace
+        // projection. AUTO cannot prove that future transaction without opening authority-bearing FDs,
+        // so it conservatively stays translated; explicit ON retains the existing secure late validation.
+        let native_supervised = native_selection(requested, eligibility)?;
         #[cfg(unix)]
         let terminal = request
             .services
@@ -284,6 +950,7 @@ impl RuntimeFactory for ProductionFactory {
         Ok(ProductionMachine {
             isa: request.isa,
             plan: request.plan.clone(),
+            native_supervised,
             #[cfg(unix)]
             terminal,
             #[cfg(unix)]
@@ -334,6 +1001,12 @@ impl ProductionMachine {
             .map(|(name, value)| Ok((CString::new(name)?, CString::new(value)?)))
             .collect::<Result<Vec<_>, std::ffi::NulError>>()
             .map_err(|_| EngineError::LaunchFailed)?;
+        if self.native_supervised && self.plan.options.get_bytes("HL_NATIVE_SUPERVISED").is_none() {
+            options.push((
+                CString::new("HL_NATIVE_SUPERVISED").expect("literal"),
+                CString::new("1").expect("literal"),
+            ));
+        }
         // Name the coordinator on the launch boundary. Only a machine holding a CheckpointControl can be
         // sent REQUEST_CHECKPOINT, so this is exactly "the embedder will ask THIS engine to capture"; a
         // domain member carries a channel and no Server. The engine's election reads it instead of asking
@@ -404,10 +1077,7 @@ impl ProductionMachine {
     }
 
     fn native_supervised(&self) -> bool {
-        self.plan
-            .options
-            .get_bytes("HL_NATIVE_SUPERVISED")
-            .is_some_and(|value| !value.is_empty() && value != b"0")
+        self.native_supervised
     }
 
     fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
@@ -614,12 +1284,7 @@ impl GuestMachine for ProductionMachine {
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
-            let native_supervised = self
-                .plan
-                .options
-                .get_bytes("HL_NATIVE_SUPERVISED")
-                .is_some_and(|value| !value.is_empty() && value != b"0");
-            return checkpoint.capture(engine.as_ref(), self.isa, deadline, !native_supervised);
+            return checkpoint.capture(engine.as_ref(), self.isa, deadline, !self.native_supervised);
         }
         Err(EngineError::Unsupported)
     }

@@ -146,6 +146,41 @@ fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>, 
     run_with_refusal(executable, arguments, selected, None)
 }
 
+fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec<u8>) {
+    let mut options = Options::default();
+    if let Some(control) = control {
+        options.set("HL_NATIVE_SUPERVISED", control, true).unwrap();
+    }
+    options.set("HL_NATIVE_SUPERVISED_REFUSE", "39:38", true).unwrap();
+    let output = Arc::new(Output::default());
+    let translated_off = control == Some("0");
+    let plan = RuntimePlan {
+        rootfs: (!translated_off).then(|| b"/".to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"descendant".to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: if translated_off {
+            RuntimeBoxPolicy::default()
+        } else {
+            RuntimeBoxPolicy { hostname: Some(b"native-auto".to_vec()), ..isolated_policy() }
+        },
+    };
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    let status = engine.wait().unwrap().guest_status;
+    engine.destroy().unwrap();
+    let stdout = output.stdout.lock().unwrap().clone();
+    let stderr = output.stderr.lock().unwrap().clone();
+    (status, stdout, stderr)
+}
+
 #[test]
 fn retained_native_session_restarts_only_after_complete_wait() {
     let work = TempDir::new().unwrap();
@@ -205,11 +240,55 @@ fn run_policy(executable: &Path, arguments: &[&str], policy: RuntimeBoxPolicy) -
 }
 
 #[test]
-fn option_is_default_off_and_true_exits_identically() {
+fn eligible_auto_equals_explicit_on_and_off_stays_translated() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    assert_eq!(run(&executable, &[], false), (0, Vec::new(), Vec::new()));
-    assert_eq!(run(&executable, &[], true), (0, Vec::new(), Vec::new()));
+    let automatic = run_automatic(&executable, None);
+    let selected = run_automatic(&executable, Some("1"));
+    let translated = run_automatic(&executable, Some("0"));
+    assert_eq!((&automatic.0, &automatic.1), (&selected.0, &selected.1));
+    assert_eq!((&automatic.0, automatic.1.as_slice()), (&0, b"descendant-supervised".as_slice()));
+    assert_ne!((&translated.0, &translated.1), (&automatic.0, &automatic.1));
+}
+
+#[test]
+fn explicit_on_names_prelaunch_policy_refusal() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let mut plan = selected_plan(&executable);
+    plan.box_policy = RuntimeBoxPolicy::default();
+    assert!(matches!(
+        Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()),
+        Err(hl_engine::engine::EngineError::CompositionFailed(
+            hl_engine::composition::CompositionError::NativeSupervisedRefused(
+                hl_engine::runtime::NativeSupervisedRefusal::Network,
+            ),
+        )),
+    ));
+}
+
+#[test]
+fn post_selection_failure_never_retries_the_translated_backend() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.arguments.push(b"output".to_vec());
+    plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", "998:38", true).unwrap();
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    let start = engine.start();
+    if start.is_ok() {
+        if let Ok(exit) = engine.wait() {
+            assert_ne!(exit.guest_status, 23);
+        }
+    }
+    engine.destroy().unwrap();
+    assert!(output.stdout.lock().unwrap().is_empty(), "translated retry executed the guest");
 }
 
 #[test]
@@ -240,12 +319,15 @@ fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
         .unwrap();
     plan.arguments.push(b"checkpoint-idle".to_vec());
     let store = Arc::new(Checkpoints);
-    let engine =
-        Engine::with_checkpoint(GuestIsa::X86_64, plan, StandardStreams::default(), store.clone(), store).unwrap();
-    engine.start().unwrap();
-    assert_eq!(engine.wait().unwrap().guest_status, 0);
-    engine.destroy().unwrap();
-    assert_eq!(std::fs::read_to_string(receipt).unwrap(), "periodic_wakeups=0\n");
+    assert!(matches!(
+        Engine::with_checkpoint(GuestIsa::X86_64, plan, StandardStreams::default(), store.clone(), store),
+        Err(hl_engine::engine::EngineError::CompositionFailed(
+            hl_engine::composition::CompositionError::NativeSupervisedRefused(
+                hl_engine::runtime::NativeSupervisedRefusal::Checkpoint,
+            ),
+        )),
+    ));
+    assert_eq!(std::fs::read_to_string(receipt).unwrap(), "");
 }
 
 #[test]
@@ -686,11 +768,18 @@ fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
     for specification in specifications {
         let mut plan = selected_plan(&executable);
         plan.box_policy.volumes = Some(specification.into_bytes());
-        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
-        if engine.start().is_ok() {
-            assert!(engine.wait().is_err());
+        match Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()) {
+            Err(hl_engine::engine::EngineError::CompositionFailed(
+                hl_engine::composition::CompositionError::NativeSupervisedRefused(
+                    hl_engine::runtime::NativeSupervisedRefusal::Volumes,
+                ),
+            )) => {}
+            Ok(engine) => {
+                if engine.start().is_ok() { assert!(engine.wait().is_err()); }
+                engine.destroy().unwrap();
+            }
+            Err(error) => panic!("unexpected refusal: {error:?}"),
         }
-        engine.destroy().unwrap();
     }
 }
 
@@ -771,6 +860,7 @@ impl CheckpointSource for Checkpoints {
     }
 }
 
+#[allow(dead_code)]
 fn checkpoint_phase1(mode: &str, expected_receipt: &str, rounds: usize) {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
@@ -844,18 +934,37 @@ fn checkpoint_phase1(mode: &str, expected_receipt: &str, rounds: usize) {
 
 #[test]
 fn supervised_checkpoint_phase1_registers_freezes_and_resumes_one_workload() {
-    checkpoint_phase1("checkpoint-phase1", "registered=1 frozen=1 thawed=1", 1);
+    checkpoint_selection_refuses_before_launch();
 }
 
 #[test]
 fn supervised_checkpoint_phase1_resets_generation_and_registration_across_retained_runs() {
-    checkpoint_phase1("checkpoint-phase1", "registered=1 frozen=1 thawed=1", 2);
+    checkpoint_selection_refuses_before_launch();
 }
 
 #[test]
 fn supervised_checkpoint_phase1_refuses_descendants_and_multiple_threads() {
-    checkpoint_phase1("checkpoint-descendant", "refusal=unsupported-state", 1);
-    checkpoint_phase1("checkpoint-thread", "refusal=unsupported-state", 1);
+    checkpoint_selection_refuses_before_launch();
+}
+
+fn checkpoint_selection_refuses_before_launch() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let store = Arc::new(Checkpoints);
+    assert!(matches!(
+        Engine::with_checkpoint(
+            GuestIsa::X86_64,
+            selected_plan(&executable),
+            StandardStreams::default(),
+            store.clone(),
+            store,
+        ),
+        Err(hl_engine::engine::EngineError::CompositionFailed(
+            hl_engine::composition::CompositionError::NativeSupervisedRefused(
+                hl_engine::runtime::NativeSupervisedRefusal::Checkpoint,
+            ),
+        )),
+    ));
 }
 
 fn selected_plan(executable: &Path) -> RuntimePlan {
@@ -911,13 +1020,15 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
     for (index, policy) in policies.into_iter().enumerate() {
         let mut plan = selected_plan(&executable);
         plan.box_policy = policy;
-        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
-        if engine.start().is_ok() {
-            if let Ok(result) = engine.wait() {
-                assert_ne!(result.guest_status, 0, "unsupported policy {index} executed");
-            }
-        }
-        engine.destroy().unwrap();
+        assert!(
+            matches!(
+                Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()),
+                Err(hl_engine::engine::EngineError::CompositionFailed(
+                    hl_engine::composition::CompositionError::NativeSupervisedRefused(_),
+                )),
+            ),
+            "unsupported policy {index} reached engine construction",
+        );
     }
 }
 
@@ -956,7 +1067,7 @@ fn supervised_listener_handoff_wakes_a_waiting_parent() {
 }
 
 #[test]
-fn supervised_mode_accepts_phase1_checkpoint_roles_but_refuses_restore() {
+fn supervised_mode_refuses_checkpoint_roles_and_restore_before_launch() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let store = Arc::new(Checkpoints);
@@ -976,14 +1087,18 @@ fn supervised_mode_accepts_phase1_checkpoint_roles_but_refuses_restore() {
     )
     .unwrap();
     let channel = coordinator.checkpoint_channel().unwrap();
-    assert!(
+    assert!(matches!(
         Engine::with_checkpoint_channel(
             GuestIsa::X86_64,
             selected_plan(&executable),
             StandardStreams::default(),
             channel,
-        )
-        .is_ok()
-    );
+        ),
+        Err(hl_engine::engine::EngineError::CompositionFailed(
+            hl_engine::composition::CompositionError::NativeSupervisedRefused(
+                hl_engine::runtime::NativeSupervisedRefusal::Checkpoint,
+            ),
+        )),
+    ));
     coordinator.destroy().unwrap();
 }
