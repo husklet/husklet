@@ -110,6 +110,32 @@ fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
 }
 
 #[test]
+fn execution_lifetime_is_backward_compatible_and_ephemeral_round_trips_explicitly() {
+    let path = tmp_path("execution-lifetime");
+    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = amd64\n").unwrap();
+    assert_eq!(
+        WorkspaceStore::load(&path)
+            .unwrap()
+            .get("legacy")
+            .unwrap()
+            .execution_lifetime,
+        ExecutionLifetime::Persisted
+    );
+
+    let mut workspace = WorkspaceConfig::new("fast", "alpine", Arch::Amd64);
+    workspace.execution_lifetime = ExecutionLifetime::Ephemeral;
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(workspace.clone()).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("execution_lifetime = ephemeral\n")
+    );
+    assert_eq!(WorkspaceStore::load(&path).unwrap().get("fast"), Some(&workspace));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn explicit_unlimited_scrollback_roundtrips_without_becoming_default() {
     let path = tmp_path("unlimited-scrollback");
     let _ = std::fs::remove_file(&path);
@@ -232,9 +258,11 @@ fn versioned_mount_serialization_is_canonical_across_repeated_saves() {
     let mut store = WorkspaceStore::load(&path).unwrap();
     store.upsert(workspace.clone()).unwrap();
     let first = std::fs::read(&path).unwrap();
-    assert!(first
-        .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
-        .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" }));
+    assert!(
+        first
+            .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
+            .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" })
+    );
 
     let mut reloaded = WorkspaceStore::load(&path).unwrap();
     reloaded.upsert(workspace).unwrap();
@@ -274,9 +302,11 @@ fn failed_persistence_does_not_change_the_live_store() {
         items: vec![original.clone()],
     };
 
-    assert!(store
-        .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
-        .is_err());
+    assert!(
+        store
+            .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
+            .is_err()
+    );
     assert_eq!(store.all(), [original]);
 }
 
