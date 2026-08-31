@@ -48,8 +48,50 @@ pub struct ExecConfig {
     pub user: String,
     #[serde(default, rename = "WorkingDir")]
     pub working_dir: String,
+    #[serde(
+        default,
+        rename = "HuskletLifetime",
+        skip_serializing_if = "ExecLifetime::is_default"
+    )]
+    pub lifetime: ExecLifetime,
+    #[serde(default, rename = "HuskletNetwork", skip_serializing_if = "ExecNetwork::is_default")]
+    pub network: ExecNetwork,
+    #[serde(default, rename = "HuskletNative", skip_serializing_if = "is_false")]
+    pub native: bool,
     #[serde(flatten, default)]
     pub unsupported: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecLifetime {
+    #[default]
+    Persisted,
+    Ephemeral,
+}
+
+impl ExecLifetime {
+    fn is_default(value: &Self) -> bool {
+        *value == Self::Persisted
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecNetwork {
+    #[default]
+    Container,
+    Isolated,
+}
+
+impl ExecNetwork {
+    fn is_default(value: &Self) -> bool {
+        *value == Self::Container
+    }
 }
 
 #[cfg(feature = "runtime")]
@@ -210,7 +252,7 @@ pub struct Console {
 
 #[cfg(test)]
 mod tests {
-    use super::{Attachment, ExecConfig, ExecStart};
+    use super::{Attachment, ExecConfig, ExecLifetime, ExecNetwork, ExecStart};
 
     #[test]
     fn exec_wire_models_use_docker_field_names() {
@@ -241,6 +283,26 @@ mod tests {
             serde_json::to_value(ExecStart::default()).unwrap(),
             serde_json::json!({"Detach": false, "Tty": false, "KillOnDisconnect": false})
         );
+    }
+
+    #[test]
+    fn ephemeral_native_fields_are_explicit_and_legacy_payloads_keep_persisted_defaults() {
+        let legacy: ExecConfig = serde_json::from_value(serde_json::json!({"Cmd": ["/bin/true"]})).unwrap();
+        assert_eq!(legacy.lifetime, ExecLifetime::Persisted);
+        assert_eq!(legacy.network, ExecNetwork::Container);
+        assert!(!legacy.native);
+
+        let encoded = serde_json::to_value(ExecConfig {
+            command: vec!["/bin/true".into()],
+            lifetime: ExecLifetime::Ephemeral,
+            network: ExecNetwork::Isolated,
+            native: true,
+            ..ExecConfig::default()
+        })
+        .unwrap();
+        assert_eq!(encoded["HuskletLifetime"], "ephemeral");
+        assert_eq!(encoded["HuskletNetwork"], "isolated");
+        assert_eq!(encoded["HuskletNative"], true);
     }
 
     #[cfg(feature = "runtime")]

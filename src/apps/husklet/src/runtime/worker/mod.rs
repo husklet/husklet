@@ -94,7 +94,15 @@ impl Worker {
         // fatal SIGINT for this worker -- reported by the pane as `workspace session ended
         // (signal 2)`. Hold the tty's terminating signals until `TerminalSession` owns raw mode.
         let interrupts = crate::ffi::InterruptMask::block();
-        let mut terminal = match crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot) {
+        let launched = match workspace.execution_lifetime {
+            crate::config::ExecutionLifetime::Persisted => {
+                crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot)
+            }
+            crate::config::ExecutionLifetime::Ephemeral => {
+                crate::runtime::execution::launch_ephemeral(&workspace, columns, rows, cwd)
+            }
+        };
+        let mut terminal = match launched {
             Ok(terminal) => terminal,
             Err(error) => {
                 diagnostics.record(format_args!("workspace launch failed: {error}"));
