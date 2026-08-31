@@ -61,6 +61,46 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
 }
 
 #[test]
+fn product_dispatch_return_census_is_complete_and_bound_to_map_misses() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let backend = fs::read_to_string(native.join("engine/backend_tree.c")).expect("backend census source");
+    let dispatch = fs::read_to_string(native.join("engine/dispatch.c")).expect("dispatcher source");
+    for field in [
+        "dispatch_translation_miss",
+        "dispatch_translated_return_total",
+        "dispatch_translated_return_mismatch",
+        "dispatch_interpreted_return_total",
+        "dispatch_interpreted_return_mismatch",
+        "t_fallthrough",
+        "t_jcc_taken",
+        "t_jcc_fall",
+        "t_direct_jmp",
+        "t_direct_call",
+        "t_ret",
+        "t_jmp_reg",
+        "t_jmp_mem",
+        "t_call_reg",
+        "t_call_mem",
+        "t_syscall",
+        "t_irq",
+        "t_fault",
+        "t_other",
+    ] {
+        assert!(backend.contains(field), "product dispatcher census omits {field}");
+    }
+    let miss = dispatch.find("if (!code) {").expect("map-miss branch");
+    let translate = dispatch[miss..]
+        .find("G_TRANSLATE_BLOCK")
+        .map(|offset| miss + offset)
+        .expect("translation after map miss");
+    let count = dispatch[miss..translate]
+        .find("hl_backend_tree_map_miss();")
+        .map(|offset| miss + offset)
+        .expect("map-miss census at the dispatcher decision");
+    assert!(miss < count && count < translate);
+}
+
+#[test]
 fn x86_runtime_has_no_unreachable_debug_kill_switches() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     for relative in [
