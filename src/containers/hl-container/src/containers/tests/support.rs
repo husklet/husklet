@@ -100,6 +100,7 @@ pub(super) struct FakeRuntime {
     pub(super) mounts: RecordedMounts,
     pub(super) networks: Arc<std::sync::Mutex<Vec<Vec<NetworkConfig>>>>,
     pub(super) programs: Arc<std::sync::Mutex<Vec<Process>>>,
+    pub(super) executions: Arc<std::sync::Mutex<Vec<crate::Execution>>>,
     pub(super) resources: Arc<std::sync::Mutex<Vec<crate::Resources>>>,
     pub(super) isolations: Arc<std::sync::Mutex<Vec<Isolation>>>,
     pub(super) publishes: Arc<std::sync::Mutex<Vec<Vec<crate::Publication>>>>,
@@ -140,6 +141,7 @@ impl FakeRuntime {
             mounts: Arc::new(std::sync::Mutex::new(Vec::new())),
             networks: Arc::new(std::sync::Mutex::new(Vec::new())),
             programs: Arc::new(std::sync::Mutex::new(Vec::new())),
+            executions: Arc::new(std::sync::Mutex::new(Vec::new())),
             resources: Arc::new(std::sync::Mutex::new(Vec::new())),
             isolations: Arc::new(std::sync::Mutex::new(Vec::new())),
             publishes: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -404,6 +406,7 @@ impl Runtime for FakeRuntime {
         let is_health =
             launch.process.program == "/health" || launch.process.args.iter().any(|value| value == "__health__");
         self.programs.lock().unwrap().push(launch.process.clone());
+        self.executions.lock().unwrap().push(launch.execution);
         self.resources.lock().unwrap().push(launch.resources);
         self.isolations.lock().unwrap().push(launch.isolation);
         self.publishes.lock().unwrap().push(launch.publish);

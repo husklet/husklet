@@ -94,7 +94,12 @@ impl Service {
         }
         let container = self.required(&exec.container).await?;
         container.require_exec()?;
-        let networks = self.launch_networks(&container).await?;
+        let ephemeral = exec.spec.lifetime == crate::ExecLifetime::Ephemeral;
+        let networks = if exec.spec.network == crate::ExecNetwork::Isolated {
+            Vec::new()
+        } else {
+            self.launch_networks(&container).await?
+        };
         let journal = JournalId::exec(exec.id.clone());
         let process_spec = exec.spec.process.clone();
         let requested_mounts = container.spec.mounts.clone();
@@ -102,12 +107,16 @@ impl Service {
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.open(&container)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
-        let domain = Some(self.process_domain(&container.id).await?);
+        let domain = if ephemeral {
+            None
+        } else {
+            Some(self.process_domain(&container.id).await?)
+        };
         // An exec session holds the far ends of the container's sockets and pipes, so
         // it is a member of the container's freeze rather than the subject of a
         // capture of its own. It therefore opens no image: there is no `exec-<id>`
         // namespace for a second, invisible generation to be committed into.
-        let checkpoint = crate::service::CheckpointRole::DomainMember;
+        let checkpoint = (!ephemeral).then_some(crate::service::CheckpointRole::DomainMember);
         let (cursor, live_at) = if let Some(cursor) = exec.attachment_cursor {
             (cursor, self.logs.cursor(&journal).await?)
         } else {
@@ -136,9 +145,9 @@ impl Service {
                 translation_cache: self.translation_cache.clone(),
                 translation_cache_observability: self.translation_cache_observability,
                 translation_symbols: self.translation_symbols.clone(),
-                checkpoint: Some(checkpoint),
+                checkpoint,
                 guest: container.spec.guest,
-                execution: container.spec.execution,
+                execution: exec.spec.execution.unwrap_or(container.spec.execution),
                 process: process_spec,
                 hostname: Some(container.hostname()),
                 mounts,

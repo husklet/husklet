@@ -225,6 +225,36 @@ async fn execution_joins_the_container_domain_without_owning_it() {
 }
 
 #[tokio::test]
+async fn ephemeral_execution_is_native_isolated_and_outside_checkpoint_membership() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("ephemeral-parent")).await.unwrap();
+    containers.start("ephemeral-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "ephemeral-parent",
+            ExecSpec::new(Process::new("/bin/true"))
+                .lifetime(crate::ExecLifetime::Ephemeral)
+                .network(crate::ExecNetwork::Isolated)
+                .execution(crate::Execution::native(false)),
+        )
+        .await
+        .unwrap();
+
+    let _session = containers.executions().start(&exec.id).await.unwrap();
+
+    assert_eq!(runtime.checkpoint_roles.lock().unwrap().last(), Some(&None));
+    assert_eq!(runtime.networks.lock().unwrap().last(), Some(&Vec::new()));
+    assert_eq!(
+        runtime.executions.lock().unwrap().last(),
+        Some(&crate::Execution::native(false))
+    );
+}
+
+#[tokio::test]
 async fn killing_an_execution_force_stops_it_without_stopping_the_container() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);

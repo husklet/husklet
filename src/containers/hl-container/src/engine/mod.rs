@@ -379,26 +379,24 @@ mod tests {
     }
 
     #[test]
-    fn native_execution_selects_only_the_retained_c_diagnostics_option() {
-        // The engine has no native-execution switch: `src/runtime/hl-native/src/native/engine/options.c`
-        // is the authoritative option registry and defines neither `HL_NATIVE_EXECUTION` nor
-        // `HL_NATIVE_DIAGNOSTICS`. `Execution::Native` therefore carries exactly one launch effect,
-        // the retained-C diagnostics request.
+    fn native_execution_selects_the_supervised_backend_and_diagnostics() {
         let mut launch = launch();
         launch.execution = crate::Execution::native(true);
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
     }
 
     #[test]
-    fn native_execution_without_diagnostics_selects_no_launch_option() {
+    fn native_execution_without_diagnostics_still_selects_the_supervised_backend() {
         let mut launch = launch();
         launch.execution = crate::Execution::native(false);
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
     }
 

@@ -27,6 +27,7 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
         Self::flag(&mut options, "HL_C_DIAGNOSTICS", launch.execution.diagnostics())?;
+        Self::flag(&mut options, "HL_NATIVE_SUPERVISED", launch.execution.is_native())?;
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
