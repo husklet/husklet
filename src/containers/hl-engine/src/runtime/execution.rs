@@ -544,7 +544,7 @@ fn native_selection(
 ) -> Result<bool, CompositionError> {
     match (request, eligibility) {
         (NativeSupervisedRequest::Off, _) => Ok(false),
-        (NativeSupervisedRequest::Auto, Ok(())) | (NativeSupervisedRequest::On, Ok(())) => Ok(true),
+        (NativeSupervisedRequest::Auto | NativeSupervisedRequest::On, Ok(())) => Ok(true),
         (NativeSupervisedRequest::Auto, Err(_)) => Ok(false),
         (NativeSupervisedRequest::On, Err(reason)) => Err(CompositionError::NativeSupervisedRefused(reason)),
     }
