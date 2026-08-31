@@ -119,7 +119,8 @@ fn executed_fall_stop_reasons_reconcile_exactly_to_translated_fallthroughs() {
 fn each_real_translation_stop_site_keeps_its_exact_reason() {
     // The hook scenarios exercise marker transport and exact counter reconciliation. This wiring
     // clamp makes a mutation at any real build-loop assignment red as well: replacing one site by
-    // OTHER must not be masked by the sum invariant.
+    // OTHER must not be masked by the sum invariant. FETCH is absent deliberately: translation
+    // consumes the decoder's authoritative bytes and has no second fetch that can fail separately.
     let source = include_str!("../src/native/translator/guest/x86_64/translit.inc");
     for assignment in [
         "fall_stop = HL_BACKEND_FALL_DECODE;",
@@ -127,7 +128,6 @@ fn each_real_translation_stop_site_keeps_its_exact_reason() {
         "fall_stop = previous_kind == TL_SSE2 ? HL_BACKEND_FALL_SSE2_TO_FS",
         "fall_stop = current_sse2 ? HL_BACKEND_FALL_NORMAL_TO_SSE2",
         "fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;",
-        "fall_stop = HL_BACKEND_FALL_FETCH;",
         "fall_stop = HL_BACKEND_FALL_RIPREL_LOWER;",
         "fall_stop = HL_BACKEND_FALL_FS_TRANSACTION;",
         "fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;",
