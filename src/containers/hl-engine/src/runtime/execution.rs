@@ -245,6 +245,7 @@ pub enum NativeSupervisedRefusal {
     Checkpoint,
     Sandbox,
     Seccomp,
+    BackendControl,
     BoxFlags,
 }
 
@@ -365,6 +366,19 @@ fn volume_spec_supported(spec: Option<&[u8]>) -> bool {
     true
 }
 
+fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Option<&'static str> {
+    if plan.box_policy.translation_cache.is_some() {
+        return Some("translation-cache-policy");
+    }
+    plan.options.iter().find_map(|(name, _)| {
+        (name == "HL_C_DIAGNOSTICS"
+            || name == "HL_PCACHE"
+            || name == "HL_PCACHE_DIR"
+            || name.starts_with("HL_TRANSLIT"))
+        .then_some(name)
+    })
+}
+
 fn native_eligibility(
     isa: crate::activation::GuestIsa,
     plan: &crate::launcher::plan::RuntimePlan,
@@ -394,6 +408,7 @@ fn native_eligibility(
     }
     if plan.options.get_bytes("HL_UNTRUSTED").is_some() { return Err(R::Sandbox); }
     if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
+    if translated_backend_control(plan).is_some() { return Err(R::BackendControl); }
     let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
     let supported_network = match box_policy.network_mode {
         // Isolated launches always receive a fresh netns. The typed namespace is its process-domain
@@ -489,6 +504,8 @@ mod native_eligibility_tests {
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Sandbox));
         let mut changed = plan(); changed.options.set("HL_SECCOMP_BASELINE", "default", true).unwrap();
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Seccomp));
+        let mut changed = plan(); changed.options.set("HL_TRANSLIT", "1", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
         let mut changed = plan(); changed.box_policy.flags = 1 << 1;
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BoxFlags));
     }
@@ -523,6 +540,40 @@ mod native_eligibility_tests {
         }
         let too_many = (0..33).map(|index| format!("rw:/v{index}:/tmp/v{index}")).collect::<Vec<_>>().join(",");
         assert!(!volume_spec_supported(Some(too_many.as_bytes())));
+    }
+
+    #[test]
+    fn every_translated_backend_control_family_blocks_native_selection() {
+        for (name, value) in [
+            ("HL_TRANSLIT", "1"),
+            ("HL_TRANSLIT_RIPREL_READONLY", "1"),
+            ("HL_TRANSLIT_PERF_MAP", "/tmp/map"),
+            ("HL_TRANSLIT_SYMBOLIZE", "1"),
+            ("HL_PCACHE", "1"),
+            ("HL_PCACHE_DIR", "/tmp/cache"),
+            ("HL_C_DIAGNOSTICS", "1"),
+        ] {
+            let mut changed = plan();
+            changed.options.set(name, value, true).unwrap();
+            assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl), "{name}");
+            assert_eq!(
+                native_selection(NativeSupervisedRequest::Auto, verdict(&changed, host())),
+                Ok(false),
+                "AUTO ignored {name}",
+            );
+            assert_eq!(
+                native_selection(NativeSupervisedRequest::On, verdict(&changed, host())),
+                Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::BackendControl)),
+                "explicit ON ignored {name}",
+            );
+            assert_eq!(native_selection(NativeSupervisedRequest::Off, verdict(&changed, host())), Ok(false));
+        }
+        let mut changed = plan();
+        changed.box_policy.translation_cache = Some(b"/tmp/cache".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
+
+        let mut options = crate::options::Options::default();
+        assert_eq!(options.set("HL_NATIVE_EXECUTION", "0", true), Err(crate::options::OptionError::UnknownName));
     }
 }
 
