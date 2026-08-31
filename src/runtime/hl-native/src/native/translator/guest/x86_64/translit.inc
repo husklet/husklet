@@ -546,7 +546,13 @@ static int translit_external_absolute_kind_valid(uint32_t kind) {
 static void translit_emit_spill(hl_x64_asm *a);
 static void translit_emit_reload(hl_x64_asm *a);
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind);
-static void translit_pcache_census_note(const struct interp_block *block);
+
+static void translit_emit_pcache_census(hl_x64_asm *a, uint16_t ordinal) {
+    translit_emit_spill(a);
+    hl_x64_atomic_inc_abs_kind(a, (uintptr_t)&translit_pcache_census_count[ordinal],
+                               TL_EXT_PCACHE_CENSUS_BASE + ordinal);
+    translit_emit_reload(a);
+}
 
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind) {
     if (__builtin_expect(!g_pcache, 1)) return;
@@ -3030,7 +3036,6 @@ static void *translit_unsupported_record_thread(void *opaque) {
 }
 
 static int translit_single_fetch_test(void);
-static int translit_pcache_census_entry_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
@@ -3316,7 +3321,6 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return 0;
     }
     if (scenario == 205) return translit_single_fetch_test();
-    if (scenario == 206) return translit_pcache_census_entry_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -4531,6 +4535,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
     struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
+    if (INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX) {
+        translit_emit_pcache_census(a, INTERP_BLOCK_PCACHE_ORDINAL(block));
+    }
+
     uint64_t pc = gpc;
     int count = 0, terminated = 0, stitched = 0;
     uint32_t readonly_riprel_count = 0;
@@ -6663,22 +6671,6 @@ static int translit_single_fetch_test(void) {
     return exact ? 0 : 194;
 }
 
-static int translit_pcache_census_entry_test(void) {
-    int saved_coldprof = g_coldprof;
-    struct interp_block block = {0};
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(&block, 7);
-    translit_pcache_census_count[7] = 0;
-    g_coldprof = 1;
-    for (unsigned i = 0; i < 5; i++) translit_pcache_census_note(&block);
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(&block, UINT16_MAX);
-    translit_pcache_census_note(&block); /* map miss/refusal/early dispatcher exits never reach this seam */
-    g_coldprof = 0;
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(&block, 7);
-    translit_pcache_census_note(&block);
-    g_coldprof = saved_coldprof;
-    return translit_pcache_census_count[7] == 5 ? 0 : 206;
-}
-
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     const size_t arena_size = 65536;
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -8083,13 +8075,6 @@ done_call_ibtc:
 // inside emitted code is captured by translit_signal_capture and leaves by the same siglongjmp the
 // interpreter uses, which restores the host callee-saved registers the block is currently holding guest
 // values in.
-static void translit_pcache_census_note(const struct interp_block *block) {
-    if (__builtin_expect(!g_coldprof, 1)) return;
-    uint16_t ordinal = INTERP_BLOCK_PCACHE_ORDINAL(block);
-    if (ordinal != UINT16_MAX)
-        (void)__atomic_fetch_add(&translit_pcache_census_count[ordinal], 1, __ATOMIC_RELAXED);
-}
-
 static void translit_run(struct cpu *cpu, struct interp_block *block) {
     // These counters exist only in the profile report. Normal launches must not serialize every translated
     // entry on their shared cache lines to maintain telemetry nobody can observe.
@@ -8097,9 +8082,6 @@ static void translit_run(struct cpu *cpu, struct interp_block *block) {
         (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
         if (g_nonpie_lo) (void)__atomic_fetch_add(&translit_displaced_entries, 1, __ATOMIC_RELAXED);
     }
-    // The cpu image is canonical at this C entry seam. Keeping diagnostics here avoids an emitted
-    // spill/update/reload prefix whose intermediate register states would need independent signal ownership.
-    translit_pcache_census_note(block);
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);

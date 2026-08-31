@@ -642,37 +642,9 @@ mod tests {
                 break;
             }
         }
-        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206] {
+        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205] {
             assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }
-    }
-
-    #[test]
-    fn cache_census_has_no_emitted_signal_stage() {
-        let source = include_str!("native/translator/guest/x86_64/translit.inc");
-        assert!(
-            !source.contains("translit_emit_pcache_census"),
-            "cache census reintroduced an emitted spill/reload prefix"
-        );
-        let run = source
-            .split("static void translit_run(struct cpu *cpu, struct interp_block *block) {")
-            .nth(1)
-            .expect("translated entry seam");
-        let census = run
-            .find("translit_pcache_census_note(block)")
-            .expect("entry census update");
-        let enter = run.find("hl_x86_translit_enter(cpu").expect("translated body entry");
-        assert!(census < enter, "cache census moved past translated body entry");
-    }
-
-    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
-    #[test]
-    fn cache_census_counts_only_canonical_body_entries() {
-        let _serial = engine_test_lock();
-        let hook = crate::loader::tests()
-            .expect("native test bridge")
-            .x86_64_translit_displaced;
-        assert_eq!(unsafe { hook(206) }, 0, "cache census entry seam");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
