@@ -228,7 +228,8 @@ static int hl_native_supervised_volumes_contains(const hl_native_supervised_volu
     return 0;
 }
 
-static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes) {
+static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes,
+                                              const hl_options *options) {
     int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (root < 0) return -1;
     for (size_t index = 0; index < volumes->count; ++index) {
@@ -254,6 +255,20 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
                 syscall(SYS_statx, target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &target_key) != 0) {
                 close(tree); close(target); close(root); return -1;
             }
+#if defined(HL_NATIVE_TEST_HOOKS)
+            const char *test = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE");
+            if (test != NULL && strcmp(test, "file-volume-target-swap") == 0) {
+                char pinned_path[PATH_MAX], replacement_path[PATH_MAX];
+                if (snprintf(pinned_path, sizeof pinned_path, "%s.pinned", target_path) >= (int)sizeof pinned_path ||
+                    snprintf(replacement_path, sizeof replacement_path, "%s.swap", target_path) >=
+                        (int)sizeof replacement_path ||
+                    rename(target_path, pinned_path) != 0 || rename(replacement_path, target_path) != 0) {
+                    close(tree); close(target); close(root); return -1;
+                }
+            }
+#else
+            (void)options;
+#endif
             int path = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
             int stable = path >= 0 && syscall(SYS_statx, path, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID,
                                               &path_key) == 0 &&
@@ -766,7 +781,7 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     char byte;
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
-    if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
+    if (hl_native_supervised_volumes_mount(projected_root, volumes, options) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
         !hl_native_supervised_volumes_contains(volumes, "/etc/hosts") &&
         hl_native_supervised_project_hostname(projected_root, box->hostname,

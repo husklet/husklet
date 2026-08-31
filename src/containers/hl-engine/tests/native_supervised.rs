@@ -967,6 +967,32 @@ fn supervised_projector_refuses_missing_symlinked_and_wrong_type_file_volumes() 
 }
 
 #[test]
+fn supervised_projector_refuses_target_swap_after_pinning_without_mounting_replacement() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let root = work.path().join("root");
+    std::fs::create_dir_all(root.join("etc")).unwrap();
+    let source = work.path().join("source");
+    std::fs::write(&source, b"trusted-source\n").unwrap();
+    std::fs::write(root.join("etc/target"), b"pinned-target\n").unwrap();
+    std::fs::write(root.join("etc/target.swap"), b"attacker-target\n").unwrap();
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.box_policy.volumes = Some(format!("ro:/etc/target:{}", source.display()).into_bytes());
+    plan.options
+        .set("HL_NATIVE_SUPERVISED_REFUSE", "file-volume-target-swap", true)
+        .unwrap();
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    if engine.start().is_ok() {
+        assert!(engine.wait().is_err());
+    }
+    engine.destroy().unwrap();
+    assert_eq!(std::fs::read(root.join("etc/target")).unwrap(), b"attacker-target\n");
+    assert_eq!(std::fs::read(root.join("etc/target.pinned")).unwrap(), b"pinned-target\n");
+    assert_eq!(std::fs::read(&source).unwrap(), b"trusted-source\n");
+}
+
+#[test]
 fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
