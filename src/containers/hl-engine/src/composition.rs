@@ -29,6 +29,8 @@ pub enum CompositionError {
     /// engine already does.
     EngineUnavailable,
     RuntimeConstruction,
+    /// An explicitly requested native-supervised launch is incompatible with this immutable plan or host.
+    NativeSupervisedRefused(crate::runtime::NativeSupervisedRefusal),
     TransactionBusy,
     DeadlineExceeded,
     /// The authoritative generation changed, but its containing directory
