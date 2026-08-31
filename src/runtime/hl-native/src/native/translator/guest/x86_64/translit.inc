@@ -55,7 +55,8 @@ _Static_assert(TL_MAX_INSNS < 256,
 #ifndef TL_STITCH_MAX_JMPS
 #define TL_STITCH_MAX_JMPS 8
 #endif
-#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 1)
+#define TL_PCACHE_CENSUS_OWNER_RANGES 7u
+#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 1 + TL_PCACHE_CENSUS_OWNER_RANGES)
 
 // ---- the host<->guest boundary
 //
@@ -547,11 +548,34 @@ static void translit_emit_spill(hl_x64_asm *a);
 static void translit_emit_reload(hl_x64_asm *a);
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind);
 
-static void translit_emit_pcache_census(hl_x64_asm *a, uint16_t ordinal) {
-    translit_emit_spill(a);
+typedef struct translit_pcache_census_ranges {
+    uint8_t *start, *rax_canonical, *rsp_canonical, *flags_canonical, *atomic_end;
+    uint8_t *flags_live, *rax_live, *rsp_live;
+} translit_pcache_census_ranges;
+
+static translit_pcache_census_ranges translit_emit_pcache_census(hl_x64_asm *a, uint16_t ordinal) {
+    translit_pcache_census_ranges ranges = {.start = a->cursor};
+    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.rax_canonical = a->cursor;
+    hl_x64_store_gs(a, HL_X64_RSP, 4 * 8);
+    ranges.rsp_canonical = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RSP, OFF_HSP);
+    hl_x64_pushfq(a);
+    hl_x64_pop(a, HL_X64_RAX);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    ranges.flags_canonical = a->cursor;
+    hl_x64_cld(a);
     hl_x64_atomic_inc_abs_kind(a, (uintptr_t)&translit_pcache_census_count[ordinal],
                                TL_EXT_PCACHE_CENSUS_BASE + ordinal);
-    translit_emit_reload(a);
+    ranges.atomic_end = a->cursor;
+    hl_x64_push_gs(a, TL_MM_FLAGS);
+    hl_x64_popfq(a);
+    ranges.flags_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.rax_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RSP, 4 * 8);
+    ranges.rsp_live = a->cursor;
+    return ranges;
 }
 
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind) {
@@ -646,6 +670,7 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
 static int translit_ret_signal_stage_test(void);
 static int translit_jmp_mem_signal_stage_test(void);
+static int translit_pcache_census_signal_stage_test(void);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
 static uint64_t translit_fs_fixture_admitted;
@@ -2635,6 +2660,26 @@ static int translit_owner_append(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES
     return 1;
 }
 
+static int translit_owner_append_pcache_census(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES],
+                                                uint32_t *count,
+                                                const translit_pcache_census_ranges *site,
+                                                uint64_t guest) {
+    uint32_t before = *count;
+    const uint32_t rax = 1u << HL_X64_RAX, rsp = 1u << HL_X64_RSP, both = rax | rsp;
+    if (!translit_owner_append(ranges, count, site->start, site->rax_canonical, guest, 0) ||
+        !translit_owner_append(ranges, count, site->rax_canonical, site->rsp_canonical, guest, rax) ||
+        !translit_owner_append(ranges, count, site->rsp_canonical, site->flags_canonical, guest, both) ||
+        !translit_owner_append(ranges, count, site->flags_canonical, site->atomic_end,
+                               JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS, both) ||
+        !translit_owner_append(ranges, count, site->atomic_end, site->flags_live,
+                               JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS, both) ||
+        !translit_owner_append(ranges, count, site->flags_live, site->rax_live,
+                               JIT_BODY_OWNER_DYNAMIC_RIP, both) ||
+        !translit_owner_append(ranges, count, site->rax_live, site->rsp_live,
+                               JIT_BODY_OWNER_DYNAMIC_RIP, rsp)) return 0;
+    return *count - before == TL_PCACHE_CENSUS_OWNER_RANGES;
+}
+
 // Ordinary copied instructions use the exact staged instruction map for normal fault provenance. Their
 // persistent fallback owner may cover one maximal contiguous zero-preserve span, matching the historical
 // block-granular fallback without consuming one 16-byte sidecar entry per one-byte NOP. The caller clears
@@ -3075,6 +3120,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
     if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
+    if (scenario == 206) return translit_pcache_census_signal_stage_test() ? 0 : 206;
     if (scenario == 150) {
         static const struct { const char *name; int missing; unsigned bit; } modes[] = {
             {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
@@ -4535,8 +4581,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
     struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
+    translit_pcache_census_ranges census_ranges = {0};
+    int census_emitted = INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX;
     if (INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX) {
-        translit_emit_pcache_census(a, INTERP_BLOCK_PCACHE_ORDINAL(block));
+        census_ranges = translit_emit_pcache_census(a, INTERP_BLOCK_PCACHE_ORDINAL(block));
     }
 
     uint64_t pc = gpc;
@@ -4568,6 +4616,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     jit_body_owner_range instruction_ranges[TL_MAX_OWNER_RANGES];
     uint32_t owner_count = 0;
     uint32_t instruction_range_count = 0;
+    if (census_emitted &&
+        !translit_owner_append_pcache_census(owners, &owner_count, &census_ranges, gpc)) {
+        if (staged_telemetry) translit_attempt_telemetry_discard();
+        return NULL;
+    }
     int owner_normal_pending = 0;
     int jcc_fall_stitched = 0;
     int direct_jmp_stitched = 0;
@@ -8706,6 +8759,65 @@ static int translit_fs_load_bridge_fixture_test(unsigned scenario) {
     return scenario == 181 || scenario == 182 || scenario == 184
                ? (int)(emitted_hash & UINT64_C(0x7fffffff))
                : 0;
+}
+
+static int translit_pcache_census_signal_stage_test(void) {
+    const size_t arena_size = 16384;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 0;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    uint64_t saved_generation = g_cache_gen;
+    int saved_selected = translit_selected;
+    g_cache = arena; g_cp = arena; g_cache_gen = UINT64_MAX - 206; translit_selected = 1;
+    jit_body_owner_drop_generation(g_cache_gen);
+    uint32_t token;
+    int exact = jit_body_owner_reserve_n(g_cache_gen, TL_PCACHE_CENSUS_OWNER_RANGES + 1, &token);
+    hl_x64_asm a = {arena, arena + arena_size, 0};
+    translit_pcache_census_ranges site = translit_emit_pcache_census(&a, 0);
+    jit_body_owner_range ranges[TL_PCACHE_CENSUS_OWNER_RANGES + 1];
+    uint32_t count = 0;
+    const uint64_t guest = UINT64_C(0x401000);
+    exact = exact && translit_owner_append_pcache_census(ranges, &count, &site, guest);
+    uint8_t *body = a.cursor;
+    hl_x64_u8(&a, 0x90);
+    exact = exact && translit_owner_append(ranges, &count, body, a.cursor, guest, 0) &&
+            count == TL_PCACHE_CENSUS_OWNER_RANGES + 1 &&
+            jit_body_owner_publish_n(g_cache_gen, token, ranges, count);
+    struct stage { uint8_t *pc; uint32_t mask; int cpu_flags; } stages[8];
+    unsigned at = 0;
+    const uint32_t rax = 1u << HL_X64_RAX, rsp = 1u << HL_X64_RSP, both = rax | rsp;
+    stages[at++] = (struct stage){site.start, 0, 0};
+    stages[at++] = (struct stage){site.rax_canonical, rax, 0};
+    stages[at++] = (struct stage){site.rsp_canonical, both, 0};
+    stages[at++] = (struct stage){site.flags_canonical, both, 1};
+    stages[at++] = (struct stage){site.atomic_end, both, 1};
+    stages[at++] = (struct stage){site.flags_live, both, 0};
+    stages[at++] = (struct stage){site.rax_live, rsp, 0};
+    stages[at++] = (struct stage){site.rsp_live, 0, 0};
+    exact = exact && at == 8;
+    for (unsigned stage = 0; exact && stage < at; stage++) {
+        struct cpu cpu = {0}, expected_flags_cpu = {0};
+        ucontext_t context; memset(&context, 0, sizeof context);
+        greg_t *gregs = HL_HOST_UC_GREGS(&context);
+        for (unsigned reg = 0; reg < 16; reg++) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        cpu.rip = guest; cpu.mmscratch[0] = UINT64_C(0x853);
+        gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
+        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == guest && cpu.reason == R_BRANCH;
+        for (unsigned reg = 0; exact && reg < 16; reg++)
+            exact = cpu.r[reg] == ((stages[stage].mask & (1u << reg))
+                    ? UINT64_C(0xc000000000000000) + reg : UINT64_C(0xa000000000000000) + reg);
+        translit_flags_out(&expected_flags_cpu, stages[stage].cpu_flags ? UINT64_C(0x853) : UINT64_C(0xad7));
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
+    }
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
+    munmap(arena, arena_size);
+    return exact;
 }
 
 // Deterministic signal-context reconstruction across the source handoff and

@@ -1982,7 +1982,7 @@ static int jit_host_to_rwpc(uint64_t host_pc, uint64_t *rwpc) {
 // is no longer pinned or reachable.  Exhaustion declines the optional emitted body rather than overwriting
 // a live owner.
 #define JIT_BODY_OWNER_N 1398101u
-#define JIT_BODY_OWNER_BLOCK_HEADROOM 217u
+#define JIT_BODY_OWNER_BLOCK_HEADROOM 224u
 // Reserved non-canonical guest PCs for generated shared stubs.  The interrupted
 // task's architectural RIP is already in cpu->rip; the second form additionally
 // says TL_MM_FLAGS, rather than the transient host flags, is authoritative.
