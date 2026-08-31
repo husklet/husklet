@@ -1,9 +1,18 @@
 //! Ignored product-path characterization for persistent translation-cache reuse.
 
-use hl_container::{Config, ContainerSpec, Containers, Execution, ExitStatus, Guest, Isolation, Process, Sandbox};
+use hl_container::{
+    Config, ContainerSpec, Containers, ExecLifetime, ExecSpec, Execution, ExitStatus, Guest, Isolation, Logs, Process,
+    Sandbox, Stream,
+};
 use hl_images::{Images, Platform, Reference, RuntimeConfig};
 use sha2::{Digest as _, Sha256};
-use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt as _, path::Path, time::Instant};
+use std::{
+    collections::BTreeMap,
+    fs,
+    os::unix::fs::PermissionsExt as _,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 type Error = Box<dyn std::error::Error>;
 
@@ -436,7 +445,10 @@ int main(void) {
                     require(site + 3 <= arena as usize, "LEA helper relocation exceeds the arena")?;
                     bytes[arena_at + site + 2] ^= 0x08;
                 } else {
-                    require(relocations != 0, "semantic relocation corruption has no relocation record")?;
+                    require(
+                        relocations != 0,
+                        "semantic relocation corruption has no relocation record",
+                    )?;
                     let offset = relocations_at + 4;
                     bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
                 }
@@ -674,7 +686,7 @@ int main(void) {
         Process::new("/bin/sh")
             .args([
                 "-c",
-                "cd /work || exit 40; ls . >/dev/null || exit 41; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok",
+                "cd /work || exit 40; ls . >/dev/null || exit 41; ls src | grep -qx unit_127.c || exit 45; set -- src/*.c; [ \"$#\" -eq 128 ] || exit 46; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok",
             ])
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
@@ -710,10 +722,15 @@ int main(void) {
         ])
     };
     let repeat_process = process.clone();
-    let spec = ContainerSpec::new(root, process)
+    let initial_process = if mode == Mode::CwdRelative {
+        Process::new("/bin/sh").args(["-c", "while :; do sleep 3600; done"])
+    } else {
+        process.clone()
+    };
+    let spec = ContainerSpec::new(root, initial_process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
-        .execution(if mode == Mode::Interpreter {
+        .execution(if matches!(mode, Mode::Interpreter | Mode::CwdRelative) {
             Execution::Interpreted
         } else {
             Execution::Auto
@@ -725,16 +742,43 @@ int main(void) {
             seccomp_baseline: hl_container::SeccompBaseline::Container,
         });
     containers.create(spec).await?;
-    if !matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CwdRelative) {
+    if !matches!(
+        mode,
+        Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CwdRelative
+    ) {
         benchmark_barrier("ready", "release")?;
     }
     let started = Instant::now();
     containers.start("pcache-profile").await?;
     let activation_close_failure = mode == Mode::CacheStageFailure
         && std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE").as_deref() == Ok("activation-close");
-    let waited = containers.wait("pcache-profile").await;
+    let (waited, logs) = if mode == Mode::CwdRelative {
+        let executions = containers.executions();
+        let exec = executions
+            .create(
+                "pcache-profile",
+                ExecSpec::new(process)
+                    .lifetime(ExecLifetime::Ephemeral)
+                    .execution(Execution::Auto),
+            )
+            .await?;
+        let mut session = executions.start(&exec.id).await?;
+        let mut logs = Logs::default();
+        while let Some(record) = session.next().await? {
+            match record.stream {
+                Stream::Stdout => logs.stdout.extend(record.bytes),
+                Stream::Stderr => logs.stderr.extend(record.bytes),
+            }
+        }
+        let waited = executions.wait(&exec.id).await;
+        containers.stop("pcache-profile", Duration::from_secs(1)).await?;
+        (waited, logs)
+    } else {
+        let waited = containers.wait("pcache-profile").await;
+        let logs = containers.logs("pcache-profile").await?;
+        (waited, logs)
+    };
     let elapsed = started.elapsed();
-    let logs = containers.logs("pcache-profile").await?;
     if mode.translated() {
         let stderr = String::from_utf8_lossy(&logs.stderr);
         let receipt = stderr
@@ -824,7 +868,10 @@ int main(void) {
     }
     let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
     if mode == Mode::CwdRelative {
-        require(logs.stdout == b"cwd-relative-ok\n", "relative cwd workload output changed")?;
+        require(
+            logs.stdout == b"cwd-relative-ok\n",
+            "relative cwd workload output changed",
+        )?;
     } else if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
         require(logs.stdout.is_empty(), "fork lifecycle fixture produced output")?;
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
@@ -1288,9 +1335,5 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    if condition {
-        Ok(())
-    } else {
-        Err(message.into())
-    }
+    if condition { Ok(()) } else { Err(message.into()) }
 }
