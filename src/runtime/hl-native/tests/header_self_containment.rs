@@ -5,6 +5,85 @@ use std::{
     process::Command,
 };
 
+#[test]
+fn persisted_map_offset_lookup_matches_slice_boundaries() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-pcache-offset-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("pcache offset probe directory");
+    let source = scratch.join("offset.c");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <string.h>
+#include "translator/guest/x86_64/interp/persistence.h"
+int main(void) {
+    uint8_t records[3 * X64_PC_MAP_SIZE] = {0};
+    uint8_t *cursor;
+    const uint64_t starts[] = {10, 30, 60};
+    for (unsigned i = 0; i < 3; i++) {
+        cursor = records + i * X64_PC_MAP_SIZE + 24;
+        x64_pc_put64(&cursor, starts[i]);
+    }
+    for (uint64_t offset = 0; offset < 100; offset++) {
+        const uint8_t *expected = NULL;
+        for (unsigned i = 0; i < 3; i++) {
+            uint64_t end = i + 1 < 3 ? starts[i + 1] : 90;
+            if (offset >= starts[i] && offset < end) expected = records + i * X64_PC_MAP_SIZE;
+        }
+        if (x64_pc_map_for_offset(offset, records, 3, 90) != expected) return 1;
+    }
+    return 0;
+}
+"#,
+    )
+    .expect("pcache offset probe source");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let build = |output: &Path, mutation: bool| {
+        let mut command = Command::new(&compiler);
+        command
+            .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-Wl,--gc-sections"])
+            .arg(format!("-I{}", native.display()))
+            .arg(format!("-I{}", native.join("include").display()));
+        if mutation {
+            command.arg("-DHL_PCACHE_OFFSET_BOUNDARY_MUTATION");
+        }
+        command
+            .arg(&source)
+            .arg(native.join("translator/guest/x86_64/interp/persistence.c"))
+            .arg(native.join("translator/digest.c"))
+            .arg("-o")
+            .arg(output)
+            .status()
+            .expect("compile pcache offset probe")
+    };
+    let executable = scratch.join("offset");
+    assert!(
+        build(&executable, false).success(),
+        "pcache offset probe did not compile"
+    );
+    assert!(
+        Command::new(&executable)
+            .status()
+            .expect("run pcache offset probe")
+            .success()
+    );
+    let mutation = scratch.join("offset-mutation");
+    assert!(
+        build(&mutation, true).success(),
+        "pcache offset mutation did not compile"
+    );
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("run pcache offset mutation")
+            .success(),
+        "strict-start mutation did not break an exact map boundary"
+    );
+    fs::remove_dir_all(scratch).expect("remove pcache offset probe directory");
+}
+
 fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).expect("native header directory") {
         let path = entry.expect("native header entry").path();

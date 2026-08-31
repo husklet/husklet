@@ -67,7 +67,7 @@ static void interp_backend_shape_dispatch_enter(struct cpu *cpu);
 
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
-        x64_pc_activate_ready();                                                                                       \
+        x64_pc_activate_ready((c)->rip);                                                                               \
         if (g_pending) maybe_deliver_signal(c); /* redirect to the guest handler */                                    \
         if (g_dispatch_diagnostics) {                                                                                  \
             g_prevpc = g_curpc;                                                                                        \

@@ -40,6 +40,26 @@ uint64_t x64_pc_get64(const uint8_t *cursor) {
     return value;
 }
 
+const uint8_t *x64_pc_map_for_offset(uint64_t offset, const uint8_t *records, uint64_t maps, uint64_t arena) {
+    uint64_t lo = 0, hi = maps;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+#ifdef HL_PCACHE_OFFSET_BOUNDARY_MUTATION
+        if (x64_pc_get64(records + mid * X64_PC_MAP_SIZE + 24) < offset)
+#else
+        if (x64_pc_get64(records + mid * X64_PC_MAP_SIZE + 24) <= offset)
+#endif
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo == 0) return NULL;
+    uint64_t ordinal = lo - 1;
+    uint64_t end = ordinal + 1 < maps
+        ? x64_pc_get64(records + (ordinal + 1) * X64_PC_MAP_SIZE + 24) : arena;
+    return offset < end ? records + ordinal * X64_PC_MAP_SIZE : NULL;
+}
+
 int x64_pc_header_validate(const uint8_t *bytes, size_t size, uint64_t abi, uint64_t cpu_size,
                            uint64_t map_slots, const uint8_t identity[32], uint64_t entry,
                            uint64_t modes, uint64_t matches[10]) {

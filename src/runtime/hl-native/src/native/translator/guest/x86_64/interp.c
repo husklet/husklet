@@ -2373,24 +2373,14 @@ static uint64_t x64_pc_saved_map_end(const uint8_t *records, uint64_t maps, uint
 static int x64_pc_saved_offset_fixed(uint64_t offset, const uint8_t *records, uint64_t maps,
                                      uint64_t arena) {
     if (maps == 0 || offset < x64_pc_get64(records + 24)) return 1;
-    for (uint64_t i = 0; i < maps; i++) {
-        uint64_t start = x64_pc_get64(records + i * X64_PC_MAP_SIZE + 24);
-        uint64_t end = x64_pc_saved_map_end(records, maps, i, arena);
-        if (offset >= start && offset < end)
-            return x64_pc_fixed(x64_pc_get64(records + i * X64_PC_MAP_SIZE + 8),
-                                x64_pc_get64(records + i * X64_PC_MAP_SIZE + 16));
-    }
-    return 0;
+    const uint8_t *record = x64_pc_map_for_offset(offset, records, maps, arena);
+    return record != NULL && x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16));
 }
 
 static int x64_pc_saved_offset_library(uint64_t offset, const uint8_t *records, uint64_t maps,
                                        uint64_t arena) {
-    for (uint64_t i = 0; i < maps; i++) {
-        uint64_t start = x64_pc_get64(records + i * X64_PC_MAP_SIZE + 24);
-        uint64_t end = x64_pc_saved_map_end(records, maps, i, arena);
-        if (offset >= start && offset < end) return x64_pc_saved_map_library(records + i * X64_PC_MAP_SIZE);
-    }
-    return -1;
+    const uint8_t *record = x64_pc_map_for_offset(offset, records, maps, arena);
+    return record == NULL ? -1 : x64_pc_saved_map_library(record);
 }
 
 static int x64_pc_saved_gpc_fixed(uint64_t gpc, const uint8_t *records, uint64_t maps) {
@@ -3732,8 +3722,9 @@ static uint64_t pcache_mmap_hint(uint64_t len) {
     return base;
 }
 
-static void x64_pc_activate_ready(void) {
+static void x64_pc_activate_ready(uint64_t pc) {
     if (!g_pcache_loaded || g_x64_pc_snapshot_allocation == NULL) return;
+    if ((pc < g_x64_pc_image_lo || pc >= g_x64_pc_image_hi) && x64_pc_library_for(pc, pc + 1) < 0) return;
     if (g_x64_pc_lib_count == 0) return;
     if (g_x64_pc_lib_count != 0 && g_x64_pc_lib_state[0] == X64_PC_LIB_ACTIVE) return;
     for (uint32_t library = 0; library < g_x64_pc_lib_count; library++)
@@ -3983,6 +3974,7 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
 #endif
         return;
     }
+    for (uint32_t i = 0; i < g_x64_pc_lib_count; i++) g_x64_pc_lib_state[i] = X64_PC_LIB_COLD;
 #if defined(HL_NATIVE_TEST_HOOKS)
     char cache_path[1024], receipt[1024];
     static const uint32_t absent = 1;
