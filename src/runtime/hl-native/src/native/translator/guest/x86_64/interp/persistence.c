@@ -304,7 +304,8 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
         chain_cursor += chain_count;
         if (i != 0) {
             const uint8_t *previous = map - X64_PC_MAP_SIZE;
-            valid = x64_pc_get32(previous + 84) + x64_pc_get32(previous + 88) <= owner_start &&
+            valid = valid &&
+                    x64_pc_get32(previous + 84) + x64_pc_get32(previous + 88) <= owner_start &&
                     x64_pc_get32(previous + 92) + x64_pc_get32(previous + 96) <= chain_start;
         }
         for (uint32_t j = 0; valid && j < owner_count; j++)
