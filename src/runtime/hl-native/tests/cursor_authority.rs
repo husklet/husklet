@@ -1,4 +1,10 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
 
 #[test]
 fn provider_cursor_owns_and_walks_mutable_handles() {
@@ -443,4 +449,104 @@ int main(void) {
     let run = Command::new(&executable).status().expect("layer probe execution");
     assert!(run.success(), "layer probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove layer probe directory");
+}
+
+#[test]
+fn fifo_lookup_is_nonblocking_but_read_open_waits_for_a_writer() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-cursor-fifo-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("fifo probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(&source, r#"
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+#include "hl/host_services.h"
+#define HL_LINUX_VFS_LOWER_CAPACITY 1
+#define HL_NFD 16
+static hl_host_result r(int32_t s, uint64_t v) { return (hl_host_result){.status=s,.value=v}; }
+static int fd(hl_host_handle h) { return (int)h - 1; }
+static hl_host_handle h(int f) { return (hl_host_handle)(f + 1); }
+static hl_host_result clone_f(void *c, hl_host_handle x) { (void)c; int y=dup(fd(x)); return y<0?r(HL_STATUS_IO,0):r(HL_STATUS_OK,h(y)); }
+static hl_host_result close_f(void *c, hl_host_handle x) { (void)c; return close(fd(x))?r(HL_STATUS_IO,0):r(HL_STATUS_OK,0); }
+static hl_host_result open_f(void *c, hl_host_handle d, const char *p, size_t n, uint32_t a, uint32_t cr, uint32_t pm) {
+    (void)c;(void)cr;(void)pm; char q[32]; if(n>=sizeof q)return r(HL_STATUS_INVALID_ARGUMENT,0); memcpy(q,p,n);q[n]=0;
+    int flags=(a&HL_HOST_FILE_PATH_ONLY)?O_PATH:O_RDONLY;
+    if(a&HL_HOST_FILE_NOFOLLOW)flags|=O_NOFOLLOW; if(a&HL_HOST_FILE_DIRECTORY)flags|=O_DIRECTORY;
+    int x=openat(fd(d),q,flags|O_CLOEXEC); return x<0?r(errno==ENOENT?HL_STATUS_NOT_FOUND:HL_STATUS_IO,0):r(HL_STATUS_OK,h(x));
+}
+static hl_host_result meta_f(void *c, hl_host_handle x, hl_host_file_metadata *o) {
+    (void)c; struct stat s; if(fstat(fd(x),&s))return r(HL_STATUS_IO,0); memset(o,0,sizeof *o);
+    o->stable_device=s.st_dev;o->stable_object=s.st_ino;o->permissions=s.st_mode&07777;
+    o->type=S_ISREG(s.st_mode)?HL_HOST_FILE_TYPE_REGULAR:S_ISDIR(s.st_mode)?HL_HOST_FILE_TYPE_DIRECTORY:
+            S_ISLNK(s.st_mode)?HL_HOST_FILE_TYPE_SYMLINK:S_ISFIFO(s.st_mode)?HL_HOST_FILE_TYPE_FIFO:HL_HOST_FILE_TYPE_UNKNOWN;
+    return r(HL_STATUS_OK,0);
+}
+static hl_host_result link_f(void *c, hl_host_handle x, hl_host_bytes o) { (void)c; ssize_t n=readlinkat(fd(x),"",o.data,o.size); return n<0?r(HL_STATUS_IO,0):r(HL_STATUS_OK,n); }
+static const hl_host_file_services files={.abi=HL_HOST_FILE_ABI,.size=sizeof files,.open_relative=open_f,.metadata=meta_f,.close=close_f,.readlink=link_f,.clone_for_fork=clone_f};
+static const hl_host_services services={.abi=HL_HOST_SERVICES_ABI,.size=sizeof services,.file=&files};
+#include "linux_abi/container/vfs/cursor.c"
+static int hl_vfs_cursor_mount_authority(const char *g, hl_vfs_cursor_authority *o){(void)g;(void)o;return 0;}
+static uint64_t ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return(uint64_t)t.tv_sec*1000+t.tv_nsec/1000000;}
+int main(int ac,char **av){
+    if(ac!=2||chdir(av[1])||mkfifo("pipe",0600))return 1;
+    int f=open("regular",O_CREAT|O_WRONLY|O_TRUNC,0600);if(f<0||write(f,"regular",7)!=7||close(f)||symlink("regular","link"))return 2;
+    int root=open(".",O_PATH|O_DIRECTORY);hl_vfs_cursor_authority a={.kind=HL_VFS_CURSOR_AUTHORITY_HOST,.value.host={.handle=h(root),.services=&services}};hl_vfs_cursor cur;
+    if(root<0||hl_vfs_cursor_root_authorities(&a,NULL,0,&cur))return 3;hl_vfs_cursor_authority_close(&a);
+    pid_t w=fork();if(w<0)return 4;if(!w){usleep(200000);int z=open("pipe",O_WRONLY);if(z<0||write(z,"Q",1)!=1)_exit(5);close(z);_exit(0);}
+    uint64_t t=ms();hl_vfs_cursor_entry e;if(hl_vfs_cursor_lookup(&cur,"pipe",&e)||e.kind!=HL_VFS_CURSOR_FILE)return 6;
+    int ws=0;if(ms()-t>=100||waitpid(w,&ws,WNOHANG)!=0)return 7;hl_vfs_cursor_entry_release(&e);
+    t=ms();hl_host_result x=open_f(NULL,cur.layers[0].value.host.handle,"pipe",4,HL_HOST_FILE_READ,0,0);char b=0;
+    if(x.status!=HL_STATUS_OK||ms()-t<100||read(fd(x.value),&b,1)!=1||b!='Q')return 8;close_f(NULL,x.value);
+    if(waitpid(w,&ws,0)!=w||!WIFEXITED(ws)||WEXITSTATUS(ws))return 9;
+    if(hl_vfs_cursor_lookup(&cur,"regular",&e)||e.kind!=HL_VFS_CURSOR_FILE)return 10;char text[7];
+    if(read(fd(e.file.value.host.handle),text,7)!=7||memcmp(text,"regular",7))return 11;hl_vfs_cursor_entry_release(&e);
+    if(hl_vfs_cursor_lookup(&cur,"link",&e)||e.kind!=HL_VFS_CURSOR_SYMLINK||strcmp(e.symlink,"regular"))return 12;
+    hl_vfs_cursor_entry_release(&e);hl_vfs_cursor_release(&cur);return 0;
+}
+"#).expect("fifo probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-function",
+            "-Wno-misleading-indentation",
+        ])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("fifo probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let mut child = Command::new(&executable)
+        .arg(&scratch)
+        .spawn()
+        .expect("fifo probe execution");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll fifo probe") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill blocked fifo probe");
+            let _ = child.wait();
+            panic!("fifo probe exceeded five seconds");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success(), "fifo probe failed with {status}");
+    fs::remove_dir_all(scratch).expect("remove fifo probe directory");
 }
