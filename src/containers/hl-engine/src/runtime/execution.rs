@@ -265,6 +265,7 @@ struct NativeHostCapabilities {
     seccomp_notify: bool,
     executable_x86_64: bool,
     rootfs_directory: bool,
+    isolated_hostname_projection: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -286,6 +287,39 @@ fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
         && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
         && u16::from_le_bytes([header[18], header[19]]) == 62
 }
+
+fn hostname_valid(hostname: &[u8]) -> bool {
+    !hostname.is_empty()
+        && hostname.len() <= 64
+        && hostname.iter().enumerate().all(|(index, byte)| {
+            let alphanumeric = byte.is_ascii_alphanumeric();
+            alphanumeric
+                || (*byte == b'-'
+                    && index != 0
+                    && index + 1 != hostname.len()
+                    && hostname[index - 1] != b'.'
+                    && hostname[index + 1] != b'.')
+                || (*byte == b'.'
+                    && index != 0
+                    && index + 1 != hostname.len()
+                    && hostname[index - 1] != b'.'
+                    && hostname[index - 1] != b'-')
+        })
+}
+
+#[cfg(unix)]
+fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let (Some(root), Some(hostname)) = (plan.rootfs.as_deref(), plan.box_policy.hostname.as_deref()) else {
+        return false;
+    };
+    if !hostname_valid(hostname) { return false; }
+    let hosts = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(root)).join("etc/hosts");
+    std::fs::metadata(hosts).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1024 * 1024)
+}
+
+#[cfg(not(unix))]
+fn isolated_hostname_projection_ready(_plan: &crate::launcher::plan::RuntimePlan) -> bool { false }
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 fn executable_is_x86_64(_path: Option<&[u8]>) -> bool { false }
@@ -311,6 +345,7 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
                 use std::os::unix::ffi::OsStrExt;
                 std::fs::metadata(std::ffi::OsStr::from_bytes(path)).is_ok_and(|metadata| metadata.is_dir())
             }),
+            isolated_hostname_projection: isolated_hostname_projection_ready(plan),
         }
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -324,6 +359,7 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
             seccomp_notify: false,
             executable_x86_64: false,
             rootfs_directory: false,
+            isolated_hostname_projection: false,
         }
     }
 }
@@ -438,6 +474,24 @@ fn native_selection(
     }
 }
 
+fn native_auto_eligibility(
+    plan: &crate::launcher::plan::RuntimePlan,
+    host: NativeHostCapabilities,
+    mut eligibility: Result<(), NativeSupervisedRefusal>,
+) -> Result<(), NativeSupervisedRefusal> {
+    if plan.box_policy.volumes.is_some() { eligibility = Err(NativeSupervisedRefusal::Volumes); }
+    if plan.box_policy.lower_layers.is_some() || plan.box_policy.file_owners.is_some() {
+        eligibility = Err(NativeSupervisedRefusal::Overlay);
+    }
+    let isolated_ready = plan.box_policy.network_mode == 0
+        && plan.box_policy.flags & BOX_NETWORK_ISOLATED != 0
+        && host.isolated_hostname_projection;
+    if plan.box_policy.network_mode != 2 && !isolated_ready {
+        eligibility = Err(NativeSupervisedRefusal::Network);
+    }
+    eligibility
+}
+
 #[cfg(test)]
 mod native_eligibility_tests {
     use super::*;
@@ -451,6 +505,7 @@ mod native_eligibility_tests {
             seccomp_notify: true,
             executable_x86_64: true,
             rootfs_directory: true,
+            isolated_hostname_projection: true,
         }
     }
 
@@ -575,6 +630,39 @@ mod native_eligibility_tests {
         let mut options = crate::options::Options::default();
         assert_eq!(options.set("HL_NATIVE_EXECUTION", "0", true), Err(crate::options::OptionError::UnknownName));
     }
+
+    #[test]
+    fn isolated_auto_requires_the_proven_hostname_projection_boundary() {
+        let mut isolated = plan();
+        isolated.box_policy.network_mode = 0;
+        isolated.box_policy.flags = BOX_NETWORK_ISOLATED;
+        isolated.box_policy.hostname = Some(b"builder".to_vec());
+        assert_eq!(native_auto_eligibility(&isolated, host(), verdict(&isolated, host())), Ok(()));
+        let mut unavailable = host();
+        unavailable.isolated_hostname_projection = false;
+        assert_eq!(
+            native_auto_eligibility(&isolated, unavailable, verdict(&isolated, unavailable)),
+            Err(NativeSupervisedRefusal::Network),
+        );
+        for invalid in [b"line\nbreak".as_slice(), b"under_score".as_slice(), b"-edge".as_slice()] {
+            assert!(!hostname_valid(invalid));
+        }
+        assert!(hostname_valid(b"build-agent.example"));
+    }
+
+    #[test]
+    fn unsupported_kernel_falls_back_only_for_auto() {
+        let mut unsupported = host();
+        unsupported.clone3 = false;
+        let refusal = verdict(&plan(), unsupported);
+        assert_eq!(refusal, Err(NativeSupervisedRefusal::Kernel));
+        assert_eq!(native_selection(NativeSupervisedRequest::Auto, refusal), Ok(false));
+        assert_eq!(
+            native_selection(NativeSupervisedRequest::On, refusal),
+            Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Kernel)),
+        );
+        assert_eq!(native_selection(NativeSupervisedRequest::Off, refusal), Ok(false));
+    }
 }
 
 impl RuntimeFactory for ProductionFactory {
@@ -588,27 +676,18 @@ impl RuntimeFactory for ProductionFactory {
                 #[cfg(unix)] { request.services.checkpoint_channel.is_some() }
                 #[cfg(not(unix))] { false }
             };
+        let host = native_host_capabilities(request.plan);
         let mut eligibility = native_eligibility(
             request.isa,
             request.plan,
             has_checkpoint_services,
-            native_host_capabilities(request.plan),
+            host,
         );
         // A native volume source is authenticated with openat2/open_tree immediately before namespace
         // projection. AUTO cannot prove that future transaction without opening authority-bearing FDs,
         // so it conservatively stays translated; explicit ON retains the existing secure late validation.
         if requested == NativeSupervisedRequest::Auto {
-            if request.plan.box_policy.volumes.is_some() {
-                eligibility = Err(NativeSupervisedRefusal::Volumes);
-            }
-            if request.plan.box_policy.lower_layers.is_some() || request.plan.box_policy.file_owners.is_some() {
-                eligibility = Err(NativeSupervisedRefusal::Overlay);
-            }
-            // Native isolated networking exposes loopback only, whereas the translated backend owns
-            // resolver projection. Without a typed no-DNS promise AUTO cannot preserve semantics.
-            if request.plan.box_policy.network_mode != 2 {
-                eligibility = Err(NativeSupervisedRefusal::Network);
-            }
+            eligibility = native_auto_eligibility(request.plan, host, eligibility);
         }
         let native_supervised = native_selection(requested, eligibility)?;
         #[cfg(unix)]

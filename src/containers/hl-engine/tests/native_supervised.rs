@@ -164,7 +164,7 @@ fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec
         box_policy: if translated_off {
             RuntimeBoxPolicy::default()
         } else {
-            RuntimeBoxPolicy { network_mode: 2, ..Default::default() }
+            RuntimeBoxPolicy { hostname: Some(b"native-auto".to_vec()), ..isolated_policy() }
         },
     };
     let engine = Engine::with_streams(
