@@ -13,6 +13,21 @@ fn sampling_exit_flush_joins_translation_serialization() {
 }
 
 #[test]
+fn x86_restore_snapshots_translation_profile_options_before_its_early_return() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let source = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
+    let start = source.find("int hl_run_linux_guest(").expect("x86 guest launch");
+    let body = &source[start..];
+    let diagnostics = body.find("g_prof = hl_option_get(\"HL_C_DIAGNOSTICS\")").expect("diagnostic snapshot");
+    let profiling = body.find("translit_profile_options_refresh();").expect("profile option snapshot");
+    let restore = body.find("const char *rdir = hl_option_get(\"HL_RESTORE\")").expect("restore branch");
+    assert!(
+        diagnostics < profiling && profiling < restore,
+        "restore can enter translated execution before its profiling options are snapshotted"
+    );
+}
+
+#[test]
 fn x86_dispatch_bookkeeping_is_diagnostic_only() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let target = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");

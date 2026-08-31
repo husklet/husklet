@@ -13,7 +13,7 @@ workspace = true
 # its independent runtime, scenario, and benchmark runners.
 clap.workspace = true
 fs2.workspace = true
-hl-container = { path = "../../containers/hl-container" }
+hl-container = { path = "../../containers/hl-container", features = ["native-test-hooks"] }
 hl-design = { path = "../../packages/hl-design" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }

@@ -68,6 +68,11 @@ static void jit_guest_soft_deactivate(void) {
 static int jit_guest_soft_active(void) {
     return atomic_load_explicit(&g_guest_soft_active, memory_order_acquire);
 }
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void jit_guest_soft_test_set(int active) {
+    atomic_store_explicit(&g_guest_soft_active, active != 0, memory_order_release);
+}
+#endif
 
 void jit_guest_bus_changed(void *opaque, uint64_t generation, int active) {
     (void)opaque;
@@ -87,6 +92,13 @@ void jit_guest_bus_arm_latched(void) {
 int jit_guest_bus_active(void) {
     return hl_target_bus_active(&g_target_bus);
 }
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void jit_guest_bus_test_set(int active) {
+    if (g_target_bus.guest.ops == NULL) hl_target_bus_init(&g_target_bus, &bus_ops, NULL);
+    uint64_t state = atomic_load_explicit(&g_target_bus.guest.state, memory_order_acquire);
+    atomic_store_explicit(&g_target_bus.guest.state, (state & ~UINT64_C(1)) | (active != 0), memory_order_release);
+}
+#endif
 
 uint64_t jit_guest_bus_fault(uint64_t address, uint64_t size) {
     return hl_target_bus_fault(&g_target_bus, address, size);
@@ -255,6 +267,16 @@ static inline void dispatch_interrupt_rearm(struct cpu *c) {
     if (signal_deliverable_for_cpu(c)) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
 }
 
+#ifndef G_FAST_REDISPATCH
+#define G_FAST_REDISPATCH(code) 0
+#endif
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define REDISPATCH_COUNT(kind) atomic_fetch_add_explicit(&g_dispatch_redispatch[kind], 1, memory_order_relaxed)
+#else
+#define REDISPATCH_COUNT(kind) ((void)0)
+#endif
+
 static void run_guest(struct cpu *c) {
     G_HOT_CONTEXT_TYPE *hot_context = G_HOT_CONTEXT_CREATE();
     hl_map_host_cache_entry *map_cache = G_MAP_HOST_CACHE;
@@ -279,7 +301,9 @@ static void run_guest(struct cpu *c) {
     install_host_sigaltstack();
     int profile_reason_open = 0;
     uint64_t profile_reason_start = 0;
+    unsigned redispatch_chain = 0;
     while (!c->exited) {
+        redispatch_chain = 0;
         if (profile_reason_open) {
             hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start, now_ns());
             profile_reason_open = 0;
@@ -490,6 +514,7 @@ static void run_guest(struct cpu *c) {
         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
         // Frontend hook: per-block JT trace dump (per-arch register/flag layout). See §A.3 (5th divergence).
         G_TRACE_DUMP(c);
+redispatch_execute:
         c->reason = 0;
         hl_dispatch_profile_crossing(&g_dispatch_profile);
         if (g_threaded) hl_dispatch_profile_threaded(&g_dispatch_profile);
@@ -546,6 +571,50 @@ static void run_guest(struct cpu *c) {
         // handles R_TIER2 itself (with `continue`), so for the x86 engine this line is never reached;
         // it remains the aarch64 path. Both arches define tier2_promote (per-arch).
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
+        if (c->reason == R_BRANCH) {
+            REDISPATCH_COUNT(REDISPATCH_ATTEMPTED);
+            if (c->exited)
+                REDISPATCH_COUNT(REDISPATCH_EXITED);
+            else if (g_threaded)
+                REDISPATCH_COUNT(REDISPATCH_THREADED);
+            else if (c->irq != 0)
+                REDISPATCH_COUNT(REDISPATCH_IRQ);
+            else if (redispatch_chain >= 8)
+                REDISPATCH_COUNT(REDISPATCH_BUDGET);
+            else if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK)
+                REDISPATCH_COUNT(REDISPATCH_FATAL);
+            else if (signal_deliverable_for_cpu(c))
+                REDISPATCH_COUNT(REDISPATCH_SIGNAL);
+            else {
+                if (profile_reason_open) {
+                    hl_dispatch_profile_delta(&g_dispatch_profile, HL_DISPATCH_PHASE_REASON, profile_reason_start,
+                                              now_ns());
+                    profile_reason_open = 0;
+                }
+                profile_sample = hl_dispatch_profile_sample(&g_dispatch_profile);
+                profile_map_start = profile_sample ? now_ns() : 0;
+                void *next_code = G_MAP_HOST(map_cache, G_PC(c));
+                void *next_rx;
+                uint64_t next_generation;
+                if (next_code == NULL)
+                    REDISPATCH_COUNT(REDISPATCH_MAP_MISS);
+                else if (!G_FAST_REDISPATCH(next_code) ||
+                         !jit_resolve_rw_code(next_code, &next_rx, &next_generation) ||
+                         next_generation != g_cache_gen)
+                    REDISPATCH_COUNT(REDISPATCH_STALE);
+                else {
+                    REDISPATCH_COUNT(REDISPATCH_HIT);
+                    if (next_generation != g_cache_gen) REDISPATCH_COUNT(REDISPATCH_STALE_HIT);
+                    if (g_threaded) REDISPATCH_COUNT(REDISPATCH_THREADED_HIT);
+                    code = next_code;
+                    rxcode = next_rx;
+                    selected_cache_gen = next_generation;
+                    selected_bus_epoch = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+                    redispatch_chain++;
+                    goto redispatch_execute;
+                }
+            }
+        }
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
         if (signal_deliverable_for_cpu(c)) maybe_deliver_signal(c);
         if (profile_reason_open) {

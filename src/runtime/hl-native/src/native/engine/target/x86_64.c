@@ -503,6 +503,8 @@ static int translit_enabled(void) {
     return 0;
 }
 
+static void translit_profile_options_refresh(void) {}
+
 static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
 }
@@ -654,6 +656,40 @@ static uint64_t jit86_store_alias_segment(struct cpu *cpu, uint64_t cursor, uint
     if (range_count != 0) jit86_store_alias_ranges(cpu, ranges, range_count, emulated_store);
     return segment_last;
 }
+
+// True when a direct data load overlaps a MAP_SHARED view whose same-backing,
+// same-offset peer is executable. This runs only while building a translation;
+// the emitted load itself remains a plain host load.
+#if !defined(HL_HOST_CPU_AARCH64)
+static int jit86_load_has_exec_alias(uint64_t guest, size_t size) {
+    if (size == 0 || guest > UINT64_MAX - size || !filemap_shared_filter_maybe(guest, size)) return 0;
+    uint64_t last = guest + size;
+    int hit = 0;
+    pthread_mutex_lock(&g_filemap_lock);
+    for (int source_index = 0; !hit && source_index < g_nfilemap; ++source_index) {
+        const struct guest_file_mapping *source = &g_filemap[source_index];
+        if (!source->shared || source->hi <= guest || source->lo >= last) continue;
+        uint64_t first = source->lo > guest ? source->lo : guest;
+        uint64_t end = source->hi < last ? source->hi : last;
+        uint64_t backing_first = source->offset + (first - source->lo);
+        uint64_t backing_last = backing_first + (end - first);
+        for (int alias_index = 0; !hit && alias_index < g_nfilemap; ++alias_index) {
+            const struct guest_file_mapping *alias = &g_filemap[alias_index];
+            if (!alias->shared || alias->device != source->device || alias->inode != source->inode) continue;
+            uint64_t alias_length = alias->hi - alias->lo;
+            if (alias->offset > UINT64_MAX - alias_length) continue;
+            uint64_t alias_backing_last = alias->offset + alias_length;
+            uint64_t overlap_first = backing_first > alias->offset ? backing_first : alias->offset;
+            uint64_t overlap_last = backing_last < alias_backing_last ? backing_last : alias_backing_last;
+            if (overlap_last <= overlap_first) continue;
+            uint64_t alias_guest = alias->lo + (overlap_first - alias->offset);
+            hit = gnx_hit(alias_guest, overlap_last - overlap_first);
+        }
+    }
+    pthread_mutex_unlock(&g_filemap_lock);
+    return hit;
+}
+#endif
 
 static void jit86_store_alias_changed(uint64_t guest, size_t size) {
     if (size == 0 || guest > UINT64_MAX - size) return;
@@ -1769,13 +1805,16 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         g_host_launch_monotonic_ns = now.value;
     }
     if (bound_shadow_activate() != 0) return hl_vfs_cursor_state_finish(70);
+    /* Restore enters engine_global_init and translated execution from inside ckpt_restore_tree, so the
+       execution-scoped diagnostic and symbol-publication snapshot must exist before that early return. */
+    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    translit_profile_options_refresh();
     const char *rdir = hl_option_get("HL_RESTORE");
     if (rdir != NULL) return hl_vfs_cursor_state_finish(ckpt_restore_tree(rootfs));
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
     /* Diagnostic stubs embed fork-shared counter addresses. They are launch-private and deliberately have
        no persistent-cache relocation: diagnostics therefore disables restore/save before cache lookup. */
-    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_pcache = hl_option_get("HL_PCACHE") != NULL && !g_prof;
     g_coldprof = g_pcache && hl_option_flag_value("HL_PCACHE_OBSERVE", 0);
     if (g_pcache) {

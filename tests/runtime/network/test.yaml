@@ -28,6 +28,13 @@ cases:
     artifact: { destination: /opt/husklet/network-dns_hostresolver }
     run: []
     expect: { exit: 0, stdout: golden/dns_hostresolver.out }
+  - id: runtime/network/dns-explicit-destination
+    status: active
+    compat: { class: compatibility }
+    build: { source: dns_explicit_destination.c, output: dns_explicit_destination, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-dns_explicit_destination }
+    run: []
+    expect: { exit: 0, stdout: golden/dns_explicit_destination.out }
   - id: runtime/network/getaddrinfo
     status: active
     compat: { class: compatibility }

@@ -327,6 +327,21 @@ const DEFINITIONS: &[Definition] = &[
         "snapshot-authenticated executable content identities",
         Records
     ),
+    launch!(
+        "HL_TRANSLIT_RIPREL_READONLY",
+        "control default-on read-only RIP-relative lowering in the same-ISA backend",
+        Flag
+    ),
+    launch!(
+        "HL_TRANSLIT_FS_LOAD_BRIDGE",
+        "control the default-on read-only FS-load bridge in the same-ISA backend",
+        Flag
+    ),
+    launch!(
+        "HL_TRANSLIT_RIPREL_LOAD_BRIDGE",
+        "control default-off natural RIP-relative register-load lowering",
+        Flag
+    ),
     debug!("HL_LOG", "debug-build logging tag selector", Text),
     debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
 ];

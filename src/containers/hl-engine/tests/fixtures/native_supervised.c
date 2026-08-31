@@ -25,6 +25,7 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <netdb.h>
 
 static void *thread_return(void *argument) { return argument; }
 static void *checkpoint_thread(void *argument) {
@@ -254,6 +255,20 @@ int main(int argc, char **argv) {
         if (getcwd(cwd, sizeof(cwd)) == NULL || strcmp(cwd, "/tmp")) return 81;
         char hostname[64];
         if (gethostname(hostname, sizeof(hostname)) != 0 || strcmp(hostname, "husklet-native")) return 81;
+        struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
+        struct addrinfo *resolved = NULL;
+        if (getaddrinfo(hostname, NULL, &hints, &resolved) != 0 || resolved == NULL) return 84;
+        struct sockaddr_in *local = (struct sockaddr_in *)resolved->ai_addr;
+        int hostname_local = local != NULL && ntohl(local->sin_addr.s_addr) == UINT32_C(0x7f000101);
+        freeaddrinfo(resolved);
+        if (!hostname_local) return 84;
+        char hosts[256] = {0};
+        int hosts_fd = open("/etc/hosts", O_RDONLY);
+        if (hosts_fd < 0 || read(hosts_fd, hosts, sizeof(hosts) - 1) <= 0 ||
+            strstr(hosts, "192.0.2.10\thusklet-native") == NULL) return 86;
+        close(hosts_fd);
+        errno = 0;
+        if (open("/etc/hosts", O_WRONLY) != -1 || errno != EROFS) return 87;
         errno = 0;
         if (open("/etc/hostname", O_RDONLY) != -1 || errno != ENOENT) return 82;
         errno = 0;
@@ -262,7 +277,7 @@ int main(int argc, char **argv) {
         if (readlink("/proc/self/ns/mnt", namespace, sizeof(namespace)) <= 0) return 84;
         errno = 0;
         if (open("/blocked", O_WRONLY | O_CREAT, 0600) != -1 || errno != EROFS) return 85;
-        fputs("root-contract", stdout);
+        fputs("root-contract-hostname", stdout);
     }
     if (argc > 1 && !strcmp(argv[1], "volumes")) {
         char source[16] = {0};

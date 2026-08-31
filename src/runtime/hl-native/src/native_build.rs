@@ -155,6 +155,9 @@ fn main() {
             ),
         ];
         add_test_hooks(&mut lifecycle_definitions, test_hooks);
+        if test_hooks && *guest == GuestIsa::X86_64 {
+            lifecycle_definitions.push(Definition::value("HL_NATIVE_TEST_HOOK_EXPORT", "1"));
+        }
         let lifecycle_archive = compiler
             .archive(
                 &archive(&environment, target, sanitizer, lifecycle_archive, false)

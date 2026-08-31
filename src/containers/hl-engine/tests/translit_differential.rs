@@ -57,6 +57,16 @@ struct Backend {
     line: String,
     blocks: u64,
     entries: u64,
+    redispatch_attempted: u64,
+    redispatch_hits: u64,
+    redispatch_stale_hits: u64,
+    redispatch_threaded_hits: u64,
+    redispatch_threaded: u64,
+    redispatch_budget: u64,
+    redispatch_irq: u64,
+    redispatch_signal: u64,
+    redispatch_map_miss: u64,
+    redispatch_stale: u64,
     declined: u64,
     stitch_candidates: u64,
     stitch_admitted: u64,
@@ -112,6 +122,7 @@ struct Backend {
     sse2_movhlps_admitted: u64,
     fs_mem_admitted: u64,
     fs_fixture_admitted: u64,
+    fs_load_bridge_admitted: u64,
     translations: u64,
     unsupported_total: u64,
     unsupported_keyed: u64,
@@ -195,6 +206,19 @@ fn exact_u64_field(line: &str, name: &str, context: &str) -> Result<u64, String>
 
 /// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
 fn backend(stderr: &[u8]) -> Backend {
+    let redispatch = String::from_utf8_lossy(stderr)
+        .lines()
+        .find(|line| line.starts_with("[prof] redispatch "))
+        .unwrap_or_else(|| panic!("redispatch receipt in {}", String::from_utf8_lossy(stderr)))
+        .to_owned();
+    let redispatch_field = |name: &str| {
+        redispatch
+            .split_ascii_whitespace()
+            .find_map(|field| field.strip_prefix(name))
+            .unwrap_or_else(|| panic!("missing {name} in {redispatch}"))
+            .parse::<u64>()
+            .unwrap()
+    };
     let text = String::from_utf8_lossy(stderr);
     let lines = text
         .lines()
@@ -441,6 +465,16 @@ fn backend(stderr: &[u8]) -> Backend {
     Backend {
         blocks: counter("blocks="),
         entries: counter("entries="),
+        redispatch_attempted: redispatch_field("attempted="),
+        redispatch_hits: redispatch_field("hit="),
+        redispatch_stale_hits: redispatch_field("stale-hit="),
+        redispatch_threaded_hits: redispatch_field("threaded-hit="),
+        redispatch_threaded: redispatch_field("threaded="),
+        redispatch_budget: redispatch_field("budget="),
+        redispatch_irq: redispatch_field("irq="),
+        redispatch_signal: redispatch_field("signal="),
+        redispatch_map_miss: redispatch_field("map-miss="),
+        redispatch_stale: redispatch_field("stale="),
         declined: counter("declined="),
         stitch_candidates: counter("stitch_candidates="),
         stitch_admitted: counter("stitch_admitted="),
@@ -498,6 +532,7 @@ fn backend(stderr: &[u8]) -> Backend {
         sse2_movhlps_admitted: counter("sse2_movhlps_admitted="),
         fs_mem_admitted: counter("fs_mem_admitted="),
         fs_fixture_admitted: counter("fs_fixture_admitted="),
+        fs_load_bridge_admitted: counter("fs_load_bridge_admitted="),
         translations,
         unsupported_total: unsupported_counter("total="),
         unsupported_keyed: unsupported_counter("keyed="),
@@ -1207,6 +1242,7 @@ fn run_with_arguments_internal(
     force_fs_authority: bool,
     disable_mixed_sse: bool,
     force_body_owner_rotation: bool,
+    fs_load_bridge: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
@@ -1236,6 +1272,11 @@ fn run_with_arguments_internal(
         options
             .set("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST", "1", true)
             .expect("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST");
+    }
+    if fs_load_bridge {
+        options
+            .set("HL_TRANSLIT_FS_LOAD_BRIDGE", "1", true)
+            .expect("HL_TRANSLIT_FS_LOAD_BRIDGE");
     }
     let plan = RuntimePlan {
         rootfs: None,
@@ -1276,11 +1317,16 @@ fn run_with_arguments(
         force_fs_authority,
         disable_mixed_sse,
         false,
+        false,
     )
 }
 
 fn run_with_body_owner_rotation(executable: &Path) -> (Vec<u8>, i32, Backend) {
-    run_with_arguments_internal(executable, "1", &[], false, false, false, false, true)
+    run_with_arguments_internal(executable, "1", &[], false, false, false, false, true, false)
+}
+
+fn run_with_fs_load_bridge(executable: &Path) -> (Vec<u8>, i32, Backend) {
+    run_with_arguments_internal(executable, "1", &[], false, false, false, false, false, true)
 }
 
 fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
@@ -1369,12 +1415,20 @@ fn run_with_perf_map(
     (out, exit.guest_status, report)
 }
 
-fn run_with_sampling_symbols(executable: &Path, directory: &Path, fresh_rollover: bool) -> (Vec<u8>, Vec<u8>, i32) {
+fn run_with_sampling_symbols(
+    executable: &Path,
+    directory: &Path,
+    fresh_rollover: bool,
+    riprel_readonly: bool,
+) -> (Vec<u8>, Vec<u8>, i32) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
     options.set("HL_TRANSLIT_SYMBOLIZE", "1", true).unwrap();
     options.set("HL_TRANSLIT_SYMBOL_RECEIPT", "1", true).unwrap();
+    if riprel_readonly {
+        options.set("HL_TRANSLIT_RIPREL_READONLY", "1", true).unwrap();
+    }
     options
         .set("HL_TRANSLIT_PERF_MAP", directory.to_str().unwrap(), true)
         .unwrap();
@@ -1406,7 +1460,7 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
     let executable = fixture(work.path(), "forward_jump");
     let maps = work.path().join("sampling-maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false);
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false, false);
     assert_eq!(status, 0);
     assert_eq!(output, b"42\n");
     let stderr = String::from_utf8(stderr).unwrap();
@@ -1427,12 +1481,39 @@ fn sampling_symbols_publish_without_enabling_lossless_diagnostics() {
 }
 
 #[test]
+fn readonly_riprel_fault_recovers_exact_guest_state_and_resumes_the_translated_block() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "riprel_readonly_fault");
+    let maps = work.path().join("riprel-fault-maps");
+    std::fs::create_dir(&maps).unwrap();
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, false, true);
+    assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
+    let output = String::from_utf8(output).unwrap();
+    let entry = output
+        .trim()
+        .strip_prefix("riprel fault recovery ok entry=")
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .unwrap_or_else(|| panic!("missing exact fault-block entry: {output:?}"));
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
+    let maps = std::fs::read_dir(&maps)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<String>();
+    let guest = format!("_g{entry:x}_");
+    assert!(
+        maps.lines().any(|line| line.contains(&guest) && line.ends_with("_rr1")),
+        "the exact block containing fault_instruction was not admitted by the readonly lowering:\n{maps}"
+    );
+}
+
+#[test]
 fn sampling_symbols_follow_exec_fresh_arena_generations() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "perf_map_fork_exec");
     let maps = work.path().join("sampling-exec-maps");
     std::fs::create_dir(&maps).unwrap();
-    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, true);
+    let (output, stderr, status) = run_with_sampling_symbols(&executable, &maps, true, false);
     assert_eq!(status, 0, "{}", String::from_utf8_lossy(&output));
     let stderr = String::from_utf8(stderr).unwrap();
     assert!(!stderr.contains("[prof]") && !stderr.contains("[diag]"), "{stderr}");
@@ -1774,7 +1855,7 @@ fn fatal_signal_is_reported_once_by_the_safe_lifecycle_parent() {
     assert_eq!(reasons, value("crossings="), "{}", records[0]);
 }
 
-fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
+fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>, Vec<u8>) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
@@ -1795,7 +1876,8 @@ fn wide_profile(executable: &Path, termination: &[u8]) -> (i32, Vec<u8>) {
     let exit = engine.wait().unwrap();
     engine.destroy().unwrap();
     let stderr = captured.err.lock().unwrap().clone();
-    (exit.guest_status, stderr)
+    let stdout = captured.out.lock().unwrap().clone();
+    (exit.guest_status, stderr, stdout)
 }
 
 #[test]
@@ -1803,8 +1885,9 @@ fn full_width_translit_profile_is_complete_for_exit_and_exit_group() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "profile_termination");
     for termination in [b"exit".as_slice(), b"group".as_slice()] {
-        let (status, stderr) = wide_profile(&executable, termination);
+        let (status, stderr, stdout) = wide_profile(&executable, termination);
         assert_eq!(status, 0);
+        assert!(stdout.is_empty(), "post-exit continuation executed: {}", String::from_utf8_lossy(&stdout));
         assert_eq!(stderr.last(), Some(&b'\n'), "{}", String::from_utf8_lossy(&stderr));
         let text = String::from_utf8(stderr).unwrap();
         let lines: Vec<_> = text
@@ -1880,7 +1963,10 @@ fn agrees(name: &str) -> Backend {
 /// program in the corpus byte-identical.
 #[test]
 fn flag_state_survives_every_transliterated_block_boundary() {
-    agrees("flags");
+    let backend = agrees("flags");
+    assert!(backend.redispatch_hits >= 8, "{}", backend.line);
+    assert!(backend.redispatch_budget > 0, "{}", backend.line);
+    assert!(backend.redispatch_map_miss > 0, "{}", backend.line);
 }
 
 #[test]
@@ -1900,19 +1986,26 @@ fn exhausted_body_owner_capacity_falls_back_to_the_interpreter() {
 /// A guest that writes its own code at runtime.
 #[test]
 fn a_guest_that_generates_code_at_runtime_agrees_with_the_interpreter() {
-    agrees("smc");
+    let backend = agrees("smc");
+    assert!(backend.redispatch_stale > 0, "SMC must decline stale descriptors: {}", backend.line);
+    assert_eq!(backend.redispatch_stale_hits, 0, "SMC must never execute a stale descriptor: {}", backend.line);
 }
 
 /// Faults into transliterated frames, including a guest stack overflow onto the alternate stack.
 #[test]
 fn signals_delivered_into_transliterated_frames_agree_with_the_interpreter() {
-    agrees("sigs");
+    let backend = agrees("sigs");
+    assert!(backend.redispatch_irq + backend.redispatch_signal > 0, "{}", backend.line);
 }
 
 /// `%gs` republication for a cloned thread, a fork child, a vfork+execve and a raw clone.
 #[test]
 fn threads_fork_and_exec_agree_with_the_interpreter() {
     let tree = agrees("procs");
+    assert!(tree.redispatch_attempted > 0, "{}", tree.line);
+    assert!(tree.redispatch_threaded > 0, "{}", tree.line);
+    assert_eq!(tree.redispatch_threaded_hits, 0, "threaded guests must never fast-redispatch: {}", tree.line);
+    assert_eq!(tree.redispatch_stale_hits, 0, "fork/exec must never fast-redispatch stale code: {}", tree.line);
     assert!(tree.root_pid > 0, "{}", tree.tree_line);
     assert_eq!(tree.claimed, 17, "{}", tree.tree_line);
     assert_eq!(tree.completed, tree.claimed, "{}", tree.tree_line);
@@ -1939,6 +2032,17 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
         tree.tree_line
     );
     assert_eq!(tree.reason_total, tree.crossings, "{}", tree.tree_line);
+}
+
+#[test]
+fn fs_load_bridge_survives_threads_fork_and_exec() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "procs");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, backend) = run_with_fs_load_bridge(&executable);
+    assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
+    assert!(backend.fs_load_bridge_admitted > 0, "{}", backend.line);
+    assert_eq!(backend.redispatch_stale_hits, 0, "{}", backend.line);
 }
 
 /// RIP-relative operands, indirect terminators, string operations and deep call/ret.
@@ -2316,7 +2420,7 @@ fn rip_relative_indirect_control_preserves_answers_and_fault_state() {
     );
     assert_eq!(
         selected_stack_backend.body_owner_recovered, 1,
-        "the forced instruction-ring miss did not recover through the immutable body owner -- {}",
+        "the forced instruction-ring miss did not recover through the immutable body owner with a poisoned unpublished tail -- {}",
         selected_stack_backend.line
     );
     let native_stack = std::process::Command::new(&executable)

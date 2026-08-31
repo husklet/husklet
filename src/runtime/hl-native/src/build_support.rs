@@ -212,6 +212,18 @@ mod tests {
     }
 
     #[test]
+    fn exec_rewinds_code_and_provenance_through_one_lifecycle_hook() {
+        let path = "src/native/linux_abi/syscall/process/exec.c";
+        let source = std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        assert_eq!(source.matches("G_CACHE_REWIND();").count(), 1, "exec must rotate arena provenance once");
+        assert_eq!(
+            source.matches("g_cp = g_cache;").count(),
+            0,
+            "exec must not rewind code without dropping its owner generation"
+        );
+    }
+
+    #[test]
     fn target_checkpoint_layout_is_deterministic_on_both_isas() {
         let placement = "g_pcache || hl_option_get(\"HL_CHECKPOINT\")";
         for target in ["aarch64", "x86_64"] {

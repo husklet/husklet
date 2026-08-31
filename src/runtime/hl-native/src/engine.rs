@@ -518,6 +518,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn transliteration_lowering_and_nonwrapping_body_owners_are_exact() {
+        let _serial = engine_test_lock();
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
@@ -530,6 +531,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn unresolved_constant_jcc_ibtc_lifecycle_is_exact() {
+        let _serial = engine_test_lock();
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
@@ -542,6 +544,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn unresolved_direct_jmp_ibtc_lifecycle_is_exact() {
+        let _serial = engine_test_lock();
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
@@ -554,6 +557,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn persistent_cache_codegen_modes_are_canonical() {
+        let _serial = engine_test_lock();
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
@@ -564,6 +568,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn ret_target_cache_simulation_is_observational_and_exact() {
+        let _serial = engine_test_lock();
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
@@ -588,6 +593,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn unresolved_direct_call_ibtc_lifecycle_is_exact() {
+        let _serial = engine_test_lock();
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
@@ -662,6 +668,7 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn isolated_test_child_termination_is_retryable_idempotent_and_closes_descendant_descriptors() {
+        let _serial = engine_test_lock();
         use std::io::BufRead as _;
         use std::process::Stdio;
 
@@ -739,6 +746,7 @@ mod tests {
     #[cfg(all(feature = "native-test-hooks", target_os = "linux"))]
     #[test]
     fn a_peer_that_leads_its_own_session_is_still_enumerated_as_a_peer() {
+        let _serial = engine_test_lock();
         let mut ready = [-1; 2];
         let mut release = [-1; 2];
         // SAFETY: both arrays name writable storage for two new descriptors each.
@@ -797,6 +805,7 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn host_force_stop_kills_exact_activation_group_and_preserves_unrelated_process() {
+        let _serial = engine_test_lock();
         use std::io::BufRead as _;
         use std::process::Stdio;
 
@@ -850,6 +859,7 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn production_force_stop_is_safe_before_session_ready_and_while_waiting() {
+        let _serial = engine_test_lock();
         struct ResumeActivation;
         impl Drop for ResumeActivation {
             fn drop(&mut self) {
@@ -1117,6 +1127,7 @@ mod tests {
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
+        let _serial = engine_test_lock();
         let on = run_product_diagnostic(product_jcc_ibtc_image(), false, true);
         assert_eq!(on["version"], 6);
         assert_eq!(on["available"], 1);
@@ -1149,6 +1160,7 @@ mod tests {
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn production_nohooks_executed_forms_aggregate_across_guest_fork() {
+        let _serial = engine_test_lock();
         let mut bytes = image();
         put16(&mut bytes, 18, 0x3e);
         bytes[0x100..0x126].copy_from_slice(&[
@@ -1166,6 +1178,7 @@ mod tests {
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn production_nohooks_deferred_fault_does_not_publish_executed_form() {
+        let _serial = engine_test_lock();
         let mut bytes = image();
         put16(&mut bytes, 18, 0x3e);
         bytes[0x100..0x134].copy_from_slice(&[
@@ -1182,6 +1195,7 @@ mod tests {
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn production_nohooks_executed_form_table_probes_collisions_then_overflows() {
+        let _serial = engine_test_lock();
         let mut bytes = image();
         bytes.resize(0x1_0000, 0);
         put16(&mut bytes, 18, 0x3e);
@@ -1218,6 +1232,7 @@ mod tests {
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn production_nohooks_async_irq_excludes_staged_rep_completion() {
+        let _serial = engine_test_lock();
         const SOURCE: &str = r#"
 .global _start
 .text
@@ -1350,7 +1365,7 @@ right: .skip 134217728
         bytes
     }
 
-    fn flush_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    fn engine_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
             .lock()
@@ -1358,8 +1373,26 @@ right: .skip 134217728
     }
 
     #[test]
+    fn every_engine_test_serializes_process_global_native_state() {
+        let _serial = engine_test_lock();
+        let source = include_str!("engine.rs");
+        let marker = ["#[", "test]"].concat();
+        let mut tests = 0;
+        for test in source.split(&marker).skip(1) {
+            let body = test.split_once('{').expect("test function body").1.trim_start();
+            assert!(
+                body.starts_with("let _serial = engine_test_lock();"),
+                "engine test does not acquire the process-global native-state guard: {}",
+                test.lines().find(|line| line.contains("fn ")).unwrap_or("unnamed test")
+            );
+            tests += 1;
+        }
+        assert!(tests >= 37, "engine test census unexpectedly shrank to {tests}");
+    }
+
+    #[test]
     fn guest_tcsetsf_publishes_flush_across_the_launch_fork_on_both_isas() {
-        let _serial = flush_test_lock();
+        let _serial = engine_test_lock();
         let mut master = -1;
         let mut slave = -1;
         // SAFETY: both descriptor outputs are writable; no name, termios override or size is requested.
@@ -1421,7 +1454,7 @@ right: .skip 134217728
 
     #[test]
     fn flush_provenance_survives_capacity_and_concurrent_fork_publishers() {
-        let _serial = flush_test_lock();
+        let _serial = engine_test_lock();
         let mut terminals = Vec::new();
         for _ in 0..(64 + 8) {
             let mut master = -1;
@@ -1605,6 +1638,7 @@ right: .skip 134217728
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn requesting_stop_after_native_finish_is_idempotent() {
+        let _serial = engine_test_lock();
         for isa in [1, 2] {
             let create = || {
                 let mut executable = tempfile::tempfile().unwrap();
@@ -1674,6 +1708,7 @@ right: .skip 134217728
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn destroying_stays_busy_and_a_terminate_race_to_finished_succeeds() {
+        let _serial = engine_test_lock();
         let api = crate::loader::tests().unwrap();
         // SAFETY: the test export owns its complete synthetic engine and retains no pointer.
         assert_eq!(unsafe { (api.engine_request_state_test)(0) }, 14);
@@ -1716,6 +1751,7 @@ right: .skip 134217728
 
     #[test]
     fn armed_running_guest_reaches_checkpoint_broker() {
+        let _serial = engine_test_lock();
         const CHILD: &str = "HL_NATIVE_ARMED_CHECKPOINT_CHILD";
         if std::env::var_os(CHILD).is_none() {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1772,6 +1808,7 @@ right: .skip 134217728
 
     #[test]
     fn pathname_replacement_cannot_change_pinned_initial_image() {
+        let _serial = engine_test_lock();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("guest");
         std::fs::write(&path, image()).unwrap();
@@ -1803,6 +1840,7 @@ right: .skip 134217728
 
     #[test]
     fn interpreter_replacement_between_create_and_run_cannot_change_image() {
+        let _serial = engine_test_lock();
         for isa in [1, 2] {
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(root.path().join("bin")).unwrap();
@@ -1839,6 +1877,7 @@ right: .skip 134217728
 
     #[test]
     fn malformed_pinned_interpreter_is_rejected_during_create() {
+        let _serial = engine_test_lock();
         for isa in [1, 2] {
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(root.path().join("bin")).unwrap();
@@ -1870,6 +1909,7 @@ right: .skip 134217728
 
     #[test]
     fn unlinked_pinned_image_can_reexec_proc_self_exe_on_both_isas() {
+        let _serial = engine_test_lock();
         const SOURCE: &str = r#"
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -1987,6 +2027,7 @@ int main(int argc, char **argv) {
 
     #[test]
     fn failed_prepared_exec_never_publishes_candidate_authority() {
+        let _serial = engine_test_lock();
         const SOURCE: &str = r#"
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -2111,6 +2152,7 @@ int main(int argc, char **argv) {
     /// two syscalls directly rather than through a shell so the failure is an errno, not a message.
     #[test]
     fn a_bind_mounted_directory_enumerates_its_host_entries() {
+        let _serial = engine_test_lock();
         const SOURCE: &str = r#"
 #include <errno.h>
 #include <fcntl.h>
@@ -2244,6 +2286,7 @@ int main(void) {
 
     #[test]
     fn interpreter_union_authority_handles_layers_links_and_deletions() {
+        let _serial = engine_test_lock();
         use std::os::unix::fs::symlink;
         let upper = tempfile::tempdir().unwrap();
         let lower = tempfile::tempdir().unwrap();
@@ -2289,6 +2332,7 @@ int main(void) {
 
     #[test]
     fn upper_non_directory_ancestor_masks_lower_directory() {
+        let _serial = engine_test_lock();
         let upper = tempfile::tempdir().unwrap();
         let lower = tempfile::tempdir().unwrap();
         std::fs::write(upper.path().join("lib"), "not a directory").unwrap();
@@ -2301,6 +2345,7 @@ int main(void) {
 
     #[test]
     fn upper_merged_directory_keeps_lower_symlink_children_reachable() {
+        let _serial = engine_test_lock();
         use std::os::unix::fs::symlink;
         let upper = tempfile::tempdir().unwrap();
         let lower = tempfile::tempdir().unwrap();
@@ -2321,6 +2366,7 @@ int main(void) {
 
     #[test]
     fn pinned_interpreter_survives_ancestor_replacement() {
+        let _serial = engine_test_lock();
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
         std::fs::write(root.path().join("lib/live/loader"), "original").unwrap();
@@ -2368,6 +2414,7 @@ int main(void) {
 
     #[test]
     fn executable_markers_cannot_change_generic_plan() {
+        let _serial = engine_test_lock();
         let plain = image();
         let mut marked = plain.clone();
         marked[0x260..0x26e].copy_from_slice(b"\xff Go buildinf:");
@@ -2377,6 +2424,7 @@ int main(void) {
 
     #[test]
     fn executable_plan_uses_the_host_placement_policy() {
+        let _serial = engine_test_lock();
         let plan = inspect(&image()).unwrap();
         assert_eq!(plan.kind, 1);
         assert_eq!(plan.flags, u32::from(!cfg!(target_os = "linux")));
@@ -2384,6 +2432,7 @@ int main(void) {
 
     #[test]
     fn malformed_load_segment_is_rejected_before_native_loader() {
+        let _serial = engine_test_lock();
         let mut bytes = image();
         put64(&mut bytes, 96, 4097);
         assert!(inspect(&bytes).is_err(), "p_filesz larger than p_memsz was accepted");
@@ -2405,6 +2454,7 @@ int main(void) {
 
     #[test]
     fn concurrent_exit_reads_only_coherent_publications() {
+        let _serial = engine_test_lock();
         for isa in [1, 2] {
             let (engine, _standard) = create_engine(isa);
             let argument = CString::new("guest").unwrap();
@@ -2461,6 +2511,7 @@ int main(void) {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn fork_child_prunes_foreign_checkpoint_descriptors_before_fd_reuse() {
+        let _serial = engine_test_lock();
         const CHILD: &str = "HL_NATIVE_CHECKPOINT_PRUNE_CHILD";
         if std::env::var_os(CHILD).is_none() {
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());
@@ -2494,6 +2545,7 @@ int main(void) {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn checkpoint_configuration_adopt_failures_preserve_descriptor_ownership() {
+        let _serial = engine_test_lock();
         const CHILD: &str = "HL_NATIVE_CHECKPOINT_ADOPT_FAILURE_CHILD";
         if std::env::var_os(CHILD).is_none() {
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());

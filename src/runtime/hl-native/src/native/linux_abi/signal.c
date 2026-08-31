@@ -1256,6 +1256,15 @@ static int svc_sigpipe_generating_write(uint64_t nr) {
 // back to run_guest -- its maybe_deliver_signal builds the frame in the engine's own stack context (the
 // exact, already-tested async-delivery path). A synchronous fault cannot be ignored or masked, so force it
 // deliverable first.
+static void record_guest_fault_state(struct cpu *c, int sig, siginfo_t *si) {
+    c->sync_signal = sig;
+    c->sync_address = si ? nonpie_unfold((uint64_t)si->si_addr) : 0;
+    c->sync_code = (sig == 7 || (sig == 11 && si &&
+                                 (gna_hit((uint64_t)si->si_addr, 1) || host_addr_mapped((uintptr_t)si->si_addr))))
+                       ? 2
+                       : 1;
+}
+
 static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     int sig = sig_m2l(hostsig);
     if (sig < 1 || sig > 64 || !ucv) return 0;
@@ -1301,26 +1310,22 @@ static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
         }
         return 0;
     }
-    c->sync_signal = sig;
     // si_addr is GUEST-visible (a handler compares it against its own pointers, and a fault-recovery
     // handler resumes from it), but a hardware fault reports the STORAGE address -- so a fault inside a
     // non-PIE image handed the guest an address it has no name for. Unfold it; thread.c has the rule.
     // sync_code below deliberately keeps the raw host address: it asks the host mapping, not the guest.
-    c->sync_address = si ? nonpie_unfold((uint64_t)si->si_addr) : 0;
     // Linux distinguishes an unmapped address (SEGV_MAPERR) from a mapped
     // protection violation (SEGV_ACCERR).  JIT safepoint/guard handlers use
     // that distinction; a physically protected g_gna page is ACCERR even
     // when Darwin surfaced the access as SIGBUS.
-    c->sync_code = (sig == 7 || (sig == 11 && si &&
-                                 (gna_hit((uint64_t)si->si_addr, 1) || host_addr_mapped((uintptr_t)si->si_addr))))
-                       ? 2
-                       : 1;
+    record_guest_fault_state(c, sig, si);
     c->sigmask &= ~(1ull << (sig - 1)); // a sync fault forces delivery even if the guest blocked it
     c->reason = R_BRANCH;               // resume as a plain branch (no stale syscall/special-op handling)
     thread_pending_set(c, sig);
     sigframe_resume_dispatch(c, ucv);
     return 1;
 }
+
 
 /* Dispatcher-only delivery for a translated access rejected by the file-mapping BUS ledger. */
 static int raise_guest_bus(struct cpu *c) {

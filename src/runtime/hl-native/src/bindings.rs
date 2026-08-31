@@ -410,6 +410,7 @@ mod tests {
         }
         for isa in [1, 2] {
             assert!(fdvis_path_publication_test(isa, 12), "ISA {isa} recursive fd identity");
+            assert!(fdvis_path_publication_test(isa, 14), "ISA {isa} fdvis index contract");
         }
         // 8: an abandoned reservation whose holder is gone is reclaimed -- until reserver_pid existed
         // nothing in the tree could reclaim one, because the UINT64_MAX marker decodes to owner -1 and

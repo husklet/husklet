@@ -197,7 +197,7 @@
         } else if (r >= 0 && want && (int)a0 >= 0 && (int)a0 < HL_NFD && g_dns_sock[(int)a0]) {
             // DNS socket: report the source as the nameserver (127.0.0.11:53) so the guest resolver's
             // "answer came from the server we queried" anti-spoof check passes (the real src is AF_UNIX).
-            dns_fill_ns((uint8_t *)a4, (socklen_t *)a5);
+            dns_fill_ns((int)a0, (uint8_t *)a4, (socklen_t *)a5);
         } else if (r >= 0 && want &&
                    udp_switch_source((int)a0, &hss, hsl, (uint8_t *)a4, (socklen_t *)a5)) {
             // translated from the switch's opaque AF_UNIX sender identity

@@ -1901,7 +1901,10 @@ static uint64_t x64_pcache_codegen_modes(void) {
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_FS_AUTHORITY_TEST", 0) << 5) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_PROVENANCE_FALLBACK", 0) << 6) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_BODY_OWNER_EXHAUST", 0) << 7) |
-           ((uint64_t)(g_coldprof != 0) << 8);
+           ((uint64_t)(g_coldprof != 0) << 8) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_READONLY", 1) << 9) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_FS_LOAD_BRIDGE", 1) << 10) |
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0) << 11);
 }
 
 static uint64_t pcache_engine_id(void) {
@@ -2183,7 +2186,7 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
     }
     if (!jit_restored_state_commit(&g_x64_pc_restored_states[slot->ordinal]))
         return NULL;
-    translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns);
+    translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns, 0);
     g_x64_pc_activated_maps++;
     return block;
 }
@@ -2585,7 +2588,7 @@ static int pcache_load(uint64_t entry_jump) {
         struct interp_block *block = (struct interp_block *)(g_cache + x64_pc_get64(record + 32));
         map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
                 g_cache + x64_pc_get64(record + 24), block);
-        translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns);
+        translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns, 0);
     }
     if (g_source_index_overflow) {
         x64_pc_pristine_rewind(); free(fixed_chains); free(allocation); return 0;
