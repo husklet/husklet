@@ -2199,7 +2199,8 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
     }
     if (!jit_restored_state_commit(&g_x64_pc_restored_states[slot->ordinal]))
         return NULL;
-    translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns, 0);
+    translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,
+                              block->host_len, block->profile_insns, 0);
     g_x64_pc_activated_maps++;
     return block;
 }
@@ -2684,7 +2685,8 @@ static int pcache_load(uint64_t entry_jump) {
         struct interp_block *block = (struct interp_block *)(g_cache + x64_pc_get64(record + 32));
         map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
                 g_cache + x64_pc_get64(record + 24), block);
-        translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns, 0);
+        translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,
+                                  block->host_len, block->profile_insns, 0);
         fixed_maps++;
     }
     if (g_source_index_overflow) {
@@ -3889,7 +3891,8 @@ static void x64_pc_activate_ready(uint64_t pc) {
         struct interp_block *block = (struct interp_block *)(g_cache + x64_pc_get64(record + 32));
         map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
                 g_cache + x64_pc_get64(record + 24), block);
-        translit_perf_map_publish(block, (uint8_t *)block, block->host_len, block->profile_insns, 0);
+        translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,
+                                  block->host_len, block->profile_insns, 0);
         g_x64_pc_activated_maps++;
         g_x64_pc_deferred_count--;
     }
