@@ -330,24 +330,37 @@ int main(void) {
             })
             .ok_or("semantic corruption arm found no cache artifact")?;
         let mut bytes = fs::read(&artifact)?;
-        require(bytes.len() >= 256, "semantic corruption artifact is truncated")?;
+        const HEADER_SIZE: usize = 272;
+        const CHECKSUM_OFFSET: usize = 264;
+        const MAP_SIZE: usize = 100;
+        const OWNER_SIZE: usize = 28;
+        const RELOCATION_SIZE: usize = 8;
+        const HELPER_RELOCATION_SIZE: usize = 8;
+        const LIBRARY_SIZE: usize = 56;
+        const CHAIN_SIZE: usize = 24;
+        require(bytes.len() >= HEADER_SIZE, "semantic corruption artifact is truncated")?;
         let get = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
         let maps = get(96) as usize;
         let owners = get(104) as usize;
+        let helper_relocations = get(112) as usize;
         let relocations = get(184) as usize;
         let libraries = get(232) as usize;
         let chains = get(240) as usize;
         let arena = get(88);
-        const MAP_SIZE: usize = 100;
-        const OWNER_SIZE: usize = 28;
+        let maps_at = HEADER_SIZE;
+        let owners_at = maps_at + maps * MAP_SIZE;
+        let relocations_at = owners_at + owners * OWNER_SIZE;
+        let helper_relocations_at = relocations_at + relocations * RELOCATION_SIZE;
+        let libraries_at = helper_relocations_at + helper_relocations * HELPER_RELOCATION_SIZE;
+        let chains_at = libraries_at + libraries * LIBRARY_SIZE;
+        let arena_at = chains_at + chains * CHAIN_SIZE;
         match mode {
             Mode::CacheSemanticMap => {
                 require(maps != 0, "semantic map corruption has no map record")?;
-                bytes[256 + 8..256 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+                bytes[maps_at + 8..maps_at + 16].copy_from_slice(&u64::MAX.to_le_bytes());
             }
             Mode::CacheSemanticOwner => {
                 require(owners != 0, "semantic owner corruption has no owner record")?;
-                let owners_at = 256 + maps * MAP_SIZE;
                 bytes[owners_at + 24..owners_at + 28].copy_from_slice(&(maps as u32).to_le_bytes());
             }
             Mode::CacheSemanticDuplicate => {
@@ -355,8 +368,8 @@ int main(void) {
                     maps >= 2,
                     "semantic duplicate corruption has fewer than two map records",
                 )?;
-                let first = bytes[256..256 + MAP_SIZE].to_vec();
-                bytes[256 + MAP_SIZE..256 + 2 * MAP_SIZE].copy_from_slice(&first);
+                let first = bytes[maps_at..maps_at + MAP_SIZE].to_vec();
+                bytes[maps_at + MAP_SIZE..maps_at + 2 * MAP_SIZE].copy_from_slice(&first);
             }
             Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
             Mode::CacheSemanticRelocation => {
@@ -364,42 +377,34 @@ int main(void) {
                     relocations != 0,
                     "semantic relocation corruption has no relocation record",
                 )?;
-                let offset = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + 4;
+                let offset = relocations_at + 4;
                 bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
             }
             Mode::CacheSemanticLibrary => {
                 require(libraries != 0, "semantic library corruption has no manifest record")?;
-                let offset = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + relocations * 8;
-                bytes[offset..offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+                bytes[libraries_at..libraries_at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
             }
             Mode::CacheSemanticOverlap => {
                 require(
                     libraries >= 2,
                     "semantic overlap corruption has fewer than two libraries",
                 )?;
-                let libraries_at = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + relocations * 8;
                 let first_base = get(libraries_at);
                 let first_len = get(libraries_at + 8);
                 require(first_len > 1, "first manifest span is too short to overlap")?;
-                let second = libraries_at + 56;
+                let second = libraries_at + LIBRARY_SIZE;
                 bytes[second..second + 8].copy_from_slice(&(first_base + first_len - 1).to_le_bytes());
             }
             Mode::CacheSemanticChain => {
                 require(chains != 0, "semantic chain corruption has no chain record")?;
-                let offset = 256 + maps * MAP_SIZE + owners * OWNER_SIZE + relocations * 8 + libraries * 56 + 4;
+                let offset = chains_at + 4;
                 bytes[offset..offset + 4].copy_from_slice(&(arena as u32).to_le_bytes());
             }
             Mode::CacheAbsentLibrary => {
                 require(libraries != 0, "absent-library arm has no manifest record")?;
-                let maps_at = 256;
-                let owners_at = maps_at + maps * MAP_SIZE;
-                let relocations_at = owners_at + owners * OWNER_SIZE;
-                let libraries_at = relocations_at + relocations * 8;
-                let chains_at = libraries_at + libraries * 56;
-                let arena_at = chains_at + chains * 24;
                 let selected = (0..libraries)
                     .find(|library| {
-                        let at = libraries_at + library * 56;
+                        let at = libraries_at + library * LIBRARY_SIZE;
                         let base = get(at);
                         let end = base.saturating_add(get(at + 8));
                         bytes[maps_at..owners_at].chunks_exact(MAP_SIZE).any(|record| {
@@ -409,7 +414,7 @@ int main(void) {
                         })
                     })
                     .ok_or("absent-library arm found no manifest-owned block")?;
-                let selected_at = libraries_at + selected * 56;
+                let selected_at = libraries_at + selected * LIBRARY_SIZE;
                 let lib_base = get(selected_at);
                 let lib_len = get(selected_at + 8);
                 let lib_end = lib_base.checked_add(lib_len).ok_or("library span overflow")?;
@@ -439,7 +444,7 @@ int main(void) {
                     }
                 }
                 let mut kept_chain_records = Vec::new();
-                for record in bytes[chains_at..arena_at].chunks_exact(24) {
+                for record in bytes[chains_at..arena_at].chunks_exact(CHAIN_SIZE) {
                     let source = u64::from_le_bytes(record[8..16].try_into().unwrap());
                     let target = u64::from_le_bytes(record[16..24].try_into().unwrap());
                     if !((source >= lib_base && source < lib_end) || (target >= lib_base && target < lib_end)) {
@@ -475,23 +480,23 @@ int main(void) {
                 }
                 let kept_maps: Vec<u8> = kept_map_records.into_iter().flatten().collect();
                 let kept_chains: Vec<u8> = kept_chain_records.into_iter().flatten().collect();
-                let mut rebuilt = bytes[..256].to_vec();
+                let mut rebuilt = bytes[..HEADER_SIZE].to_vec();
                 rebuilt[96..104].copy_from_slice(&(maps - removed_maps).to_le_bytes());
                 rebuilt[104..112].copy_from_slice(&(kept_owners.len() / OWNER_SIZE).to_le_bytes());
                 rebuilt[232..240].copy_from_slice(&(libraries - 1).to_le_bytes());
-                rebuilt[240..248].copy_from_slice(&(kept_chains.len() / 24).to_le_bytes());
+                rebuilt[240..248].copy_from_slice(&(kept_chains.len() / CHAIN_SIZE).to_le_bytes());
                 rebuilt.extend_from_slice(&kept_maps);
                 rebuilt.extend_from_slice(&kept_owners);
                 rebuilt.extend_from_slice(&bytes[relocations_at..libraries_at]);
                 rebuilt.extend_from_slice(&bytes[libraries_at..selected_at]);
-                rebuilt.extend_from_slice(&bytes[selected_at + 56..chains_at]);
+                rebuilt.extend_from_slice(&bytes[selected_at + LIBRARY_SIZE..chains_at]);
                 rebuilt.extend_from_slice(&kept_chains);
                 rebuilt.extend_from_slice(&bytes[arena_at..]);
                 bytes = rebuilt;
             }
             _ => unreachable!(),
         }
-        bytes[248..256].fill(0);
+        bytes[CHECKSUM_OFFSET..HEADER_SIZE].fill(0);
         let mut digest = 1_469_598_103_934_665_603u64;
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
@@ -502,7 +507,7 @@ int main(void) {
             digest ^= u64::from(*byte);
             digest = digest.wrapping_mul(1_099_511_628_211);
         }
-        bytes[248..256].copy_from_slice(&digest.to_le_bytes());
+        bytes[CHECKSUM_OFFSET..HEADER_SIZE].copy_from_slice(&digest.to_le_bytes());
         fs::write(artifact, bytes)?;
     }
     if mode.cached() {
