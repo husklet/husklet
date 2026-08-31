@@ -5,13 +5,13 @@ pub use hl_daemon::api::{
     Container, ContainerConfig, ContainerCreation, ContainerDetails, ContainerLogs, ContainerPrune, ContainerState,
     Cpu, CpuUsage, CreateContainer, Credentials, DiskUsage, Distribution, DockerMount, DriverConfig, EndpointConfig,
     EndpointIpam, EndpointsConfig, Event, EventFilter, EventQuery, ExecAttach, ExecConfig, ExecCreated, ExecInspect,
-    ExecOpen, ExecProcess, ExecStart, ExposedPorts, HealthLog, HealthState, Healthcheck, HostConfig, ImageCommit,
-    ImageConfig, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary, InspectContainer, InspectImage, Ipam,
-    IpamConfig, List, LogOptions, LogStreams, Memory, MountPoint, Network, NetworkConnect, NetworkContainer,
-    NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune, NetworkSettings, NetworkingConfig, PathStat, Pids,
-    Plugin, PortBinding, PortBindings, PortSummary, ProgressDetail, PullProgress, PushAux, PushProgress, RestartPolicy,
-    Search, Stats, SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, UsageData, Version, Volume,
-    VolumeCreate, VolumeList, VolumeOptions, VolumePrune, VolumeUsage, Wait,
+    ExecLifetime, ExecNetwork, ExecOpen, ExecProcess, ExecStart, ExposedPorts, HealthLog, HealthState, Healthcheck,
+    HostConfig, ImageCommit, ImageConfig, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary,
+    InspectContainer, InspectImage, Ipam, IpamConfig, List, LogOptions, LogStreams, Memory, MountPoint, Network,
+    NetworkConnect, NetworkContainer, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune, NetworkSettings,
+    NetworkingConfig, PathStat, Pids, Plugin, PortBinding, PortBindings, PortSummary, ProgressDetail, PullProgress,
+    PushAux, PushProgress, RestartPolicy, Search, Stats, SystemInfo, SystemPrune, Throttling, Top, Update,
+    UpdateResult, UsageData, Version, Volume, VolumeCreate, VolumeList, VolumeOptions, VolumePrune, VolumeUsage, Wait,
 };
 
 #[cfg(test)]
