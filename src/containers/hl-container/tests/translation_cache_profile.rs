@@ -716,7 +716,9 @@ int main(void) {
         .execution(if mode == Mode::Interpreter {
             Execution::Interpreted
         } else {
-            Execution::native(false)
+            // Product-path profiling needs an executed-backend receipt; diagnostics are orthogonal to
+            // Auto translation and must not change the selected backend.
+            Execution::native(true)
         })
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
@@ -735,6 +737,21 @@ int main(void) {
     let waited = containers.wait("pcache-profile").await;
     let elapsed = started.elapsed();
     let logs = containers.logs("pcache-profile").await?;
+    if mode.translated() {
+        let stderr = String::from_utf8_lossy(&logs.stderr);
+        let receipt = stderr
+            .lines()
+            .find(|line| line.starts_with("[prof] translit:"))
+            .ok_or("translated product run published no backend receipt")?;
+        require(!receipt.ends_with("not selected"), "translated product run selected the interpreter")?;
+        let entries = receipt
+            .split_ascii_whitespace()
+            .find_map(|field| field.strip_prefix("entries="))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        require(entries > 0, "translated product run executed no generated entries")?;
+        eprintln!("pcache-profile backend_receipt={receipt}");
+    }
     containers.remove("pcache-profile").await?;
     if activation_close_failure {
         let failure = waited.expect_err("activation close failure returned ordinary guest status");
