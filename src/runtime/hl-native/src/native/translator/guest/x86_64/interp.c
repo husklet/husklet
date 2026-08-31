@@ -3478,8 +3478,9 @@ static void pcache_save(void) {
         } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-target") == 0) {
             uint64_t original = x64_pc_get64(chain_records + 16), replacement = original;
             for (uint32_t i = 0; i < map_count && replacement == original; i++) {
-                uint64_t candidate = x64_pc_get64(map_records + (uint64_t)i * X64_PC_MAP_SIZE);
-                if (candidate != original) replacement = candidate;
+                const uint8_t *map = map_records + (uint64_t)i * X64_PC_MAP_SIZE;
+                if (x64_pc_get64(map) == original && original + 1 < x64_pc_get64(map + 16))
+                    replacement = original + 1;
             }
             if (replacement == original) {
                 free(buffer); free(saved_maps); free(map_ordinal_by_index); free(owner_map_ordinal); free(saved_chains);
