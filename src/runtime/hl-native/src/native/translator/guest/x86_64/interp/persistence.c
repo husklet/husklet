@@ -175,6 +175,9 @@ int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
                 x64_pc_get64(record + 56) == gpc && entry <= length && entry <= layout->arena &&
                 host <= layout->arena - entry && length <= layout->arena - host &&
                 (policy->require_census_ordinal ? ordinal < UINT16_MAX : ordinal == UINT16_MAX) &&
+                layout->arena >= 52 && body <= layout->arena - 52 &&
+                x64_pc_get64(layout->arena_bytes + body + 16) == x64_pc_get64(record + 64) &&
+                x64_pc_get16(layout->arena_bytes + body + 50) == ordinal &&
                 x64_pc_get32(record + 84) <= layout->owners &&
                 x64_pc_get32(record + 88) <= layout->owners - x64_pc_get32(record + 84) &&
                 x64_pc_get32(record + 92) <= layout->chains &&
@@ -274,8 +277,14 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
     for (uint64_t i = 0; valid && i < layout->chains; i++) {
         const uint8_t *record = layout->chain_records + i * X64_PC_CHAIN_SIZE;
         uint32_t site = x64_pc_get32(record), fallback = x64_pc_get32(record + 4);
+        uint64_t target = x64_pc_get64(record + 16);
+        int target_known = 0;
+        for (uint64_t map = 0; map < layout->maps && !target_known; map++) {
+            const uint8_t *candidate = layout->map_records + map * X64_PC_MAP_SIZE;
+            target_known = target >= x64_pc_get64(candidate + 8) && target < x64_pc_get64(candidate + 16);
+        }
         valid = site <= layout->arena && layout->arena - site >= 5 && fallback < layout->arena &&
-                layout->arena_bytes[site] == 0xe9 && (i == 0 || site > prior_chain);
+                layout->arena_bytes[site] == 0xe9 && target_known && (i == 0 || site > prior_chain);
         prior_chain = site;
     }
     if (valid && stage != NULL) *stage = 6;

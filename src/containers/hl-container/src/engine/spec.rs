@@ -34,6 +34,14 @@ impl TryFrom<&ProcessConfig> for Spec {
             std::env::var_os("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST").is_some(),
         )?;
         #[cfg(feature = "native-test-hooks")]
+        if let Some(mutation) = std::env::var_os("HL_TRANSLIT_PCACHE_MUTATION_TEST") {
+            Self::set(
+                &mut options,
+                "HL_TRANSLIT_PCACHE_MUTATION_TEST",
+                mutation.as_encoded_bytes(),
+            )?;
+        }
+        #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
             "HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST",

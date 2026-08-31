@@ -24,6 +24,11 @@ enum Mode {
     CacheSemanticLibrary,
     CacheSemanticOverlap,
     CacheSemanticChain,
+    CacheSemanticCensusOrdinal,
+    CacheSemanticChainSite,
+    CacheSemanticChainFallback,
+    CacheSemanticChainTarget,
+    CacheSemanticGeneration,
     CacheChangedLibrary,
     CacheAbsentLibrary,
     CacheStageFailure,
@@ -55,6 +60,11 @@ impl Mode {
             "cache-semantic-library" => Ok(Self::CacheSemanticLibrary),
             "cache-semantic-overlap" => Ok(Self::CacheSemanticOverlap),
             "cache-semantic-chain" => Ok(Self::CacheSemanticChain),
+            "cache-semantic-census-ordinal" => Ok(Self::CacheSemanticCensusOrdinal),
+            "cache-semantic-chain-site" => Ok(Self::CacheSemanticChainSite),
+            "cache-semantic-chain-fallback" => Ok(Self::CacheSemanticChainFallback),
+            "cache-semantic-chain-target" => Ok(Self::CacheSemanticChainTarget),
+            "cache-semantic-generation" => Ok(Self::CacheSemanticGeneration),
             "cache-changed-library" => Ok(Self::CacheChangedLibrary),
             "cache-absent-library" => Ok(Self::CacheAbsentLibrary),
             "cache-stage-failure" => Ok(Self::CacheStageFailure),
@@ -132,6 +142,11 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             | Mode::CacheSemanticLibrary
             | Mode::CacheSemanticOverlap
             | Mode::CacheSemanticChain
+            | Mode::CacheSemanticCensusOrdinal
+            | Mode::CacheSemanticChainSite
+            | Mode::CacheSemanticChainFallback
+            | Mode::CacheSemanticChainTarget
+            | Mode::CacheSemanticGeneration
             | Mode::CacheChangedLibrary
             | Mode::CacheAbsentLibrary
             | Mode::CacheStageFailure
@@ -510,6 +525,20 @@ int main(void) {
         bytes[CHECKSUM_OFFSET..HEADER_SIZE].copy_from_slice(&digest.to_le_bytes());
         fs::write(artifact, bytes)?;
     }
+    let native_mutation = match mode {
+        Mode::CacheSemanticCensusOrdinal => Some("census-ordinal"),
+        Mode::CacheSemanticChainSite => Some("chain-site"),
+        Mode::CacheSemanticChainFallback => Some("chain-fallback"),
+        Mode::CacheSemanticChainTarget => Some("chain-target"),
+        Mode::CacheSemanticGeneration => Some("generation"),
+        _ => None,
+    };
+    if let Some(expected) = native_mutation {
+        require(
+            std::env::var("HL_TRANSLIT_PCACHE_MUTATION_TEST").as_deref() == Ok(expected),
+            "semantic mutation arm did not enable its exact native hook",
+        )?;
+    }
     if mode.cached() {
         let metadata = fs::symlink_metadata(cache)?;
         require(
@@ -759,6 +788,28 @@ int main(void) {
                             .any(|part| part == b".hit-")
                     }),
                 "rechecksummed semantic corruption did not remain a pristine MISS",
+            )?,
+            Mode::CacheSemanticCensusOrdinal
+            | Mode::CacheSemanticChainSite
+            | Mode::CacheSemanticChainFallback
+            | Mode::CacheSemanticChainTarget
+            | Mode::CacheSemanticGeneration => require(
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".length-invalid"))
+                    && !cache_loaded
+                    && entries
+                        .iter()
+                        .filter(|entry| {
+                            entry
+                                .file_name()
+                                .as_encoded_bytes()
+                                .windows(11)
+                                .any(|part| part == b".published-")
+                        })
+                        .count()
+                        >= 2,
+                "native rechecksummed semantic mutation did not reject and freshly translate",
             )?,
             Mode::CacheChangedLibrary => {
                 require(

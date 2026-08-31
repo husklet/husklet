@@ -155,6 +155,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only omit one same-ISA pcache external relocation",
         Flag
     ),
+    internal!(
+        "HL_TRANSLIT_PCACHE_MUTATION_TEST",
+        "test-only publish one rechecksummed same-ISA pcache semantic mutation",
+        Text
+    ),
     launch!(
         "HL_TRANSLIT_MIXED_SSE_DISABLE",
         "disable mixed normal/SSE same-ISA descriptor admission",

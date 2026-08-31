@@ -397,6 +397,7 @@ enum translit_external_absolute_kind {
     TL_EXT_CALL_HIT = 0x400, TL_EXT_CALL_MISS, TL_EXT_CALL_IRQ,
     TL_EXT_HOOK_LINK_TAKEN = 0x500, TL_EXT_HOOK_LINK_IRQ, TL_EXT_HOOK_LINK_DISPATCH,
     TL_EXT_HOOK_JCC_SHAPE, TL_EXT_HOOK_CALL_HIT, TL_EXT_HOOK_CALL_MISS,
+    TL_EXT_FALL_FS_TRANSACTION = 0x600, TL_EXT_FALL_NORMAL_TO_FS,
     TL_EXT_PCACHE_CENSUS_BASE = 0x10000,
 };
 typedef struct { uint32_t offset; uint32_t kind; } translit_external_absolute;
@@ -476,6 +477,10 @@ static uint32_t translit_external_absolute_kind_for(uintptr_t address) {
         TL_DIRECT_CALL_IBTC_COUNT_HIT, TL_DIRECT_CALL_IBTC_COUNT_MISS, TL_DIRECT_CALL_IBTC_COUNT_IRQ};
     for (uint32_t i = 0; i < 3; i++)
         if (address == translit_direct_call_ibtc_dynamic_counter(call[i])) return TL_EXT_CALL_HIT + i;
+    if (address == translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_FS_TRANSACTION))
+        return TL_EXT_FALL_FS_TRANSACTION;
+    if (address == translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_NORMAL_TO_FS))
+        return TL_EXT_FALL_NORMAL_TO_FS;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (address == (uintptr_t)&translit_jcc_link_taken) return TL_EXT_HOOK_LINK_TAKEN;
     if (address == (uintptr_t)&translit_jcc_link_irq_fallback) return TL_EXT_HOOK_LINK_IRQ;
@@ -508,6 +513,10 @@ static uintptr_t translit_external_absolute_address_for(uint32_t kind) {
         TL_DIRECT_CALL_IBTC_COUNT_HIT, TL_DIRECT_CALL_IBTC_COUNT_MISS, TL_DIRECT_CALL_IBTC_COUNT_IRQ};
     if (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ)
         return translit_direct_call_ibtc_dynamic_counter(call[kind - TL_EXT_CALL_HIT]);
+    if (kind == TL_EXT_FALL_FS_TRANSACTION)
+        return translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_FS_TRANSACTION);
+    if (kind == TL_EXT_FALL_NORMAL_TO_FS)
+        return translit_fallthrough_ibtc_hit_counter(HL_BACKEND_FALL_NORMAL_TO_FS);
 #if defined(HL_NATIVE_TEST_HOOKS)
     switch (kind) {
     case TL_EXT_HOOK_LINK_TAKEN: return (uintptr_t)&translit_jcc_link_taken;
@@ -530,6 +539,7 @@ static int translit_external_absolute_kind_valid(uint32_t kind) {
            (kind >= TL_EXT_JCC_HIT && kind <= TL_EXT_JCC_IRQ) ||
            (kind >= TL_EXT_JMP_HIT && kind <= TL_EXT_JMP_IRQ) ||
            (kind >= TL_EXT_CALL_HIT && kind <= TL_EXT_CALL_IRQ) ||
+           (kind >= TL_EXT_FALL_FS_TRANSACTION && kind <= TL_EXT_FALL_NORMAL_TO_FS) ||
            (kind >= TL_EXT_HOOK_LINK_TAKEN && kind <= TL_EXT_HOOK_CALL_MISS);
 }
 
@@ -2980,9 +2990,9 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
-            {"HL_TRANSLIT_RIPREL_READONLY", 1, 8},
-            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 9},
-            {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 10},
+            {"HL_TRANSLIT_RIPREL_READONLY", 1, 9},
+            {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 10},
+            {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 11},
         };
         for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) (void)hl_option_unset(modes[i].name);
         uint64_t baseline = x64_pcache_codegen_modes();

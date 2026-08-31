@@ -2482,11 +2482,7 @@ static int pcache_load(uint64_t entry_jump) {
     if (valid) {
         const x64_pc_semantic_policy policy = {
             INTERP_BLOCK_MAGIC, UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX, JIT_MAP_N,
-#if defined(HL_NATIVE_TEST_HOOKS)
-            0,
-#else
             g_coldprof != 0,
-#endif
         };
         valid = x64_pc_validate_maps_owners(&layout, &policy, &semantic_stage);
         if (valid)
@@ -3342,7 +3338,7 @@ static void pcache_save(void) {
             char invalid_path[1024], invalid_receipt[1024];
             if (x64_pc_file(invalid_path, sizeof invalid_path)) {
                 int invalid_length = snprintf(invalid_receipt, sizeof invalid_receipt,
-                                              "%s.chain-invalid-%lld", invalid_path, (long long)getpid());
+                                              "%s.chain-invalid-%lld-%u", invalid_path, (long long)getpid(), i);
                 uint64_t invalid[7] = {i, chain.site_offset, chain.fallback_offset, chain_map_at,
                                        chain.source, chain.target, map_count};
                 if (invalid_length > 0 && (size_t)invalid_length < sizeof invalid_receipt)
@@ -3449,6 +3445,30 @@ static void pcache_save(void) {
         x64_pc_put64(&cursor, translit_chain_sites[i].target);
     }
     memcpy(cursor, g_cache, (size_t)used);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *mutation = hl_option_get("HL_TRANSLIT_PCACHE_MUTATION_TEST");
+    if (mutation != NULL) {
+        uint8_t *map_records = buffer + X64_PC_HEADER_SIZE;
+        uint8_t *chain_records = map_records + map_bytes + owner_bytes + reloc_bytes +
+                                 helper_reloc_bytes + library_bytes;
+        if (map_count != 0 && strcmp(mutation, "census-ordinal") == 0) {
+            uint16_t value = x64_pc_get16(map_records + 82) ^ 1u;
+            uint8_t *at = map_records + 82; x64_pc_put16(&at, value);
+        } else if (map_count != 0 && strcmp(mutation, "generation") == 0) {
+            uint64_t value = x64_pc_get64(map_records + 64) ^ 1u;
+            uint8_t *at = map_records + 64; x64_pc_put64(&at, value);
+        } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-site") == 0) {
+            uint8_t *at = chain_records; x64_pc_put32(&at, (uint32_t)used);
+        } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-fallback") == 0) {
+            uint8_t *at = chain_records + 4; x64_pc_put32(&at, (uint32_t)used);
+        } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-target") == 0) {
+            uint8_t *at = chain_records + 16; x64_pc_put64(&at, UINT64_MAX);
+        } else {
+            free(buffer); free(saved_maps); free(map_ordinal_by_index); free(owner_map_ordinal); free(saved_chains);
+            return;
+        }
+    }
+#endif
     x64_pc_checksum_write(buffer, total);
     uint64_t observe_save_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     char path[1024];
