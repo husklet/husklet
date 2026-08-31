@@ -10,6 +10,23 @@ type Error = Box<dyn std::error::Error>;
 const UNIT_127_ASSEMBLY: &str = "a1d41926570d6ddfee050116a5698a9e5f7d2b7accf0dcfce685e46c707a7265";
 const CC1: &str = "/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1";
 
+#[test]
+fn cache_census_owner_budget_contract_is_explicit() {
+    let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("../../runtime/hl-native/src/native/translator");
+    let translit =
+        fs::read_to_string(native.join("guest/x86_64/translit.inc")).expect("read x86 transliterator owner budget");
+    let cache = fs::read_to_string(native.join("cache.c")).expect("read owner capacity");
+    assert!(
+        translit.contains("#define TL_PCACHE_CENSUS_OWNER_RANGES 7u"),
+        "each instrumented block must retain exactly seven staged census ranges"
+    );
+    assert!(
+        cache.contains("#define JIT_BODY_OWNER_N 1398101u"),
+        "update the profile harness capacity ceiling when owner capacity changes"
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Interpreter,
@@ -795,20 +812,36 @@ int main(void) {
             "cache contains a non-private or non-regular entry",
         )?;
         match mode {
-            Mode::CacheCold | Mode::CacheAuthorityReuse | Mode::CacheThreadCold => require(
-                entries
-                    .iter()
-                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
-                    && (!cfg!(feature = "native-test-hooks")
-                        || entries.iter().any(|entry| {
-                            entry
-                                .file_name()
-                                .as_encoded_bytes()
-                                .windows(11)
-                                .any(|part| part == b".published-")
-                        })),
-                "cold arm did not publish a cache artifact (and hook receipt when enabled)",
-            )?,
+            Mode::CacheCold | Mode::CacheAuthorityReuse | Mode::CacheThreadCold => {
+                require(
+                    entries
+                        .iter()
+                        .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                        && (!cfg!(feature = "native-test-hooks")
+                            || entries.iter().any(|entry| {
+                                entry
+                                    .file_name()
+                                    .as_encoded_bytes()
+                                    .windows(11)
+                                    .any(|part| part == b".published-")
+                            })),
+                    "cold arm did not publish a cache artifact (and hook receipt when enabled)",
+                )?;
+                if mode == Mode::CacheCold {
+                    let artifact = entries
+                        .iter()
+                        .find(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                        .ok_or("cold arm has no cache artifact for owner-capacity check")?;
+                    let header = fs::read(artifact.path())?;
+                    require(header.len() >= 112, "cold cache header is truncated")?;
+                    let owners = u64::from_le_bytes(header[104..112].try_into().unwrap());
+                    const JIT_BODY_OWNER_N: u64 = 1_398_101;
+                    require(
+                        owners.saturating_mul(4) <= JIT_BODY_OWNER_N.saturating_mul(3),
+                        "cold cache owner census exceeds 75% of publication capacity",
+                    )?;
+                }
+            }
             Mode::CacheUpperOverride => require(
                 entries
                     .iter()
