@@ -770,6 +770,7 @@ mod native_eligibility_tests {
         assert!(!isolated_hostname_projection_ready(&actual), "oversized hosts admitted");
         drop(large);
         std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        std::fs::remove_file(root.path().join("etc/real-hosts")).unwrap();
         std::fs::remove_dir(root.path().join("etc")).unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("hosts"), b"127.0.0.1 outside\n").unwrap();
