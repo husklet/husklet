@@ -692,6 +692,9 @@ mod native_eligibility_tests {
         assert!(!isolated_hostname_projection_ready(&actual), "missing hosts admitted");
         std::fs::write(root.path().join("etc/hosts"), b"127.0.0.1 localhost\n").unwrap();
         assert!(isolated_hostname_projection_ready(&actual));
+        actual.box_policy.hostname = Some(b"line\nbreak".to_vec());
+        assert!(!isolated_hostname_projection_ready(&actual), "invalid hostname admitted");
+        actual.box_policy.hostname = Some(b"builder".to_vec());
         actual.box_policy.hostname = None;
         assert!(!isolated_hostname_projection_ready(&actual), "missing hostname admitted");
         actual.box_policy.hostname = Some(b"builder".to_vec());
