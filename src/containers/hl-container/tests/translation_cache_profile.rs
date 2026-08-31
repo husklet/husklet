@@ -65,6 +65,7 @@ enum Mode {
     ForkNoExec,
     ForkExec,
     RelocationMissing,
+    CwdRelative,
 }
 
 impl Mode {
@@ -106,12 +107,13 @@ impl Mode {
             "fork-no-exec" => Ok(Self::ForkNoExec),
             "fork-exec" => Ok(Self::ForkExec),
             "relocation-missing" => Ok(Self::RelocationMissing),
+            "cwd-relative" => Ok(Self::CwdRelative),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
 
     const fn cached(self) -> bool {
-        !matches!(self, Self::Interpreter | Self::Translated)
+        !matches!(self, Self::Interpreter | Self::Translated | Self::CwdRelative)
     }
 
     const fn translated(self) -> bool {
@@ -668,7 +670,21 @@ int main(void) {
     }
     // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
     // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
-    let process = if mode == Mode::ForkNoExec {
+    let process = if mode == Mode::CwdRelative {
+        Process::new("/bin/sh")
+            .args([
+                "-c",
+                "ls . >/dev/null || exit 41; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok",
+            ])
+            .env("TERM", "xterm-256color")
+            .env("COLORTERM", "truecolor")
+            .env("LANG", "C.UTF-8")
+            .env("HOME", "/root")
+            .env(
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
+    } else if mode == Mode::ForkNoExec {
         Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done) & wait"])
     } else if mode == Mode::ForkExec {
         Process::new("/bin/sh").args(["-c", "/bin/true & /bin/true & wait"])
@@ -709,7 +725,7 @@ int main(void) {
             seccomp_baseline: hl_container::SeccompBaseline::Container,
         });
     containers.create(spec).await?;
-    if !matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
+    if !matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CwdRelative) {
         benchmark_barrier("ready", "release")?;
     }
     let started = Instant::now();
@@ -781,7 +797,9 @@ int main(void) {
         require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
         eprintln!("pcache-profile authority_hit_elapsed_us={}", repeat_elapsed.as_micros());
     }
-    benchmark_barrier("done", "finish")?;
+    if mode != Mode::CwdRelative {
+        benchmark_barrier("done", "finish")?;
+    }
     if status != ExitStatus::Code(0) {
         return Err(format!(
             "compiler workload exited {status:?}; stderr:\n{}",
@@ -790,7 +808,9 @@ int main(void) {
         .into());
     }
     let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
-    if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
+    if mode == Mode::CwdRelative {
+        require(logs.stdout == b"cwd-relative-ok\n", "relative cwd workload output changed")?;
+    } else if matches!(mode, Mode::ForkNoExec | Mode::ForkExec) {
         require(logs.stdout.is_empty(), "fork lifecycle fixture produced output")?;
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
         require(
@@ -1213,7 +1233,7 @@ int main(void) {
                 }),
                 "unrecorded emitted absolute did not refuse cache publication",
             )?,
-            Mode::Interpreter | Mode::Translated => unreachable!(),
+            Mode::Interpreter | Mode::Translated | Mode::CwdRelative => unreachable!(),
         }
     }
     eprintln!(
