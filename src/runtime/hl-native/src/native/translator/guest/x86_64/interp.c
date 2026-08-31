@@ -2505,6 +2505,7 @@ static int pcache_load(uint64_t entry_jump) {
     x64_pc_format_layout layout = {0};
     unsigned validation = 2; /* structurally invalid/truncated */
     unsigned semantic_stage = 0;
+    uint64_t checksum_ns = 0;
     uint64_t header_state[10];
     int valid = x64_pc_header_validate(bytes, size, HL_PCACHE_ABI_X86_64, sizeof(struct cpu), JIT_MAP_N,
                                        g_pc_binid.bytes, entry_jump, x64_pcache_codegen_modes(), header_state);
@@ -2534,7 +2535,9 @@ static int pcache_load(uint64_t entry_jump) {
 #endif
     }
     if (valid) {
+        uint64_t checksum_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
         valid = x64_pc_checksum_validate(bytes, size);
+        if (g_coldprof) checksum_ns = coldprof_now_ns(effective_host_services()) - checksum_started;
         validation = valid ? 1 : 3; /* authenticated or checksum mismatch */
     }
     if (valid) {
@@ -2558,7 +2561,12 @@ static int pcache_load(uint64_t entry_jump) {
     if (receipt_length > 0 && (size_t)receipt_length < sizeof receipt)
         (void)x64_pc_artifact_store(receipt, &validation, sizeof validation);
 #endif
-    if (g_coldprof) g_x64_pc_observe_validation_ns = coldprof_now_ns(effective_host_services()) - observe_started;
+    if (g_coldprof) {
+        g_x64_pc_observe_validation_ns = coldprof_now_ns(effective_host_services()) - observe_started;
+        fprintf(stderr, "[pcache] load phases read_ns=%llu checksum_ns=%llu validation_ns=%llu\n",
+                (unsigned long long)g_x64_pc_observe_read_ns, (unsigned long long)checksum_ns,
+                (unsigned long long)g_x64_pc_observe_validation_ns);
+    }
     if (!valid) {
         free(allocation);
         return 0;
@@ -3740,6 +3748,7 @@ static void x64_pc_activate_ready(uint64_t pc) {
     if (entries == NULL) return;
     jit_body_owner_preserve *preserves = jit_body_owner_preserves(entries);
     uint32_t owner_at = atomic_load_explicit(&set->count, memory_order_acquire);
+    uint64_t classification_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     uint64_t deferred_maps = 0, deferred_owners = 0, deferred_relocs = 0, deferred_helpers = 0;
     for (uint64_t i = 0; i < g_x64_pc_snapshot_maps_count; i++)
         deferred_maps += x64_pc_saved_map_library(g_x64_pc_snapshot_maps + i * X64_PC_MAP_SIZE) >= 0;
@@ -3766,8 +3775,11 @@ static void x64_pc_activate_ready(uint64_t pc) {
         translit_external_absolute_count > TL_EXTERNAL_ABSOLUTE_N - deferred_relocs ||
         translit_helper_relative_count > TL_HELPER_RELATIVE_N - deferred_helpers ||
         g_x64_pc_chain_count > g_x64_pc_snapshot_chains_count) goto cold;
+    uint64_t classification_ns = g_coldprof
+        ? coldprof_now_ns(effective_host_services()) - classification_started : 0;
 
     if (g_coldprof) fprintf(stderr, "[pcache] activate phase=copy libraries=%u\n", g_x64_pc_lib_count);
+    uint64_t arena_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     if (!jit_wprot(0)) goto cold;
     for (uint64_t i = 0; i < g_x64_pc_snapshot_maps_count; i++) {
         const uint8_t *record = g_x64_pc_snapshot_maps + i * X64_PC_MAP_SIZE;
@@ -3778,6 +3790,8 @@ static void x64_pc_activate_ready(uint64_t pc) {
         memcpy(g_cache + start, g_x64_pc_snapshot_arena + start, (size_t)(end - start));
         ((struct interp_block *)(g_cache + x64_pc_get64(record + 32)))->generation = g_cache_gen;
     }
+    uint64_t arena_copy_ns = g_coldprof ? coldprof_now_ns(effective_host_services()) - arena_started : 0;
+    uint64_t relocate_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     for (uint64_t i = 0; i < g_x64_pc_snapshot_relocs_count; i++) {
         const uint8_t *record = g_x64_pc_snapshot_relocs + i * X64_PC_RELOC_SIZE;
         uint32_t offset = x64_pc_get32(record);
@@ -3810,6 +3824,7 @@ static void x64_pc_activate_ready(uint64_t pc) {
         int32_t encoded = (int32_t)delta;
         memcpy(g_cache + chain.site_offset + 1, &encoded, sizeof encoded);
     }
+    uint64_t relocate_ns = g_coldprof ? coldprof_now_ns(effective_host_services()) - relocate_started : 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (x64_pc_fail_stage("activation-close")) {
         char close_path[1024], close_receipt[1024];
@@ -3829,12 +3844,16 @@ static void x64_pc_activate_ready(uint64_t pc) {
         x64_pc_restored_detach();
         return;
     }
+    uint64_t code_publish_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     if (!jit_publish_code(J_RX(g_cache), (size_t)g_x64_pc_snapshot_arena_size)) {
         x64_pc_restored_detach();
         return;
     }
+    uint64_t code_publish_ns = g_coldprof
+        ? coldprof_now_ns(effective_host_services()) - code_publish_started : 0;
 
     if (g_coldprof) fprintf(stderr, "[pcache] activate phase=publish\n");
+    uint64_t metadata_started = g_coldprof ? coldprof_now_ns(effective_host_services()) : 0;
     for (uint64_t i = 0; i < g_x64_pc_snapshot_owners_count; i++) {
         const uint8_t *record = g_x64_pc_snapshot_owners + i * X64_PC_OWNER_SIZE;
         uint32_t ordinal = x64_pc_get32(record + 24);
@@ -3883,6 +3902,15 @@ static void x64_pc_activate_ready(uint64_t pc) {
     }
     for (uint32_t library = 0; library < g_x64_pc_lib_count; library++)
         g_x64_pc_lib_state[library] = X64_PC_LIB_ACTIVE;
+    if (g_coldprof) {
+        uint64_t metadata_ns = coldprof_now_ns(effective_host_services()) - metadata_started;
+        fprintf(stderr,
+                "[pcache] activate phases classify_ns=%llu arena_copy_ns=%llu relocate_ns=%llu "
+                "code_publish_ns=%llu metadata_publish_ns=%llu dso_hash_ns=%llu\n",
+                (unsigned long long)classification_ns, (unsigned long long)arena_copy_ns,
+                (unsigned long long)relocate_ns, (unsigned long long)code_publish_ns,
+                (unsigned long long)metadata_ns, (unsigned long long)g_x64_pc_observe_library_ns);
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     char path[1024], receipt[1024];
     if (x64_pc_file(path, sizeof path)) {
