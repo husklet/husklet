@@ -295,6 +295,23 @@ int main(int argc, char **argv) {
         if (output < 0 || write(output, "object\n", 7) != 7 || close(output) != 0) return 93;
         fputs("volumes", stdout);
     }
+    if (argc > 1 && !strcmp(argv[1], "file-volumes")) {
+        char contents[256] = {0};
+        int hosts = open("/etc/hosts", O_RDONLY);
+        ssize_t host_count = hosts < 0 ? -1 : read(hosts, contents, sizeof(contents) - 1);
+        if (hosts < 0 || host_count < 15 || strstr(contents, "identity-hosts\n") == NULL) return 96;
+        close(hosts);
+        errno = 0;
+        if (open("/etc/hosts", O_WRONLY | O_TRUNC) != -1 || (errno != EROFS && errno != EACCES)) return 97;
+        struct statvfs mounted;
+        if (statvfs("/etc/hosts", &mounted) != 0 || !(mounted.f_flag & ST_RDONLY) ||
+            !(mounted.f_flag & ST_NOSUID) || !(mounted.f_flag & ST_NODEV)) return 98;
+        int hostname = open("/etc/hostname", O_WRONLY | O_TRUNC);
+        if (hostname < 0 || write(hostname, "guest-host\n", 11) != 11 || close(hostname) != 0) return 99;
+        int resolver = open("/etc/resolv.conf", O_WRONLY | O_TRUNC);
+        if (resolver < 0 || write(resolver, "nameserver 127.0.0.1\n", 21) != 21 || close(resolver) != 0) return 100;
+        fputs("file-volumes", stdout);
+    }
     if (argc > 1 && !strcmp(argv[1], "identity-limits")) {
         if (getuid() != 1234 || geteuid() != 1234 || getgid() != 2345 || getegid() != 2345 || getgroups(0, NULL) != 0)
             return 94;

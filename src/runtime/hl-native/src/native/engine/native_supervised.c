@@ -98,6 +98,7 @@ static void hl_native_supervised_projection_cleanup(hl_native_supervised_bootstr
 typedef struct {
     int source;
     int read_only;
+    int directory;
     char guest[PATH_MAX];
 } hl_native_supervised_volume;
 
@@ -183,23 +184,34 @@ static int hl_native_supervised_volumes_open(const char *spec, hl_native_supervi
                 hl_native_supervised_path_contains(record, volumes->entries[index].guest))
                 goto failed;
         int host_root = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-        struct open_how source_how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+        struct open_how source_how = {.flags = O_PATH | O_CLOEXEC,
                                       .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
         int source = host_root < 0 ? -1 : (int)syscall(SYS_openat2, host_root, colon + 1, &source_how, sizeof(source_how));
         if (host_root >= 0) close(host_root);
         if (source < 0) goto failed;
-        int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
-        struct stat source_status, tree_status;
-        if (tree < 0 || fstat(source, &source_status) != 0 || fstat(tree, &tree_status) != 0 ||
-            source_status.st_dev != tree_status.st_dev || source_status.st_ino != tree_status.st_ino) {
-            if (tree >= 0) close(tree);
+        struct stat source_status;
+        if (fstat(source, &source_status) != 0 || (!S_ISDIR(source_status.st_mode) && !S_ISREG(source_status.st_mode))) {
             close(source);
             goto failed;
         }
-        close(source);
+        int mounted_source = source;
+        if (S_ISDIR(source_status.st_mode)) {
+            int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon,
+                                    OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
+            struct stat tree_status;
+            if (tree < 0 || fstat(tree, &tree_status) != 0 ||
+                source_status.st_dev != tree_status.st_dev || source_status.st_ino != tree_status.st_ino) {
+                if (tree >= 0) close(tree);
+                close(source);
+                goto failed;
+            }
+            close(source);
+            mounted_source = tree;
+        }
         hl_native_supervised_volume *volume = &volumes->entries[volumes->count++];
-        volume->source = tree;
+        volume->source = mounted_source;
         volume->read_only = read_only;
+        volume->directory = S_ISDIR(source_status.st_mode);
         strcpy(volume->guest, record);
     }
     free(copy);
@@ -210,18 +222,70 @@ failed:
     return -1;
 }
 
+static int hl_native_supervised_volumes_contains(const hl_native_supervised_volumes *volumes, const char *guest) {
+    for (size_t index = 0; index < volumes->count; ++index)
+        if (strcmp(volumes->entries[index].guest, guest) == 0) return 1;
+    return 0;
+}
+
 static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes) {
     int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (root < 0) return -1;
     for (size_t index = 0; index < volumes->count; ++index) {
         const hl_native_supervised_volume *volume = &volumes->entries[index];
-        struct open_how how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+        struct open_how how = {.flags = O_PATH | O_CLOEXEC | (volume->directory ? O_DIRECTORY : 0),
                                .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
         int target = (int)syscall(SYS_openat2, root, volume->guest + 1, &how, sizeof(how));
         if (target < 0) { close(root); return -1; }
+        struct stat source_status, target_status;
+        if (fstat(volume->source, &source_status) != 0 || fstat(target, &target_status) != 0 ||
+            (volume->directory ? !S_ISDIR(target_status.st_mode) : !S_ISREG(target_status.st_mode))) {
+            close(volume->source); close(target); close(root); errno = EINVAL; return -1;
+        }
         int tree = volume->source;
         struct mount_attr attributes = {.attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV |
                                                      (volume->read_only ? MOUNT_ATTR_RDONLY : 0)};
+        if (!volume->directory) {
+            char source_path[64], target_path[PATH_MAX];
+            struct statx source_key, target_key, path_key, mounted_key, tree_key;
+            if (snprintf(source_path, sizeof source_path, "/proc/self/fd/%d", tree) >= (int)sizeof source_path ||
+                snprintf(target_path, sizeof target_path, "%s%s", rootfs, volume->guest) >= (int)sizeof target_path ||
+                syscall(SYS_statx, tree, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &source_key) != 0 ||
+                syscall(SYS_statx, target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &target_key) != 0) {
+                close(tree); close(target); close(root); return -1;
+            }
+            int path = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+            int stable = path >= 0 && syscall(SYS_statx, path, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID,
+                                              &path_key) == 0 &&
+                         path_key.stx_ino == target_key.stx_ino && path_key.stx_mnt_id == target_key.stx_mnt_id;
+            if (path >= 0) close(path);
+            if (!stable || mount(source_path, target_path, NULL, MS_BIND, NULL) != 0) {
+                close(tree); close(target); close(root); errno = ESTALE; return -1;
+            }
+            int mounted = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+            int mounted_tree = (int)syscall(SYS_open_tree, AT_FDCWD, target_path, OPEN_TREE_CLOEXEC);
+            struct stat mounted_status;
+            int exact = mounted >= 0 && mounted_tree >= 0 && fstat(mounted, &mounted_status) == 0 &&
+                        syscall(SYS_statx, mounted, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &mounted_key) == 0 &&
+                        syscall(SYS_statx, mounted_tree, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &tree_key) == 0 &&
+                        mounted_status.st_dev == source_status.st_dev && mounted_status.st_ino == source_status.st_ino &&
+                        mounted_key.stx_ino == source_key.stx_ino && mounted_key.stx_mnt_id != target_key.stx_mnt_id &&
+                        tree_key.stx_ino == mounted_key.stx_ino && tree_key.stx_mnt_id == mounted_key.stx_mnt_id &&
+                        syscall(SYS_mount_setattr, mounted_tree, "", AT_EMPTY_PATH, &attributes, sizeof attributes) == 0;
+            struct statvfs flags;
+            if (exact && volume->read_only &&
+                (statvfs(target_path, &flags) != 0 || (flags.f_flag & ST_RDONLY) == 0))
+                exact = 0;
+            if (mounted >= 0) close(mounted);
+            if (mounted_tree >= 0) close(mounted_tree);
+            close(tree); close(target);
+            if (!exact) {
+                int failure = errno != 0 ? errno : ESTALE;
+                umount2(target_path, MNT_DETACH);
+                close(root); errno = failure; return -1;
+            }
+            continue;
+        }
         if (tree < 0 || syscall(SYS_mount_setattr, tree, "", AT_EMPTY_PATH | AT_RECURSIVE, &attributes, sizeof(attributes)) != 0 ||
             syscall(SYS_move_mount, tree, "", target, "", MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH) != 0) {
             if (tree >= 0) close(tree);
@@ -704,6 +768,7 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
     if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
+        !hl_native_supervised_volumes_contains(volumes, "/etc/hosts") &&
         hl_native_supervised_project_hostname(projected_root, box->hostname,
                                               (box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0,
                                               private_setup) != 0)

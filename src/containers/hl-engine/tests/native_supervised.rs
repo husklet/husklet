@@ -887,6 +887,86 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
 }
 
 #[test]
+fn supervised_projector_mounts_pinned_regular_files_with_exact_access() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    let sources = work.path().join("sources");
+    for path in [root.join("bin"), root.join("proc"), root.join("etc"), sources.clone()] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let hosts = sources.join("hosts");
+    let hostname = sources.join("hostname");
+    let resolver = sources.join("resolv.conf");
+    std::fs::write(&hosts, b"identity-hosts\n").unwrap();
+    std::fs::write(&hostname, b"old-host\n").unwrap();
+    std::fs::write(&resolver, b"nameserver 192.0.2.1\n").unwrap();
+    for name in ["hosts", "hostname", "resolv.conf"] {
+        std::fs::write(root.join("etc").join(name), b"target\n").unwrap();
+    }
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"file-volumes".to_vec());
+    plan.box_policy.volumes = Some(
+        format!(
+            "ro:/etc/hosts:{},rw:/etc/hostname:{},rw:/etc/resolv.conf:{}",
+            hosts.display(), hostname.display(), resolver.display()
+        )
+        .into_bytes(),
+    );
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"file-volumes");
+    assert_eq!(std::fs::read(&hosts).unwrap(), b"identity-hosts\n");
+    assert_eq!(std::fs::read(&hostname).unwrap(), b"guest-host\n");
+    assert_eq!(std::fs::read(&resolver).unwrap(), b"nameserver 127.0.0.1\n");
+}
+
+#[test]
+fn supervised_projector_refuses_missing_symlinked_and_wrong_type_file_volumes() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let root = work.path().join("root");
+    let source = work.path().join("source");
+    let source_link = work.path().join("source-link");
+    for path in [root.join("etc"), root.join("tmp")] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(&source, b"source\n").unwrap();
+    std::os::unix::fs::symlink(&source, &source_link).unwrap();
+    std::fs::write(root.join("etc/regular"), b"target\n").unwrap();
+    std::os::unix::fs::symlink(root.join("etc/regular"), root.join("etc/link")).unwrap();
+    for specification in [
+        format!("rw:/etc/regular:{}", work.path().join("missing").display()),
+        format!("rw:/etc/regular:{}", source_link.display()),
+        format!("rw:/etc/link:{}", source.display()),
+        format!("rw:/tmp:{}", source.display()),
+        format!("rw:/etc/regular:{}", work.path().display()),
+    ] {
+        let mut plan = selected_plan(&executable);
+        plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+        plan.box_policy.volumes = Some(specification.into_bytes());
+        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        if engine.start().is_ok() {
+            assert!(engine.wait().is_err());
+        }
+        engine.destroy().unwrap();
+    }
+    assert_eq!(std::fs::read(root.join("etc/regular")).unwrap(), b"target\n");
+    assert_eq!(std::fs::read(&source).unwrap(), b"source\n");
+}
+
+#[test]
 fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
