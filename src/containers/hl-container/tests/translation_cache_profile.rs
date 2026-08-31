@@ -28,6 +28,7 @@ enum Mode {
     CacheSemanticChainSite,
     CacheSemanticChainFallback,
     CacheSemanticChainSource,
+    CacheSemanticChainSlice,
     CacheSemanticChainTarget,
     CacheSemanticChainDestination,
     CacheSemanticGeneration,
@@ -67,6 +68,7 @@ impl Mode {
             "cache-semantic-chain-site" => Ok(Self::CacheSemanticChainSite),
             "cache-semantic-chain-fallback" => Ok(Self::CacheSemanticChainFallback),
             "cache-semantic-chain-source" => Ok(Self::CacheSemanticChainSource),
+            "cache-semantic-chain-slice" => Ok(Self::CacheSemanticChainSlice),
             "cache-semantic-chain-target" => Ok(Self::CacheSemanticChainTarget),
             "cache-semantic-chain-destination" => Ok(Self::CacheSemanticChainDestination),
             "cache-semantic-generation" => Ok(Self::CacheSemanticGeneration),
@@ -153,6 +155,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             | Mode::CacheSemanticChainSite
             | Mode::CacheSemanticChainFallback
             | Mode::CacheSemanticChainSource
+            | Mode::CacheSemanticChainSlice
             | Mode::CacheSemanticChainTarget
             | Mode::CacheSemanticChainDestination
             | Mode::CacheSemanticGeneration
@@ -340,6 +343,7 @@ int main(void) {
             | Mode::CacheSemanticLibrary
             | Mode::CacheSemanticOverlap
             | Mode::CacheSemanticChain
+            | Mode::CacheSemanticChainSlice
             | Mode::CacheAbsentLibrary
     ) {
         let artifact = cache
@@ -423,6 +427,17 @@ int main(void) {
                 require(chains != 0, "semantic chain corruption has no chain record")?;
                 let offset = chains_at + 4;
                 bytes[offset..offset + 4].copy_from_slice(&(arena as u32).to_le_bytes());
+            }
+            Mode::CacheSemanticChainSlice => {
+                let map = bytes[maps_at..owners_at]
+                    .chunks_exact(MAP_SIZE)
+                    .position(|record| u32::from_le_bytes(record[96..100].try_into().unwrap()) != 0)
+                    .ok_or("semantic chain-slice corruption has no nonempty map slice")?;
+                let at = maps_at + map * MAP_SIZE;
+                let start = u32::from_le_bytes(bytes[at + 92..at + 96].try_into().unwrap());
+                let count = u32::from_le_bytes(bytes[at + 96..at + 100].try_into().unwrap());
+                bytes[at + 92..at + 96].copy_from_slice(&(start + 1).to_le_bytes());
+                bytes[at + 96..at + 100].copy_from_slice(&(count - 1).to_le_bytes());
             }
             Mode::CacheAbsentLibrary => {
                 require(libraries != 0, "absent-library arm has no manifest record")?;
@@ -804,6 +819,7 @@ int main(void) {
             | Mode::CacheSemanticChainSite
             | Mode::CacheSemanticChainFallback
             | Mode::CacheSemanticChainSource
+            | Mode::CacheSemanticChainSlice
             | Mode::CacheSemanticChainTarget
             | Mode::CacheSemanticChainDestination
             | Mode::CacheSemanticGeneration => require(

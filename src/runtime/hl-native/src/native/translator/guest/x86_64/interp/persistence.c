@@ -295,10 +295,13 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
         prior_chain = site;
     }
     if (valid && stage != NULL) *stage = 6;
+    uint64_t chain_cursor = 0;
     for (uint64_t i = 0; valid && i < layout->maps; i++) {
         const uint8_t *map = layout->map_records + i * X64_PC_MAP_SIZE;
         uint32_t owner_start = x64_pc_get32(map + 84), owner_count = x64_pc_get32(map + 88);
         uint32_t chain_start = x64_pc_get32(map + 92), chain_count = x64_pc_get32(map + 96);
+        valid = chain_start == chain_cursor && chain_count <= layout->chains - chain_cursor;
+        chain_cursor += chain_count;
         if (i != 0) {
             const uint8_t *previous = map - X64_PC_MAP_SIZE;
             valid = x64_pc_get32(previous + 84) + x64_pc_get32(previous + 88) <= owner_start &&
@@ -325,6 +328,7 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
                     x64_pc_get64(chain + 8) < x64_pc_get64(map + 16);
         }
     }
+    valid = valid && chain_cursor == layout->chains;
     if (valid && stage != NULL) *stage = 7;
     for (uint64_t i = 0; valid && i < layout->maps; i++) {
         const uint8_t *map = layout->map_records + i * X64_PC_MAP_SIZE;
