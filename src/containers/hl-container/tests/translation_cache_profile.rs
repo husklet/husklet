@@ -478,6 +478,7 @@ int main(void) {
                 let lib_len = get(selected_at + 8);
                 let lib_end = lib_base.checked_add(lib_len).ok_or("library span overflow")?;
                 let mut kept_map_records = Vec::new();
+                let mut kept_map_ordinals = Vec::new();
                 let mut old_to_new = vec![None; maps];
                 let mut removed_maps = 0usize;
                 for (old, record) in bytes[maps_at..owners_at].chunks_exact(MAP_SIZE).enumerate() {
@@ -487,6 +488,7 @@ int main(void) {
                         removed_maps += 1;
                     } else {
                         old_to_new[old] = Some(kept_map_records.len());
+                        kept_map_ordinals.push(old);
                         kept_map_records.push(record.to_vec());
                     }
                 }
@@ -503,40 +505,67 @@ int main(void) {
                     }
                 }
                 let mut kept_chain_records = Vec::new();
-                for record in bytes[chains_at..arena_at].chunks_exact(CHAIN_SIZE) {
+                let mut old_chain_to_new = vec![None; chains];
+                for (old, record) in bytes[chains_at..arena_at].chunks_exact(CHAIN_SIZE).enumerate() {
                     let source = u64::from_le_bytes(record[8..16].try_into().unwrap());
                     let target = u64::from_le_bytes(record[16..24].try_into().unwrap());
                     if !((source >= lib_base && source < lib_end) || (target >= lib_base && target < lib_end)) {
+                        old_chain_to_new[old] = Some(kept_chain_records.len());
                         kept_chain_records.push(record.to_vec());
                     }
                 }
                 let mut owner_cursor = 0usize;
                 let mut chain_cursor = 0usize;
-                for (ordinal, map) in kept_map_records.iter_mut().enumerate() {
-                    let owner_positions: Vec<_> = kept_owners
-                        .chunks_exact(OWNER_SIZE)
-                        .enumerate()
-                        .filter_map(|(index, owner)| {
-                            (u32::from_le_bytes(owner[24..28].try_into().unwrap()) == ordinal as u32).then_some(index)
-                        })
-                        .collect();
-                    let owner_start = owner_positions.first().copied().unwrap_or(owner_cursor);
-                    let gpc = u64::from_le_bytes(map[..8].try_into().unwrap());
-                    let chain_positions: Vec<_> = kept_chain_records
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, chain)| {
-                            (u64::from_le_bytes(chain[8..16].try_into().unwrap()) == gpc).then_some(index)
-                        })
-                        .collect();
-                    let chain_start = chain_positions.first().copied().unwrap_or(chain_cursor);
-                    map[84..88].copy_from_slice(&(owner_start as u32).to_le_bytes());
-                    map[88..92].copy_from_slice(&(owner_positions.len() as u32).to_le_bytes());
-                    map[92..96].copy_from_slice(&(chain_start as u32).to_le_bytes());
-                    map[96..100].copy_from_slice(&(chain_positions.len() as u32).to_le_bytes());
-                    owner_cursor = owner_start + owner_positions.len();
-                    chain_cursor = chain_start + chain_positions.len();
+                let mut owner_starts = vec![None; kept_map_records.len()];
+                let mut owner_counts = vec![0usize; kept_map_records.len()];
+                for (index, owner) in kept_owners.chunks_exact(OWNER_SIZE).enumerate() {
+                    let ordinal = u32::from_le_bytes(owner[24..28].try_into().unwrap());
+                    if ordinal == u32::MAX {
+                        continue;
+                    }
+                    let ordinal = ordinal as usize;
+                    owner_starts[ordinal].get_or_insert(index);
+                    owner_counts[ordinal] += 1;
                 }
+                let mut chain_starts = vec![None; kept_map_records.len()];
+                let mut chain_counts = vec![0usize; kept_map_records.len()];
+                for (ordinal, &old) in kept_map_ordinals.iter().enumerate() {
+                    let old_map = &bytes[maps_at + old * MAP_SIZE..maps_at + (old + 1) * MAP_SIZE];
+                    let start = u32::from_le_bytes(old_map[92..96].try_into().unwrap()) as usize;
+                    let count = u32::from_le_bytes(old_map[96..100].try_into().unwrap()) as usize;
+                    for old_chain in start..start + count {
+                        if let Some(index) = old_chain_to_new[old_chain] {
+                            chain_starts[ordinal].get_or_insert(index);
+                            chain_counts[ordinal] += 1;
+                        }
+                    }
+                }
+                let mapped_owners = kept_owners
+                    .chunks_exact(OWNER_SIZE)
+                    .filter(|owner| u32::from_le_bytes(owner[24..28].try_into().unwrap()) != u32::MAX)
+                    .count();
+                require(
+                    owner_counts.iter().sum::<usize>() == mapped_owners,
+                    "absent-library owner ordinals changed while indexing",
+                )?;
+                require(
+                    chain_counts.iter().sum::<usize>() == kept_chain_records.len(),
+                    "absent-library chain sources changed while indexing",
+                )?;
+                for (ordinal, map) in kept_map_records.iter_mut().enumerate() {
+                    let owner_start = owner_starts[ordinal].unwrap_or(owner_cursor);
+                    let chain_start = chain_starts[ordinal].unwrap_or(chain_cursor);
+                    map[84..88].copy_from_slice(&(owner_start as u32).to_le_bytes());
+                    map[88..92].copy_from_slice(&(owner_counts[ordinal] as u32).to_le_bytes());
+                    map[92..96].copy_from_slice(&(chain_start as u32).to_le_bytes());
+                    map[96..100].copy_from_slice(&(chain_counts[ordinal] as u32).to_le_bytes());
+                    owner_cursor = owner_start + owner_counts[ordinal];
+                    chain_cursor = chain_start + chain_counts[ordinal];
+                }
+                require(
+                    owner_cursor == kept_owners.len() / OWNER_SIZE && chain_cursor == kept_chain_records.len(),
+                    "absent-library rebuilt slices do not cover their indexed records",
+                )?;
                 let kept_maps: Vec<u8> = kept_map_records.into_iter().flatten().collect();
                 let kept_chains: Vec<u8> = kept_chain_records.into_iter().flatten().collect();
                 let mut rebuilt = bytes[..HEADER_SIZE].to_vec();
@@ -1160,9 +1189,5 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    if condition {
-        Ok(())
-    } else {
-        Err(message.into())
-    }
+    if condition { Ok(()) } else { Err(message.into()) }
 }
