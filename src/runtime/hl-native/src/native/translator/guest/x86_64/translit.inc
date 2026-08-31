@@ -538,6 +538,8 @@ static int translit_riprel_readonly_fixture_test(unsigned scenario);
 static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
 static int translit_riprel_load_bridge_gate_test(void);
+static int translit_riprel_integer_corpus_test(void);
+static int interp_step(struct cpu *, struct insn *, uint64_t, uint64_t);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
@@ -3140,6 +3142,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 271;
     }
     if (scenario == 189) return translit_riprel_load_bridge_gate_test();
+    if (scenario == 192) return translit_riprel_integer_corpus_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -5210,6 +5213,111 @@ static int translit_fall_fixture_fetch(void *opaque, uint64_t guest, void *desti
     memcpy(destination, translit_fall_fixture_bytes + offset, copied);
     memset((uint8_t *)destination + copied, 0, length - copied);
     return 0;
+}
+
+static uint64_t translit_riprel_native_call(void *entry, uint64_t rax, uint64_t *flags) {
+    uint64_t captured;
+    __asm__ volatile("push $0x202\n\tpopfq\n\tcall *%2\n\tpushfq\n\tpop %1"
+                     : "+a"(rax), "=r"(captured)
+                     : "r"(entry)
+                     : "cc", "memory");
+    *flags = captured;
+    return rax;
+}
+
+static int translit_riprel_integer_corpus_test(void) {
+    struct corpus_case { uint8_t bytes[12]; uint8_t length, immediate; uint64_t rax, target; };
+    static const struct corpus_case cases[] = {
+        {{0x8A,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x66,0x8B,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x8B,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x48,0x8B,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x89,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0xC6,0x05,0,0,0,0,0x5A},7,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x83,0x05,0,0,0,0,0x03},7,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0xF0,0x83,0x05,0,0,0,0,0x03},8,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0xFE,0x05},6,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x48,0x31,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x80,0x3D,0,0,0,0,0x44},7,1,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x88,0x25},6,0,UINT64_C(0x0000000000005A00),UINT64_C(0x8877665544332211)},
+        {{0x0F,0xB6,0x05},7,0,UINT64_C(0x1122334455667788),UINT64_C(0x8877665544332211)},
+        {{0x0F,0xC1,0x05},7,0,UINT64_C(0x0000000000000003),UINT64_C(0x8877665544332211)},
+    };
+    const size_t size = 8192, source_offset = 128, target_offset = 4093;
+    uint8_t *arena = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) return 300;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen, saved_lo = g_nonpie_lo,
+             saved_hi = g_nonpie_hi, saved_bias = g_nonpie_bias;
+    g_cache = arena; g_rw2rx = 0; g_nonpie_lo = g_nonpie_hi = g_nonpie_bias = 0;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = size;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    int result = context == NULL ? 301 : 0;
+    for (unsigned index = 0; result == 0 && index < sizeof cases / sizeof cases[0]; ++index) {
+        struct corpus_case current = cases[index];
+        memset(guest, 0x0F, size);
+        memcpy(guest + source_offset, current.bytes, current.length);
+        int disp_offset = current.length - current.immediate - 4;
+        int32_t disp = (int32_t)(target_offset - source_offset - current.length);
+        memcpy(guest + source_offset + disp_offset, &disp, 4);
+        guest[source_offset + current.length] = 0xC3;
+        memcpy(guest + target_offset, &current.target, sizeof current.target);
+        if (mprotect(guest, size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) { result = 299; break; }
+        uint64_t native_flags = 0;
+        uint64_t native_rax = translit_riprel_native_call(guest + source_offset, current.rax, &native_flags);
+        uint64_t native_memory; memcpy(&native_memory, guest + target_offset, 8);
+        guest[source_offset + current.length] = 0x0F; guest[source_offset + current.length + 1] = 0x0B;
+        memcpy(guest + target_offset, &current.target, sizeof current.target);
+        uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+        struct insn decoded;
+        if (hl_x86_decode_context(context, source, &decoded) <= 0 || decoded.len != current.length) {
+            result = 302 + (int)index; break;
+        }
+        struct cpu interpreted = {0}; interpreted.rip = source; interpreted.r[HL_X64_RAX] = current.rax;
+        interpreted.r[10] = UINT64_C(0x1010101010101010);
+        interpreted.r[HL_X64_R11] = UINT64_C(0x1111111111111111);
+        translit_flags_out(&interpreted, UINT64_C(0x202));
+        (void)interp_step(&interpreted, &decoded, source, source + current.length);
+        uint64_t interpreter_memory; memcpy(&interpreter_memory, guest + target_offset, 8);
+        uint64_t interpreter_flags = translit_flags_in(&interpreted);
+        uint64_t checked_flags = UINT64_C(0xCD5);
+        if (native_rax != interpreted.r[HL_X64_RAX] || native_memory != interpreter_memory ||
+            (native_flags & checked_flags) != (interpreter_flags & checked_flags)) {
+            result = 315 + (int)index; break;
+        }
+
+        memcpy(guest + target_offset, &current.target, sizeof current.target);
+        memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0x400 - index; map_clear();
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = translit_build(context, block, source, NULL);
+        if (body == NULL || block->profile_insns != 1) { result = 330 + (int)index; break; }
+        block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+        struct cpu candidate = {0}; candidate.rip = source; candidate.r[HL_X64_RAX] = current.rax;
+        candidate.r[10] = UINT64_C(0x1010101010101010);
+        candidate.r[HL_X64_R11] = UINT64_C(0x1111111111111111);
+        translit_flags_out(&candidate, UINT64_C(0x202));
+        hl_backend_tree_begin(1, effective_host_services()); run_block(context, &candidate, block);
+        uint64_t candidate_memory; memcpy(&candidate_memory, guest + target_offset, 8);
+        if (candidate.rip != source + current.length || candidate.r[HL_X64_RAX] != interpreted.r[HL_X64_RAX] ||
+            candidate.r[10] != interpreted.r[10] ||
+            candidate.r[HL_X64_R11] != interpreted.r[HL_X64_R11] ||
+            candidate_memory != interpreter_memory ||
+            (translit_flags_in(&candidate) & checked_flags) != (interpreter_flags & checked_flags))
+            result = 360 + (int)index;
+        jit_body_owner_drop_generation(g_cache_gen); map_clear();
+    }
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    translit_fall_fixture_bytes = NULL; g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation; g_nonpie_lo = saved_lo; g_nonpie_hi = saved_hi; g_nonpie_bias = saved_bias;
+    munmap(guest, size); munmap(arena, size);
+    return result;
 }
 
 static int translit_riprel_readonly_fixture_test(unsigned scenario) {

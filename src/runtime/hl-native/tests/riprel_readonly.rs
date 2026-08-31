@@ -111,3 +111,9 @@ fn natural_riprel_load_bridge_option_reaches_the_block_builder() {
     let _guard = native_globals();
     assert_eq!(hl_native::x86_64_translit_displaced_test(189), 0);
 }
+
+#[test]
+fn general_integer_riprel_matches_the_interpreter_across_load_store_and_rmw_families() {
+    let _guard = native_globals();
+    assert_eq!(hl_native::x86_64_translit_displaced_test(192), 0);
+}
