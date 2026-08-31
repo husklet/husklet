@@ -1594,6 +1594,10 @@ enum {
     HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY,
     HL_BACKEND_SHAPE_T_COUNT,
 };
+_Static_assert(HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY != HL_BACKEND_SHAPE_T_INDIRECT_BRANCH,
+               "register and memory indirect jumps need separate production counters");
+_Static_assert(HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY != HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+               "register and memory indirect calls need separate production counters");
 
 enum {
     HL_BACKEND_FALL_CAP,
@@ -1925,7 +1929,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         return;
     char record[8192];
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=6 available=%d crossings=%llu "
+                             "[diag] backend-shape version=7 available=%d crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
                              "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
@@ -2057,6 +2061,10 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
         formatted += added;
     }
+    uint64_t translated_return_total = 0;
+    for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
+        translated_return_total += atomic_load_explicit(&census->translated_exit[kind], memory_order_relaxed);
+    uint64_t translated_entries = atomic_load_explicit(&census->translated_entries, memory_order_relaxed);
     if ((size_t)formatted + 1 >= sizeof record) return;
     record[formatted++] = '\n';
     for (unsigned reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason) {
@@ -2080,13 +2088,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
         formatted += added;                                                                                           \
     } while (0)
-    uint64_t translated_return_total = 0;
-    for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
-        translated_return_total += atomic_load_explicit(&census->translated_exit[kind], memory_order_relaxed);
     uint64_t interpreted_return_total = 0;
     for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_S_COUNT; ++kind)
         interpreted_return_total += atomic_load_explicit(&census->interpreter_stop[kind], memory_order_relaxed);
-    uint64_t translated_entries = atomic_load_explicit(&census->translated_entries, memory_order_relaxed);
     uint64_t interpreted_entries = atomic_load_explicit(&census->interpreted_entries, memory_order_relaxed);
     int added = snprintf(record + formatted, sizeof record - (size_t)formatted,
                          " dispatch_translation_miss=%llu dispatch_interpreted=%llu"
@@ -2117,6 +2121,45 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CROSSING("t_irq", census->translated_exit, HL_BACKEND_SHAPE_T_IRQ);
     HL_APPEND_CROSSING("t_fault", census->translated_exit, HL_BACKEND_SHAPE_T_FAULT);
     HL_APPEND_CROSSING("t_other", census->translated_exit, HL_BACKEND_SHAPE_T_OTHER);
+    added = snprintf(
+        record + formatted, sizeof record - (size_t)formatted,
+        "\n[diag] x86-exit-family version=1 translated_entries=%llu total=%llu"
+        " t_fallthrough=%llu t_jcc_taken=%llu t_jcc_fall=%llu t_direct_jmp=%llu t_direct_call=%llu"
+        " t_ret=%llu t_jmp_reg=%llu t_jmp_mem=%llu t_call_reg=%llu t_call_mem=%llu"
+        " t_syscall=%llu t_irq=%llu t_fault=%llu t_other=%llu",
+        (unsigned long long)translated_entries, (unsigned long long)translated_return_total,
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_COND_NOT_TAKEN], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_DIRECT_JUMP], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_DIRECT_CALL], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_RETURN],
+                                                 memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(
+            &census->translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_SYSCALL],
+                                                 memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_IRQ],
+                                                 memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_FAULT],
+                                                 memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_OTHER],
+                                                 memory_order_relaxed));
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    formatted += added;
+    if ((size_t)formatted + 1 >= sizeof record) return;
+    record[formatted++] = '\n';
     uint64_t fall_total = 0;
     for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
         fall_total += atomic_load_explicit(&census->translated_fall_stop[reason], memory_order_relaxed);
