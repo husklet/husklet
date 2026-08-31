@@ -1715,7 +1715,6 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t direct_call_ibtc_irq;
     _Atomic uint64_t direct_call_ibtc_fills;
     _Atomic uint64_t direct_call_ibtc_invalid_refusals;
-    _Atomic uint64_t direct_call_ibtc_fast_redispatch;
     _Atomic uint64_t ret_ibtc_attempts;
     _Atomic uint64_t ret_ibtc_hits;
     _Atomic uint64_t ret_ibtc_key_misses;
@@ -1949,8 +1948,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "direct_jmp_ibtc_invalid_refusals=%llu direct_call_ibtc_emitted=%llu "
                              "direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
                              "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu "
-                             "direct_call_ibtc_invalid_refusals=%llu direct_call_ibtc_fast_redispatch=%llu "
-                             "ret_ibtc_attempts=%llu "
+                             "direct_call_ibtc_invalid_refusals=%llu ret_ibtc_attempts=%llu "
                              "ret_ibtc_hits=%llu ret_ibtc_key_misses=%llu ret_ibtc_null_misses=%llu "
                              "ret_ibtc_irq=%llu ret_ibtc_fills=%llu ret_ibtc_collisions=%llu "
                              "ret_ibtc_unmapped=%llu ret_ibtc_invalid_refusals=%llu "
@@ -2015,8 +2013,6 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_fills,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_invalid_refusals,
-                                                                     memory_order_relaxed),
-                             (unsigned long long)atomic_load_explicit(&census->direct_call_ibtc_fast_redispatch,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->ret_ibtc_attempts,
                                                                      memory_order_relaxed),
@@ -2437,7 +2433,6 @@ enum hl_backend_direct_call_ibtc_counter {
     HL_BACKEND_DIRECT_CALL_IBTC_IRQ,
     HL_BACKEND_DIRECT_CALL_IBTC_FILL,
     HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL,
-    HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH,
 };
 static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     enum hl_backend_direct_call_ibtc_counter kind) {
@@ -2450,7 +2445,6 @@ static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     case HL_BACKEND_DIRECT_CALL_IBTC_IRQ: return &census->direct_call_ibtc_irq;
     case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &census->direct_call_ibtc_fills;
     case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &census->direct_call_ibtc_invalid_refusals;
-    case HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH: return &census->direct_call_ibtc_fast_redispatch;
     }
     return NULL;
 }
