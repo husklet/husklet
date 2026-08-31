@@ -263,7 +263,8 @@ fn automatic_daily_developer_session() {
         options.set("HL_NATIVE_SUPERVISED", control, true).unwrap();
     }
     let output = Arc::new(Output::default());
-    let executable = root.join("bin/sh");
+    let guest_link = std::fs::read_link(root.join("bin/sh")).unwrap();
+    let executable = root.join(guest_link.strip_prefix("/").unwrap_or(&guest_link));
     let plan = RuntimePlan {
         rootfs: Some(root.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
