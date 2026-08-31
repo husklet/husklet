@@ -189,7 +189,7 @@ static void make_artifact(uint8_t bytes[TOTAL]) {
         put64(map + 48, UINT64_C(0x1122334455667788));
         put64(map + 56, 0x1000 + i); put64(map + 64, 7 + i);
         put32(map + 72, 52); put32(map + 76, 10); put16(map + 82, UINT16_MAX);
-        put64(arena + hosts[i] + 16, 7 + i); put16(arena + hosts[i] + 50, UINT16_MAX);
+        put64(arena + hosts[i] + 16, 7 + i); put16(arena + hosts[i] + 50, 0);
     }
     x64_pc_checksum_write(bytes, TOTAL);
 }
