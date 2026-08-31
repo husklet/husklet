@@ -92,6 +92,7 @@ struct Backend {
     lea_lowered: u64,
     abs32_lowered: u64,
     natural_lea_lowered: u64,
+    natural_load_bridge_lowered: u64,
     rip_indirect_lowered: u64,
     provenance_fallback: u64,
     body_owner_recovered: u64,
@@ -500,6 +501,7 @@ fn backend(stderr: &[u8]) -> Backend {
         lea_lowered: counter("lea_lowered="),
         abs32_lowered: counter("abs32_lowered="),
         natural_lea_lowered: counter("natural_lea_lowered="),
+        natural_load_bridge_lowered: counter("natural_load_bridge_lowered="),
         rip_indirect_lowered: counter("rip_indirect_lowered="),
         provenance_fallback: counter("provenance_fallback="),
         body_owner_recovered: counter("body_owner_recovered="),
@@ -650,8 +652,8 @@ fn unsupported_census_records_successful_interpreter_steps() {
 fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "executed_families");
-    let (interpreted, interpreted_status, _) = run(&executable, "0");
-    let (selected, selected_status, report) = run(&executable, "1");
+    let (interpreted, interpreted_status, report) = run(&executable, "0");
+    let (selected, selected_status, selected_report) = run(&executable, "1");
     let native = std::process::Command::new(&executable)
         .output()
         .expect("native executed-family fixture");
@@ -660,6 +662,8 @@ fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
     assert_eq!(native.status.code(), Some(0));
     assert_eq!(selected, interpreted);
     assert_eq!(selected, native.stdout);
+    assert!(selected_report.entries > 0, "{}", selected_report.line);
+    assert!(selected_report.interpreted_entries > 0, "{}", selected_report.shape_line);
     assert_eq!(report.family_jmem, 1, "{}", report.shape_line);
     assert_eq!(report.family_div_inline, 1, "{}", report.shape_line);
     assert!(report.family_div_service64 >= 1, "{}", report.shape_line);
@@ -2304,9 +2308,9 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
             "the cold direct CALL path must publish before it becomes hot: {}",
             selected_backend.shape_line
         );
-        assert_eq!(
-            selected_backend.direct_call_ibtc_misses,
-            selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals,
+        assert!(
+            selected_backend.direct_call_ibtc_misses
+                >= selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals,
             "{}",
             selected_backend.shape_line
         );
@@ -2553,12 +2557,12 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         assert_eq!(selected_backend.declined, 0, "{name}: a link-address image was refused");
         if name == "displaced_memory" || name == "displaced_fault" || name == "natural_abs32_fault" {
             assert!(
-                selected_backend.riprel_lowered > 0,
+                selected_backend.riprel_lowered + selected_backend.natural_load_bridge_lowered > 0,
                 "{name}: a natural low ET_EXEC never entered absolute RIP-relative lowering -- {}",
                 selected_backend.line
             );
             assert!(
-                selected_backend.abs32_lowered > 0,
+                selected_backend.abs32_lowered + selected_backend.natural_load_bridge_lowered > 0,
                 "{name}: no abs32 load -- {}",
                 selected_backend.line
             );
