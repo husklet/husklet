@@ -99,6 +99,7 @@ pub(super) struct FakeRuntime {
     pub(super) suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
     pub(super) mounts: RecordedMounts,
     pub(super) networks: Arc<std::sync::Mutex<Vec<Vec<NetworkConfig>>>>,
+    pub(super) network_modes: Arc<std::sync::Mutex<Vec<crate::NetworkMode>>>,
     pub(super) programs: Arc<std::sync::Mutex<Vec<Process>>>,
     pub(super) executions: Arc<std::sync::Mutex<Vec<crate::Execution>>>,
     pub(super) resources: Arc<std::sync::Mutex<Vec<crate::Resources>>>,
@@ -140,6 +141,7 @@ impl FakeRuntime {
             suspensions: Arc::new(std::sync::Mutex::new(Vec::new())),
             mounts: Arc::new(std::sync::Mutex::new(Vec::new())),
             networks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            network_modes: Arc::new(std::sync::Mutex::new(Vec::new())),
             programs: Arc::new(std::sync::Mutex::new(Vec::new())),
             executions: Arc::new(std::sync::Mutex::new(Vec::new())),
             resources: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -424,6 +426,7 @@ impl Runtime for FakeRuntime {
                 .collect(),
         );
         self.networks.lock().unwrap().push(launch.networks);
+        self.network_modes.lock().unwrap().push(launch.network_mode);
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Runtime("injected launch failure".into()));
         }

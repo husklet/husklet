@@ -117,6 +117,10 @@ impl Service {
         // capture of its own. It therefore opens no image: there is no `exec-<id>`
         // namespace for a second, invisible generation to be committed into.
         let checkpoint = (!ephemeral).then_some(crate::service::CheckpointRole::DomainMember);
+        let mut isolation = container.spec.isolation;
+        if exec.spec.network == crate::ExecNetwork::Isolated {
+            isolation.network_isolated = true;
+        }
         let (cursor, live_at) = if let Some(cursor) = exec.attachment_cursor {
             (cursor, self.logs.cursor(&journal).await?)
         } else {
@@ -152,7 +156,7 @@ impl Service {
                 hostname: Some(container.hostname()),
                 mounts,
                 resources: container.spec.resources,
-                isolation: container.spec.isolation,
+                isolation,
                 network_mode: container.spec.network_mode,
                 networks,
                 publish: Vec::new(),

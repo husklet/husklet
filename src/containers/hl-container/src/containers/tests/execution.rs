@@ -248,6 +248,8 @@ async fn ephemeral_execution_is_native_isolated_and_outside_checkpoint_membershi
 
     assert_eq!(runtime.checkpoint_roles.lock().unwrap().last(), Some(&None));
     assert_eq!(runtime.networks.lock().unwrap().last(), Some(&Vec::new()));
+    assert_eq!(runtime.network_modes.lock().unwrap().last(), Some(&crate::NetworkMode::Automatic));
+    assert!(runtime.isolations.lock().unwrap().last().unwrap().network_isolated);
     assert_eq!(
         runtime.executions.lock().unwrap().last(),
         Some(&crate::Execution::native(false))
