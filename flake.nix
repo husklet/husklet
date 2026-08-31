@@ -967,8 +967,10 @@
             runHook preBuild
             export CC_${lib.replaceStrings [ "-" ] [ "_" ] target}=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
-            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine
+            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine -p engine
             test -f target/${target}/debug/libhl_native.rlib
+            test -x target/${target}/debug/hl-x86_64
+            file target/${target}/debug/hl-x86_64 | grep -F ${lib.escapeShellArg fileArchitecture}
             native_libraries=(target/${target}/debug/build/hl-native-*/out/libhl_native_engine.so)
             test "''${#native_libraries[@]}" -eq 1
             test -s "''${native_libraries[0]}"

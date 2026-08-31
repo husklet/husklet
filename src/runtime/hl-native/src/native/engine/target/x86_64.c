@@ -509,6 +509,26 @@ static int translit_report(char *out, size_t size) {
     return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
 }
 
+/* These observability values belong to the x86-on-x86 transliterator in
+ * translit.inc.  An AArch64 host executes x86 guests through the JIT above,
+ * which neither publishes x86 perf-map samples nor owns transliterator
+ * absolute relocations.  Keep the shared exit/cache call sites typed without
+ * pretending this backend produced same-ISA state. */
+static uint32_t translit_external_absolute_count;
+static void translit_sampling_receipt(const char *stage) { (void)stage; }
+static void translit_perf_map_flush_at_exit(void) {}
+static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
+                                               uint64_t size) {
+    (void)generation;
+    (void)rw;
+    (void)rx;
+    (void)size;
+}
+static void translit_external_absolute_generation_reset(void) {}
+static void translit_ret_ibtc_reset(void) {}
+static void translit_ret_ibtc_drop_target(uint64_t target) { (void)target; }
+static void translit_cache_rewind_in_place(void) { jit_cache_rewind_in_place(); }
+
 #if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_HOST_CPU_X86_64)
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     (void)scenario;
