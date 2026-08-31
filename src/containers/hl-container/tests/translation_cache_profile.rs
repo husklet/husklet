@@ -27,6 +27,7 @@ enum Mode {
     CacheSemanticCensusOrdinal,
     CacheSemanticChainSite,
     CacheSemanticChainFallback,
+    CacheSemanticChainSource,
     CacheSemanticChainTarget,
     CacheSemanticChainDestination,
     CacheSemanticGeneration,
@@ -65,6 +66,7 @@ impl Mode {
             "cache-semantic-census-ordinal" => Ok(Self::CacheSemanticCensusOrdinal),
             "cache-semantic-chain-site" => Ok(Self::CacheSemanticChainSite),
             "cache-semantic-chain-fallback" => Ok(Self::CacheSemanticChainFallback),
+            "cache-semantic-chain-source" => Ok(Self::CacheSemanticChainSource),
             "cache-semantic-chain-target" => Ok(Self::CacheSemanticChainTarget),
             "cache-semantic-chain-destination" => Ok(Self::CacheSemanticChainDestination),
             "cache-semantic-generation" => Ok(Self::CacheSemanticGeneration),
@@ -150,6 +152,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             | Mode::CacheSemanticCensusOrdinal
             | Mode::CacheSemanticChainSite
             | Mode::CacheSemanticChainFallback
+            | Mode::CacheSemanticChainSource
             | Mode::CacheSemanticChainTarget
             | Mode::CacheSemanticChainDestination
             | Mode::CacheSemanticGeneration
@@ -535,6 +538,7 @@ int main(void) {
         Mode::CacheSemanticCensusOrdinal => Some("census-ordinal"),
         Mode::CacheSemanticChainSite => Some("chain-site"),
         Mode::CacheSemanticChainFallback => Some("chain-fallback"),
+        Mode::CacheSemanticChainSource => Some("chain-source"),
         Mode::CacheSemanticChainTarget => Some("chain-target"),
         Mode::CacheSemanticChainDestination => Some("chain-destination"),
         Mode::CacheSemanticGeneration => Some("generation"),
@@ -799,6 +803,7 @@ int main(void) {
             Mode::CacheSemanticCensusOrdinal
             | Mode::CacheSemanticChainSite
             | Mode::CacheSemanticChainFallback
+            | Mode::CacheSemanticChainSource
             | Mode::CacheSemanticChainTarget
             | Mode::CacheSemanticChainDestination
             | Mode::CacheSemanticGeneration => require(

@@ -3463,6 +3463,18 @@ static void pcache_save(void) {
         } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-fallback") == 0) {
             uint8_t *at = chain_records + 4;
             x64_pc_put32(&at, x64_pc_get32(chain_records + 4) + 1);
+        } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-source") == 0) {
+            uint64_t original = x64_pc_get64(chain_records + 8), replacement = original;
+            for (uint32_t i = 0; i < map_count && replacement == original; i++) {
+                const uint8_t *map = map_records + (uint64_t)i * X64_PC_MAP_SIZE;
+                if (original < x64_pc_get64(map + 8) || original >= x64_pc_get64(map + 16))
+                    replacement = x64_pc_get64(map);
+            }
+            if (replacement == original) {
+                free(buffer); free(saved_maps); free(map_ordinal_by_index); free(owner_map_ordinal); free(saved_chains);
+                return;
+            }
+            uint8_t *at = chain_records + 8; x64_pc_put64(&at, replacement);
         } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-target") == 0) {
             uint64_t original = x64_pc_get64(chain_records + 16), replacement = original;
             for (uint32_t i = 0; i < map_count && replacement == original; i++) {
