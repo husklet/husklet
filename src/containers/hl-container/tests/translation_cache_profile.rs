@@ -424,10 +424,15 @@ int main(void) {
             Mode::CacheSemanticHelper => bytes[120..128].copy_from_slice(&arena.to_le_bytes()),
             Mode::CacheSemanticRelocation => {
                 if helper_relocations != 0 {
-                    // Helper records carry an authenticated instruction form in
-                    // their high bits. No unknown form may reach relocation.
-                    let offset = helper_relocations_at + 4;
-                    bytes[offset..offset + 4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+                    // Exercise the new address-producing helper form itself,
+                    // not whichever older JMP record happens to sort first.
+                    let record = bytes[helper_relocations_at..libraries_at]
+                        .chunks_exact(HELPER_RELOCATION_SIZE)
+                        .find(|record| u32::from_le_bytes(record[4..8].try_into().unwrap()) & (1 << 31) != 0)
+                        .ok_or("semantic relocation corruption has no LEA helper record")?;
+                    let site = u32::from_le_bytes(record[..4].try_into().unwrap()) as usize;
+                    require(site + 3 <= arena as usize, "LEA helper relocation exceeds the arena")?;
+                    bytes[arena_at + site + 2] ^= 0x08;
                 } else {
                     require(relocations != 0, "semantic relocation corruption has no relocation record")?;
                     let offset = relocations_at + 4;
