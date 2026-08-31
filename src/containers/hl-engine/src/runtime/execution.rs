@@ -462,8 +462,7 @@ fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Opti
         return Some("translation-cache-policy");
     }
     plan.options.iter().find_map(|(name, _)| {
-        (name == "HL_C_DIAGNOSTICS"
-            || name == "HL_PCACHE"
+        (name == "HL_PCACHE"
             || name == "HL_PCACHE_DIR"
             || name.starts_with("HL_TRANSLIT"))
         .then_some(name)
@@ -497,7 +496,9 @@ fn native_eligibility(
     // fixtures prove the shared trigger across a real product plan. The typed split prevents a future
     // proof for FreshCoordinator from accidentally admitting Restore or malformed partial services.
     if checkpoint != NativeCheckpointIntent::None
-        || box_policy.checkpoint_mode & 2 != 0
+        || box_policy.checkpoint_mode != 0
+        || box_policy.checkpoint_policy != 0
+        || plan.options.get_bytes("HL_CHECKPOINT").is_some()
         || plan.options.get_bytes("HL_RESTORE").is_some()
     {
         return Err(R::Checkpoint);
@@ -539,6 +540,11 @@ fn native_auto_eligibility(
     host: NativeHostCapabilities,
     mut eligibility: Result<(), NativeSupervisedRefusal>,
 ) -> Result<(), NativeSupervisedRefusal> {
+    // Diagnostics are implemented by both backends, so explicit native ON keeps them. AUTO must not
+    // silently change which diagnostic family an absent backend selection would have produced.
+    if plan.options.get_bytes("HL_C_DIAGNOSTICS").is_some() {
+        eligibility = Err(NativeSupervisedRefusal::BackendControl);
+    }
     if plan.box_policy.volumes.is_some() { eligibility = Err(NativeSupervisedRefusal::Volumes); }
     if plan.box_policy.lower_layers.is_some() || plan.box_policy.file_owners.is_some() {
         eligibility = Err(NativeSupervisedRefusal::Overlay);
@@ -677,7 +683,6 @@ mod native_eligibility_tests {
             ("HL_TRANSLIT_SYMBOLIZE", "1"),
             ("HL_PCACHE", "1"),
             ("HL_PCACHE_DIR", "/tmp/cache"),
-            ("HL_C_DIAGNOSTICS", "1"),
         ] {
             let mut changed = plan();
             changed.options.set(name, value, true).unwrap();
@@ -697,6 +702,16 @@ mod native_eligibility_tests {
         let mut changed = plan();
         changed.box_policy.translation_cache = Some(b"/tmp/cache".to_vec());
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
+
+        let mut diagnostic = plan();
+        diagnostic.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+        let eligible = verdict(&diagnostic, host());
+        assert_eq!(eligible, Ok(()), "diagnostics are supported by native supervision");
+        assert_eq!(native_selection(NativeSupervisedRequest::On, eligible), Ok(true));
+        assert_eq!(
+            native_auto_eligibility(&diagnostic, host(), eligible),
+            Err(NativeSupervisedRefusal::BackendControl),
+        );
 
         let mut options = crate::options::Options::default();
         assert_eq!(options.set("HL_NATIVE_EXECUTION", "0", true), Err(crate::options::OptionError::UnknownName));
@@ -814,6 +829,20 @@ mod native_eligibility_tests {
         assert_eq!(native_checkpoint_intent(true, true, false, true), NativeCheckpointIntent::Restore);
         assert_eq!(native_checkpoint_intent(true, false, false, false), NativeCheckpointIntent::Partial);
         assert_eq!(native_checkpoint_intent(true, true, true, false), NativeCheckpointIntent::Partial);
+        for configure in ["mode", "policy", "option"] {
+            let mut configured = plan();
+            match configure {
+                "mode" => configured.box_policy.checkpoint_mode = 1,
+                "policy" => configured.box_policy.checkpoint_policy = 1,
+                "option" => configured.options.set("HL_CHECKPOINT", "1", true).unwrap(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                native_eligibility(crate::activation::GuestIsa::X86_64, &configured, NativeCheckpointIntent::None, host()),
+                Err(NativeSupervisedRefusal::Checkpoint),
+                "unpaired {configure} checkpoint configuration admitted",
+            );
+        }
     }
 }
 
