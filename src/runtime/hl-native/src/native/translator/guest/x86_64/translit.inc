@@ -3311,11 +3311,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         (void)hl_option_set("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", "0", 1);
         hl_x86_hot_context *off = hl_x86_hot_context_create(NULL, NULL, NULL);
         uint64_t off_modes = x64_pcache_codegen_modes();
-        int exact = absent != NULL && on != NULL && off != NULL && !absent->riprel_load_bridge_enabled &&
-                    on->riprel_load_bridge_enabled && !off->riprel_load_bridge_enabled &&
-                    (absent_modes & (UINT64_C(1) << 10)) == 0 &&
-                    (on_modes & (UINT64_C(1) << 10)) != 0 &&
-                    (off_modes & (UINT64_C(1) << 10)) == 0;
+        int failure = absent == NULL ? 271 : on == NULL ? 273 : off == NULL ? 274
+            : absent->riprel_load_bridge_enabled ? 275 : !on->riprel_load_bridge_enabled ? 276
+            : off->riprel_load_bridge_enabled ? 277
+            : (absent_modes & (UINT64_C(1) << 11)) != 0 ? 278
+            : (on_modes & (UINT64_C(1) << 11)) == 0 ? 279
+            : (off_modes & (UINT64_C(1) << 11)) != 0 ? 280 : 0;
         hl_x86_hot_context_destroy(off);
         hl_x86_hot_context_destroy(on);
         hl_x86_hot_context_destroy(absent);
@@ -3324,15 +3325,17 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (child == 0) {
             hl_x86_hot_context *inherited = hl_x86_hot_context_create(NULL, NULL, NULL);
             int inherited_exact = inherited != NULL && inherited->riprel_load_bridge_enabled &&
-                                  (x64_pcache_codegen_modes() & (UINT64_C(1) << 10)) != 0;
+                                  (x64_pcache_codegen_modes() & (UINT64_C(1) << 11)) != 0;
             if (inherited != NULL) hl_x86_hot_context_destroy(inherited);
             _exit(inherited_exact ? 0 : 1);
         }
         int status = 0;
-        exact = exact && child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-                WEXITSTATUS(status) == 0;
+        pid_t waited = child > 0 ? waitpid(child, &status, 0) : -1;
+        if (failure == 0 && child <= 0) failure = 281;
+        if (failure == 0 && waited != child) failure = 282;
+        if (failure == 0 && (!WIFEXITED(status) || WEXITSTATUS(status) != 0)) failure = 283;
         (void)hl_option_unset("HL_TRANSLIT_RIPREL_LOAD_BRIDGE");
-        return exact ? 0 : 271;
+        return failure;
     }
     if (scenario == 189) return translit_riprel_load_bridge_gate_test();
     if (scenario == 192) {
