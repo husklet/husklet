@@ -22,6 +22,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/statvfs.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -29,6 +30,8 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/uio.h>
 #include <termios.h>
 #include <net/if.h>
+
+#define HL_NATIVE_TCGETS2 0x802c542aU
 
 static int hl_native_supervised_available(void) { return 1; }
 
@@ -98,6 +101,7 @@ static void hl_native_supervised_projection_cleanup(hl_native_supervised_bootstr
 typedef struct {
     int source;
     int read_only;
+    int directory;
     char guest[PATH_MAX];
 } hl_native_supervised_volume;
 
@@ -183,23 +187,34 @@ static int hl_native_supervised_volumes_open(const char *spec, hl_native_supervi
                 hl_native_supervised_path_contains(record, volumes->entries[index].guest))
                 goto failed;
         int host_root = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-        struct open_how source_how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+        struct open_how source_how = {.flags = O_PATH | O_CLOEXEC,
                                       .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
         int source = host_root < 0 ? -1 : (int)syscall(SYS_openat2, host_root, colon + 1, &source_how, sizeof(source_how));
         if (host_root >= 0) close(host_root);
         if (source < 0) goto failed;
-        int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
-        struct stat source_status, tree_status;
-        if (tree < 0 || fstat(source, &source_status) != 0 || fstat(tree, &tree_status) != 0 ||
-            source_status.st_dev != tree_status.st_dev || source_status.st_ino != tree_status.st_ino) {
-            if (tree >= 0) close(tree);
+        struct stat source_status;
+        if (fstat(source, &source_status) != 0 || (!S_ISDIR(source_status.st_mode) && !S_ISREG(source_status.st_mode))) {
             close(source);
             goto failed;
         }
-        close(source);
+        int mounted_source = source;
+        if (S_ISDIR(source_status.st_mode)) {
+            int tree = (int)syscall(SYS_open_tree, AT_FDCWD, colon,
+                                    OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
+            struct stat tree_status;
+            if (tree < 0 || fstat(tree, &tree_status) != 0 ||
+                source_status.st_dev != tree_status.st_dev || source_status.st_ino != tree_status.st_ino) {
+                if (tree >= 0) close(tree);
+                close(source);
+                goto failed;
+            }
+            close(source);
+            mounted_source = tree;
+        }
         hl_native_supervised_volume *volume = &volumes->entries[volumes->count++];
-        volume->source = tree;
+        volume->source = mounted_source;
         volume->read_only = read_only;
+        volume->directory = S_ISDIR(source_status.st_mode);
         strcpy(volume->guest, record);
     }
     free(copy);
@@ -210,18 +225,85 @@ failed:
     return -1;
 }
 
-static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes) {
+static int hl_native_supervised_volumes_contains(const hl_native_supervised_volumes *volumes, const char *guest) {
+    for (size_t index = 0; index < volumes->count; ++index)
+        if (strcmp(volumes->entries[index].guest, guest) == 0) return 1;
+    return 0;
+}
+
+static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes,
+                                              const hl_options *options) {
     int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (root < 0) return -1;
     for (size_t index = 0; index < volumes->count; ++index) {
         const hl_native_supervised_volume *volume = &volumes->entries[index];
-        struct open_how how = {.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+        struct open_how how = {.flags = O_PATH | O_CLOEXEC | (volume->directory ? O_DIRECTORY : 0),
                                .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
         int target = (int)syscall(SYS_openat2, root, volume->guest + 1, &how, sizeof(how));
         if (target < 0) { close(root); return -1; }
+        struct stat source_status, target_status;
+        if (fstat(volume->source, &source_status) != 0 || fstat(target, &target_status) != 0 ||
+            (volume->directory ? !S_ISDIR(target_status.st_mode) : !S_ISREG(target_status.st_mode))) {
+            close(volume->source); close(target); close(root); errno = EINVAL; return -1;
+        }
         int tree = volume->source;
         struct mount_attr attributes = {.attr_set = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV |
                                                      (volume->read_only ? MOUNT_ATTR_RDONLY : 0)};
+        if (!volume->directory) {
+            char source_path[64], target_path[PATH_MAX];
+            struct statx source_key, target_key, path_key, mounted_key, tree_key;
+            if (snprintf(source_path, sizeof source_path, "/proc/self/fd/%d", tree) >= (int)sizeof source_path ||
+                snprintf(target_path, sizeof target_path, "%s%s", rootfs, volume->guest) >= (int)sizeof target_path ||
+                syscall(SYS_statx, tree, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &source_key) != 0 ||
+                syscall(SYS_statx, target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &target_key) != 0) {
+                close(tree); close(target); close(root); return -1;
+            }
+#if defined(HL_NATIVE_TEST_HOOKS)
+            const char *test = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE");
+            if (test != NULL && strcmp(test, "file-volume-target-swap") == 0) {
+                char pinned_path[PATH_MAX], replacement_path[PATH_MAX];
+                if (snprintf(pinned_path, sizeof pinned_path, "%s.pinned", target_path) >= (int)sizeof pinned_path ||
+                    snprintf(replacement_path, sizeof replacement_path, "%s.swap", target_path) >=
+                        (int)sizeof replacement_path ||
+                    rename(target_path, pinned_path) != 0 || rename(replacement_path, target_path) != 0) {
+                    close(tree); close(target); close(root); return -1;
+                }
+            }
+#else
+            (void)options;
+#endif
+            int path = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+            int stable = path >= 0 && syscall(SYS_statx, path, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID,
+                                              &path_key) == 0 &&
+                         path_key.stx_ino == target_key.stx_ino && path_key.stx_mnt_id == target_key.stx_mnt_id;
+            if (path >= 0) close(path);
+            if (!stable || mount(source_path, target_path, NULL, MS_BIND, NULL) != 0) {
+                close(tree); close(target); close(root); errno = ESTALE; return -1;
+            }
+            int mounted = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+            int mounted_tree = (int)syscall(SYS_open_tree, AT_FDCWD, target_path, OPEN_TREE_CLOEXEC);
+            struct stat mounted_status;
+            int exact = mounted >= 0 && mounted_tree >= 0 && fstat(mounted, &mounted_status) == 0 &&
+                        syscall(SYS_statx, mounted, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &mounted_key) == 0 &&
+                        syscall(SYS_statx, mounted_tree, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &tree_key) == 0 &&
+                        mounted_status.st_dev == source_status.st_dev && mounted_status.st_ino == source_status.st_ino &&
+                        mounted_key.stx_ino == source_key.stx_ino && mounted_key.stx_mnt_id != target_key.stx_mnt_id &&
+                        tree_key.stx_ino == mounted_key.stx_ino && tree_key.stx_mnt_id == mounted_key.stx_mnt_id &&
+                        syscall(SYS_mount_setattr, mounted_tree, "", AT_EMPTY_PATH, &attributes, sizeof attributes) == 0;
+            struct statvfs flags;
+            if (exact && volume->read_only &&
+                (statvfs(target_path, &flags) != 0 || (flags.f_flag & ST_RDONLY) == 0))
+                exact = 0;
+            if (mounted >= 0) close(mounted);
+            if (mounted_tree >= 0) close(mounted_tree);
+            close(tree); close(target);
+            if (!exact) {
+                int failure = errno != 0 ? errno : ESTALE;
+                umount2(target_path, MNT_DETACH);
+                close(root); errno = failure; return -1;
+            }
+            continue;
+        }
         if (tree < 0 || syscall(SYS_mount_setattr, tree, "", AT_EMPTY_PATH | AT_RECURSIVE, &attributes, sizeof(attributes)) != 0 ||
             syscall(SYS_move_mount, tree, "", target, "", MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH) != 0) {
             if (tree >= 0) close(tree);
@@ -231,6 +313,61 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
         close(target);
     }
     close(root);
+    return 0;
+}
+
+static int hl_native_supervised_terminal_mount(const char *rootfs) {
+    if (!isatty(STDIN_FILENO)) return 0;
+    int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    struct open_how how = {.flags = O_PATH | O_CLOEXEC,
+                           .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
+    int target = root < 0 ? -1 : (int)syscall(SYS_openat2, root, "dev/tty", &how, sizeof how);
+    struct stat source_status, target_status, mounted_status;
+    struct statx target_key, path_key, mounted_key;
+    if (target < 0 || fstat(STDIN_FILENO, &source_status) != 0 || !S_ISCHR(source_status.st_mode) ||
+        fstat(target, &target_status) != 0 || (!S_ISCHR(target_status.st_mode) && !S_ISREG(target_status.st_mode)) ||
+        syscall(SYS_statx, target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &target_key) != 0) {
+        if (target >= 0) close(target);
+        if (root >= 0) close(root);
+        return -1;
+    }
+    if (S_ISCHR(target_status.st_mode)) {
+        int canonical = target_status.st_rdev == makedev(5, 0);
+        close(target); close(root);
+        if (!canonical) errno = EPERM;
+        return canonical ? 0 : -1;
+    }
+    char target_path[PATH_MAX];
+    if (snprintf(target_path, sizeof target_path, "%s/dev/tty", rootfs) >= (int)sizeof target_path) {
+        close(target); close(root); return -1;
+    }
+    int path = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    int stable = path >= 0 && syscall(SYS_statx, path, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &path_key) == 0 &&
+                 path_key.stx_ino == target_key.stx_ino && path_key.stx_mnt_id == target_key.stx_mnt_id;
+    if (path >= 0) close(path);
+    if (!stable) { close(target); close(root); errno = ESTALE; return -1; }
+    int dev = (int)syscall(SYS_openat2, root, "dev", &how, sizeof how);
+    struct stat before_replace;
+    int replacement_ok = dev >= 0 && fstatat(dev, "tty", &before_replace, AT_SYMLINK_NOFOLLOW) == 0 &&
+                         before_replace.st_dev == target_status.st_dev && before_replace.st_ino == target_status.st_ino &&
+                         unlinkat(dev, "tty", 0) == 0 &&
+                         mknodat(dev, "tty", S_IFCHR | 0600, makedev(5, 0)) == 0;
+    if (dev >= 0) close(dev);
+    if (!replacement_ok) { close(target); close(root); return -1; }
+    int mounted = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    int exact = mounted >= 0;
+    if (exact && fstat(mounted, &mounted_status) != 0) exact = 0;
+    if (exact && !S_ISCHR(mounted_status.st_mode)) { errno = ENODEV; exact = 0; }
+    if (exact && mounted_status.st_rdev != makedev(5, 0)) {
+        errno = EXDEV;
+        exact = 0;
+    }
+    if (exact && (mounted_status.st_mode & 07777) != 0600) { errno = EPERM; exact = 0; }
+    if (exact && syscall(SYS_statx, mounted, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &mounted_key) != 0) exact = 0;
+    if (exact && mounted_key.stx_ino == target_key.stx_ino) { errno = ESTALE; exact = 0; }
+    if (mounted >= 0) close(mounted);
+    close(target); close(root);
+    if (!exact) return -1;
     return 0;
 }
 
@@ -702,8 +839,10 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     char byte;
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
-    if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
+    if (hl_native_supervised_volumes_mount(projected_root, volumes, options) != 0) return -1;
+    if (hl_native_supervised_terminal_mount(projected_root) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
+        !hl_native_supervised_volumes_contains(volumes, "/etc/hosts") &&
         hl_native_supervised_project_hostname(projected_root, box->hostname,
                                               (box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0,
                                               private_setup) != 0)
@@ -841,7 +980,8 @@ static int hl_native_supervised_clone_namespaces(uint64_t flags) {
 static int hl_native_supervised_ioctl_allowed(uint64_t request) {
     return request == TCGETS || request == TCSETS || request == TCSETSW || request == TCSETSF ||
            request == TIOCGWINSZ || request == TIOCSWINSZ || request == TIOCGPGRP || request == TIOCSPGRP ||
-           request == FIONREAD || request == TIOCGPTN || request == TIOCSPTLCK;
+           request == TIOCGSID || request == HL_NATIVE_TCGETS2 || request == FIONREAD || request == TIOCGPTN ||
+           request == TIOCSPTLCK;
 }
 
 static int hl_native_supervised_single_child(pid_t parent, pid_t *child) {
@@ -1138,6 +1278,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         if (attached.status != HL_STATUS_OK || attached.value > INT_MAX) goto attachment_failed;
         borrowed[fd] = (int)attached.value;
     }
+    int terminal = isatty(borrowed[STDIN_FILENO]);
     int planted_high_fd = -1;
     const char *test_refusal = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE");
     if (test_refusal != NULL && strcmp(test_refusal, "999:38") == 0) {
@@ -1211,6 +1352,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
             _exit(70);
         }
+        /* The generic lifecycle deliberately leaves native-supervised PTYs unattached. Claim this supplied
+         * slave while setup is still trusted; the filtered workload then only inherits terminal authority. */
+        if (terminal && (setsid() < 0 || ioctl(STDIN_FILENO, TIOCSCTTY, 0) != 0)) _exit(70);
         int listener = stage_fail != NULL && strcmp(stage_fail, "listener") == 0
                            ? (errno = EIO, -1)
                            : hl_native_supervised_create_listener(options);

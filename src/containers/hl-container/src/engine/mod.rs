@@ -379,27 +379,57 @@ mod tests {
     }
 
     #[test]
-    fn native_execution_selects_only_the_retained_c_diagnostics_option() {
-        // The engine has no native-execution switch: `src/runtime/hl-native/src/native/engine/options.c`
-        // is the authoritative option registry and defines neither `HL_NATIVE_EXECUTION` nor
-        // `HL_NATIVE_DIAGNOSTICS`. `Execution::Native` therefore carries exactly one launch effect,
-        // the retained-C diagnostics request.
+    fn native_execution_selects_the_supervised_backend_and_diagnostics() {
         let mut launch = launch();
         launch.execution = crate::Execution::native(true);
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
     }
 
     #[test]
-    fn native_execution_without_diagnostics_selects_no_launch_option() {
+    fn native_execution_without_diagnostics_still_selects_the_supervised_backend() {
         let mut launch = launch();
         launch.execution = crate::Execution::native(false);
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
+    }
+
+    #[test]
+    fn native_execution_carries_the_typed_isolated_sentry_projection() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let mut launch = launch();
+        launch.guest = crate::Guest::X86_64;
+        launch.execution = crate::Execution::native(false);
+        launch.isolation.network_isolated = true;
+        launch.process.uid = Some(1234);
+        launch.process.gid = Some(2345);
+        launch.process.working_dir = "/work".into();
+        launch.hostname = Some("ephemeral-pane".into());
+        launch.mounts.push(crate::model::ResolvedMount {
+            source: source.path().to_owned(),
+            target: "/etc/hosts".into(),
+            access: crate::Access::ReadWrite,
+        });
+
+        let spec = Spec::try_from(&launch).unwrap();
+
+        assert_eq!(spec.plan.box_policy.flags & ((1 << 2) | (1 << 5)), (1 << 2) | (1 << 5));
+        assert_eq!((spec.plan.box_policy.uid, spec.plan.box_policy.gid), (1234, 2345));
+        assert_eq!(spec.plan.box_policy.working_directory.as_deref(), Some(b"/work".as_slice()));
+        assert_eq!(spec.plan.box_policy.hostname.as_deref(), Some(b"ephemeral-pane".as_slice()));
+        assert!(
+            spec.plan
+                .box_policy
+                .volumes
+                .as_deref()
+                .is_some_and(|volumes| volumes.starts_with(b"rw:/etc/hosts:/"))
+        );
     }
 
     #[test]
@@ -409,7 +439,7 @@ mod tests {
             (crate::Execution::Auto, supported),
             (crate::Execution::Translit, supported),
             (crate::Execution::Interpreted, false),
-            (crate::Execution::native(false), supported),
+            (crate::Execution::native(false), false),
         ] {
             let mut launch = launch();
             launch.guest = crate::Guest::X86_64;

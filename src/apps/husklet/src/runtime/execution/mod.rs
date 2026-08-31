@@ -2,7 +2,7 @@
 
 use crate::config::WorkspaceConfig;
 use hl_client::api::Size;
-use hl_client::model::{Attachment, ExecAttach, ExecConfig, ExecStart};
+use hl_client::model::{Attachment, ExecAttach, ExecConfig, ExecLifetime, ExecNetwork, ExecStart};
 use hl_ws::{Directory, Key, Storage};
 use hl_ws_term::PtyBackend;
 use std::io;
@@ -72,11 +72,7 @@ enum PersistedAction {
 
 impl PersistedAction {
     fn for_running(running: bool) -> Self {
-        if running {
-            Self::Attach
-        } else {
-            Self::Restore
-        }
+        if running { Self::Attach } else { Self::Restore }
     }
 
     fn after_failed_attach(running: Option<bool>) -> Self {
@@ -90,12 +86,51 @@ impl LauncherError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PaneLifetime {
+    #[default]
+    Persisted,
+    Ephemeral,
+}
+
+impl PaneLifetime {
+    fn wire(self) -> (ExecLifetime, ExecNetwork, bool) {
+        match self {
+            Self::Persisted => (ExecLifetime::Persisted, ExecNetwork::Container, false),
+            Self::Ephemeral => (ExecLifetime::Ephemeral, ExecNetwork::Isolated, true),
+        }
+    }
+}
+
 pub fn launch(
     workspace: &WorkspaceConfig,
     columns: u16,
     rows: u16,
     cwd: Option<&str>,
     slot: Option<&str>,
+) -> io::Result<Box<dyn PtyBackend>> {
+    launch_with_lifetime(workspace, columns, rows, cwd, slot, PaneLifetime::Persisted)
+}
+
+/// Launches an explicitly non-checkpointed pane through the native supervised backend.
+///
+/// This mode never reads or writes pane reattachment state. Closing it ends the session.
+pub fn launch_ephemeral(
+    workspace: &WorkspaceConfig,
+    columns: u16,
+    rows: u16,
+    cwd: Option<&str>,
+) -> io::Result<Box<dyn PtyBackend>> {
+    launch_with_lifetime(workspace, columns, rows, cwd, None, PaneLifetime::Ephemeral)
+}
+
+fn launch_with_lifetime(
+    workspace: &WorkspaceConfig,
+    columns: u16,
+    rows: u16,
+    cwd: Option<&str>,
+    slot: Option<&str>,
+    lifetime: PaneLifetime,
 ) -> io::Result<Box<dyn PtyBackend>> {
     let mut runtime = PaneRuntime::shared()?;
     let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
@@ -119,7 +154,11 @@ pub fn launch(
         );
     let (working_dir, command) = terminal_start(cwd, terminal_home, &base);
     let size = Size::new(rows.max(1), columns.max(1)).map_err(LauncherError::io)?;
-    let pane = PaneExecution::new(workspace, slot)?;
+    let pane = match lifetime {
+        PaneLifetime::Persisted => PaneExecution::new(workspace, slot)?,
+        PaneLifetime::Ephemeral => None,
+    };
+    let (exec_lifetime, network, native) = lifetime.wire();
     let config = ExecConfig {
         attach: Attachment {
             stdin: true,
@@ -131,6 +170,9 @@ pub fn launch(
         command: vec!["/bin/sh".into(), "-c".into(), command],
         user: terminal_user.into(),
         working_dir,
+        lifetime: exec_lifetime,
+        network,
+        native,
         ..ExecConfig::default()
     };
     let start = ExecStart {
@@ -499,13 +541,26 @@ impl PaneStart {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{terminal_identity, PaneExecution, PersistedAction};
+    use super::{PaneExecution, PaneLifetime, PersistedAction, terminal_identity};
     use crate::config::WorkspaceConfig;
+    use hl_client::model::{ExecLifetime, ExecNetwork};
     use hl_ws::Arch;
 
     #[test]
     fn terminal_defaults_to_the_administrative_workspace_identity() {
         assert_eq!(terminal_identity(), ("0:0", "/root"));
+    }
+
+    #[test]
+    fn ephemeral_panes_request_native_isolation_without_changing_persisted_defaults() {
+        assert_eq!(
+            PaneLifetime::Persisted.wire(),
+            (ExecLifetime::Persisted, ExecNetwork::Container, false)
+        );
+        assert_eq!(
+            PaneLifetime::Ephemeral.wire(),
+            (ExecLifetime::Ephemeral, ExecNetwork::Isolated, true)
+        );
     }
 
     #[test]

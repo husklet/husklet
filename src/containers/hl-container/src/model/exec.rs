@@ -59,6 +59,28 @@ pub struct ExecSpec {
     pub privileged: bool,
     pub detach_keys: String,
     pub user: String,
+    #[serde(default)]
+    pub lifetime: ExecLifetime,
+    #[serde(default)]
+    pub network: ExecNetwork,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<crate::Execution>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecLifetime {
+    #[default]
+    Persisted,
+    Ephemeral,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecNetwork {
+    #[default]
+    Container,
+    Isolated,
 }
 
 impl ExecSpec {
@@ -70,7 +92,28 @@ impl ExecSpec {
             privileged: false,
             detach_keys: String::new(),
             user: String::new(),
+            lifetime: ExecLifetime::Persisted,
+            network: ExecNetwork::Container,
+            execution: None,
         }
+    }
+
+    #[must_use]
+    pub const fn lifetime(mut self, value: ExecLifetime) -> Self {
+        self.lifetime = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn network(mut self, value: ExecNetwork) -> Self {
+        self.network = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn execution(mut self, value: crate::Execution) -> Self {
+        self.execution = Some(value);
+        self
     }
 
     #[must_use]
@@ -206,6 +249,21 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(state, ExecState::Exited { process_id: None, .. }));
+    }
+
+    #[test]
+    fn legacy_exec_specs_remain_persisted_on_the_container_network() {
+        let spec: ExecSpec = serde_json::from_value(serde_json::json!({
+            "process": Process::new("/bin/true"),
+            "streams": Streams::default(),
+            "privileged": false,
+            "detach_keys": "",
+            "user": ""
+        }))
+        .unwrap();
+        assert_eq!(spec.lifetime, ExecLifetime::Persisted);
+        assert_eq!(spec.network, ExecNetwork::Container);
+        assert_eq!(spec.execution, None);
     }
 
     /// `docker exec -u root` must work, so a named user resolves against the container's own

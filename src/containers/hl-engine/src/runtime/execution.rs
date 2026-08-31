@@ -228,6 +228,7 @@ pub(crate) struct ProductionFactory;
 const BOX_ROOTFS_READ_ONLY: u32 = 1;
 const BOX_NETWORK_ISOLATED: u32 = 1 << 2;
 const BOX_TRANSLATION_CACHE_DISABLED: u32 = 1 << 4;
+const BOX_SENTRY_ONLY: u32 = 1 << 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeSupervisedRefusal {
@@ -344,11 +345,24 @@ fn hostname_valid(hostname: &[u8]) -> bool {
 
 #[cfg(unix)]
 fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let (Some(root), Some(hostname)) = (plan.rootfs.as_deref(), plan.box_policy.hostname.as_deref()) else {
+    let Some(hostname) = plan.box_policy.hostname.as_deref() else {
         return false;
     };
     if !hostname_valid(hostname) { return false; }
+    [plan.rootfs.as_deref(), plan.box_policy.lower_layers.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|root| hostname_projection_root_ready(root))
+        || plan
+            .box_policy
+            .volumes
+            .as_deref()
+            .is_some_and(hostname_projection_volume_ready)
+}
+
+#[cfg(unix)]
+fn hostname_projection_root_ready(root: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
     let root = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(root));
     if !std::fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.file_type().is_dir()) {
         return false;
@@ -359,6 +373,25 @@ fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan)
     }
     let hosts = etc.join("hosts");
     std::fs::symlink_metadata(hosts)
+        .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
+}
+
+#[cfg(unix)]
+fn hostname_projection_volume_ready(volumes: &[u8]) -> bool {
+    volumes.split(|byte| *byte == b',').any(|raw| {
+        let record = raw.strip_prefix(b"ro:").or_else(|| raw.strip_prefix(b"rw:")).unwrap_or(raw);
+        let Some(split) = record.iter().position(|byte| *byte == b':') else {
+            return false;
+        };
+        let (guest, host) = (&record[..split], &record[split + 1..]);
+        guest == b"/etc/hosts" && hostname_projection_file_ready(host)
+    })
+}
+
+#[cfg(unix)]
+fn hostname_projection_file_ready(path: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    std::fs::symlink_metadata(std::ffi::OsStr::from_bytes(path))
         .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
 }
 
@@ -434,7 +467,13 @@ fn native_eligibility_for_request(
         return Err(NativeSupervisedRefusal::Host);
     }
     let host = probe();
-    let eligibility = native_eligibility(isa, plan, checkpoint, host);
+    let eligibility = native_eligibility_with_sentry(
+        isa,
+        plan,
+        checkpoint,
+        host,
+        requested == NativeSupervisedRequest::On,
+    );
     if requested == NativeSupervisedRequest::Auto {
         native_auto_eligibility(plan, host, eligibility)
     } else {
@@ -484,11 +523,22 @@ fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Opti
     })
 }
 
+#[cfg(test)]
 fn native_eligibility(
     isa: crate::activation::GuestIsa,
     plan: &crate::launcher::plan::RuntimePlan,
     checkpoint: NativeCheckpointIntent,
     host: NativeHostCapabilities,
+) -> Result<(), NativeSupervisedRefusal> {
+    native_eligibility_with_sentry(isa, plan, checkpoint, host, false)
+}
+
+fn native_eligibility_with_sentry(
+    isa: crate::activation::GuestIsa,
+    plan: &crate::launcher::plan::RuntimePlan,
+    checkpoint: NativeCheckpointIntent,
+    host: NativeHostCapabilities,
+    allow_sentry_only: bool,
 ) -> Result<(), NativeSupervisedRefusal> {
     use NativeSupervisedRefusal as R;
     if !host.linux_x86_64 || !host.root { return Err(R::Host); }
@@ -518,7 +568,11 @@ fn native_eligibility(
     {
         return Err(R::Checkpoint);
     }
-    if plan.options.get_bytes("HL_UNTRUSTED").is_some() { return Err(R::Sandbox); }
+    if plan.options.get_bytes("HL_SANDBOX").is_some()
+        || (plan.options.get_bytes("HL_UNTRUSTED").is_some() && !allow_sentry_only)
+    {
+        return Err(R::Sandbox);
+    }
     if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
     if translated_backend_control(plan).is_some() { return Err(R::BackendControl); }
     let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
@@ -533,7 +587,10 @@ fn native_eligibility(
         box_policy.network_bridge.is_some() || box_policy.ip.is_some() || box_policy.egress_proxy.is_some() {
         return Err(R::Network);
     }
-    let allowed = BOX_ROOTFS_READ_ONLY | BOX_NETWORK_ISOLATED | BOX_TRANSLATION_CACHE_DISABLED;
+    let allowed = BOX_ROOTFS_READ_ONLY
+        | BOX_NETWORK_ISOLATED
+        | BOX_TRANSLATION_CACHE_DISABLED
+        | if allow_sentry_only { BOX_SENTRY_ONLY } else { 0 };
     if box_policy.flags & !allowed != 0 { return Err(R::BoxFlags); }
     Ok(())
 }
@@ -675,6 +732,48 @@ mod native_eligibility_tests {
     }
 
     #[test]
+    fn explicit_on_accepts_only_sentry_only_in_an_isolated_network() {
+        let mut sentry = plan();
+        sentry.options.set("HL_UNTRUSTED", "1", true).unwrap();
+        sentry.box_policy.network_mode = 0;
+        sentry.box_policy.flags |= BOX_NETWORK_ISOLATED;
+        sentry.box_policy.network_namespace = Some(b"ephemeral-pane".to_vec());
+
+        assert_eq!(
+            native_eligibility_for_request(
+                NativeSupervisedRequest::On,
+                crate::activation::GuestIsa::X86_64,
+                &sentry,
+                NativeCheckpointIntent::None,
+                host,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            native_eligibility_for_request(
+                NativeSupervisedRequest::Auto,
+                crate::activation::GuestIsa::X86_64,
+                &sentry,
+                NativeCheckpointIntent::None,
+                host,
+            ),
+            Err(NativeSupervisedRefusal::Sandbox)
+        );
+
+        sentry.options.set("HL_SANDBOX", "1", true).unwrap();
+        assert_eq!(
+            native_eligibility_for_request(
+                NativeSupervisedRequest::On,
+                crate::activation::GuestIsa::X86_64,
+                &sentry,
+                NativeCheckpointIntent::None,
+                host,
+            ),
+            Err(NativeSupervisedRefusal::Sandbox)
+        );
+    }
+
+    #[test]
     fn volume_admission_rejects_overlap_traversal_proc_and_excess() {
         assert!(volume_spec_supported(Some(b"ro:/src:/host/src,rw:/out:/host/out")));
         for invalid in [
@@ -757,6 +856,25 @@ mod native_eligibility_tests {
         assert!(!isolated_hostname_projection_ready(&actual), "missing hosts admitted");
         std::fs::write(root.path().join("etc/hosts"), b"127.0.0.1 localhost\n").unwrap();
         assert!(isolated_hostname_projection_ready(&actual));
+        let upper = tempfile::tempdir().unwrap();
+        actual.rootfs = Some(upper.path().as_os_str().as_encoded_bytes().to_vec());
+        actual.box_policy.lower_layers = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
+        assert!(
+            isolated_hostname_projection_ready(&actual),
+            "an overlay lower carrying the projected hosts file was ignored"
+        );
+        actual.rootfs = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
+        actual.box_policy.lower_layers = None;
+        actual.rootfs = Some(upper.path().as_os_str().as_encoded_bytes().to_vec());
+        actual.box_policy.volumes = Some(
+            format!("rw:/etc/hosts:{}", root.path().join("etc/hosts").display()).into_bytes(),
+        );
+        assert!(
+            isolated_hostname_projection_ready(&actual),
+            "the engine-owned identity mount carrying /etc/hosts was ignored"
+        );
+        actual.rootfs = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
+        actual.box_policy.volumes = None;
         actual.box_policy.hostname = Some(b"line\nbreak".to_vec());
         assert!(!isolated_hostname_projection_ready(&actual), "invalid hostname admitted");
         actual.box_policy.hostname = Some(b"builder".to_vec());
@@ -908,7 +1026,12 @@ impl RuntimeFactory for ProductionFactory {
             .services
             .streams
             .terminal()
-            .map(|terminal| NativeTerminalBridge::attach(terminal, InputDiscipline::Linux))
+            .map(|terminal| {
+                NativeTerminalBridge::attach(
+                    terminal,
+                    if native_supervised { InputDiscipline::Host } else { InputDiscipline::Linux },
+                )
+            })
             .transpose()?;
         #[cfg(unix)]
         let output = if terminal.is_none() {

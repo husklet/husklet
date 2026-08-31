@@ -15,7 +15,7 @@ use serde::Deserialize;
 use super::DockerState;
 use super::console::{DetachKeys, Resize};
 use super::error::{ApiError, ApiResult};
-use crate::api::{ExecConfig, ExecCreated, Wait};
+use crate::api::{ExecConfig, ExecCreated, ExecLifetime, ExecNetwork, Wait};
 
 #[hl_design::adapter]
 pub(super) async fn create(
@@ -48,7 +48,20 @@ pub(super) async fn create(
         })
         .privileged(config.privileged)
         .detach_keys(config.detach_keys)
-        .user(config.user);
+        .user(config.user)
+        .lifetime(match config.lifetime {
+            ExecLifetime::Persisted => hl_container::ExecLifetime::Persisted,
+            ExecLifetime::Ephemeral => hl_container::ExecLifetime::Ephemeral,
+        })
+        .network(match config.network {
+            ExecNetwork::Container => hl_container::ExecNetwork::Container,
+            ExecNetwork::Isolated => hl_container::ExecNetwork::Isolated,
+        });
+    let spec = if config.native {
+        spec.execution(hl_container::Execution::native(false))
+    } else {
+        spec
+    };
     let exec = state
         .containers
         .executions()

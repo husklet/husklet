@@ -24,6 +24,33 @@ use document::{WorkspaceDocument, WorkspaceText};
 #[cfg(feature = "gui")]
 use hl_ws_term::config::{CursorShape, TermConfig};
 
+/// Whether terminal panes participate in workspace checkpoint persistence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExecutionLifetime {
+    #[default]
+    Persisted,
+    Ephemeral,
+}
+
+impl ExecutionLifetime {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Persisted => "persisted",
+            Self::Ephemeral => "ephemeral",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "persisted" => Some(Self::Persisted),
+            "ephemeral" => Some(Self::Ephemeral),
+            _ => None,
+        }
+    }
+}
+
 /// The kind of VPN/proxy a workspace routes its egress through. Pure
 /// data; the container domain applies the routing mechanism at launch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -165,6 +192,8 @@ pub struct WorkspaceConfig {
     pub vpn: Option<VpnConfig>,
     /// Terminal appearance persisted with this workspace.
     pub terminal: TerminalPreferences,
+    /// Pane execution durability. Existing workspace files default to checkpointed persistence.
+    pub execution_lifetime: ExecutionLifetime,
 }
 
 pub(super) const DEFAULT_SCROLLBACK_LINES: u64 = 100_000;
@@ -201,6 +230,7 @@ impl WorkspaceConfig {
             scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             vpn: None,
             terminal: TerminalPreferences::default(),
+            execution_lifetime: ExecutionLifetime::Persisted,
         }
     }
     /// VTE scrollback-line count to apply. Unlimited (`None`/`0`) maps to a very large, file-backed cap
@@ -344,6 +374,9 @@ impl WorkspaceStore {
             }
             if let Some(vpn) = &w.vpn {
                 out.field("vpn", &vpn.to_spec());
+            }
+            if w.execution_lifetime != ExecutionLifetime::Persisted {
+                out.field("execution_lifetime", w.execution_lifetime.as_str());
             }
             if let Some(value) = &w.terminal.font_family {
                 out.field("terminal_font", value);

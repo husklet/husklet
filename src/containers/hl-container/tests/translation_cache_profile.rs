@@ -716,9 +716,7 @@ int main(void) {
         .execution(if mode == Mode::Interpreter {
             Execution::Interpreted
         } else {
-            // Product-path profiling needs an executed-backend receipt; diagnostics are orthogonal to
-            // Auto translation and must not change the selected backend.
-            Execution::native(true)
+            Execution::Auto
         })
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,

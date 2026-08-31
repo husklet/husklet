@@ -1,4 +1,4 @@
-use super::{io, Arch, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig};
+use super::{Arch, ExecutionLifetime, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig, io};
 
 #[derive(Default)]
 pub(super) struct WorkspaceDocument {
@@ -87,6 +87,7 @@ struct WsBuilder {
     scrollback: ScrollbackValue,
     vpn: Option<VpnConfig>,
     terminal: TerminalPreferences,
+    execution_lifetime: ExecutionLifetime,
 }
 
 #[derive(Default)]
@@ -126,6 +127,10 @@ impl WsBuilder {
             }
             "vpn" if !v.is_empty() => {
                 self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?);
+            }
+            "execution_lifetime" => {
+                self.execution_lifetime =
+                    ExecutionLifetime::parse(v).ok_or_else(|| Value::new("execution_lifetime", v).invalid())?;
             }
             "terminal_font" if !v.is_empty() => self.terminal.font_family = Some(v.to_owned()),
             "terminal_size" => self.terminal.font_size = Some(Value::new("terminal_size", v).number()?),
@@ -220,6 +225,7 @@ impl WsBuilder {
             },
             vpn: self.vpn,
             terminal: self.terminal,
+            execution_lifetime: self.execution_lifetime,
         })
     }
 

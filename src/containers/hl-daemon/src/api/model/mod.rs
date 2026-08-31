@@ -29,7 +29,8 @@ pub use create::{
 #[cfg(feature = "runtime")]
 pub(crate) use exec::console_size;
 pub use exec::{
-    Attachment, Console, ExecAttach, ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart,
+    Attachment, Console, ExecAttach, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen,
+    ExecProcess, ExecStart,
 };
 pub use filesystem::{Change, ChangeKind, PathStat};
 pub use image::{

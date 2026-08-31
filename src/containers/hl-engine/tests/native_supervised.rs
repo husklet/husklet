@@ -339,7 +339,6 @@ fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
     let receipt = work.path().join("idle-receipt");
     let mut plan = selected_plan(&executable);
     std::fs::write(&receipt, b"").unwrap();
-    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
     plan.options
         .set_bytes(
@@ -777,6 +776,7 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     let output_directory = work.path().join("output");
     for path in [
         lower.join("bin"),
+        lower.join("dev"),
         lower.join("tmp"),
         lower.join("proc"),
         lower.join("src"),
@@ -788,12 +788,15 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     ] {
         std::fs::create_dir_all(path).unwrap();
     }
+    std::fs::write(lower.join("dev/tty"), b"").unwrap();
     let executable = lower.join("bin/fixture");
     std::fs::copy(built, &executable).unwrap();
     let terminal = Arc::new(PaneTerminal::default());
     let mut plan = selected_plan(&executable);
+    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     plan.rootfs = Some(upper.as_os_str().as_encoded_bytes().to_vec());
     plan.arguments.push(b"secure-jail".to_vec());
+    plan.arguments.push(b"pty-session".to_vec());
     plan.options
         .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
         .unwrap();
@@ -812,7 +815,62 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     engine.destroy().unwrap();
     let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     assert!(text.windows(b"secure-jail".len()).any(|window| window == b"secure-jail"), "pty={text:?}");
+    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
     assert_eq!(native_overlay_directories(), before);
+}
+
+#[test]
+fn supervised_terminal_has_a_controlling_session_before_guest_exec() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let terminal = Arc::new(PaneTerminal::default());
+    let mut plan = selected_plan(&executable);
+    plan.arguments.push(b"pty-session".to_vec());
+    let streams = StandardStreams::default()
+        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    if let Err(error) = engine.start() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        panic!("native terminal start failed: {error:?}, pty={text:?}");
+    }
+    let waited = engine.wait();
+    if let Err(error) = &waited {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        panic!("native terminal wait failed: {error:?}, pty={text:?}");
+    }
+    assert_eq!(waited.unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
+}
+
+#[test]
+fn supervised_terminal_refuses_an_image_supplied_non_tty_character_device() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("dev")).unwrap();
+    std::fs::create_dir_all(root.join("proc")).unwrap();
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    assert!(std::process::Command::new("mknod")
+        .arg(root.join("dev/tty"))
+        .args(["c", "1", "3"])
+        .status()
+        .unwrap()
+        .success());
+    let terminal = Arc::new(PaneTerminal::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"pty-session".to_vec());
+    let streams = StandardStreams::default().with_terminal(Terminal::new(terminal, 37, 111).unwrap());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    engine.start().unwrap();
+    assert!(engine.wait().is_err());
+    engine.destroy().unwrap();
 }
 
 #[test]
@@ -884,6 +942,116 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn supervised_projector_mounts_pinned_regular_files_with_exact_access() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    let sources = work.path().join("sources");
+    for path in [root.join("bin"), root.join("proc"), root.join("etc"), sources.clone()] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let hosts = sources.join("hosts");
+    let hostname = sources.join("hostname");
+    let resolver = sources.join("resolv.conf");
+    std::fs::write(&hosts, b"identity-hosts\n").unwrap();
+    std::fs::write(&hostname, b"old-host\n").unwrap();
+    std::fs::write(&resolver, b"nameserver 192.0.2.1\n").unwrap();
+    for name in ["hosts", "hostname", "resolv.conf"] {
+        std::fs::write(root.join("etc").join(name), b"target\n").unwrap();
+    }
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments.push(b"file-volumes".to_vec());
+    plan.box_policy.volumes = Some(
+        format!(
+            "ro:/etc/hosts:{},rw:/etc/hostname:{},rw:/etc/resolv.conf:{}",
+            hosts.display(), hostname.display(), resolver.display()
+        )
+        .into_bytes(),
+    );
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"file-volumes");
+    assert_eq!(std::fs::read(&hosts).unwrap(), b"identity-hosts\n");
+    assert_eq!(std::fs::read(&hostname).unwrap(), b"guest-host\n");
+    assert_eq!(std::fs::read(&resolver).unwrap(), b"nameserver 127.0.0.1\n");
+}
+
+#[test]
+fn supervised_projector_refuses_missing_symlinked_and_wrong_type_file_volumes() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let root = work.path().join("root");
+    let source = work.path().join("source");
+    let source_link = work.path().join("source-link");
+    for path in [root.join("etc"), root.join("tmp")] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(&source, b"source\n").unwrap();
+    std::os::unix::fs::symlink(&source, &source_link).unwrap();
+    std::fs::write(root.join("etc/regular"), b"target\n").unwrap();
+    std::os::unix::fs::symlink(root.join("etc/regular"), root.join("etc/link")).unwrap();
+    for specification in [
+        format!("rw:/etc/regular:{}", work.path().join("missing").display()),
+        format!("rw:/etc/regular:{}", source_link.display()),
+        format!("rw:/etc/link:{}", source.display()),
+        format!("rw:/tmp:{}", source.display()),
+        format!("rw:/etc/regular:{}", work.path().display()),
+    ] {
+        let mut plan = selected_plan(&executable);
+        plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+        plan.box_policy.volumes = Some(specification.into_bytes());
+        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        if engine.start().is_ok() {
+            assert!(engine.wait().is_err());
+        }
+        engine.destroy().unwrap();
+    }
+    assert_eq!(std::fs::read(root.join("etc/regular")).unwrap(), b"target\n");
+    assert_eq!(std::fs::read(&source).unwrap(), b"source\n");
+}
+
+#[test]
+fn supervised_projector_refuses_target_swap_after_pinning_without_mounting_replacement() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    for path in [root.join("bin"), root.join("proc"), root.join("etc")] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    let source = work.path().join("source");
+    std::fs::write(&source, b"trusted-source\n").unwrap();
+    std::fs::write(root.join("etc/target"), b"pinned-target\n").unwrap();
+    std::fs::write(root.join("etc/target.swap"), b"attacker-target\n").unwrap();
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.box_policy.volumes = Some(format!("ro:/etc/target:{}", source.display()).into_bytes());
+    plan.options
+        .set("HL_NATIVE_SUPERVISED_REFUSE", "file-volume-target-swap", true)
+        .unwrap();
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    if engine.start().is_ok() {
+        assert!(engine.wait().is_err());
+    }
+    engine.destroy().unwrap();
+    assert_eq!(std::fs::read(root.join("etc/target")).unwrap(), b"attacker-target\n");
+    assert_eq!(std::fs::read(root.join("etc/target.pinned")).unwrap(), b"pinned-target\n");
+    assert_eq!(std::fs::read(&source).unwrap(), b"trusted-source\n");
 }
 
 #[test]

@@ -26,12 +26,17 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut options, launch)?;
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
-        Self::flag(&mut options, "HL_C_DIAGNOSTICS", launch.execution.diagnostics())?;
+        Self::flag(
+            &mut options,
+            "HL_C_DIAGNOSTICS",
+            launch.execution.diagnostics() || launch.translation_cache_observability,
+        )?;
         Self::flag(
             &mut options,
             "HL_TRANSLIT",
             launch.execution.translit(matches!(launch.guest, crate::Guest::X86_64)),
         )?;
+        Self::flag(&mut options, "HL_NATIVE_SUPERVISED", launch.execution.is_native())?;
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
@@ -177,7 +182,39 @@ impl TryFrom<&ProcessConfig> for Spec {
             })
             .collect();
 
+        let volumes = launch
+            .mounts
+            .iter()
+            .map(|mount| {
+                let access = match mount.access {
+                    crate::Access::ReadOnly => "ro",
+                    crate::Access::ReadWrite => "rw",
+                };
+                format!("{access}:{}:{}", mount.target.display(), mount.source.display())
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let limits = launch
+            .resources
+            .limits
+            .iter()
+            .map(crate::ResourceLimit::record)
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut box_flags = u32::from(launch.isolation.read_only_root);
+        box_flags |= u32::from(launch.isolation.sandbox == crate::Sandbox::Enabled) << 1;
+        box_flags |= u32::from(launch.isolation.network_isolated) << 2;
+        box_flags |= u32::from(launch.translation_cache.is_none()) << 4;
+        box_flags |= u32::from(launch.isolation.sandbox == crate::Sandbox::SentryOnly) << 5;
+
         let box_policy = hl_engine::launcher::plan::RuntimeBoxPolicy {
+            flags: box_flags,
+            uid: launch.process.uid.unwrap_or(-1),
+            gid: launch.process.gid.unwrap_or(-1),
+            working_directory: Some(launch.process.working_dir.as_os_str().as_encoded_bytes().to_vec()),
+            hostname: launch.hostname.as_ref().map(|hostname| hostname.as_bytes().to_vec()),
+            volumes: (!volumes.is_empty()).then(|| volumes.into_bytes()),
+            limits: (!limits.is_empty()).then(|| limits.into_bytes()),
             // Retain the daemon-owned coherence epoch in the typed policy as well as the legacy
             // option. Native execution relies on kernel VFS coherence; translated execution maps
             // this file to invalidate its user-space caches.

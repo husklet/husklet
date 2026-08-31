@@ -665,9 +665,13 @@ static int32_t hl_production_entry(void *opaque) {
     hl_host_activation_ready_test_wait();
 #endif
     int inherited_terminal = 0;
-    hl_status terminal_status = hl_production_terminal_state(context, 0, &inherited_terminal);
-    if (terminal_status != HL_STATUS_OK) return terminal_status;
-    if (!inherited_terminal && setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
+    int native_supervised = hl_native_supervised_selected(context->options);
+    hl_status terminal_status = HL_STATUS_OK;
+    if (!native_supervised) {
+        terminal_status = hl_production_terminal_state(context, 0, &inherited_terminal);
+        if (terminal_status != HL_STATUS_OK) return terminal_status;
+        if (!inherited_terminal && setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
+    }
     if (context->activation_ready_read >= 0) {
         int activation_read = context->activation_ready_read;
         if (close(activation_read) != 0) {
@@ -692,7 +696,7 @@ static int32_t hl_production_entry(void *opaque) {
     /* Keep process-directed checkpoint kicks away from helper/control threads.
      * Guest executor registration selectively unblocks the reserved signal. */
     hl_ckpt_interrupt_block();
-    if (!inherited_terminal) {
+    if (!native_supervised && !inherited_terminal) {
         terminal_status = hl_production_terminal_state(context, 1, NULL);
         if (terminal_status != HL_STATUS_OK) return terminal_status;
     }
