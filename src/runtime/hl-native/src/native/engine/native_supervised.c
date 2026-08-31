@@ -380,6 +380,78 @@ static int hl_native_supervised_loopback_up(void) {
     return result;
 }
 
+/* An isolated native guest owns a private UTS namespace but has no DNS path.
+ * Keep its own hostname local, as the translated network does, without
+ * modifying the image's identity file: bind a mode/owner-preserving copy over
+ * the existing /etc/hosts only inside this mount namespace. */
+static int hl_native_supervised_project_hostname(const char *root, const char *hostname) {
+    char inherited[HOST_NAME_MAX + 1];
+    if (hostname == NULL || hostname[0] == 0) {
+        if (gethostname(inherited, HOST_NAME_MAX) != 0) return -1;
+        inherited[HOST_NAME_MAX] = 0;
+        hostname = inherited;
+    }
+    if (hostname[0] == 0 || strpbrk(hostname, "\r\n\t ") != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    char target[PATH_MAX];
+    if (snprintf(target, sizeof target, "%s/etc/hosts", root) >= (int)sizeof target) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    int input = open(target, O_RDONLY | O_CLOEXEC);
+    if (input < 0 && errno == ENOENT) return 0;
+    if (input < 0) return -1;
+    struct stat metadata;
+    if (fstat(input, &metadata) != 0 || !S_ISREG(metadata.st_mode)) {
+        int failure = errno != 0 ? errno : EINVAL;
+        close(input);
+        errno = failure;
+        return -1;
+    }
+    char temporary[] = "/var/tmp/husklet-native-hosts.XXXXXX";
+    int output = mkstemp(temporary);
+    if (output < 0) { close(input); return -1; }
+    int exact = fchown(output, metadata.st_uid, metadata.st_gid) == 0 &&
+                fchmod(output, metadata.st_mode & 07777) == 0;
+    char buffer[16384];
+    size_t total = 0;
+    unsigned char last = '\n';
+    while (exact) {
+        ssize_t count = read(input, buffer, sizeof buffer);
+        if (count < 0) { if (errno == EINTR) continue; exact = 0; break; }
+        if (count == 0) break;
+        if (total > 1024u * 1024u - (size_t)count) { errno = EFBIG; exact = 0; break; }
+        total += (size_t)count;
+        last = (unsigned char)buffer[count - 1];
+        size_t written = 0;
+        while (written < (size_t)count) {
+            ssize_t step = write(output, buffer + written, (size_t)count - written);
+            if (step < 0 && errno == EINTR) continue;
+            if (step <= 0) { exact = 0; break; }
+            written += (size_t)step;
+        }
+    }
+    if (exact && total != 0 && last != '\n') exact = write(output, "\n", 1) == 1;
+    if (exact) {
+        char record[HOST_NAME_MAX + 16];
+        int length = snprintf(record, sizeof record, "127.0.1.1\t%s\n", hostname);
+        exact = length > 0 && (size_t)length < sizeof record && write(output, record, (size_t)length) == length;
+        if (!exact && errno == 0) errno = EINVAL;
+    }
+    int failure = errno;
+    close(input);
+    if (close(output) != 0 && exact) { exact = 0; failure = errno; }
+    if (exact) {
+        exact = mount(temporary, target, NULL, MS_BIND, NULL) == 0;
+        if (!exact) failure = errno;
+    }
+    (void)unlink(temporary);
+    if (!exact) { errno = failure; return -1; }
+    return 0;
+}
+
 static int hl_native_supervised_limit_resource(const char *name) {
     static const struct { const char *name; int resource; } resources[] = {
         {"cpu", RLIMIT_CPU}, {"fsize", RLIMIT_FSIZE}, {"data", RLIMIT_DATA}, {"stack", RLIMIT_STACK},
@@ -445,6 +517,9 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
     if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
+    if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
+        hl_native_supervised_project_hostname(projected_root, box->hostname) != 0)
+        return -1;
     char proc_target[PATH_MAX];
     if (snprintf(proc_target, sizeof(proc_target), "%s%s", projected_root, "/proc") >= (int)sizeof(proc_target)) return -1;
     if (umount2(proc_target, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) return -1;
