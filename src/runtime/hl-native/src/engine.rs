@@ -561,9 +561,89 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 190..=191 {
+        for scenario in 198..=199 {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "fallthrough IBTC scenario {scenario}");
+        }
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn indirect_jumps_and_calls_fill_and_hit_the_shared_target_cache() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in [200, 202, 203, 204] {
+            // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
+            assert_eq!(unsafe { hook(scenario) }, 0, "indirect IBTC scenario {scenario}");
+        }
+        // Scenario 201 is the unresolved-indirect marker-5 hit arm. Keep it
+        // explicit so an independently-added selector cannot hide it again.
+        assert_eq!(unsafe { hook(201) }, 0, "indirect IBTC scenario 201");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn translation_reuses_the_authoritative_decoder_bytes() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: scenario 205 owns bounded mappings and restores all process-global test state.
+        assert_eq!(unsafe { hook(205) }, 0, "single-fetch scenario 205");
+    }
+
+    #[test]
+    fn transliteration_exported_selectors_do_not_overlap() {
+        let _serial = engine_test_lock();
+        let source = include_str!("native/translator/guest/x86_64/translit.inc");
+        let start = source
+            .find("HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {")
+            .expect("x86 transliteration test export");
+        let mut depth = 0_i32;
+        let mut selectors = std::collections::BTreeMap::<u32, &str>::new();
+        for line in source[start..].lines() {
+            depth += line.matches('{').count() as i32;
+            depth -= line.matches('}').count() as i32;
+            if line.starts_with("    if (scenario") {
+                let mut values = Vec::new();
+                if let Some(rest) = line.split("scenario >= ").nth(1) {
+                    let low = rest.split_whitespace().next().unwrap().parse::<u32>().unwrap();
+                    let high = line
+                        .split("scenario <= ")
+                        .nth(1)
+                        .unwrap()
+                        .split(|character: char| !character.is_ascii_digit())
+                        .next()
+                        .unwrap()
+                        .parse::<u32>()
+                        .unwrap();
+                    values.extend(low..=high);
+                } else {
+                    for rest in line.split("scenario == ").skip(1) {
+                        values.push(
+                            rest.split(|character: char| !character.is_ascii_digit())
+                                .next()
+                                .unwrap()
+                                .parse::<u32>()
+                                .unwrap(),
+                        );
+                    }
+                }
+                for selector in values {
+                    assert!(
+                        selectors.insert(selector, line).is_none(),
+                        "duplicate exported transliteration selector {selector}"
+                    );
+                }
+            }
+            if depth == 0 {
+                break;
+            }
+        }
+        for selector in [190, 192, 198, 199, 200, 201, 202, 203, 204, 205] {
+            assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }
     }
 

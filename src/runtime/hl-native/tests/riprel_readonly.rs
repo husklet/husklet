@@ -10,6 +10,16 @@ fn native_globals() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
+fn translator_reuses_the_authorized_decoder_bytes() {
+    let _guard = native_globals();
+    assert_eq!(
+        hl_native::x86_64_translit_displaced_test(205),
+        0,
+        "translated instructions must reuse authoritative decoder bytes, including at a page boundary"
+    );
+}
+
+#[test]
 fn readonly_riprel_expansions_are_exact_and_prefix_bounded() {
     let _guard = native_globals();
     assert_eq!(hl_native::x86_64_translit_displaced_test(158), 0, "TEST r/m8, imm8");

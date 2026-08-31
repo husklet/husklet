@@ -67,6 +67,8 @@ hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, voi
                                               const _Atomic uint64_t *byte_unstable);
 void hl_x86_hot_context_destroy(hl_x86_hot_context *context);
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn);
+int hl_x86_decode_context_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn,
+                                uint8_t bytes[HL_X86_MAX_INSN]);
 int hl_x86_decode_transaction_begin(hl_x86_hot_context *context);
 int hl_x86_decode_transaction_commit(hl_x86_hot_context *context);
 int hl_x86_decode_transaction_rejected(const hl_x86_hot_context *context);
