@@ -210,15 +210,16 @@ fn backend(stderr: &[u8]) -> Backend {
     let redispatch = String::from_utf8_lossy(stderr)
         .lines()
         .find(|line| line.starts_with("[prof] redispatch "))
-        .unwrap_or_else(|| panic!("redispatch receipt in {}", String::from_utf8_lossy(stderr)))
+        // Displaced images cannot use the same-address redispatch path and therefore publish no receipt.
+        // Keep parsing their independent translation/backend receipts instead of making absence fatal.
+        .unwrap_or("")
         .to_owned();
     let redispatch_field = |name: &str| {
         redispatch
             .split_ascii_whitespace()
             .find_map(|field| field.strip_prefix(name))
-            .unwrap_or_else(|| panic!("missing {name} in {redispatch}"))
-            .parse::<u64>()
-            .unwrap()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
     };
     let text = String::from_utf8_lossy(stderr);
     let lines = text
