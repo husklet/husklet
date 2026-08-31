@@ -64,6 +64,10 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
 fn product_dispatch_return_census_is_complete_and_bound_to_map_misses() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let backend = fs::read_to_string(native.join("engine/backend_tree.c")).expect("backend census source");
+    let product_backend = backend
+        .split_once("#else\n\n/* Hook-disabled translit_shape_exit")
+        .map(|(_, product)| product)
+        .expect("product backend census section");
     let dispatch = fs::read_to_string(native.join("engine/dispatch.c")).expect("dispatcher source");
     for field in [
         "dispatch_translation_miss",
@@ -103,7 +107,7 @@ fn product_dispatch_return_census_is_complete_and_bound_to_map_misses() {
         "fall_sse_riprel",
         "fall_other",
     ] {
-        assert!(backend.contains(field), "product dispatcher census omits {field}");
+        assert!(product_backend.contains(field), "product dispatcher census omits {field}");
     }
     let miss = dispatch.find("if (!code) {").expect("map-miss branch");
     let translate = dispatch[miss..]
