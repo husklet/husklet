@@ -30,6 +30,8 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <termios.h>
 #include <net/if.h>
 
+#define HL_NATIVE_TCGETS2 0x802c542aU
+
 static int hl_native_supervised_available(void) { return 1; }
 
 uint64_t hl_linux_abi_constructed(void);
@@ -921,7 +923,8 @@ static int hl_native_supervised_clone_namespaces(uint64_t flags) {
 static int hl_native_supervised_ioctl_allowed(uint64_t request) {
     return request == TCGETS || request == TCSETS || request == TCSETSW || request == TCSETSF ||
            request == TIOCGWINSZ || request == TIOCSWINSZ || request == TIOCGPGRP || request == TIOCSPGRP ||
-           request == FIONREAD || request == TIOCGPTN || request == TIOCSPTLCK;
+           request == TIOCGSID || request == HL_NATIVE_TCGETS2 || request == FIONREAD || request == TIOCGPTN ||
+           request == TIOCSPTLCK;
 }
 
 static int hl_native_supervised_single_child(pid_t parent, pid_t *child) {
@@ -1218,6 +1221,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         if (attached.status != HL_STATUS_OK || attached.value > INT_MAX) goto attachment_failed;
         borrowed[fd] = (int)attached.value;
     }
+    int terminal = isatty(borrowed[STDIN_FILENO]);
     int planted_high_fd = -1;
     const char *test_refusal = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE");
     if (test_refusal != NULL && strcmp(test_refusal, "999:38") == 0) {
@@ -1291,6 +1295,9 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
                 fprintf(stderr, "[hl-native-supervised]\tprojector_errno=%d\n", errno);
             _exit(70);
         }
+        /* The generic lifecycle deliberately leaves native-supervised PTYs unattached. Claim this supplied
+         * slave while setup is still trusted; the filtered workload then only inherits terminal authority. */
+        if (terminal && (setsid() < 0 || ioctl(STDIN_FILENO, TIOCSCTTY, 0) != 0)) _exit(70);
         int listener = stage_fail != NULL && strcmp(stage_fail, "listener") == 0
                            ? (errno = EIO, -1)
                            : hl_native_supervised_create_listener(options);

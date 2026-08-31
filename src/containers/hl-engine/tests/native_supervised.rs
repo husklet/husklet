@@ -816,6 +816,33 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
 }
 
 #[test]
+fn supervised_terminal_has_a_controlling_session_before_guest_exec() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let terminal = Arc::new(PaneTerminal::default());
+    let mut plan = selected_plan(&executable);
+    plan.arguments.push(b"pty-session".to_vec());
+    let streams = StandardStreams::default()
+        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    if let Err(error) = engine.start() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        panic!("native terminal start failed: {error:?}, pty={text:?}");
+    }
+    let waited = engine.wait();
+    if let Err(error) = &waited {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        panic!("native terminal wait failed: {error:?}, pty={text:?}");
+    }
+    assert_eq!(waited.unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
+}
+
+#[test]
 fn supervised_projector_refuses_hostname_hosts_token_injection() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

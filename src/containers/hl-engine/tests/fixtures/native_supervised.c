@@ -14,6 +14,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <termios.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
 #include <sched.h>
@@ -311,6 +312,13 @@ int main(int argc, char **argv) {
         int resolver = open("/etc/resolv.conf", O_WRONLY | O_TRUNC);
         if (resolver < 0 || write(resolver, "nameserver 127.0.0.1\n", 21) != 21 || close(resolver) != 0) return 100;
         fputs("file-volumes", stdout);
+    }
+    if (argc > 1 && !strcmp(argv[1], "pty-session")) {
+        pid_t session = getsid(0);
+        if (!isatty(0)) return errno == EPERM ? 104 : errno == ENOTTY ? 101 : 105;
+        if (session < 0 || tcgetsid(0) != session) return 102;
+        if (tcgetpgrp(0) != getpgrp()) return 103;
+        fputs("pty-session", stdout);
     }
     if (argc > 1 && !strcmp(argv[1], "identity-limits")) {
         if (getuid() != 1234 || geteuid() != 1234 || getgid() != 2345 || getegid() != 2345 || getgroups(0, NULL) != 0)
