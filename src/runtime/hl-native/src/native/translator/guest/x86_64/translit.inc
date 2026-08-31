@@ -7302,7 +7302,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         if (scenario == 136) {
             uint32_t token;
             jit_body_owner_range invalid = {
-                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 17};
+                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 18};
             return jit_body_owner_reserve_n(g_cache_gen, 1, &token) &&
                            !jit_body_owner_publish_n(g_cache_gen, token, &invalid, 1)
                        ? 0
