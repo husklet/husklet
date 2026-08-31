@@ -224,6 +224,279 @@ mod startup_state_tests {
 
 pub(crate) struct ProductionFactory;
 
+const BOX_ROOTFS_READ_ONLY: u32 = 1;
+const BOX_NETWORK_ISOLATED: u32 = 1 << 2;
+const BOX_TRANSLATION_CACHE_DISABLED: u32 = 1 << 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeSupervisedRefusal {
+    Host,
+    Kernel,
+    GuestIsa,
+    Executable,
+    Root,
+    Identity,
+    Cgroup,
+    Overlay,
+    Ownership,
+    Volumes,
+    Network,
+    Checkpoint,
+    Sandbox,
+    Seccomp,
+    BoxFlags,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeSupervisedRequest {
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeHostCapabilities {
+    linux_x86_64: bool,
+    root: bool,
+    clone3: bool,
+    pidfd_getfd: bool,
+    seccomp_notify: bool,
+    executable_x86_64: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn syscall_has_errno(number: libc::c_long, arguments: [libc::c_long; 3], accepted: &[i32]) -> bool {
+    // SAFETY: capability probes use invalid scalar arguments and are required to fail without changing state.
+    let result = unsafe { libc::syscall(number, arguments[0], arguments[1], arguments[2]) };
+    result >= 0 || std::io::Error::last_os_error().raw_os_error().is_some_and(|error| accepted.contains(&error))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
+    let Some(path) = path else { return false };
+    let mut header = [0_u8; 20];
+    std::fs::File::open(std::ffi::OsStr::from_bytes(path))
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok()
+        && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
+        && u16::from_le_bytes([header[18], header[19]]) == 62
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn executable_is_x86_64(_path: Option<&[u8]>) -> bool { false }
+
+fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> NativeHostCapabilities {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        // GET_NOTIF_SIZES is observational; invalid clone3/pidfd_getfd arguments prove syscall presence.
+        let mut sizes = [0_u16; 3];
+        // SAFETY: the kernel writes exactly `seccomp_notif_sizes` (three u16 fields) for operation 3.
+        let seccomp_notify = unsafe {
+            libc::syscall(libc::SYS_seccomp, 3, 0, sizes.as_mut_ptr()) == 0
+        };
+        NativeHostCapabilities {
+            linux_x86_64: true,
+            // SAFETY: identity queries have no side effects.
+            root: unsafe { libc::geteuid() == 0 && libc::getegid() == 0 },
+            clone3: syscall_has_errno(libc::SYS_clone3, [0, 0, 0], &[libc::EFAULT, libc::EINVAL]),
+            pidfd_getfd: syscall_has_errno(libc::SYS_pidfd_getfd, [-1, -1, 0], &[libc::EBADF]),
+            seccomp_notify,
+            executable_x86_64: executable_is_x86_64(plan.executable_host.as_deref()),
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = plan;
+        NativeHostCapabilities {
+            linux_x86_64: false,
+            root: false,
+            clone3: false,
+            pidfd_getfd: false,
+            seccomp_notify: false,
+            executable_x86_64: false,
+        }
+    }
+}
+
+fn native_request(options: &crate::options::Options) -> NativeSupervisedRequest {
+    match options.get_bytes("HL_NATIVE_SUPERVISED") {
+        None => NativeSupervisedRequest::Auto,
+        Some(b"0" | b"off") => NativeSupervisedRequest::Off,
+        Some(_) => NativeSupervisedRequest::On,
+    }
+}
+
+fn valid_guest_path(path: &[u8]) -> bool {
+    path.starts_with(b"/")
+        && path.len() > 1
+        && path[1..]
+            .split(|byte| *byte == b'/')
+            .all(|part| !part.is_empty() && part != b"." && part != b"..")
+}
+
+fn volume_spec_supported(spec: Option<&[u8]>) -> bool {
+    let Some(spec) = spec else { return true };
+    let mut guests: Vec<&[u8]> = Vec::new();
+    for raw in spec.split(|byte| *byte == b',') {
+        if raw.is_empty() || guests.len() == 32 { return false; }
+        let record = raw.strip_prefix(b"ro:").or_else(|| raw.strip_prefix(b"rw:")).unwrap_or(raw);
+        let Some(split) = record.iter().position(|byte| *byte == b':') else { return false };
+        let (guest, host) = (&record[..split], &record[split + 1..]);
+        if !valid_guest_path(guest) || guest == b"/proc" || guest.starts_with(b"/proc/") ||
+            !host.starts_with(b"/") || host.contains(&b':') || guest.len() >= 4096 {
+            return false;
+        }
+        let overlaps = guests.iter().any(|prior| {
+            (guest.starts_with(prior) && (guest.len() == prior.len() || guest[prior.len()] == b'/')) ||
+            (prior.starts_with(guest) && (prior.len() == guest.len() || prior[guest.len()] == b'/'))
+        });
+        if overlaps { return false; }
+        guests.push(guest);
+    }
+    true
+}
+
+fn native_eligibility(
+    isa: crate::activation::GuestIsa,
+    plan: &crate::launcher::plan::RuntimePlan,
+    has_checkpoint_services: bool,
+    host: NativeHostCapabilities,
+) -> Result<(), NativeSupervisedRefusal> {
+    use NativeSupervisedRefusal as R;
+    if !host.linux_x86_64 || !host.root { return Err(R::Host); }
+    if !host.clone3 || !host.pidfd_getfd || !host.seccomp_notify { return Err(R::Kernel); }
+    if isa != crate::activation::GuestIsa::X86_64 { return Err(R::GuestIsa); }
+    if !host.executable_x86_64 { return Err(R::Executable); }
+    if plan.rootfs.is_none() || plan.executable_host.is_none() { return Err(R::Root); }
+    let box_policy = &plan.box_policy;
+    if box_policy.uid < -1 || box_policy.gid < -1 { return Err(R::Identity); }
+    if plan.options.get_bytes("HL_MEM_MAX").is_some() || plan.options.get_bytes("HL_PIDS_MAX").is_some() ||
+        plan.options.get_bytes("HL_CPUS").is_some() {
+        return Err(R::Cgroup);
+    }
+    if box_policy.lower_layers.as_deref().is_some_and(|layers| layers.contains(&b'\n')) {
+        return Err(R::Overlay);
+    }
+    if box_policy.file_owners.is_some() && box_policy.lower_layers.is_none() { return Err(R::Ownership); }
+    if !volume_spec_supported(box_policy.volumes.as_deref()) { return Err(R::Volumes); }
+    if has_checkpoint_services || box_policy.checkpoint_mode != 0 || box_policy.checkpoint_policy != 0 ||
+        plan.options.get_bytes("HL_CHECKPOINT").is_some() || plan.options.get_bytes("HL_RESTORE").is_some() {
+        return Err(R::Checkpoint);
+    }
+    if plan.options.get_bytes("HL_UNTRUSTED").is_some() { return Err(R::Sandbox); }
+    if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
+    let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
+    let supported_network = match box_policy.network_mode {
+        0 => isolated && box_policy.network_namespace.is_none(),
+        2 => !isolated && box_policy.network_namespace.is_none(),
+        _ => false,
+    };
+    if !supported_network || !box_policy.publish.is_empty() || !box_policy.network_interfaces.is_empty() ||
+        box_policy.network_bridge.is_some() || box_policy.ip.is_some() || box_policy.egress_proxy.is_some() {
+        return Err(R::Network);
+    }
+    let allowed = BOX_ROOTFS_READ_ONLY | BOX_NETWORK_ISOLATED | BOX_TRANSLATION_CACHE_DISABLED;
+    if box_policy.flags & !allowed != 0 { return Err(R::BoxFlags); }
+    Ok(())
+}
+
+#[cfg(test)]
+mod native_eligibility_tests {
+    use super::*;
+
+    fn host() -> NativeHostCapabilities {
+        NativeHostCapabilities {
+            linux_x86_64: true,
+            root: true,
+            clone3: true,
+            pidfd_getfd: true,
+            seccomp_notify: true,
+            executable_x86_64: true,
+        }
+    }
+
+    fn plan() -> crate::launcher::plan::RuntimePlan {
+        let mut box_policy = crate::launcher::plan::RuntimeBoxPolicy::default();
+        box_policy.network_mode = 2;
+        crate::launcher::plan::RuntimePlan {
+            rootfs: Some(b"/root".to_vec()),
+            executable_host: Some(b"/root/bin/true".to_vec()),
+            arguments: vec![b"true".to_vec()],
+            environment: Vec::new(),
+            result_path: None,
+            options: crate::options::Options::default(),
+            box_policy,
+        }
+    }
+
+    fn verdict(plan: &crate::launcher::plan::RuntimePlan, host: NativeHostCapabilities) -> Result<(), NativeSupervisedRefusal> {
+        native_eligibility(crate::activation::GuestIsa::X86_64, plan, false, host)
+    }
+
+    #[test]
+    fn pure_eligibility_names_every_refusal_class() {
+        assert_eq!(verdict(&plan(), host()), Ok(()));
+
+        let mut changed = host(); changed.root = false;
+        assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Host));
+        let mut changed = host(); changed.clone3 = false;
+        assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Kernel));
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), false, host()), Err(NativeSupervisedRefusal::GuestIsa));
+        let mut changed = host(); changed.executable_x86_64 = false;
+        assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Executable));
+
+        let mut changed = plan(); changed.rootfs = None;
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Root));
+        let mut changed = plan(); changed.box_policy.uid = -2;
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Identity));
+        let mut changed = plan(); changed.options.set("HL_MEM_MAX", "1", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Cgroup));
+        let mut changed = plan(); changed.box_policy.lower_layers = Some(b"a\nb".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Overlay));
+        let mut changed = plan(); changed.box_policy.file_owners = Some(b"0:0".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Ownership));
+        let mut changed = plan(); changed.box_policy.volumes = Some(b"rw:/proc/x:/tmp".to_vec());
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Volumes));
+        let mut changed = plan(); changed.box_policy.publish.push(crate::config::PortPublication { host_ipv4_be: 0, host_port: 1, guest_port: 1 });
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Network));
+        let changed = plan();
+        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &changed, true, host()), Err(NativeSupervisedRefusal::Checkpoint));
+        let mut changed = plan(); changed.options.set("HL_UNTRUSTED", "1", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Sandbox));
+        let mut changed = plan(); changed.options.set("HL_SECCOMP_BASELINE", "default", true).unwrap();
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Seccomp));
+        let mut changed = plan(); changed.box_policy.flags = 1 << 1;
+        assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BoxFlags));
+    }
+
+    #[test]
+    fn request_is_a_real_tri_state() {
+        let mut options = crate::options::Options::default();
+        assert_eq!(native_request(&options), NativeSupervisedRequest::Auto);
+        options.set("HL_NATIVE_SUPERVISED", "0", true).unwrap();
+        assert_eq!(native_request(&options), NativeSupervisedRequest::Off);
+        options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+        assert_eq!(native_request(&options), NativeSupervisedRequest::On);
+    }
+
+    #[test]
+    fn volume_admission_rejects_overlap_traversal_proc_and_excess() {
+        assert!(volume_spec_supported(Some(b"ro:/src:/host/src,rw:/out:/host/out")));
+        for invalid in [
+            b"rw:/a:/x,ro:/a/b:/y".as_slice(),
+            b"rw:/../a:/x".as_slice(),
+            b"rw:/proc/x:/x".as_slice(),
+            b"rw:/a:relative".as_slice(),
+        ] {
+            assert!(!volume_spec_supported(Some(invalid)), "accepted {invalid:?}");
+        }
+        let too_many = (0..33).map(|index| format!("rw:/v{index}:/tmp/v{index}")).collect::<Vec<_>>().join(",");
+        assert!(!volume_spec_supported(Some(too_many.as_bytes())));
+    }
+}
+
 impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
