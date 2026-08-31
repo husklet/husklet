@@ -1868,7 +1868,7 @@ static translit_jcc_ibtc_site_ranges translit_test_jcc_ibtc_site;
 static uint64_t translit_test_jcc_ibtc_source_guest;
 static int translit_test_jcc_ibtc_stub_fail;
 static int translit_test_direct_jmp_ibtc_stub_fail;
-static int translit_test_jcc_guard;
+static int translit_test_jcc_guard = -1;
 #endif
 
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
@@ -2220,7 +2220,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint6
     ranges.rip_end = a->cursor;
     int guard = 1;
 #if defined(HL_NATIVE_TEST_HOOKS)
-    guard = translit_test_jcc_guard;
+    if (translit_test_jcc_guard >= 0) guard = translit_test_jcc_guard;
 #endif
     if (!guard) {
         translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
@@ -7628,6 +7628,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
 
 static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     unsigned requested_scenario = scenario;
+    translit_test_jcc_guard = 0;
     if (scenario >= 208 && scenario <= 216) {
         static const uint8_t guard_scenarios[] = {90, 92, 93, 94, 95, 99, 98, 90, 90};
         scenario = guard_scenarios[scenario - 208];
@@ -7986,7 +7987,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
                  : 143;
 
 done_ibtc:
-    translit_test_jcc_guard = 0;
+    translit_test_jcc_guard = -1;
     translit_test_jcc_ibtc_stub_fail = 0;
     (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
     translit_fall_fixture_bytes = NULL;
