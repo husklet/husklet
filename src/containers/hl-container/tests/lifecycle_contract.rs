@@ -4,8 +4,8 @@
 //! Public lifecycle acceptance contracts against a pinned Alpine root filesystem.
 
 use hl_container::{
-    Check, Config, Console, ContainerSpec, ContainerState, Containers, ExitStatus, Guest, HealthStatus, Healthcheck,
-    Isolation, Process, Sandbox, Signal, Size,
+    Check, Config, Console, ContainerSpec, ContainerState, Containers, ExecSpec, ExitStatus, Guest, HealthStatus,
+    Healthcheck, Isolation, Process, Sandbox, Signal, Size, Stream, Streams,
 };
 use std::{future::Future, path::Path, time::Duration};
 
@@ -173,6 +173,94 @@ async fn checkpoint_restore_preserves_filesystem_and_container_control() -> Resu
 
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn checkpoint_restore_reattaches_the_same_interactive_execution() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
+    let fixture = bounded("exec checkpoint fixture", Fixture::new()).await?;
+    let name = "lifecycle-exec-checkpoint";
+    let outcome = bounded("exec checkpoint lifecycle", async {
+        fixture
+            .containers
+            .create(fixture.spec(name, Process::new("/bin/sleep").args(["10000"])))
+            .await?;
+        fixture.containers.start(name).await?;
+        let execution = fixture
+            .containers
+            .executions()
+            .create(
+                name,
+                ExecSpec::new(
+                    Process::new("/bin/sh")
+                        .args(["-c", "while IFS= read -r line; do printf 'reply:%s\\n' \"$line\"; done"])
+                        .console(Console::default().terminal(Size::new(24, 80)?)),
+                )
+                .streams(Streams {
+                    stdin: true,
+                    stdout: true,
+                    stderr: true,
+                }),
+            )
+            .await?;
+        let mut session = fixture.containers.executions().start(&execution.id).await?;
+        session.write("before\n").await?;
+        require(
+            read_session_until(&mut session, b"reply:before").await?,
+            "pre-capture exec did not answer",
+        )?;
+
+        fixture.containers.checkpoint_all(Duration::from_secs(10)).await?;
+        drop(session);
+        fixture.containers.start(name).await?;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let failures = fixture.containers.executions().restore_checkpoints().await?;
+        if !failures.is_empty() {
+            return Err(format!("restored execution was refused: {failures:?}").into());
+        }
+        let mut session = fixture.containers.executions().attach(&execution.id, None).await?;
+        session.write("after\n").await?;
+        require(
+            read_session_until(&mut session, b"reply:after").await?,
+            "reattached exec did not answer",
+        )
+    })
+    .await;
+    finish(outcome, cleanup(&fixture.containers, name).await)
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE and HL_EXECUTABLE_MAPPING_FIXTURE"]
+async fn auto_backend_falls_back_after_an_executable_mapping_without_losing_output() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
+    let fixture = bounded("executable mapping fixture", Fixture::new()).await?;
+    let source = std::env::var_os("HL_EXECUTABLE_MAPPING_FIXTURE")
+        .ok_or("HL_EXECUTABLE_MAPPING_FIXTURE must name the settled static fixture")?;
+    let destination = fixture.rootfs.join("work/executable-mapping");
+    std::fs::create_dir_all(destination.parent().ok_or("fixture destination has no parent")?)?;
+    std::fs::copy(source, &destination)?;
+    let mut permissions = std::fs::metadata(&destination)?.permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&destination, permissions)?;
+
+    let name = "lifecycle-executable-mapping";
+    let outcome = bounded("executable mapping lifecycle", async {
+        fixture
+            .containers
+            .create(fixture.spec(name, Process::new("/work/executable-mapping")))
+            .await?;
+        fixture.containers.start(name).await?;
+        let status = fixture.containers.wait(name).await?;
+        let logs = fixture.containers.logs(name).await?;
+        require(status == ExitStatus::Code(0), "executable mapping fixture failed")?;
+        require(
+            logs.stdout == b"work h=6acbb551769b4d75\nwork h=6acbb551769b4d75\nwork h=6acbb551769b4d75\n",
+            "fallback execution changed the fixture output",
+        )
+    })
+    .await;
+    finish(outcome, cleanup(&fixture.containers, name).await)
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn checkpoint_restore_restarts_interrupted_sleep_syscalls() -> Result<(), Error> {
     let _process = LIFECYCLE_PROCESS.lock().await;
     let fixture = bounded("sleep checkpoint fixture", Fixture::new()).await?;
@@ -310,6 +398,23 @@ async fn wait_for_size(path: &Path, minimum: u64) -> Result<(), Error> {
     .await
     .map_err(|_| format!("{} did not reach {minimum} bytes", path.display()))?;
     Ok(())
+}
+
+async fn read_session_until(session: &mut hl_container::Session, marker: &[u8]) -> Result<bool, Error> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut output = Vec::new();
+        while let Some(entry) = session.next().await? {
+            if entry.stream == Stream::Stdout {
+                output.extend(entry.bytes);
+            }
+            if contains(&output, marker) {
+                return Ok::<_, hl_container::Error>(true);
+            }
+        }
+        Ok(false)
+    })
+    .await?
+    .map_err(Into::into)
 }
 
 fn guest() -> Result<Guest, Error> {
