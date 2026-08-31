@@ -62,6 +62,7 @@ pub struct ExecConfig {
     pub unsupported: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -75,6 +76,7 @@ pub enum ExecLifetime {
 }
 
 impl ExecLifetime {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn is_default(value: &Self) -> bool {
         *value == Self::Persisted
     }
@@ -89,6 +91,7 @@ pub enum ExecNetwork {
 }
 
 impl ExecNetwork {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn is_default(value: &Self) -> bool {
         *value == Self::Container
     }

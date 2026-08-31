@@ -55,13 +55,11 @@ impl ExecutableDigestAuthority {
     pub fn authenticate(&self, guest_path: &Path, host: &Path) -> Result<Option<ExecutableDigest>> {
         let guest = normalize_guest(guest_path)?;
         let expected = self.lower.join(guest.strip_prefix("/").expect("normalized absolute"));
-        let expected = match fs::canonicalize(&expected) {
-            Ok(path) => path,
-            Err(_) => return Ok(None),
+        let Ok(expected) = fs::canonicalize(&expected) else {
+            return Ok(None);
         };
-        let host = match fs::canonicalize(host) {
-            Ok(path) => path,
-            Err(_) => return Ok(None),
+        let Ok(host) = fs::canonicalize(host) else {
+            return Ok(None);
         };
         let lower = fs::canonicalize(&self.lower).at(&self.lower)?;
         if host != expected || !host.starts_with(&lower) {
@@ -74,6 +72,7 @@ impl ExecutableDigestAuthority {
         let lock_path = self.records.join(format!("{}-{key}.lock", self.snapshot));
         let lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .mode(0o600)
@@ -81,27 +80,26 @@ impl ExecutableDigestAuthority {
             .at(&lock_path)?;
         lock.lock_exclusive().at(&lock_path)?;
         let metadata = fs::metadata(&host).at(&host)?;
-        if let Some(record) = read_record(&record_path) {
-            if record.version == VERSION
-                && record.snapshot == self.snapshot
-                && record.guest_path == guest
-                && record.size == metadata.len()
-                && decode_digest(&record.sha256).is_some()
-            {
-                return Ok(Some(ExecutableDigest {
-                    snapshot: record.snapshot,
-                    guest_path: record.guest_path,
-                    size: record.size,
-                    sha256: decode_digest(&record.sha256).expect("checked"),
-                    bytes_hashed: 0,
-                }));
-            }
+        if let Some(record) = read_record(&record_path)
+            && record.version == VERSION
+            && record.snapshot == self.snapshot
+            && record.guest_path == guest
+            && record.size == metadata.len()
+            && decode_digest(&record.sha256).is_some()
+        {
+            return Ok(Some(ExecutableDigest {
+                snapshot: record.snapshot,
+                guest_path: record.guest_path,
+                size: record.size,
+                sha256: decode_digest(&record.sha256).expect("checked"),
+                bytes_hashed: 0,
+            }));
         }
         let before = metadata;
         let mut file = fs::File::open(&host).at(&host)?;
         let mut hash = Sha256::new();
         let mut copied = 0u64;
-        let mut buffer = [0u8; 64 * 1024];
+        let mut buffer = vec![0u8; 64 * 1024].into_boxed_slice();
         loop {
             let count = file.read(&mut buffer).at(&host)?;
             if count == 0 {
@@ -189,7 +187,14 @@ fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    use std::fmt::Write as _;
+
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut output, byte| {
+            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+            output
+        })
 }
 fn decode_digest(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64 {

@@ -352,7 +352,7 @@ fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan)
     [plan.rootfs.as_deref(), plan.box_policy.lower_layers.as_deref()]
         .into_iter()
         .flatten()
-        .any(|root| hostname_projection_root_ready(root))
+        .any(hostname_projection_root_ready)
         || plan
             .box_policy
             .volumes
