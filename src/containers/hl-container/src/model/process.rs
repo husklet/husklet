@@ -628,9 +628,16 @@ impl Execution {
 #[cfg(test)]
 mod execution_tests {
     use super::Execution;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct StoredExecution {
+        #[serde(default)]
+        execution: Execution,
+    }
 
     #[test]
-    fn legacy_execution_encoding_is_unchanged() {
+    fn current_execution_encoding_defaults_to_auto() {
         assert_eq!(
             serde_json::to_string(&Execution::default()).unwrap(),
             r#"{"backend":"auto"}"#
@@ -642,6 +649,17 @@ mod execution_tests {
         assert_eq!(
             serde_json::from_str::<Execution>(r#"{"backend":"native","diagnostics":false}"#).unwrap(),
             Execution::native(false)
+        );
+    }
+
+    #[test]
+    fn legacy_missing_and_interpreted_execution_decode_explicitly() {
+        assert_eq!(serde_json::from_str::<StoredExecution>("{}").unwrap().execution, Execution::Auto);
+        assert_eq!(
+            serde_json::from_str::<StoredExecution>(r#"{"execution":{"backend":"interpreted"}}"#)
+                .unwrap()
+                .execution,
+            Execution::Interpreted
         );
     }
 
