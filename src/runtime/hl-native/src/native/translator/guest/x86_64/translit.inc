@@ -6435,6 +6435,7 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     g_cache_gen = UINT64_MAX - scenario;
     map_clear();
     struct interp_block *block = (struct interp_block *)arena;
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, UINT16_MAX);
     translit_fall_fixture_bytes = bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
     translit_fall_fixture_length = length;
