@@ -6928,6 +6928,17 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     if (cpu.rip != target || cpu.jcc_ibtc_miss != TL_INDIRECT_IBTC_MISS ||
         cpu.r[HL_X64_RSP] != expected_rsp || translit_flags_in(&cpu) != flags)
         return 197;
+    if (scenario == 194 && stack[-1] != source + 2) return 200;
+    translit_jcc_ibtc_fill(&cpu, NULL, 0);
+    if (cpu.jcc_ibtc_miss != 0 || ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) return 201;
+    cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+    cpu.r[HL_X64_RAX] = target;
+    cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
+    translit_flags_out(&cpu, UINT64_C(0xad7));
+    run_block(context, &cpu, source_block);
+    if (cpu.jcc_ibtc_miss != TL_INDIRECT_IBTC_MISS) return 202;
+    uint64_t collision = target + ((uint64_t)IBTC_N << 2);
+    ibtc_publish(&g_ibtc[ibtc_index(target)], collision, (void *)(uintptr_t)1);
     translit_jcc_ibtc_fill(&cpu, target_block, 0);
     if (cpu.jcc_ibtc_miss != 0 || ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != target) return 198;
     cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
@@ -6937,7 +6948,21 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     translit_flags_out(&cpu, UINT64_C(0xad7));
     run_block(context, &cpu, source_block);
     expected_rsp = (uint64_t)(uintptr_t)stack - (scenario == 194 ? 8 : 0);
-    return cpu.r[HL_X64_RAX] == 42 && cpu.r[HL_X64_RSP] == expected_rsp && cpu.jcc_ibtc_miss == 0 ? 0 : 199;
+    if (cpu.r[HL_X64_RAX] != 42 || cpu.r[HL_X64_RSP] != expected_rsp || cpu.jcc_ibtc_miss != 0 ||
+        translit_flags_in(&cpu) != flags)
+        return 199;
+    if (scenario == 194 && stack[-1] != source + 2) return 203;
+    smc_inplace_drop();
+    if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) return 204;
+    cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc, .irq = 1};
+    cpu.r[HL_X64_RAX] = target;
+    cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
+    translit_flags_out(&cpu, UINT64_C(0xad7));
+    run_block(context, &cpu, source_block);
+    return cpu.rip == target && cpu.jcc_ibtc_miss == 0 && cpu.r[HL_X64_RSP] == expected_rsp &&
+                   translit_flags_in(&cpu) == flags
+               ? 0
+               : 205;
 }
 
 static int translit_ret_ibtc_fixture_test(unsigned scenario) {
