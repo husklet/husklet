@@ -2203,7 +2203,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     int direct_jmp = miss_kind == TL_DIRECT_JMP_IBTC_MISS;
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
     int disabled = actual_miss && (fallthrough ? 0
-                                             : direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)
+                                             : direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)
                                              : direct_call ? 0
                                                            : hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0));
     if (disabled) {
@@ -2945,7 +2945,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 150) {
         static const struct { const char *name; int missing; unsigned bit; } modes[] = {
             {"HL_TRANSLIT_JCC_LINK_DISABLE", 0, 0}, {"HL_TRANSLIT_JCC_IBTC_DISABLE", 0, 1},
-            {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1, 4},
+            {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 8},
@@ -4863,7 +4863,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                 (unsigned)jcc_fall_stitched, source_page_delta);
 #endif
             if (translit_direct_jmp_ibtc_stub_entry != NULL &&
-                !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 1)) {
+                !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)) {
                 ibtc_site = translit_emit_direct_jmp_ibtc(a, next + (uint64_t)insn.imm);
                 direct_jmp_ibtc_sites++;
             } else {
@@ -6554,9 +6554,9 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     uint32_t source_owner_count =
         source_owners == NULL ? 0 : atomic_load_explicit(&source_owners->count, memory_order_acquire);
     if (source_block == NULL || source_block->host_entry_off == 0 || source_block->host_len >= TL_MAX_BYTES ||
-        source_owner_count != (scenario == 110 ? 7 : 9) ||
+        source_owner_count != 9 ||
         __atomic_load_n(&translit_direct_jmp_ibtc_emitted, __ATOMIC_RELAXED) !=
-            emitted_before + (scenario == 110 ? 0 : 1))
+            emitted_before + 1)
         goto done_direct_ibtc;
     if (scenario == 101 && !translit_jcc_ibtc_signal_stage_test(1)) {
         result = 167;
@@ -6576,16 +6576,6 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     cpu.v[0] = UINT64_C(0x8877665544332211);
     cpu.ibtc_base = (uint64_t)g_ibtc;
     run_block(context, &cpu, source_block);
-    if (scenario == 110) {
-        result = cpu.rip == target && cpu.reason == R_BRANCH && cpu.jcc_ibtc_miss == 0 &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_miss, __ATOMIC_RELAXED) == miss_before &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_fill_count, __ATOMIC_RELAXED) == fill_before
-                     ? 0
-                     : 196;
-        goto done_direct_ibtc;
-    }
     if (scenario == 109) {
         if (cpu.rip != target) result = 169;
         else if (cpu.reason != R_BRANCH) result = 170;
