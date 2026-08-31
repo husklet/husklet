@@ -674,7 +674,7 @@ int main(void) {
         Process::new("/bin/sh")
             .args([
                 "-c",
-                "ls . >/dev/null || exit 41; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok",
+                "cd /work || exit 40; ls . >/dev/null || exit 41; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok",
             ])
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
