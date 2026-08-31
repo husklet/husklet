@@ -6099,6 +6099,17 @@ static int translit_fall_fixture_test(unsigned scenario) {
         hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL,
                                   scenario >= 78 ? hl_guest_fetch_authority_source() : NULL);
     if (scenario >= 78 && context != NULL) {
+        // Scenario 78 needs an authority-backed memo entry so the next transaction
+        // exercises invalidation while accepting that entry.  Prime it through the
+        // same begin/commit/release path used by translation, not by seeding internals.
+        struct insn primed;
+        int primed_exact = 1;
+        if (scenario == 78) {
+            primed_exact = hl_x86_decode_transaction_begin(context) &&
+                           hl_x86_decode_context(context, translit_fall_fixture_guest, &primed) > 0 &&
+                           hl_x86_decode_transaction_commit(context);
+            hl_x86_decode_transaction_release(context);
+        }
         jit_body_owner_set *owners = jit_body_owner_set_for(g_cache_gen, 1);
         uint32_t owners_before = owners == NULL ? UINT32_MAX
                                                : atomic_load_explicit(&owners->count, memory_order_acquire);
@@ -6106,7 +6117,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
         uint64_t mixed_before = __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED);
         g_cp = arena;
         if (scenario == 78)
-            hl_x86_decode_test_transaction_invalidate_on_sample(2);
+            hl_x86_decode_test_transaction_invalidate_on_sample(1);
         else if (scenario == 79)
             hl_x86_decode_test_transaction_invalidate_before_commit();
         else
@@ -6114,7 +6125,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
         struct interp_block *rejected = translate_block(context, translit_fall_fixture_guest);
         uint32_t owners_after = owners == NULL ? UINT32_MAX
                                               : atomic_load_explicit(&owners->count, memory_order_acquire);
-        int isolated = scenario == 80
+        int isolated = primed_exact && (scenario == 80
                            ? rejected != NULL && rejected->host_entry_off != 0 && rejected->host_len != 0 &&
                                  map_body(translit_fall_fixture_guest) == rejected && owners_after > owners_before &&
                                  __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED) == blocks_before + 1 &&
@@ -6124,7 +6135,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
                        g_cp == (uint8_t *)rejected + sizeof *rejected && rejected->host_entry_off == 0 &&
                        rejected->host_len == 0 && map_body(translit_fall_fixture_guest) == rejected &&
                        __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED) == blocks_before &&
-                       __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED) == mixed_before;
+                       __atomic_load_n(&translit_mixed_sse_encounters, __ATOMIC_RELAXED) == mixed_before);
         map_clear();
         struct interp_block *retry = scenario == 80 ? rejected : translate_block(context, translit_fall_fixture_guest);
         int retried = scenario == 80 || (retry != NULL && retry->host_entry_off != 0 && retry->host_len != 0 &&
