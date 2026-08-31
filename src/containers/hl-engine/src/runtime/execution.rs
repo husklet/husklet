@@ -362,6 +362,16 @@ fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan)
         .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
 }
 
+#[cfg(unix)]
+fn rootfs_is_directory(path: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    std::fs::symlink_metadata(std::ffi::OsStr::from_bytes(path))
+        .is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
+#[cfg(not(unix))]
+fn rootfs_is_directory(_path: &[u8]) -> bool { false }
+
 #[cfg(not(unix))]
 fn isolated_hostname_projection_ready(_plan: &crate::launcher::plan::RuntimePlan) -> bool { false }
 
@@ -385,10 +395,7 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
             pidfd_getfd: syscall_has_errno(libc::SYS_pidfd_getfd, [-1, -1, 0], &[libc::EBADF]),
             seccomp_notify,
             executable_x86_64: executable_is_x86_64(plan.executable_host.as_deref()),
-            rootfs_directory: plan.rootfs.as_deref().is_some_and(|path| {
-                use std::os::unix::ffi::OsStrExt;
-                std::fs::metadata(std::ffi::OsStr::from_bytes(path)).is_ok_and(|metadata| metadata.is_dir())
-            }),
+            rootfs_directory: plan.rootfs.as_deref().is_some_and(rootfs_is_directory),
             isolated_hostname_projection: isolated_hostname_projection_ready(plan),
         }
     }
@@ -807,6 +814,12 @@ mod native_eligibility_tests {
         valid[18..20].copy_from_slice(&62_u16.to_le_bytes());
         assert!(!x86_64_executable_header(false, Some(valid)), "valid bytes over nonregular authority admitted");
         assert!(x86_64_executable_header(true, Some(valid)));
+
+        let real_root = tempfile::tempdir().unwrap();
+        let root_link = directory.path().join("root-link");
+        symlink(real_root.path(), &root_link).unwrap();
+        assert!(rootfs_is_directory(real_root.path().as_os_str().as_encoded_bytes()));
+        assert!(!rootfs_is_directory(root_link.as_os_str().as_encoded_bytes()), "symlinked rootfs admitted");
     }
 
     #[test]

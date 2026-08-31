@@ -2,7 +2,7 @@
 
 #[test]
 fn projection_boundary_refuses_hosts_token_injection_without_mutation() {
-    for scenario in 0..5 {
+    for scenario in 0..6 {
         assert_eq!(hl_native::native_supervised_hostname_projection_test(scenario), 0);
     }
 }

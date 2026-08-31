@@ -400,6 +400,20 @@ static int hl_native_supervised_hostname_valid(const char *hostname) {
     return valid_hostname;
 }
 
+static int hl_native_supervised_open_hosts(const char *root) {
+    int rootfd = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (rootfd < 0) return -1;
+    struct open_how hosts_how = {
+        .flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
+    };
+    int input = (int)syscall(SYS_openat2, rootfd, "etc/hosts", &hosts_how, sizeof(hosts_how));
+    int failure = errno;
+    close(rootfd);
+    errno = failure;
+    return input;
+}
+
 static int hl_native_supervised_project_hostname(const char *root, const char *hostname, int read_only) {
     char inherited[HOST_NAME_MAX + 1];
     if (hostname == NULL || hostname[0] == 0) {
@@ -411,16 +425,7 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
         errno = EINVAL;
         return -1;
     }
-    int rootfd = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (rootfd < 0) return -1;
-    struct open_how hosts_how = {
-        .flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
-        .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
-    };
-    int input = (int)syscall(SYS_openat2, rootfd, "etc/hosts", &hosts_how, sizeof(hosts_how));
-    int open_failure = errno;
-    close(rootfd);
-    errno = open_failure;
+    int input = hl_native_supervised_open_hosts(root);
     if (input < 0 && errno == ENOENT) return 0;
     if (input < 0) return -1;
     struct stat metadata;
@@ -508,6 +513,27 @@ HL_API int hl_native_supervised_hostname_projection_test(uint32_t scenario) {
         unlink(outside_hosts);
         rmdir(root);
         rmdir(outside);
+        return status;
+    }
+    if (scenario == 5) {
+        char root[] = "/var/tmp/husklet-hostname-inroot.XXXXXX";
+        if (mkdtemp(root) == NULL) return 102;
+        char real_etc[PATH_MAX], hosts[PATH_MAX], etc[PATH_MAX];
+        int status = 0;
+        if (snprintf(real_etc, sizeof real_etc, "%s/real-etc", root) >= (int)sizeof real_etc ||
+            snprintf(hosts, sizeof hosts, "%s/hosts", real_etc) >= (int)sizeof hosts ||
+            snprintf(etc, sizeof etc, "%s/etc", root) >= (int)sizeof etc || mkdir(real_etc, 0700) != 0) status = 103;
+        int descriptor = status == 0 ? open(hosts, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0640) : -1;
+        if (status == 0 && (descriptor < 0 || write(descriptor, "hosts\n", 6) != 6 || close(descriptor) != 0 ||
+                            symlink("real-etc", etc) != 0)) status = 104;
+        errno = 0;
+        descriptor = status == 0 ? hl_native_supervised_open_hosts(root) : -1;
+        if (status == 0 && descriptor >= 0) status = 105;
+        if (descriptor >= 0) close(descriptor);
+        unlink(etc);
+        unlink(hosts);
+        rmdir(real_etc);
+        rmdir(root);
         return status;
     }
     if (scenario >= sizeof hostile / sizeof hostile[0]) return 90;
