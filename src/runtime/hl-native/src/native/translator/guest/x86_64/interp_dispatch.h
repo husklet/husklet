@@ -51,6 +51,7 @@ static void *interp_backend_shape_map_host(void *cache, uint64_t gpc);
 #define G_TRANSLATE_BLOCK(context, pc) translate_block(context, pc)
 #define G_RUN_BLOCK(context, cpu, code) run_block(context, cpu, code)
 #define G_FAST_REDISPATCH(code) (((struct interp_block *)(code))->host_entry_off != 0)
+#define G_FAST_REDISPATCH_COMMIT(c) translit_jcc_ibtc_fast_redispatch(c)
 #define G_BACKEND_TREE_RUN_OWNED 1
 
 // Publish the absence of an IBTC base (header note).

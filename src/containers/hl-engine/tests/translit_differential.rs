@@ -55,6 +55,7 @@ impl StandardStreamPort for CapturedOutput {
 /// What the engine reported about the same-ISA backend for one run.
 struct Backend {
     line: String,
+    redispatch_present: bool,
     blocks: u64,
     entries: u64,
     redispatch_attempted: u64,
@@ -85,6 +86,7 @@ struct Backend {
     direct_call_ibtc_irq: u64,
     direct_call_ibtc_fills: u64,
     direct_call_ibtc_invalid_refusals: u64,
+    direct_call_ibtc_fast_redispatch: u64,
     operand_declined: u64,
     sse2_memory_declined: u64,
     riprel_lowered: u64,
@@ -212,8 +214,9 @@ fn backend(stderr: &[u8]) -> Backend {
         .find(|line| line.starts_with("[prof] redispatch "))
         // Displaced images cannot use the same-address redispatch path and therefore publish no receipt.
         // Keep parsing their independent translation/backend receipts instead of making absence fatal.
-        .unwrap_or("")
-        .to_owned();
+        .map(str::to_owned);
+    let redispatch_present = redispatch.is_some();
+    let redispatch = redispatch.unwrap_or_default();
     let redispatch_field = |name: &str| {
         redispatch
             .split_ascii_whitespace()
@@ -228,6 +231,10 @@ fn backend(stderr: &[u8]) -> Backend {
         .collect::<Vec<_>>();
     assert_eq!(lines.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
     let line = lines[0].to_owned();
+    assert!(
+        redispatch_present || line.contains("translit: displaced"),
+        "same-address run omitted redispatch receipt: {text}"
+    );
     let counter = |name: &str| {
         line.split_whitespace()
             .find_map(|field| field.strip_prefix(name))
@@ -465,6 +472,7 @@ fn backend(stderr: &[u8]) -> Backend {
         "{shape}"
     );
     Backend {
+        redispatch_present,
         blocks: counter("blocks="),
         entries: counter("entries="),
         redispatch_attempted: redispatch_field("attempted="),
@@ -495,6 +503,7 @@ fn backend(stderr: &[u8]) -> Backend {
         direct_call_ibtc_irq: shape_counter("direct_call_ibtc_irq="),
         direct_call_ibtc_fills: shape_counter("direct_call_ibtc_fills="),
         direct_call_ibtc_invalid_refusals: shape_counter("direct_call_ibtc_invalid_refusals="),
+        direct_call_ibtc_fast_redispatch: shape_counter("direct_call_ibtc_fast_redispatch="),
         operand_declined: counter("operand_declined="),
         sse2_memory_declined: counter("sse2_memory_declined="),
         riprel_lowered: counter("riprel_lowered="),
@@ -2311,7 +2320,9 @@ fn an_already_published_same_page_taken_jcc_links_without_losing_irq_or_rcx() {
         );
         assert!(
             selected_backend.direct_call_ibtc_misses
-                >= selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals,
+                == selected_backend.direct_call_ibtc_fills + selected_backend.direct_call_ibtc_invalid_refusals
+                    + selected_backend.direct_call_ibtc_irq
+                    + selected_backend.direct_call_ibtc_fast_redispatch,
             "{}",
             selected_backend.shape_line
         );
@@ -2559,12 +2570,12 @@ fn a_non_position_independent_image_at_its_link_address_is_transliterated() {
         if name == "displaced_memory" || name == "displaced_fault" || name == "natural_abs32_fault" {
             assert!(
                 selected_backend.riprel_lowered + selected_backend.natural_load_bridge_lowered > 0,
-                "{name}: a natural low ET_EXEC never entered absolute RIP-relative lowering -- {}",
+                "{name}: a natural low ET_EXEC entered neither absolute nor destination-borrowed load lowering -- {}",
                 selected_backend.line
             );
             assert!(
                 selected_backend.abs32_lowered + selected_backend.natural_load_bridge_lowered > 0,
-                "{name}: no abs32 load -- {}",
+                "{name}: no natural absolute or destination-borrowed load -- {}",
                 selected_backend.line
             );
             assert_eq!(
@@ -2727,6 +2738,7 @@ fn captured_cc1_profile(root: &Path, argv_path: &Path, selected: &str, perf_map:
     let report = backend(&captured.err.lock().unwrap());
     if selected == "1" {
         assert!(report.line.contains("translit: displaced"), "{}", report.line);
+        assert!(!report.redispatch_present, "displaced cc1 unexpectedly published same-address redispatch");
         assert!(report.blocks > 0 && report.entries > 0, "{}", report.line);
     } else {
         assert_eq!(report.line, "[prof] translit: not selected");
