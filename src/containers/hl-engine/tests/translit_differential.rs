@@ -1998,6 +1998,22 @@ fn signals_delivered_into_transliterated_frames_agree_with_the_interpreter() {
     assert!(backend.redispatch_irq + backend.redispatch_signal > 0, "{}", backend.line);
 }
 
+/// Every integer DIV/IDIV encoding admitted by the same-ISA backend, including result widths and
+/// synchronous-fault provenance, agrees bit-for-bit with both independent execution oracles.
+#[test]
+fn complete_integer_division_family_agrees_with_interpreter_and_native() {
+    let backend = agrees("div_family");
+    // Freeze the independently generated native-oracle receipt too: mutating signedness, result width,
+    // remainder placement, or synchronous-fault provenance changes this digest even when all three
+    // arms are built from the same deliberately broken fixture.
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "div_family");
+    let native = std::process::Command::new(executable).output().expect("native divide-family receipt");
+    assert_eq!(native.stdout, b"div-family=0efa4b7f17476aec\n");
+    assert!(backend.translated_entries > 0, "{}", backend.tree_line);
+    assert!(backend.translated_steps > backend.translated_entries, "{}", backend.tree_line);
+}
+
 /// `%gs` republication for a cloned thread, a fork child, a vfork+execve and a raw clone.
 #[test]
 fn threads_fork_and_exec_agree_with_the_interpreter() {
