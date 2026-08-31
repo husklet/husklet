@@ -3458,11 +3458,26 @@ static void pcache_save(void) {
             uint64_t value = x64_pc_get64(map_records + 64) ^ 1u;
             uint8_t *at = map_records + 64; x64_pc_put64(&at, value);
         } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-site") == 0) {
-            uint8_t *at = chain_records; x64_pc_put32(&at, (uint32_t)used);
+            uint8_t *at = chain_records;
+            x64_pc_put32(&at, x64_pc_get32(chain_records) + 1);
         } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-fallback") == 0) {
-            uint8_t *at = chain_records + 4; x64_pc_put32(&at, (uint32_t)used);
+            uint8_t *at = chain_records + 4;
+            x64_pc_put32(&at, x64_pc_get32(chain_records + 4) + 1);
         } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-target") == 0) {
-            uint8_t *at = chain_records + 16; x64_pc_put64(&at, UINT64_MAX);
+            uint64_t original = x64_pc_get64(chain_records + 16), replacement = original;
+            for (uint32_t i = 0; i < map_count && replacement == original; i++) {
+                uint64_t candidate = x64_pc_get64(map_records + (uint64_t)i * X64_PC_MAP_SIZE);
+                if (candidate != original) replacement = candidate;
+            }
+            if (replacement == original) {
+                free(buffer); free(saved_maps); free(map_ordinal_by_index); free(owner_map_ordinal); free(saved_chains);
+                return;
+            }
+            uint8_t *at = chain_records + 16; x64_pc_put64(&at, replacement);
+        } else if (translit_chain_site_count != 0 && strcmp(mutation, "chain-destination") == 0) {
+            uint32_t site = x64_pc_get32(chain_records), fallback = x64_pc_get32(chain_records + 4);
+            int32_t displacement = (int32_t)((uint64_t)fallback + 1 - ((uint64_t)site + 5));
+            memcpy(chain_records + chain_bytes + site + 1, &displacement, sizeof displacement);
         } else {
             free(buffer); free(saved_maps); free(map_ordinal_by_index); free(owner_map_ordinal); free(saved_chains);
             return;

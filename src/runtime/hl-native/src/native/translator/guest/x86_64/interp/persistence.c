@@ -278,13 +278,20 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
         const uint8_t *record = layout->chain_records + i * X64_PC_CHAIN_SIZE;
         uint32_t site = x64_pc_get32(record), fallback = x64_pc_get32(record + 4);
         uint64_t target = x64_pc_get64(record + 16);
-        int target_known = 0;
-        for (uint64_t map = 0; map < layout->maps && !target_known; map++) {
+        uint64_t target_entry = UINT64_MAX;
+        for (uint64_t map = 0; map < layout->maps && target_entry == UINT64_MAX; map++) {
             const uint8_t *candidate = layout->map_records + map * X64_PC_MAP_SIZE;
-            target_known = target >= x64_pc_get64(candidate + 8) && target < x64_pc_get64(candidate + 16);
+            if (target == x64_pc_get64(candidate))
+                target_entry = x64_pc_get64(candidate + 24) + x64_pc_get32(candidate + 72);
         }
+        int32_t displacement = 0;
+        if (site <= layout->arena && layout->arena - site >= 5)
+            memcpy(&displacement, layout->arena_bytes + site + 1, sizeof displacement);
+        int64_t destination = (int64_t)site + 5 + displacement;
         valid = site <= layout->arena && layout->arena - site >= 5 && fallback < layout->arena &&
-                layout->arena_bytes[site] == 0xe9 && target_known && (i == 0 || site > prior_chain);
+                fallback == site + 5 && layout->arena_bytes[site] == 0xe9 && target_entry < layout->arena &&
+                destination >= 0 && ((uint64_t)destination == fallback || (uint64_t)destination == target_entry) &&
+                (i == 0 || site > prior_chain);
         prior_chain = site;
     }
     if (valid && stage != NULL) *stage = 6;
@@ -312,7 +319,8 @@ int x64_pc_validate_relocations_authority(const x64_pc_format_layout *layout,
             memcpy(&displacement, layout->arena_bytes + site + 1, sizeof displacement);
             int64_t destination = (int64_t)site + 5 + displacement;
             valid = site >= slice_start && site <= slice_end && slice_end - site >= 5 &&
-                    fallback < layout->arena && destination >= 0 && (uint64_t)destination < layout->arena &&
+                    fallback == site + 5 && fallback < slice_end && destination >= 0 &&
+                    (uint64_t)destination < layout->arena &&
                     x64_pc_get64(chain + 8) >= x64_pc_get64(map + 8) &&
                     x64_pc_get64(chain + 8) < x64_pc_get64(map + 16);
         }

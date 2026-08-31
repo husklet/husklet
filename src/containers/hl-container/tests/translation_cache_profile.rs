@@ -28,6 +28,7 @@ enum Mode {
     CacheSemanticChainSite,
     CacheSemanticChainFallback,
     CacheSemanticChainTarget,
+    CacheSemanticChainDestination,
     CacheSemanticGeneration,
     CacheChangedLibrary,
     CacheAbsentLibrary,
@@ -65,6 +66,7 @@ impl Mode {
             "cache-semantic-chain-site" => Ok(Self::CacheSemanticChainSite),
             "cache-semantic-chain-fallback" => Ok(Self::CacheSemanticChainFallback),
             "cache-semantic-chain-target" => Ok(Self::CacheSemanticChainTarget),
+            "cache-semantic-chain-destination" => Ok(Self::CacheSemanticChainDestination),
             "cache-semantic-generation" => Ok(Self::CacheSemanticGeneration),
             "cache-changed-library" => Ok(Self::CacheChangedLibrary),
             "cache-absent-library" => Ok(Self::CacheAbsentLibrary),
@@ -149,6 +151,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             | Mode::CacheSemanticChainSite
             | Mode::CacheSemanticChainFallback
             | Mode::CacheSemanticChainTarget
+            | Mode::CacheSemanticChainDestination
             | Mode::CacheSemanticGeneration
             | Mode::CacheChangedLibrary
             | Mode::CacheAbsentLibrary
@@ -533,6 +536,7 @@ int main(void) {
         Mode::CacheSemanticChainSite => Some("chain-site"),
         Mode::CacheSemanticChainFallback => Some("chain-fallback"),
         Mode::CacheSemanticChainTarget => Some("chain-target"),
+        Mode::CacheSemanticChainDestination => Some("chain-destination"),
         Mode::CacheSemanticGeneration => Some("generation"),
         _ => None,
     };
@@ -796,6 +800,7 @@ int main(void) {
             | Mode::CacheSemanticChainSite
             | Mode::CacheSemanticChainFallback
             | Mode::CacheSemanticChainTarget
+            | Mode::CacheSemanticChainDestination
             | Mode::CacheSemanticGeneration => require(
                 entries
                     .iter()
