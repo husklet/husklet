@@ -151,6 +151,112 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove pcache gpc probe directory");
 }
 
+#[test]
+fn authenticated_map_body_bounds_reject_malformed_records() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-pcache-body-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("pcache body probe directory");
+    let source = scratch.join("body.c");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include "translator/guest/x86_64/interp/persistence.h"
+
+enum { ARENA = 200, MAPS = 2, TOTAL = X64_PC_HEADER_SIZE + MAPS * X64_PC_MAP_SIZE + ARENA };
+
+static void put64(uint8_t *at, uint64_t value) { x64_pc_put64(&at, value); }
+static void put32(uint8_t *at, uint32_t value) { x64_pc_put32(&at, value); }
+static void put16(uint8_t *at, uint16_t value) { x64_pc_put16(&at, value); }
+
+static void make_artifact(uint8_t bytes[TOTAL]) {
+    memset(bytes, 0, TOTAL);
+    put64(bytes + 88, ARENA); put64(bytes + 96, MAPS);
+    put64(bytes + 200, 0x1000); put64(bytes + 208, 0x2000);
+    put64(bytes + 216, 0x3000); put64(bytes + 224, 0x4000);
+    for (unsigned group = 0; group < 2; group++)
+        for (unsigned field = 0; field < 4; field++)
+            put64(bytes + 120 + group * 32 + field * 8, UINT64_MAX);
+    uint8_t *arena = bytes + X64_PC_HEADER_SIZE + MAPS * X64_PC_MAP_SIZE;
+    const uint64_t hosts[MAPS] = {0, 70};
+    for (unsigned i = 0; i < MAPS; i++) {
+        uint8_t *map = bytes + X64_PC_HEADER_SIZE + i * X64_PC_MAP_SIZE;
+        put64(map, 0x1000 + i); put64(map + 8, 0x1000 + i); put64(map + 16, 0x1001 + i);
+        put64(map + 24, hosts[i]); put64(map + 32, hosts[i]); put64(map + 40, hosts[i]);
+        put64(map + 48, UINT64_C(0x1122334455667788));
+        put64(map + 56, 0x1000 + i); put64(map + 64, 7 + i);
+        put32(map + 72, 52); put32(map + 76, 10); put16(map + 82, UINT16_MAX);
+        put64(arena + hosts[i] + 16, 7 + i); put16(arena + hosts[i] + 50, UINT16_MAX);
+    }
+    x64_pc_checksum_write(bytes, TOTAL);
+}
+
+static int validate(uint8_t bytes[TOTAL], int expected) {
+    x64_pc_checksum_write(bytes, TOTAL);
+    if (!x64_pc_checksum_validate(bytes, TOTAL)) return 90;
+    x64_pc_format_limits limits = {.arena_bytes=ARENA, .maps=MAPS};
+    x64_pc_format_layout layout;
+    if (!x64_pc_layout_validate(bytes, TOTAL, &limits, &layout, 0)) return 91;
+    x64_pc_semantic_policy policy = {.block_magic=UINT64_C(0x1122334455667788), .map_slots=8};
+    return x64_pc_validate_maps_owners(&layout, &policy, 0) == expected ? 0 : 92;
+}
+
+static int malformed(unsigned which) {
+    uint8_t bytes[TOTAL]; make_artifact(bytes);
+    uint8_t *first = bytes + X64_PC_HEADER_SIZE;
+    uint8_t *second = first + X64_PC_MAP_SIZE;
+    switch (which) {
+    case 0: put32(first + 72, 0); put32(first + 76, 0); return validate(bytes, 1);
+    case 1: put32(first + 72, 0); break;
+    case 2: put32(first + 76, 0); break;
+    case 3: put32(first + 72, 51); break;
+    case 4: put32(second + 72, 150); break;
+    case 5: put32(second + 76, 100); break;
+    case 6: put64(second + 24, 0); put64(second + 32, 0); put64(second + 40, 0); break;
+    case 7: put64(second + 24, 40); put64(second + 32, 40); put64(second + 40, 40); break;
+    case 8: put32(first + 72, 71); break;
+    case 9: put32(first + 76, 19); break;
+    default: return 93;
+    }
+    return validate(bytes, 0);
+}
+
+int main(void) {
+    for (unsigned i = 0; i < 10; i++) {
+        int result = malformed(i);
+        if (result != 0) return 10 + i;
+    }
+    return 0;
+}
+"#,
+    )
+    .expect("pcache body probe source");
+    let executable = scratch.join("body");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let built = Command::new(&compiler)
+        .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-Wl,--gc-sections"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("translator/guest/x86_64/interp/persistence.c"))
+        .arg(native.join("translator/digest.c"))
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .expect("compile pcache body probe");
+    assert!(built.success(), "pcache body probe did not compile");
+    assert!(
+        Command::new(&executable)
+            .status()
+            .expect("run pcache body probe")
+            .success()
+    );
+    fs::remove_dir_all(scratch).expect("remove pcache body probe directory");
+}
+
 fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).expect("native header directory") {
         let path = entry.expect("native header entry").path();
