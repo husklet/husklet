@@ -416,7 +416,7 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
         errno = ENAMETOOLONG;
         return -1;
     }
-    int input = open(target, O_RDONLY | O_CLOEXEC);
+    int input = open(target, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (input < 0 && errno == ENOENT) return 0;
     if (input < 0) return -1;
     struct stat metadata;
@@ -424,6 +424,12 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
         int failure = errno != 0 ? errno : EINVAL;
         close(input);
         errno = failure;
+        return -1;
+    }
+    char pinned_target[64];
+    if (snprintf(pinned_target, sizeof pinned_target, "/proc/self/fd/%d", input) >= (int)sizeof pinned_target) {
+        close(input);
+        errno = ENAMETOOLONG;
         return -1;
     }
     char temporary[] = "/var/tmp/husklet-native-hosts.XXXXXX";
@@ -456,16 +462,17 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
     }
     free(contents);
     int failure = errno;
-    close(input);
     if (close(output) != 0 && exact) { exact = 0; failure = errno; }
     if (exact) {
-        exact = mount(temporary, target, NULL, MS_BIND, NULL) == 0;
+        /* Mount through the descriptor pinned above: pathname replacement cannot redirect the target. */
+        exact = mount(temporary, pinned_target, NULL, MS_BIND, NULL) == 0;
         if (!exact) failure = errno;
     }
     if (exact && read_only) {
-        exact = mount(NULL, target, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0;
+        exact = mount(NULL, pinned_target, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0;
         if (!exact) failure = errno;
     }
+    close(input);
     (void)unlink(temporary);
     if (!exact) { errno = failure; return -1; }
     return 0;

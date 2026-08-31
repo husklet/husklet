@@ -277,13 +277,18 @@ fn syscall_has_errno(number: libc::c_long, arguments: [libc::c_long; 3], accepte
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
-    use std::io::Read;
+    use std::os::unix::fs::{FileExt, OpenOptionsExt};
     use std::os::unix::ffi::OsStrExt;
     let Some(path) = path else { return false };
     let mut header = [0_u8; 20];
-    std::fs::File::open(std::ffi::OsStr::from_bytes(path))
-        .and_then(|mut file| file.read_exact(&mut header))
-        .is_ok()
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(std::ffi::OsStr::from_bytes(path));
+    file.is_ok_and(|file| {
+        file.metadata().is_ok_and(|metadata| metadata.is_file())
+            && file.read_exact_at(&mut header, 0).is_ok()
+    })
         && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
         && u16::from_le_bytes([header[18], header[19]]) == 62
 }
@@ -315,7 +320,8 @@ fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan)
     };
     if !hostname_valid(hostname) { return false; }
     let hosts = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(root)).join("etc/hosts");
-    std::fs::metadata(hosts).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1024 * 1024)
+    std::fs::symlink_metadata(hosts)
+        .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
 }
 
 #[cfg(not(unix))]
@@ -369,6 +375,25 @@ fn native_request(options: &crate::options::Options) -> NativeSupervisedRequest 
         None => NativeSupervisedRequest::Auto,
         Some(b"0" | b"off") => NativeSupervisedRequest::Off,
         Some(_) => NativeSupervisedRequest::On,
+    }
+}
+
+fn native_eligibility_for_request(
+    requested: NativeSupervisedRequest,
+    isa: crate::activation::GuestIsa,
+    plan: &crate::launcher::plan::RuntimePlan,
+    has_checkpoint_services: bool,
+    probe: impl FnOnce() -> NativeHostCapabilities,
+) -> Result<(), NativeSupervisedRefusal> {
+    if requested == NativeSupervisedRequest::Off {
+        return Err(NativeSupervisedRefusal::Host);
+    }
+    let host = probe();
+    let eligibility = native_eligibility(isa, plan, has_checkpoint_services, host);
+    if requested == NativeSupervisedRequest::Auto {
+        native_auto_eligibility(plan, host, eligibility)
+    } else {
+        eligibility
     }
 }
 
@@ -580,6 +605,17 @@ mod native_eligibility_tests {
             native_selection(NativeSupervisedRequest::On, Err(NativeSupervisedRefusal::Network)),
             Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Network))
         );
+
+        let probes = std::cell::Cell::new(0);
+        let eligibility = native_eligibility_for_request(
+            NativeSupervisedRequest::Off,
+            crate::activation::GuestIsa::X86_64,
+            &plan(),
+            false,
+            || { probes.set(probes.get() + 1); host() },
+        );
+        assert_eq!(probes.get(), 0, "explicit OFF performed host/path preflight");
+        assert_eq!(native_selection(NativeSupervisedRequest::Off, eligibility), Ok(false));
     }
 
     #[test]
@@ -648,6 +684,54 @@ mod native_eligibility_tests {
             assert!(!hostname_valid(invalid));
         }
         assert!(hostname_valid(b"build-agent.example"));
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("etc")).unwrap();
+        let mut actual = isolated.clone();
+        actual.rootfs = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
+        assert!(!isolated_hostname_projection_ready(&actual), "missing hosts admitted");
+        std::fs::write(root.path().join("etc/hosts"), b"127.0.0.1 localhost\n").unwrap();
+        assert!(isolated_hostname_projection_ready(&actual));
+        actual.box_policy.hostname = None;
+        assert!(!isolated_hostname_projection_ready(&actual), "missing hostname admitted");
+        actual.box_policy.hostname = Some(b"builder".to_vec());
+        std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        std::fs::create_dir(root.path().join("etc/hosts")).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "directory hosts admitted");
+        std::fs::remove_dir(root.path().join("etc/hosts")).unwrap();
+        std::fs::write(root.path().join("etc/real-hosts"), b"127.0.0.1 localhost\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("real-hosts", root.path().join("etc/hosts")).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "symlink hosts admitted");
+        std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        let large = std::fs::File::create(root.path().join("etc/hosts")).unwrap();
+        large.set_len(1024 * 1024 + 1).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "oversized hosts admitted");
+
+        let mut wrong_mode = isolated;
+        wrong_mode.box_policy.network_mode = 1;
+        assert_eq!(
+            native_auto_eligibility(&wrong_mode, host(), verdict(&wrong_mode, host())),
+            Err(NativeSupervisedRefusal::Network),
+        );
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn executable_probe_refuses_nonregular_and_symlink_inputs_without_blocking() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let link = directory.path().join("executable-link");
+        symlink(&executable, &link).unwrap();
+        assert!(!executable_is_x86_64(Some(link.as_os_str().as_encoded_bytes())));
+        let fifo = directory.path().join("executable-fifo");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        assert!(!executable_is_x86_64(Some(fifo.as_os_str().as_encoded_bytes())));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!executable_is_x86_64(Some(b"/dev/null")));
     }
 
     #[test]
@@ -676,19 +760,17 @@ impl RuntimeFactory for ProductionFactory {
                 #[cfg(unix)] { request.services.checkpoint_channel.is_some() }
                 #[cfg(not(unix))] { false }
             };
-        let host = native_host_capabilities(request.plan);
-        let mut eligibility = native_eligibility(
+        // OFF is a strict translated path: do not even inspect host paths or probe kernel support.
+        let eligibility = native_eligibility_for_request(
+            requested,
             request.isa,
             request.plan,
             has_checkpoint_services,
-            host,
+            || native_host_capabilities(request.plan),
         );
         // A native volume source is authenticated with openat2/open_tree immediately before namespace
         // projection. AUTO cannot prove that future transaction without opening authority-bearing FDs,
         // so it conservatively stays translated; explicit ON retains the existing secure late validation.
-        if requested == NativeSupervisedRequest::Auto {
-            eligibility = native_auto_eligibility(request.plan, host, eligibility);
-        }
         let native_supervised = native_selection(requested, eligibility)?;
         #[cfg(unix)]
         let terminal = request
