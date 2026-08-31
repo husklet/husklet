@@ -1129,7 +1129,7 @@ mod tests {
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
         let _serial = engine_test_lock();
         let on = run_product_diagnostic(product_jcc_ibtc_image(), false, true);
-        assert_eq!(on["version"], 6);
+        assert_eq!(on["version"], 7);
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
@@ -1145,7 +1145,7 @@ mod tests {
         assert!(on["executed_form_total"] >= on["executed_form_unique"]);
 
         let off = run_product_diagnostic(product_jcc_ibtc_image(), true, true);
-        assert_eq!(off["version"], 6);
+        assert_eq!(off["version"], 7);
         assert_eq!(off["available"], 1);
         assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
         assert_eq!(off["jcc_ibtc_emitted"], 1);

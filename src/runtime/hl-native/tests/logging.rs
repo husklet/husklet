@@ -4,12 +4,19 @@ use std::{fs, path::PathBuf, process::Command};
 fn sampling_exit_flush_joins_translation_serialization() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let source = fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read transliterator");
-    let start = source.find("static void translit_perf_map_flush_at_exit(void)").expect("exit flush");
+    let start = source
+        .find("static void translit_perf_map_flush_at_exit(void)")
+        .expect("exit flush");
     let body = &source[start..source[start..].find("\n}").map_or(source.len(), |end| start + end)];
     let lock = body.find("pthread_mutex_lock(&g_jit_lock)").expect("translation lock");
     let flush = body.find("translit_perf_map_flush()").expect("sampling flush");
-    let unlock = body.find("pthread_mutex_unlock(&g_jit_lock)").expect("translation unlock");
-    assert!(lock < flush && flush < unlock, "exit flush is outside translation serialization: {body}");
+    let unlock = body
+        .find("pthread_mutex_unlock(&g_jit_lock)")
+        .expect("translation unlock");
+    assert!(
+        lock < flush && flush < unlock,
+        "exit flush is outside translation serialization: {body}"
+    );
 }
 
 #[test]
@@ -18,9 +25,15 @@ fn x86_restore_snapshots_translation_profile_options_before_its_early_return() {
     let source = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
     let start = source.find("int hl_run_linux_guest(").expect("x86 guest launch");
     let body = &source[start..];
-    let diagnostics = body.find("g_prof = hl_option_get(\"HL_C_DIAGNOSTICS\")").expect("diagnostic snapshot");
-    let profiling = body.find("translit_profile_options_refresh();").expect("profile option snapshot");
-    let restore = body.find("const char *rdir = hl_option_get(\"HL_RESTORE\")").expect("restore branch");
+    let diagnostics = body
+        .find("g_prof = hl_option_get(\"HL_C_DIAGNOSTICS\")")
+        .expect("diagnostic snapshot");
+    let profiling = body
+        .find("translit_profile_options_refresh();")
+        .expect("profile option snapshot");
+    let restore = body
+        .find("const char *rdir = hl_option_get(\"HL_RESTORE\")")
+        .expect("restore branch");
     assert!(
         diagnostics < profiling && profiling < restore,
         "restore can enter translated execution before its profiling options are snapshotted"
@@ -107,7 +120,10 @@ fn product_dispatch_return_census_is_complete_and_bound_to_map_misses() {
         "fall_sse_riprel",
         "fall_other",
     ] {
-        assert!(product_backend.contains(field), "product dispatcher census omits {field}");
+        assert!(
+            product_backend.contains(field),
+            "product dispatcher census omits {field}"
+        );
     }
     let miss = dispatch.find("if (!code) {").expect("map-miss branch");
     let translate = dispatch[miss..]
@@ -119,6 +135,46 @@ fn product_dispatch_return_census_is_complete_and_bound_to_map_misses() {
         .map(|offset| miss + offset)
         .expect("map-miss census at the dispatcher decision");
     assert!(miss < count && count < translate);
+}
+
+#[test]
+fn x86_completed_terminal_markers_keep_indirect_exit_families_distinct() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translit.inc");
+    for (terminal, family) in [
+        ("case TL_JMP_REG:", "HL_BACKEND_SHAPE_T_INDIRECT_BRANCH"),
+        ("case TL_JMP_MEM:", "HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY"),
+        ("case TL_JMP_RIP:", "HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY"),
+        ("case TL_RET:", "HL_BACKEND_SHAPE_T_RETURN"),
+    ] {
+        let body = source
+            .split_once(terminal)
+            .unwrap_or_else(|| panic!("missing terminal {terminal}"))
+            .1
+            .split_once("break;")
+            .map(|(body, _)| body)
+            .expect("terminal body");
+        let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            body.contains(&format!(
+                "translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0, {family})"
+            )),
+            "{terminal} collapses its completed-terminal family"
+        );
+    }
+    let calls = source
+        .split_once("case TL_CALL:\n")
+        .expect("CALL terminal")
+        .1
+        .split_once("break;\n        }")
+        .map(|(body, _)| body)
+        .expect("CALL terminal body");
+    for family in [
+        "HL_BACKEND_SHAPE_T_DIRECT_CALL",
+        "HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY",
+        "HL_BACKEND_SHAPE_T_INDIRECT_CALL",
+    ] {
+        assert!(calls.contains(family), "CALL terminal collapses {family}");
+    }
 }
 
 #[test]
