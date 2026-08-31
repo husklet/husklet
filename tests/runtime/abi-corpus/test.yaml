@@ -510,6 +510,14 @@ cases:
     status: active
     compat: { class: compatibility }
     expect: { exit: 0, stdout: golden/x_div128.out }
+  - id: runtime/abi-corpus-x_div_family
+    targets: [amd64]
+    build: { source: x_div_family.c, output: x_div_family, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_div_family }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_div_family.out }
   - id: runtime/abi-corpus-x_mulhi
     targets: [arm64, amd64]
     build: { source: x_mulhi.c, output: x_mulhi, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
