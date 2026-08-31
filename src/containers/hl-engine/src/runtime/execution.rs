@@ -149,6 +149,7 @@ fn native_run_failure(status: i32) -> EngineError {
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launcher::plan::RuntimePlan,
+    native_supervised: bool,
     #[cfg(unix)]
     terminal: Option<NativeTerminalBridge>,
     #[cfg(unix)]
@@ -262,6 +263,7 @@ struct NativeHostCapabilities {
     pidfd_getfd: bool,
     seccomp_notify: bool,
     executable_x86_64: bool,
+    rootfs_directory: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -304,6 +306,10 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
             pidfd_getfd: syscall_has_errno(libc::SYS_pidfd_getfd, [-1, -1, 0], &[libc::EBADF]),
             seccomp_notify,
             executable_x86_64: executable_is_x86_64(plan.executable_host.as_deref()),
+            rootfs_directory: plan.rootfs.as_deref().is_some_and(|path| {
+                use std::os::unix::ffi::OsStrExt;
+                std::fs::metadata(std::ffi::OsStr::from_bytes(path)).is_ok_and(|metadata| metadata.is_dir())
+            }),
         }
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -316,6 +322,7 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
             pidfd_getfd: false,
             seccomp_notify: false,
             executable_x86_64: false,
+            rootfs_directory: false,
         }
     }
 }
@@ -369,7 +376,7 @@ fn native_eligibility(
     if !host.clone3 || !host.pidfd_getfd || !host.seccomp_notify { return Err(R::Kernel); }
     if isa != crate::activation::GuestIsa::X86_64 { return Err(R::GuestIsa); }
     if !host.executable_x86_64 { return Err(R::Executable); }
-    if plan.rootfs.is_none() || plan.executable_host.is_none() { return Err(R::Root); }
+    if plan.rootfs.is_none() || plan.executable_host.is_none() || !host.rootfs_directory { return Err(R::Root); }
     let box_policy = &plan.box_policy;
     if box_policy.uid < -1 || box_policy.gid < -1 { return Err(R::Identity); }
     if plan.options.get_bytes("HL_MEM_MAX").is_some() || plan.options.get_bytes("HL_PIDS_MAX").is_some() ||
@@ -389,7 +396,9 @@ fn native_eligibility(
     if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
     let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
     let supported_network = match box_policy.network_mode {
-        0 => isolated && box_policy.network_namespace.is_none(),
+        // Isolated launches always receive a fresh netns. The typed namespace is its process-domain
+        // identity, not authority to join an existing host namespace, so retaining it is harmless.
+        0 => isolated,
         2 => !isolated && box_policy.network_namespace.is_none(),
         _ => false,
     };
@@ -400,6 +409,18 @@ fn native_eligibility(
     let allowed = BOX_ROOTFS_READ_ONLY | BOX_NETWORK_ISOLATED | BOX_TRANSLATION_CACHE_DISABLED;
     if box_policy.flags & !allowed != 0 { return Err(R::BoxFlags); }
     Ok(())
+}
+
+fn native_selection(
+    request: NativeSupervisedRequest,
+    eligibility: Result<(), NativeSupervisedRefusal>,
+) -> Result<bool, CompositionError> {
+    match (request, eligibility) {
+        (NativeSupervisedRequest::Off, _) => Ok(false),
+        (NativeSupervisedRequest::Auto, Ok(())) | (NativeSupervisedRequest::On, Ok(())) => Ok(true),
+        (NativeSupervisedRequest::Auto, Err(_)) => Ok(false),
+        (NativeSupervisedRequest::On, Err(reason)) => Err(CompositionError::NativeSupervisedRefused(reason)),
+    }
 }
 
 #[cfg(test)]
@@ -414,6 +435,7 @@ mod native_eligibility_tests {
             pidfd_getfd: true,
             seccomp_notify: true,
             executable_x86_64: true,
+            rootfs_directory: true,
         }
     }
 
@@ -479,6 +501,13 @@ mod native_eligibility_tests {
         assert_eq!(native_request(&options), NativeSupervisedRequest::Off);
         options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
         assert_eq!(native_request(&options), NativeSupervisedRequest::On);
+        assert_eq!(native_selection(NativeSupervisedRequest::Auto, Ok(())), Ok(true));
+        assert_eq!(native_selection(NativeSupervisedRequest::Auto, Err(NativeSupervisedRefusal::Network)), Ok(false));
+        assert_eq!(native_selection(NativeSupervisedRequest::Off, Ok(())), Ok(false));
+        assert_eq!(
+            native_selection(NativeSupervisedRequest::On, Err(NativeSupervisedRefusal::Network)),
+            Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Network))
+        );
     }
 
     #[test]
@@ -501,15 +530,36 @@ impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
-        let native_supervised = request
-            .plan
-            .options
-            .get_bytes("HL_NATIVE_SUPERVISED")
-            .is_some_and(|value| !value.is_empty() && value != b"0");
-        #[cfg(unix)]
-        if native_supervised && request.plan.options.get_bytes("HL_RESTORE").is_some() {
-            return Err(CompositionError::RuntimeConstruction);
+        let requested = native_request(&request.plan.options);
+        let has_checkpoint_services = request.services.checkpoint_sink.is_some()
+            || request.services.checkpoint_source.is_some()
+            || {
+                #[cfg(unix)] { request.services.checkpoint_channel.is_some() }
+                #[cfg(not(unix))] { false }
+            };
+        let mut eligibility = native_eligibility(
+            request.isa,
+            request.plan,
+            has_checkpoint_services,
+            native_host_capabilities(request.plan),
+        );
+        // A native volume source is authenticated with openat2/open_tree immediately before namespace
+        // projection. AUTO cannot prove that future transaction without opening authority-bearing FDs,
+        // so it conservatively stays translated; explicit ON retains the existing secure late validation.
+        if requested == NativeSupervisedRequest::Auto {
+            if request.plan.box_policy.volumes.is_some() {
+                eligibility = Err(NativeSupervisedRefusal::Volumes);
+            }
+            if request.plan.box_policy.lower_layers.is_some() || request.plan.box_policy.file_owners.is_some() {
+                eligibility = Err(NativeSupervisedRefusal::Overlay);
+            }
+            // Native isolated networking exposes loopback only, whereas the translated backend owns
+            // resolver projection. Without a typed no-DNS promise AUTO cannot preserve semantics.
+            if request.plan.box_policy.network_mode != 2 {
+                eligibility = Err(NativeSupervisedRefusal::Network);
+            }
         }
+        let native_supervised = native_selection(requested, eligibility)?;
         #[cfg(unix)]
         let terminal = request
             .services
@@ -557,6 +607,7 @@ impl RuntimeFactory for ProductionFactory {
         Ok(ProductionMachine {
             isa: request.isa,
             plan: request.plan.clone(),
+            native_supervised,
             #[cfg(unix)]
             terminal,
             #[cfg(unix)]
@@ -607,6 +658,12 @@ impl ProductionMachine {
             .map(|(name, value)| Ok((CString::new(name)?, CString::new(value)?)))
             .collect::<Result<Vec<_>, std::ffi::NulError>>()
             .map_err(|_| EngineError::LaunchFailed)?;
+        if self.native_supervised && self.plan.options.get_bytes("HL_NATIVE_SUPERVISED").is_none() {
+            options.push((
+                CString::new("HL_NATIVE_SUPERVISED").expect("literal"),
+                CString::new("1").expect("literal"),
+            ));
+        }
         // Name the coordinator on the launch boundary. Only a machine holding a CheckpointControl can be
         // sent REQUEST_CHECKPOINT, so this is exactly "the embedder will ask THIS engine to capture"; a
         // domain member carries a channel and no Server. The engine's election reads it instead of asking
@@ -677,10 +734,7 @@ impl ProductionMachine {
     }
 
     fn native_supervised(&self) -> bool {
-        self.plan
-            .options
-            .get_bytes("HL_NATIVE_SUPERVISED")
-            .is_some_and(|value| !value.is_empty() && value != b"0")
+        self.native_supervised
     }
 
     fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
@@ -887,12 +941,7 @@ impl GuestMachine for ProductionMachine {
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
-            let native_supervised = self
-                .plan
-                .options
-                .get_bytes("HL_NATIVE_SUPERVISED")
-                .is_some_and(|value| !value.is_empty() && value != b"0");
-            return checkpoint.capture(engine.as_ref(), self.isa, deadline, !native_supervised);
+            return checkpoint.capture(engine.as_ref(), self.isa, deadline, !self.native_supervised);
         }
         Err(EngineError::Unsupported)
     }

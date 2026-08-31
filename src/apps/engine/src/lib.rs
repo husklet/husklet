@@ -70,6 +70,12 @@ enum TranslitFeatureControl {
     Off,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum NativeSupervisedControl {
+    On,
+    Off,
+}
+
 #[derive(Parser)]
 struct BackendReceiptArguments {
     #[arg(long = "guest-isa")]
@@ -127,9 +133,9 @@ struct LaunchArguments {
     /// Control the strict FS-load bridge (enabled by default for x86-64 transliteration).
     #[arg(long, value_enum, value_name = "on|off", num_args = 0..=1, default_missing_value = "on", require_equals = true, requires = "translit")]
     translit_fs_load_bridge: Option<TranslitFeatureControl>,
-    /// Execute a same-ISA Linux x86-64 guest under the experimental native syscall supervisor.
-    #[arg(long)]
-    native_supervised: bool,
+    /// Control automatic same-ISA native syscall supervision.
+    #[arg(long, value_enum, value_name = "on|off", num_args = 0..=1, default_missing_value = "on", require_equals = true)]
+    native_supervised: Option<NativeSupervisedControl>,
     /// Set one launch-scoped native test injection in a hooks-enabled worker.
     #[cfg(feature = "native-test-hooks")]
     #[arg(long, value_name = "KEY=VALUE", hide = true, value_parser = parse_native_test_option)]
@@ -351,7 +357,7 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             guest.name()
         )));
     }
-    if launch.native_supervised && guest != Guest::X86_64 {
+    if launch.native_supervised == Some(NativeSupervisedControl::On) && guest != Guest::X86_64 {
         return Err(Failure::Request(
             "--native-supervised is available only in the x86-64 worker".to_owned(),
         ));
@@ -397,7 +403,9 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             "--translit-fs-load-bridge is available only in the x86-64 worker".to_owned(),
         ));
     }
-    if launch.rootfs.is_none() && (launch.diagnostics || launch.translit || launch.native_supervised) {
+    if launch.rootfs.is_none()
+        && (launch.diagnostics || launch.translit || launch.native_supervised == Some(NativeSupervisedControl::On))
+    {
         return Err(Failure::Request(
             "--diagnostics, --translit and --native-supervised require --rootfs; raw host-path launches do not carry launch options"
                 .to_owned(),
@@ -476,13 +484,17 @@ fn rootfs_plan(
     for (enabled, name) in [
         (launch.diagnostics, "HL_C_DIAGNOSTICS"),
         (launch.translit, "HL_TRANSLIT"),
-        (launch.native_supervised, "HL_NATIVE_SUPERVISED"),
     ] {
         if enabled {
             options
                 .set(name, "1", true)
                 .map_err(|error| Failure::Request(format!("cannot set the engine launch option {name}: {error:?}")))?;
         }
+    }
+    if let Some(control) = launch.native_supervised {
+        options
+            .set("HL_NATIVE_SUPERVISED", if control == NativeSupervisedControl::On { "1" } else { "0" }, true)
+            .map_err(|error| Failure::Request(format!("cannot set the engine launch option HL_NATIVE_SUPERVISED: {error:?}")))?;
     }
     for (control, name) in [
         (launch.translit_riprel_readonly, "HL_TRANSLIT_RIPREL_READONLY"),
@@ -580,7 +592,7 @@ fn rootfs_plan(
         box_policy: hl_engine::launcher::plan::RuntimeBoxPolicy {
             // Native supervision never inherits host networking. Selecting it at this developer CLI
             // boundary is an explicit request for the backend's isolated-network contract.
-            flags: if launch.native_supervised { 1 << 2 } else { 0 },
+            flags: if launch.native_supervised == Some(NativeSupervisedControl::On) { 1 << 2 } else { 0 },
             ..Default::default()
         },
     })
@@ -760,7 +772,7 @@ mod tests {
         assert_eq!(defaults.translit_riprel_readonly, None);
         assert_eq!(defaults.translit_riprel_load_bridge, None);
         assert_eq!(defaults.translit_fs_load_bridge, None);
-        assert!(!defaults.native_supervised);
+        assert_eq!(defaults.native_supervised, None);
 
         let selected = launch(&[
             "--diagnostics",
@@ -796,7 +808,7 @@ mod tests {
             selected.translit_fs_load_bridge,
             Some(super::TranslitFeatureControl::On)
         );
-        assert!(selected.native_supervised);
+        assert_eq!(selected.native_supervised, Some(super::NativeSupervisedControl::On));
         assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
 
         for option in [
