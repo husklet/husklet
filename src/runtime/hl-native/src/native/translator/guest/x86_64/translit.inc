@@ -4463,12 +4463,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
-        if (count == 0 && pc == gpc && first_decoded <= 0) {
-            fall_stop = HL_BACKEND_FALL_DECODE;
-            break;
-        } else if (count == 0 && pc == gpc)
+        int decoded;
+        if (count == 0 && pc == gpc) {
             insn = first_insn;
-        else if (hl_x86_decode_context_bytes(context, pc, &insn, bytes) <= 0) {
+            decoded = first_decoded;
+        } else {
+            decoded = hl_x86_decode_context_bytes(context, pc, &insn, bytes);
+        }
+        if (decoded <= 0) {
             fall_stop = HL_BACKEND_FALL_DECODE;
             break;
         }
