@@ -409,7 +409,7 @@ mod tests {
             (crate::Execution::Auto, supported),
             (crate::Execution::Translit, supported),
             (crate::Execution::Interpreted, false),
-            (crate::Execution::native(false), false),
+            (crate::Execution::native(false), supported),
         ] {
             let mut launch = launch();
             launch.guest = crate::Guest::X86_64;
