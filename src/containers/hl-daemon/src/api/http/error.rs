@@ -84,6 +84,7 @@ impl ApiError {
             | ContainerError::NotConnected { .. }
             | ContainerError::InvalidState { .. }
             | ContainerError::InvalidExecState { .. }
+            | ContainerError::NonCheckpointableExec { .. }
             | ContainerError::NoTerminal(_)
             | ContainerError::AlreadyRunning(_) => StatusCode::CONFLICT,
             ContainerError::InvalidSpec(_) | ContainerError::InvalidVolume(_) | ContainerError::InvalidNetwork(_) => {

@@ -26,6 +26,10 @@ impl Service {
                 expected: "running",
             });
         }
+        // Refuse before asking the coordinator to freeze anything. A live-only execution deliberately
+        // owns no checkpoint channel, so a capture cannot include it and must not partially capture the
+        // rest of the domain around it.
+        self.preflight_checkpoint_members(Some(&container.id)).await?;
         let (process, output_complete) = {
             let live = self.live.lock().await;
             let run = live
@@ -197,6 +201,10 @@ impl Service {
 
     pub(crate) async fn checkpoint_all(self: &Arc<Self>, timeout: Duration) -> Result<()> {
         let _guard = self.operations.lock().await;
+        // Validate the entire service before touching the first coordinator. Otherwise an ordinary
+        // container ordered before a live-only member could be captured even though the operation
+        // must be refused as one atomic workspace checkpoint.
+        self.preflight_checkpoint_members(None).await?;
         #[cfg(test)]
         self.wait_checkpoint_all_gate().await;
         let mut failure = None;
@@ -244,5 +252,16 @@ impl Service {
             }
         }
         Err(failure)
+    }
+
+    async fn preflight_checkpoint_members(&self, container: Option<&crate::ContainerId>) -> Result<()> {
+        if let Some(exec) = self.execs.list().await?.into_iter().find(|exec| {
+            container.is_none_or(|id| &exec.container == id)
+                && exec.state.is_active()
+                && exec.spec.lifetime == crate::ExecLifetime::Live
+        }) {
+            return Err(Error::NonCheckpointableExec { id: exec.id });
+        }
+        Ok(())
     }
 }

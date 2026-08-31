@@ -72,6 +72,8 @@ pub struct ExecSpec {
 pub enum ExecLifetime {
     #[default]
     Persisted,
+    /// Keeps the durable execution record and permits live reattachment, but never joins a checkpoint.
+    Live,
     Ephemeral,
 }
 

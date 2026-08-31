@@ -257,6 +257,66 @@ async fn ephemeral_execution_is_native_isolated_and_outside_checkpoint_membershi
 }
 
 #[tokio::test]
+async fn live_execution_reattaches_but_atomically_refuses_workspace_checkpoint() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(2);
+    let runtime = Arc::new(runtime);
+    let exits = Arc::clone(&runtime.checkpoint_exits);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("ordinary-parent")).await.unwrap();
+    containers.start("ordinary-parent").await.unwrap();
+    containers.create(spec("live-parent")).await.unwrap();
+    containers.start("live-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "live-parent",
+            ExecSpec::new(Process::new("/bin/sh"))
+                .lifetime(crate::ExecLifetime::Live)
+                .network(crate::ExecNetwork::Isolated)
+                .execution(crate::Execution::native(false)),
+        )
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    let before = containers.executions().inspect(&exec.id).await.unwrap();
+    let ExecState::Running { process_id, .. } = before.state else {
+        panic!("live execution was not running: {:?}", before.state);
+    };
+
+    let mut reattached = containers.executions().attach(&exec.id, None).await.unwrap();
+    assert_eq!(reattached.next().await.unwrap().unwrap().bytes, b"fake-out\n");
+    drop(reattached);
+    let after = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(matches!(after.state, ExecState::Running { process_id: id, .. } if id == process_id));
+    assert_eq!(after.checkpoint, None);
+    assert_eq!(runtime.checkpoint_roles.lock().unwrap().last(), Some(&None));
+
+    let error = containers
+        .checkpoint("live-parent", Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::NonCheckpointableExec { id } if id == exec.id));
+    assert_eq!(exits.load(Ordering::SeqCst), 0, "checkpoint preflight froze the coordinator");
+    assert!(matches!(containers.inspect("live-parent").await.unwrap().state, ContainerState::Running { .. }));
+    let still_live = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(matches!(still_live.state, ExecState::Running { process_id: id, .. } if id == process_id));
+    assert_eq!(still_live.checkpoint, None, "refusal published a member checkpoint token");
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+    assert!(matches!(error, Error::NonCheckpointableExec { id } if id == exec.id));
+    assert_eq!(exits.load(Ordering::SeqCst), 0, "service-wide preflight froze a coordinator");
+    let ordinary = containers.inspect("ordinary-parent").await.unwrap();
+    assert!(matches!(ordinary.state, ContainerState::Running { .. }));
+    assert_eq!(ordinary.checkpoint, None, "service-wide refusal published an earlier image");
+
+    containers.remove_force("live-parent").await.unwrap();
+    containers.remove_force("ordinary-parent").await.unwrap();
+    assert!(runtime.signals.lock().unwrap().contains(&Signal::KILL));
+}
+
+#[tokio::test]
 async fn killing_an_execution_force_stops_it_without_stopping_the_container() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);

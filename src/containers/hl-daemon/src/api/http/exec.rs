@@ -51,6 +51,7 @@ pub(super) async fn create(
         .user(config.user)
         .lifetime(match config.lifetime {
             ExecLifetime::Persisted => hl_container::ExecLifetime::Persisted,
+            ExecLifetime::Live => hl_container::ExecLifetime::Live,
             ExecLifetime::Ephemeral => hl_container::ExecLifetime::Ephemeral,
         })
         .network(match config.network {
