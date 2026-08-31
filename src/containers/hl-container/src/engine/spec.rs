@@ -27,6 +27,11 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
         Self::flag(&mut options, "HL_C_DIAGNOSTICS", launch.execution.diagnostics())?;
+        Self::flag(
+            &mut options,
+            "HL_TRANSLIT",
+            launch.execution.translit(matches!(launch.guest, crate::Guest::X86_64)),
+        )?;
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
@@ -60,12 +65,6 @@ impl TryFrom<&ProcessConfig> for Spec {
             &mut options,
             "HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST",
             std::env::var_os("HL_TRANSLIT_PCACHE_SINGLE_MAP_TEST").is_some(),
-        )?;
-        #[cfg(feature = "native-test-hooks")]
-        Self::flag(
-            &mut options,
-            "HL_TRANSLIT",
-            std::env::var_os("HL_TRANSLIT").is_some_and(|value| value == "1"),
         )?;
         #[cfg(feature = "native-test-hooks")]
         Self::flag(

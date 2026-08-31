@@ -588,7 +588,9 @@ pub use spec::{ContainerSpec, Resolver};
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub enum Execution {
     #[default]
+    Auto,
     Interpreted,
+    Translit,
     Native {
         diagnostics: bool,
     },
@@ -609,9 +611,17 @@ impl Execution {
     #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
-            Self::Interpreted => false,
+            Self::Auto | Self::Interpreted | Self::Translit => false,
             Self::Native { diagnostics } => diagnostics,
         }
+    }
+
+    /// Whether this policy selects same-ISA translation for an x86-64 guest on a supported host.
+    #[must_use]
+    pub const fn translit(self, x86_64_guest: bool) -> bool {
+        x86_64_guest
+            && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+            && matches!(self, Self::Auto | Self::Translit)
     }
 }
 
@@ -623,7 +633,7 @@ mod execution_tests {
     fn legacy_execution_encoding_is_unchanged() {
         assert_eq!(
             serde_json::to_string(&Execution::default()).unwrap(),
-            r#"{"backend":"interpreted"}"#
+            r#"{"backend":"auto"}"#
         );
         assert_eq!(
             serde_json::to_string(&Execution::native(true)).unwrap(),

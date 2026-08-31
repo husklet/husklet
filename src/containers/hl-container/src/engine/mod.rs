@@ -403,13 +403,24 @@ mod tests {
     }
 
     #[test]
-    fn every_execution_mode_leaves_product_backend_unselected() {
-        for execution in [crate::Execution::default(), crate::Execution::native(false)] {
+    fn execution_policy_selects_translation_only_for_auto_and_explicit_translit() {
+        let supported = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+        for (execution, selected) in [
+            (crate::Execution::Auto, supported),
+            (crate::Execution::Translit, supported),
+            (crate::Execution::Interpreted, false),
+            (crate::Execution::native(false), false),
+        ] {
             let mut launch = launch();
+            launch.guest = crate::Guest::X86_64;
             launch.execution = execution;
             let spec = Spec::try_from(&launch).unwrap();
             assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
+            assert_eq!(spec.plan.options.get("HL_TRANSLIT"), selected.then_some("1"));
         }
+        let launch = launch();
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_TRANSLIT"), None);
     }
 
     #[test]
