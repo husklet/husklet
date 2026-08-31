@@ -6206,6 +6206,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_rw2rx = 0;
     g_cache_gen = UINT64_MAX - scenario;
     struct interp_block *block = (struct interp_block *)arena;
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, UINT16_MAX);
     translit_fall_fixture_bytes = bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
     translit_fall_fixture_length = length;
@@ -6589,6 +6590,7 @@ static struct interp_block *translit_jcc_ibtc_test_build(hl_x86_hot_context *con
     struct interp_block *block = (struct interp_block *)g_cp;
     g_cp += sizeof *block;
     memset(block, 0, sizeof *block);
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, UINT16_MAX);
     block->magic = INTERP_BLOCK_MAGIC;
     block->gpc = guest;
     block->generation = g_cache_gen;
