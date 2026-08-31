@@ -1187,7 +1187,11 @@ static int translit_classify(const struct insn *insn) {
     if (op == 0xE9 || op == 0xEB) return TL_JMP;
     if (op == 0xF5 || op == 0xF8 || op == 0xF9) return TL_COPY;            // cmc/clc/stc
     if (op == 0xFC || op == 0xFD) return TL_COPY;                          // cld/std -- DF is live in the host flags
-    if (op == 0xF6 || op == 0xF7) return insn->reg <= 5 ? TL_COPY : TL_NO; // not div/idiv (#DE is an exit)
+    // DIV/IDIV are safe to execute verbatim on the same ISA.  Successful execution has exactly the
+    // guest dividend-pair, quotient, remainder, and undefined-flags behaviour.  A memory fault or #DE
+    // is recovered by translit_signal_capture(), whose instruction provenance restores the original
+    // guest RIP before the normal guest signal path observes it.
+    if (op == 0xF6 || op == 0xF7) return TL_COPY;
     if (op == 0xFE) return insn->reg <= 1 ? TL_COPY : TL_NO;               // inc/dec r/m8
     if (op == 0xFF) {
         if (insn->reg == 0 || insn->reg == 1 || insn->reg == 6) return TL_COPY; // inc/dec/push r/m
@@ -3017,6 +3021,28 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return exact ? 0 : 271;
     }
     if (scenario == 189) return translit_riprel_load_bridge_gate_test();
+    if (scenario == 190) {
+        // F6 supplies byte width regardless of the decoder's canonical opsize. F7 spans the three
+        // prefix-selected integer widths. Exercise both register and memory ModRM forms for DIV and
+        // IDIV; /0../5 remain admitted members of the same group.
+        static const uint8_t widths[] = {1, 2, 4, 8};
+        for (size_t width_index = 0; width_index < sizeof widths; ++width_index) {
+            for (int division = 6; division <= 7; ++division) {
+                for (int memory = 0; memory <= 1; ++memory) {
+                    struct insn divide = {.len = 2,
+                                          .op = widths[width_index] == 1 ? 0xF6 : 0xF7,
+                                          .opsize = widths[width_index],
+                                          .has_modrm = 1,
+                                          .mod = memory ? 1 : 3,
+                                          .reg = division,
+                                          .rm = memory ? 2 : 1,
+                                          .is_mem = memory};
+                    if (translit_classify(&divide) != TL_COPY) return 272;
+                }
+            }
+        }
+        return 0;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
