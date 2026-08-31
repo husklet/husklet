@@ -411,12 +411,16 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
         errno = EINVAL;
         return -1;
     }
-    char target[PATH_MAX];
-    if (snprintf(target, sizeof target, "%s/etc/hosts", root) >= (int)sizeof target) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    int input = open(target, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    int rootfd = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (rootfd < 0) return -1;
+    struct open_how hosts_how = {
+        .flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
+    };
+    int input = (int)syscall(SYS_openat2, rootfd, "etc/hosts", &hosts_how, sizeof(hosts_how));
+    int open_failure = errno;
+    close(rootfd);
+    errno = open_failure;
     if (input < 0 && errno == ENOENT) return 0;
     if (input < 0) return -1;
     struct stat metadata;
@@ -481,6 +485,31 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
 #if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
 HL_API int hl_native_supervised_hostname_projection_test(uint32_t scenario) {
     static const char *const hostile[] = {"line\nbreak", "white space", "under_score", "control\001byte"};
+    if (scenario == 4) {
+        char root[] = "/var/tmp/husklet-hostname-root.XXXXXX";
+        char outside[] = "/var/tmp/husklet-hostname-outside.XXXXXX";
+        if (mkdtemp(root) == NULL || mkdtemp(outside) == NULL) return 97;
+        char outside_hosts[PATH_MAX], etc[PATH_MAX];
+        int status = 0;
+        if (snprintf(outside_hosts, sizeof outside_hosts, "%s/hosts", outside) >= (int)sizeof outside_hosts ||
+            snprintf(etc, sizeof etc, "%s/etc", root) >= (int)sizeof etc) status = 98;
+        static const char original[] = "127.0.0.1\toutside\n";
+        int descriptor = status == 0 ? open(outside_hosts, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0640) : -1;
+        if (status == 0 && (descriptor < 0 || write(descriptor, original, sizeof original - 1) != sizeof original - 1 ||
+                            close(descriptor) != 0 || symlink(outside, etc) != 0)) status = 99;
+        errno = 0;
+        if (status == 0 && hl_native_supervised_project_hostname(root, "builder", 0) != -1) status = 100;
+        char receipt[sizeof original] = {0};
+        descriptor = status == 0 ? open(outside_hosts, O_RDONLY | O_CLOEXEC) : -1;
+        if (status == 0 && (descriptor < 0 || read(descriptor, receipt, sizeof receipt) != sizeof original - 1 ||
+                            memcmp(receipt, original, sizeof original) != 0)) status = 101;
+        if (descriptor >= 0) close(descriptor);
+        unlink(etc);
+        unlink(outside_hosts);
+        rmdir(root);
+        rmdir(outside);
+        return status;
+    }
     if (scenario >= sizeof hostile / sizeof hostile[0]) return 90;
     char root[] = "/var/tmp/husklet-hostname-hook.XXXXXX";
     if (mkdtemp(root) == NULL) return 91;

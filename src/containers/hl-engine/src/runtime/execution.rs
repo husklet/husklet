@@ -349,7 +349,15 @@ fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan)
         return false;
     };
     if !hostname_valid(hostname) { return false; }
-    let hosts = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(root)).join("etc/hosts");
+    let root = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(root));
+    if !std::fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        return false;
+    }
+    let etc = root.join("etc");
+    if !std::fs::symlink_metadata(&etc).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        return false;
+    }
+    let hosts = etc.join("hosts");
     std::fs::symlink_metadata(hosts)
         .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() <= 1024 * 1024)
 }
@@ -760,6 +768,14 @@ mod native_eligibility_tests {
         let large = std::fs::File::create(root.path().join("etc/hosts")).unwrap();
         large.set_len(1024 * 1024 + 1).unwrap();
         assert!(!isolated_hostname_projection_ready(&actual), "oversized hosts admitted");
+        drop(large);
+        std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
+        std::fs::remove_dir(root.path().join("etc")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("hosts"), b"127.0.0.1 outside\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), root.path().join("etc")).unwrap();
+        assert!(!isolated_hostname_projection_ready(&actual), "intermediate etc symlink escaped root");
 
         let mut wrong_mode = isolated;
         wrong_mode.box_policy.network_mode = 1;
