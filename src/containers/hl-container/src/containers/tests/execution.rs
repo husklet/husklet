@@ -317,6 +317,59 @@ async fn live_execution_reattaches_but_atomically_refuses_workspace_checkpoint()
 }
 
 #[tokio::test]
+async fn lost_live_execution_reconciles_terminal_without_restore_or_replacement() {
+    let storage = Arc::new(Memory::default());
+    let setup = test_containers(
+        Arc::clone(&storage),
+        Arc::new(FakeRuntime::new(ExitStatus::Code(0))),
+    )
+    .await
+    .unwrap();
+    let parent = setup.create(spec("lost-live-parent")).await.unwrap();
+    let mut stale = crate::Exec::new(
+        parent.id,
+        ExecSpec::new(Process::new("/bin/sh")).lifetime(crate::ExecLifetime::Live),
+    );
+    stale.state = ExecState::Running {
+        process_id: 91,
+        started_at_ms: 100,
+    };
+    crate::storage::Execs::insert(storage.as_ref(), &stale)
+        .await
+        .unwrap();
+    let exec = stale.clone();
+    drop(setup);
+
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(2);
+    let runtime = Arc::new(runtime);
+    let recovered = test_containers(storage, runtime.clone()).await.unwrap();
+    let lost = recovered.executions().inspect(&exec.id).await.unwrap();
+    assert!(matches!(
+        lost.state,
+        ExecState::Exited {
+            result: ExitStatus::Fault {
+                reason: crate::FaultCause::Unknown,
+                ..
+            },
+            process_id: Some(91),
+            ..
+        }
+    ));
+    assert!(matches!(
+        recovered.executions().attach(&exec.id, None).await,
+        Err(Error::InvalidExecState { id, .. }) if id == exec.id
+    ));
+    assert!(runtime.programs.lock().unwrap().is_empty(), "reattach launched a replacement process");
+
+    recovered.start("lost-live-parent").await.unwrap();
+    recovered
+        .checkpoint("lost-live-parent", Duration::from_secs(1))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn killing_an_execution_force_stops_it_without_stopping_the_container() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
