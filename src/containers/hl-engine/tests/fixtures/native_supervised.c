@@ -35,6 +35,11 @@ static void *checkpoint_thread(void *argument) {
     return NULL;
 }
 
+static int has_argument(int argc, char **argv, const char *argument) {
+    for (int index = 1; index < argc; index++) if (!strcmp(argv[index], argument)) return 1;
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "network-none")) {
         struct stat netns;
@@ -313,11 +318,16 @@ int main(int argc, char **argv) {
         if (resolver < 0 || write(resolver, "nameserver 127.0.0.1\n", 21) != 21 || close(resolver) != 0) return 100;
         fputs("file-volumes", stdout);
     }
-    if (argc > 1 && !strcmp(argv[1], "pty-session")) {
+    if (has_argument(argc, argv, "pty-session")) {
         pid_t session = getsid(0);
         if (!isatty(0)) return errno == EPERM ? 104 : errno == ENOTTY ? 101 : 105;
         if (session < 0 || tcgetsid(0) != session) return 102;
         if (tcgetpgrp(0) != getpgrp()) return 103;
+        signal(SIGTTOU, SIG_IGN);
+        if (setpgid(0, 0) != 0) return 106;
+        if (tcsetpgrp(0, getpgrp()) != 0 || tcgetpgrp(0) != getpgrp()) return 107;
+        int tty = open("/dev/tty", O_RDWR | O_NOCTTY);
+        if (tty < 0 || tcgetpgrp(tty) != getpgrp() || close(tty) != 0) return 108;
         fputs("pty-session", stdout);
     }
     if (argc > 1 && !strcmp(argv[1], "identity-limits")) {

@@ -1026,7 +1026,12 @@ impl RuntimeFactory for ProductionFactory {
             .services
             .streams
             .terminal()
-            .map(|terminal| NativeTerminalBridge::attach(terminal, InputDiscipline::Linux))
+            .map(|terminal| {
+                NativeTerminalBridge::attach(
+                    terminal,
+                    if native_supervised { InputDiscipline::Host } else { InputDiscipline::Linux },
+                )
+            })
             .transpose()?;
         #[cfg(unix)]
         let output = if terminal.is_none() {

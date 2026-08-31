@@ -339,7 +339,6 @@ fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
     let receipt = work.path().join("idle-receipt");
     let mut plan = selected_plan(&executable);
     std::fs::write(&receipt, b"").unwrap();
-    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
     plan.options
         .set_bytes(
@@ -777,6 +776,7 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     let output_directory = work.path().join("output");
     for path in [
         lower.join("bin"),
+        lower.join("dev"),
         lower.join("tmp"),
         lower.join("proc"),
         lower.join("src"),
@@ -788,12 +788,15 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     ] {
         std::fs::create_dir_all(path).unwrap();
     }
+    std::fs::write(lower.join("dev/tty"), b"").unwrap();
     let executable = lower.join("bin/fixture");
     std::fs::copy(built, &executable).unwrap();
     let terminal = Arc::new(PaneTerminal::default());
     let mut plan = selected_plan(&executable);
+    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     plan.rootfs = Some(upper.as_os_str().as_encoded_bytes().to_vec());
     plan.arguments.push(b"secure-jail".to_vec());
+    plan.arguments.push(b"pty-session".to_vec());
     plan.options
         .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
         .unwrap();
@@ -812,6 +815,7 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     engine.destroy().unwrap();
     let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     assert!(text.windows(b"secure-jail".len()).any(|window| window == b"secure-jail"), "pty={text:?}");
+    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
     assert_eq!(native_overlay_directories(), before);
 }
 

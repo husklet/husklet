@@ -22,6 +22,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/statvfs.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -312,6 +313,55 @@ static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_nativ
         close(target);
     }
     close(root);
+    return 0;
+}
+
+static int hl_native_supervised_terminal_mount(const char *rootfs) {
+    if (!isatty(STDIN_FILENO)) return 0;
+    int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    struct open_how how = {.flags = O_PATH | O_CLOEXEC,
+                           .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
+    int target = root < 0 ? -1 : (int)syscall(SYS_openat2, root, "dev/tty", &how, sizeof how);
+    struct stat source_status, target_status, mounted_status;
+    struct statx target_key, path_key, mounted_key;
+    if (target < 0 || fstat(STDIN_FILENO, &source_status) != 0 || !S_ISCHR(source_status.st_mode) ||
+        fstat(target, &target_status) != 0 || (!S_ISCHR(target_status.st_mode) && !S_ISREG(target_status.st_mode)) ||
+        syscall(SYS_statx, target, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &target_key) != 0) {
+        if (target >= 0) close(target);
+        if (root >= 0) close(root);
+        return -1;
+    }
+    if (S_ISCHR(target_status.st_mode)) { close(target); close(root); return 0; }
+    char target_path[PATH_MAX];
+    if (snprintf(target_path, sizeof target_path, "%s/dev/tty", rootfs) >= (int)sizeof target_path) {
+        close(target); close(root); return -1;
+    }
+    int path = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    int stable = path >= 0 && syscall(SYS_statx, path, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &path_key) == 0 &&
+                 path_key.stx_ino == target_key.stx_ino && path_key.stx_mnt_id == target_key.stx_mnt_id;
+    if (path >= 0) close(path);
+    if (!stable) { close(target); close(root); errno = ESTALE; return -1; }
+    int dev = (int)syscall(SYS_openat2, root, "dev", &how, sizeof how);
+    struct stat before_replace;
+    int replacement_ok = dev >= 0 && fstatat(dev, "tty", &before_replace, AT_SYMLINK_NOFOLLOW) == 0 &&
+                         before_replace.st_dev == target_status.st_dev && before_replace.st_ino == target_status.st_ino &&
+                         unlinkat(dev, "tty", 0) == 0 &&
+                         mknodat(dev, "tty", S_IFCHR | 0600, makedev(5, 0)) == 0;
+    if (dev >= 0) close(dev);
+    if (!replacement_ok) { close(target); close(root); return -1; }
+    int mounted = open(target_path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    int exact = mounted >= 0;
+    if (exact && fstat(mounted, &mounted_status) != 0) exact = 0;
+    if (exact && !S_ISCHR(mounted_status.st_mode)) { errno = ENODEV; exact = 0; }
+    if (exact && mounted_status.st_rdev != makedev(5, 0)) {
+        errno = EXDEV;
+        exact = 0;
+    }
+    if (exact && syscall(SYS_statx, mounted, "", AT_EMPTY_PATH, STATX_INO | STATX_MNT_ID, &mounted_key) != 0) exact = 0;
+    if (exact && mounted_key.stx_ino == target_key.stx_ino) { errno = ESTALE; exact = 0; }
+    if (mounted >= 0) close(mounted);
+    close(target); close(root);
+    if (!exact) return -1;
     return 0;
 }
 
@@ -784,6 +834,7 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
     if (hl_native_supervised_volumes_mount(projected_root, volumes, options) != 0) return -1;
+    if (hl_native_supervised_terminal_mount(projected_root) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
         !hl_native_supervised_volumes_contains(volumes, "/etc/hosts") &&
         hl_native_supervised_project_hostname(projected_root, box->hostname,
