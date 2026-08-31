@@ -276,6 +276,14 @@ fn syscall_has_errno(number: libc::c_long, arguments: [libc::c_long; 3], accepte
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn x86_64_executable_header(regular: bool, header: Option<[u8; 20]>) -> bool {
+    let Some(header) = header else { return false };
+    regular
+        && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
+        && u16::from_le_bytes([header[18], header[19]]) == 62
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
     use std::os::unix::fs::{FileExt, OpenOptionsExt};
     use std::os::unix::ffi::OsStrExt;
@@ -285,12 +293,10 @@ fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(std::ffi::OsStr::from_bytes(path));
-    file.is_ok_and(|file| {
-        file.metadata().is_ok_and(|metadata| metadata.is_file())
-            && file.read_exact_at(&mut header, 0).is_ok()
-    })
-        && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
-        && u16::from_le_bytes([header[18], header[19]]) == 62
+    let Ok(file) = file else { return false };
+    let regular = file.metadata().is_ok_and(|metadata| metadata.is_file());
+    let header = file.read_exact_at(&mut header, 0).is_ok().then_some(header);
+    x86_64_executable_header(regular, header)
 }
 
 fn hostname_valid(hostname: &[u8]) -> bool {
@@ -735,6 +741,11 @@ mod native_eligibility_tests {
         assert!(!executable_is_x86_64(Some(fifo.as_os_str().as_encoded_bytes())));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(!executable_is_x86_64(Some(b"/dev/null")));
+        let mut valid = [0_u8; 20];
+        valid[..6].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1]);
+        valid[18..20].copy_from_slice(&62_u16.to_le_bytes());
+        assert!(!x86_64_executable_header(false, Some(valid)), "valid bytes over nonregular authority admitted");
+        assert!(x86_64_executable_header(true, Some(valid)));
     }
 
     #[test]

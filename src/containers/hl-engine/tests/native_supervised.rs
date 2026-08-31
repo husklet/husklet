@@ -251,50 +251,6 @@ fn eligible_auto_equals_explicit_on_and_off_stays_translated() {
     assert_ne!((&translated.0, &translated.1), (&automatic.0, &automatic.1));
 }
 
-/// Measurement-only product-plan driver. The caller supplies a fresh canonical day root for each
-/// process; keeping this ignored prevents the ordinary gate from depending on a benchmark corpus.
-#[test]
-#[ignore = "requires HL_NATIVE_AUTO_DAY_ROOT canonical developer-session root"]
-fn automatic_daily_developer_session() {
-    let root = PathBuf::from(std::env::var_os("HL_NATIVE_AUTO_DAY_ROOT").expect("day root"));
-    let control = std::env::var("HL_NATIVE_AUTO_DAY_CONTROL").ok();
-    let mut options = Options::default();
-    if let Some(control) = control.as_deref() {
-        options.set("HL_NATIVE_SUPERVISED", control, true).unwrap();
-    }
-    let output = Arc::new(Output::default());
-    let guest_link = std::fs::read_link(root.join("bin/sh")).unwrap();
-    let executable = root.join(guest_link.strip_prefix("/").unwrap_or(&guest_link));
-    let plan = RuntimePlan {
-        rootfs: Some(root.as_os_str().as_encoded_bytes().to_vec()),
-        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![b"bin/sh".to_vec(), b"/work/session.sh".to_vec()],
-        environment: Vec::new(),
-        result_path: None,
-        options,
-        box_policy: RuntimeBoxPolicy {
-            hostname: Some(b"native-auto-day".to_vec()),
-            ..isolated_policy()
-        },
-    };
-    let engine = Engine::with_streams(
-        GuestIsa::X86_64,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
-    engine.start().unwrap();
-    let exit = engine.wait().unwrap();
-    engine.destroy().unwrap();
-    assert_eq!((exit.kind, exit.guest_status), (ExitKind::Code, 0));
-    let stdout = output.stdout.lock().unwrap().clone();
-    assert_eq!(stdout.iter().filter(|&&byte| byte == b'\n').count(), 8);
-    assert!(stdout.windows(b"spawned=300".len()).any(|window| window == b"spawned=300"));
-    let semantic = std::fs::read_to_string(root.join("work/semantic.sha256")).unwrap();
-    assert_eq!(semantic.split_whitespace().next(), Some("352e97dab05b2a584920171525b9c0c93240b2c8d1f4ca34a8f55d3b7d8d700b"));
-    std::io::Write::write_all(&mut std::io::stdout(), &stdout).unwrap();
-}
-
 #[test]
 fn explicit_on_names_prelaunch_policy_refusal() {
     let work = TempDir::new().unwrap();
