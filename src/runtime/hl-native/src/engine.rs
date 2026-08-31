@@ -563,10 +563,24 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 192..=196 {
+        for scenario in [192, 194, 195, 196] {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "indirect IBTC scenario {scenario}");
         }
+        // Scenario 193 is the unresolved-indirect marker-5 hit arm. Keep it
+        // explicit so an independently-added selector cannot hide it again.
+        assert_eq!(unsafe { hook(193) }, 0, "indirect IBTC scenario 193");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn translation_reuses_the_authoritative_decoder_bytes() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: scenario 197 owns bounded mappings and restores all process-global test state.
+        assert_eq!(unsafe { hook(197) }, 0, "single-fetch scenario 197");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]

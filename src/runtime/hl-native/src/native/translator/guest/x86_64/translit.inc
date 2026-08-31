@@ -3206,7 +3206,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         }
         return 0;
     }
-    if (scenario == 193) return translit_single_fetch_test();
+    if (scenario == 197) return translit_single_fetch_test();
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -6491,7 +6491,7 @@ static int translit_single_fetch_test(void) {
     if (arena == MAP_FAILED || guest == MAP_FAILED) {
         if (arena != MAP_FAILED) munmap(arena, arena_size);
         if (guest != MAP_FAILED) munmap(guest, 4096);
-        return 193;
+        return 197;
     }
     guest[0] = 0x90; /* NOP */
     guest[1] = 0xc3; /* RET */
@@ -6506,7 +6506,7 @@ static int translit_single_fetch_test(void) {
     g_rw2rx = 0;
     g_dualmap = 1;
     translit_selected = 1;
-    g_cache_gen = UINT64_MAX - 193;
+    g_cache_gen = UINT64_MAX - 197;
     map_clear();
     translit_fall_fixture_bytes = guest;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
