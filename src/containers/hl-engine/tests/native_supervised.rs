@@ -571,7 +571,7 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     std::fs::create_dir_all(root.join("tmp")).unwrap();
     std::fs::create_dir_all(root.join("proc")).unwrap();
     std::fs::create_dir_all(root.join("etc")).unwrap();
-    std::fs::write(root.join("etc/hosts"), b"127.0.0.1\toriginal-marker").unwrap();
+    std::fs::write(root.join("etc/hosts"), b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker").unwrap();
     std::fs::set_permissions(root.join("etc/hosts"), std::fs::Permissions::from_mode(0o640)).unwrap();
     std::fs::write(root.join("proc/hostile"), b"host").unwrap();
     let executable = root.join("bin/fixture");
@@ -593,8 +593,23 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
     assert_eq!(*output.stdout.lock().unwrap(), b"root-contract-hostname");
-    assert_eq!(std::fs::read(root.join("etc/hosts")).unwrap(), b"127.0.0.1\toriginal-marker");
+    assert_eq!(std::fs::read(root.join("etc/hosts")).unwrap(), b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker");
     assert_eq!(std::fs::metadata(root.join("etc/hosts")).unwrap().permissions().mode() & 0o7777, 0o640);
+}
+
+#[test]
+fn supervised_projector_refuses_hostname_hosts_token_injection() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    for hostname in [b"husklet\n127.0.0.1 injected".as_slice(), b"bad_host".as_slice()] {
+        let mut plan = selected_plan(&executable);
+        plan.box_policy.hostname = Some(hostname.to_vec());
+        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        if engine.start().is_ok() {
+            assert!(engine.wait().is_err());
+        }
+        engine.destroy().unwrap();
+    }
 }
 
 #[test]

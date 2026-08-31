@@ -384,14 +384,26 @@ static int hl_native_supervised_loopback_up(void) {
  * Keep its own hostname local, as the translated network does, without
  * modifying the image's identity file: bind a mode/owner-preserving copy over
  * the existing /etc/hosts only inside this mount namespace. */
-static int hl_native_supervised_project_hostname(const char *root, const char *hostname) {
+static int hl_native_supervised_project_hostname(const char *root, const char *hostname, int read_only) {
     char inherited[HOST_NAME_MAX + 1];
     if (hostname == NULL || hostname[0] == 0) {
         if (gethostname(inherited, HOST_NAME_MAX) != 0) return -1;
         inherited[HOST_NAME_MAX] = 0;
         hostname = inherited;
     }
-    if (hostname[0] == 0 || strpbrk(hostname, "\r\n\t ") != NULL) {
+    size_t hostname_length = strlen(hostname);
+    int valid_hostname = hostname_length > 0 && hostname_length <= HOST_NAME_MAX;
+    for (size_t index = 0; valid_hostname && index < hostname_length; ++index) {
+        unsigned char byte = (unsigned char)hostname[index];
+        int alphanumeric = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+                           (byte >= '0' && byte <= '9');
+        if (!alphanumeric && byte != '-' && byte != '.') valid_hostname = 0;
+        if (byte == '-' && (index == 0 || index + 1 == hostname_length || hostname[index - 1] == '.' ||
+                            hostname[index + 1] == '.')) valid_hostname = 0;
+        if (byte == '.' && (index == 0 || index + 1 == hostname_length || hostname[index - 1] == '.' ||
+                            hostname[index - 1] == '-')) valid_hostname = 0;
+    }
+    if (!valid_hostname) {
         errno = EINVAL;
         return -1;
     }
@@ -415,36 +427,39 @@ static int hl_native_supervised_project_hostname(const char *root, const char *h
     if (output < 0) { close(input); return -1; }
     int exact = fchown(output, metadata.st_uid, metadata.st_gid) == 0 &&
                 fchmod(output, metadata.st_mode & 07777) == 0;
-    char buffer[16384];
+    char *contents = malloc(1024u * 1024u + 1);
+    if (contents == NULL) { close(input); close(output); unlink(temporary); return -1; }
     size_t total = 0;
-    unsigned char last = '\n';
     while (exact) {
-        ssize_t count = read(input, buffer, sizeof buffer);
+        ssize_t count = read(input, contents + total, 1024u * 1024u + 1 - total);
         if (count < 0) { if (errno == EINTR) continue; exact = 0; break; }
         if (count == 0) break;
-        if (total > 1024u * 1024u - (size_t)count) { errno = EFBIG; exact = 0; break; }
         total += (size_t)count;
-        last = (unsigned char)buffer[count - 1];
-        size_t written = 0;
-        while (written < (size_t)count) {
-            ssize_t step = write(output, buffer + written, (size_t)count - written);
-            if (step < 0 && errno == EINTR) continue;
-            if (step <= 0) { exact = 0; break; }
-            written += (size_t)step;
-        }
+        if (total > 1024u * 1024u) { errno = EFBIG; exact = 0; break; }
     }
-    if (exact && total != 0 && last != '\n') exact = write(output, "\n", 1) == 1;
     if (exact) {
         char record[HOST_NAME_MAX + 16];
         int length = snprintf(record, sizeof record, "127.0.1.1\t%s\n", hostname);
         exact = length > 0 && (size_t)length < sizeof record && write(output, record, (size_t)length) == length;
         if (!exact && errno == 0) errno = EINVAL;
     }
+    size_t written = 0;
+    while (exact && written < total) {
+        ssize_t step = write(output, contents + written, total - written);
+        if (step < 0 && errno == EINTR) continue;
+        if (step <= 0) { exact = 0; break; }
+        written += (size_t)step;
+    }
+    free(contents);
     int failure = errno;
     close(input);
     if (close(output) != 0 && exact) { exact = 0; failure = errno; }
     if (exact) {
         exact = mount(temporary, target, NULL, MS_BIND, NULL) == 0;
+        if (!exact) failure = errno;
+    }
+    if (exact && read_only) {
+        exact = mount(NULL, target, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) == 0;
         if (!exact) failure = errno;
     }
     (void)unlink(temporary);
@@ -518,7 +533,8 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;
     if (hl_native_supervised_volumes_mount(projected_root, volumes) != 0) return -1;
     if ((box->flags & HL_ENGINE_BOX_NETWORK_ISOLATED) != 0 &&
-        hl_native_supervised_project_hostname(projected_root, box->hostname) != 0)
+        hl_native_supervised_project_hostname(projected_root, box->hostname,
+                                              (box->flags & HL_ENGINE_BOX_ROOTFS_READ_ONLY) != 0) != 0)
         return -1;
     char proc_target[PATH_MAX];
     if (snprintf(proc_target, sizeof(proc_target), "%s%s", projected_root, "/proc") >= (int)sizeof(proc_target)) return -1;

@@ -262,6 +262,13 @@ int main(int argc, char **argv) {
         int hostname_local = local != NULL && ntohl(local->sin_addr.s_addr) == UINT32_C(0x7f000101);
         freeaddrinfo(resolved);
         if (!hostname_local) return 84;
+        char hosts[256] = {0};
+        int hosts_fd = open("/etc/hosts", O_RDONLY);
+        if (hosts_fd < 0 || read(hosts_fd, hosts, sizeof(hosts) - 1) <= 0 ||
+            strstr(hosts, "192.0.2.10\thusklet-native") == NULL) return 86;
+        close(hosts_fd);
+        errno = 0;
+        if (open("/etc/hosts", O_WRONLY) != -1 || errno != EROFS) return 87;
         errno = 0;
         if (open("/etc/hostname", O_RDONLY) != -1 || errno != ENOENT) return 82;
         errno = 0;
