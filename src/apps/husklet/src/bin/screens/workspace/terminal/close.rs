@@ -15,7 +15,9 @@ impl CloseRequest {
             let dialog_parent = parent.clone();
             crate::gtk_adapter::Dialog::present(
                 Some(dialog_parent.upcast_ref()),
-                crate::components::dialog::CloseWorkspace::model(),
+                crate::components::dialog::CloseWorkspace::model(
+                    terminal.ws.execution_lifetime == hl::config::ExecutionLifetime::Persisted,
+                ),
                 move |event| {
                     let Some(choice) = crate::components::dialog::CloseWorkspace::choice(&event) else {
                         return;

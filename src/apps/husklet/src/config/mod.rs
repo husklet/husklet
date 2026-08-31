@@ -29,6 +29,8 @@ use hl_ws_term::config::{CursorShape, TermConfig};
 pub enum ExecutionLifetime {
     #[default]
     Persisted,
+    /// Retains live pane identity and reattachment, but cannot survive workspace shutdown.
+    Live,
     Ephemeral,
 }
 
@@ -37,6 +39,7 @@ impl ExecutionLifetime {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Persisted => "persisted",
+            Self::Live => "live",
             Self::Ephemeral => "ephemeral",
         }
     }
@@ -45,6 +48,7 @@ impl ExecutionLifetime {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "persisted" => Some(Self::Persisted),
+            "live" => Some(Self::Live),
             "ephemeral" => Some(Self::Ephemeral),
             _ => None,
         }
