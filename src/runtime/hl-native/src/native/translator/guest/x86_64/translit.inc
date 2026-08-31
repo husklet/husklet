@@ -2670,13 +2670,13 @@ static int translit_owner_append_pcache_census(jit_body_owner_range ranges[TL_MA
         !translit_owner_append(ranges, count, site->rax_canonical, site->rsp_canonical, guest, rax) ||
         !translit_owner_append(ranges, count, site->rsp_canonical, site->flags_canonical, guest, both) ||
         !translit_owner_append(ranges, count, site->flags_canonical, site->atomic_end,
-                               JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS, both) ||
+                               guest, both | JIT_BODY_OWNER_FLAGS_FROM_CPU) ||
         !translit_owner_append(ranges, count, site->atomic_end, site->flags_live,
-                               JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS, both) ||
+                               guest, both | JIT_BODY_OWNER_FLAGS_FROM_CPU) ||
         !translit_owner_append(ranges, count, site->flags_live, site->rax_live,
-                               JIT_BODY_OWNER_DYNAMIC_RIP, both) ||
+                               guest, both) ||
         !translit_owner_append(ranges, count, site->rax_live, site->rsp_live,
-                               JIT_BODY_OWNER_DYNAMIC_RIP, rsp)) return 0;
+                               guest, rsp)) return 0;
     return *count - before == TL_PCACHE_CENSUS_OWNER_RANGES;
 }
 
@@ -8515,6 +8515,10 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         flags_from_cpu = guest_pc == JIT_BODY_OWNER_DYNAMIC_RIP_FLAGS;
         guest_pc = cpu->rip;
     }
+    if (preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_CPU) {
+        flags_from_cpu = 1;
+        preserve_registers &= ~JIT_BODY_OWNER_FLAGS_FROM_CPU;
+    }
     if (preserve_registers & JIT_BODY_OWNER_PRESERVE_RET_RAX) {
         cpu->r[HL_X64_RAX] = cpu->mmscratch[1];
         preserve_registers &= ~JIT_BODY_OWNER_PRESERVE_RET_RAX;
@@ -8813,7 +8817,7 @@ static int translit_pcache_census_signal_stage_test(void) {
             cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
-        cpu.rip = guest; cpu.mmscratch[0] = UINT64_C(0x853);
+        cpu.rip = UINT64_C(0xdead000000000206); cpu.mmscratch[0] = UINT64_C(0x853);
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
         HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
         exact = translit_signal_capture(&cpu, &context) && cpu.rip == guest && cpu.reason == R_BRANCH;

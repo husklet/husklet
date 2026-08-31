@@ -1995,6 +1995,10 @@ typedef struct {
 _Static_assert(sizeof(jit_body_owner_entry) == 16, "body owner ABI must stay compact");
 typedef uint32_t jit_body_owner_preserve;
 #define JIT_BODY_OWNER_PRESERVE_RET_RAX (1u << 16)
+#define JIT_BODY_OWNER_FLAGS_FROM_CPU (1u << 17)
+_Static_assert((JIT_BODY_OWNER_PRESERVE_RET_RAX & UINT16_MAX) == 0 &&
+               (JIT_BODY_OWNER_FLAGS_FROM_CPU & (UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) == 0,
+               "body owner metadata must not collide with the GPR preserve mask");
 typedef struct {
     uint64_t generation;
     uint8_t *rw;
@@ -2185,7 +2189,8 @@ static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
     uint32_t previous_end = token == 0 ? 0 : entries[token - 1].rw_end;
     for (uint32_t i = 0; i < wanted; i++) {
         if (range[i].hi <= range[i].lo || range[i].lo < base || range[i].hi > base + CACHE_SZ ||
-            (range[i].preserve_registers & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) != 0)
+            (range[i].preserve_registers & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX |
+                                             JIT_BODY_OWNER_FLAGS_FROM_CPU)) != 0)
             return 0;
         uint32_t start = (uint32_t)(range[i].lo - base), end = (uint32_t)(range[i].hi - base);
         if ((token != 0 || i != 0) && previous_end > start) return 0;
