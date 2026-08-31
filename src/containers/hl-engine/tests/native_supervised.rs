@@ -969,9 +969,13 @@ fn supervised_projector_refuses_missing_symlinked_and_wrong_type_file_volumes() 
 #[test]
 fn supervised_projector_refuses_target_swap_after_pinning_without_mounting_replacement() {
     let work = TempDir::new().unwrap();
-    let executable = fixture(work.path());
+    let built = fixture(work.path());
     let root = work.path().join("root");
-    std::fs::create_dir_all(root.join("etc")).unwrap();
+    for path in [root.join("bin"), root.join("proc"), root.join("etc")] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
     let source = work.path().join("source");
     std::fs::write(&source, b"trusted-source\n").unwrap();
     std::fs::write(root.join("etc/target"), b"pinned-target\n").unwrap();
