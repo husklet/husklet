@@ -714,7 +714,7 @@ mod native_eligibility_tests {
         let mut wrong_mode = isolated;
         wrong_mode.box_policy.network_mode = 1;
         assert_eq!(
-            native_auto_eligibility(&wrong_mode, host(), verdict(&wrong_mode, host())),
+            native_auto_eligibility(&wrong_mode, host(), Ok(())),
             Err(NativeSupervisedRefusal::Network),
         );
     }
