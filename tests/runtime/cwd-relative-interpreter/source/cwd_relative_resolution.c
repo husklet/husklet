@@ -46,8 +46,8 @@ static int read_tag(int fd, const char *tag, struct stat *status) {
     return 0;
 }
 
-static int listed(const char *leaf) {
-    int fd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+static int listed_in(const char *directory, const char *leaf) {
+    int fd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) return 0;
     char bytes[1024];
     int found = 0;
@@ -66,6 +66,22 @@ static int listed(const char *leaf) {
     }
     close(fd);
     return found == 1;
+}
+
+static int listed(const char *leaf) {
+    return listed_in(".", leaf);
+}
+
+static int create_and_list_relative(const char *directory) {
+    char relative[96], child[128], absolute[256];
+    snprintf(relative, sizeof relative, ".husklet-created-%ld", (long)getpid());
+    snprintf(child, sizeof child, "%s/child", relative);
+    snprintf(absolute, sizeof absolute, "%s/%s", directory, relative);
+    if (mkdir(relative, 0700) != 0 || write_tag(child, "CREATED") != 0) return 16;
+    int result = listed_in(relative, "child") ? 0 : 17;
+    unlink(child);
+    rmdir(absolute);
+    return result;
 }
 
 static int check_here(const char *directory, const char *absolute, const char *leaf, const char *tag) {
@@ -96,6 +112,8 @@ static int child_status(pid_t child) {
 
 static int exercise(const char *directory, const char *absolute, const char *leaf, const char *tag) {
     int result = check(directory, absolute, leaf, tag);
+    if (result != 0) return result;
+    result = create_and_list_relative(directory);
     if (result != 0) return result;
     pid_t child = fork();
     if (child == 0) _exit(check_here(directory, absolute, leaf, tag));
