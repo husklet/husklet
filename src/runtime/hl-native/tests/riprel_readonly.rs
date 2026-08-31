@@ -13,9 +13,9 @@ fn native_globals() -> std::sync::MutexGuard<'static, ()> {
 fn translator_reuses_the_authorized_decoder_bytes() {
     let _guard = native_globals();
     assert_eq!(
-        hl_native::x86_64_translit_displaced_test(193),
+        hl_native::x86_64_translit_displaced_test(205),
         0,
-        "a one-instruction translated block must fetch its guest bytes exactly once"
+        "translated instructions must reuse authoritative decoder bytes, including at a page boundary"
     );
 }
 
