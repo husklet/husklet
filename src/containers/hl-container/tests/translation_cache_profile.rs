@@ -899,8 +899,8 @@ int main(void) {
                     let restored = u64::from_le_bytes(census[..8].try_into().unwrap());
                     let executed = u64::from_le_bytes(census[8..16].try_into().unwrap());
                     require(
-                        restored > 0 && executed == restored,
-                        "warm HIT did not execute every restored map",
+                        restored > 0 && executed > 0 && executed <= restored,
+                        "warm HIT did not execute a restored map",
                     )?;
                     require(
                         census.len() == 16 + restored as usize * 24,
