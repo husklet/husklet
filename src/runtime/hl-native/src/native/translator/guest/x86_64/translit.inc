@@ -2218,7 +2218,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint6
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    int guard = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_HIT) == 0;
+    int guard = 1;
 #if defined(HL_NATIVE_TEST_HOOKS)
     guard = translit_test_jcc_guard;
 #endif
