@@ -2735,6 +2735,62 @@ static int translit_lower_natural_riprel_readonly(hl_x64_asm *a, const struct in
     return !a->overflow;
 }
 
+// Lower any ordinary integer RIP-relative memory operand through a borrowed guest register.  The
+// register is first copied to the canonical cpu image; owner ranges make the memory instruction the
+// precise fault point and retire it at op_end, while preserving the borrowed value until restoration.
+// Rebuilding only the addressing tail retains every legacy prefix, opcode, immediate, LOCK semantics,
+// operand width and flag effect of the decoder-approved instruction.
+static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct insn *insn,
+                                                  const uint8_t *bytes, uint64_t storage_target,
+                                                  int *scratch_out, uint8_t **save_end,
+                                                  uint8_t **op_end) {
+    if (!insn->has_modrm || !insn->is_mem || !insn->rip_rel || insn->mod != 0 || insn->rm != 5 ||
+        insn->addr32 || insn->seg || insn->vex || insn->evex || insn->map3)
+        return 0;
+    int modrm_offset = insn->len - insn->imm_bytes - 5;
+    if (modrm_offset < 1 || modrm_offset + 5 + insn->imm_bytes != insn->len) return 0;
+
+    // Adding a REX prefix would rename AH/CH/DH/BH. In that one encoding family borrow RSI/RDI so the
+    // rebuilt operation remains prefix-free; otherwise R10/R11 have no implicit integer role.
+    int byte_reg_operand = !insn->two &&
+                           ((insn->op < 0x40 && (insn->op & 7) <= 3) || insn->op == 0x84 ||
+                            insn->op == 0x86 || insn->op == 0x88 || insn->op == 0x8A);
+    int high_byte = !insn->has_rex && byte_reg_operand && insn->reg >= 4 && insn->reg <= 7;
+    int scratch = high_byte ? (insn->reg == 6 ? 7 : 6)
+                            : (insn->reg == HL_X64_R11 ? 10 : HL_X64_R11);
+    hl_x64_store_gs(a, scratch, R_OFF(scratch));
+    *save_end = a->cursor;
+    hl_x64_mov_imm64(a, scratch, storage_target);
+
+    int rex_offset = -1;
+    for (int i = 0; i < modrm_offset; ++i)
+        if ((bytes[i] & 0xF0) == 0x40) rex_offset = i;
+    if (rex_offset < 0 && scratch >= 8) {
+        int prefix_end = 0;
+        while (prefix_end < modrm_offset) {
+            uint8_t byte = bytes[prefix_end];
+            if (byte != 0xF0 && byte != 0xF2 && byte != 0xF3 && byte != 0x66 &&
+                byte != 0x2E && byte != 0x36 && byte != 0x3E && byte != 0x26 &&
+                byte != 0x64 && byte != 0x65)
+                break;
+            hl_x64_u8(a, byte);
+            ++prefix_end;
+        }
+        hl_x64_u8(a, 0x41); // REX.B selects R10/R11 without changing operand width
+        for (int i = prefix_end; i < modrm_offset; ++i) hl_x64_u8(a, bytes[i]);
+    } else {
+        for (int i = 0; i < modrm_offset; ++i)
+            hl_x64_u8(a, (uint8_t)(bytes[i] | (i == rex_offset && scratch >= 8 ? 1 : 0)));
+    }
+    hl_x64_u8(a, (uint8_t)((bytes[modrm_offset] & 0xF8) | (scratch & 7)));
+    for (int i = 0; i < insn->imm_bytes; ++i) hl_x64_u8(a, bytes[modrm_offset + 5 + i]);
+    *op_end = a->cursor;
+    hl_x64_load_gs(a, scratch, R_OFF(scratch));
+    if (a->overflow) return 0;
+    *scratch_out = scratch;
+    return 1;
+}
+
 static int translit_fix_riprel(struct translit_builder *b, const struct insn *insn, uint64_t guest_next,
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
@@ -4401,13 +4457,20 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                        translit_lower_natural_riprel_readonly(a, &insn, storage_target,
                                                                               &riprel_readonly_save_end,
                                                                               &riprel_readonly_op_end);
+                int integer_lowered = 0;
+                if (!readonly_lowered && !g_nonpie_lo && !direct_data_authority &&
+                    !(context->riprel_load_bridge_enabled && !insn.two && insn.op == 0x8B) &&
+                    !(insn.op == 0x8D && !insn.two))
+                    integer_lowered = translit_lower_natural_riprel_integer(
+                        a, &insn, bytes, storage_target, &preserve_register,
+                        &riprel_readonly_save_end, &riprel_readonly_op_end);
                 int executable_target = !g_nonpie_lo &&
                                         gnx_hit(storage_target, insn.opsize == 8 ? 8 : 4);
                 int executable_alias = !g_nonpie_lo &&
                                        jit86_load_has_exec_alias(storage_target, insn.opsize == 8 ? 8 : 4);
                 // Natural low ET_EXEC currently admits only the measured dominant form.  The wider helper
                 // remains available to displaced images, whose complete family is covered separately.
-                if (!readonly_lowered &&
+                if (!readonly_lowered && !integer_lowered &&
                     ((!g_nonpie_lo && (insn.two || (insn.op != 0x8B && insn.op != 0x8D))) ||
                     !translit_lower_absolute_riprel(a, &insn, guest_target, storage_target, g_nonpie_lo != 0,
                                                     context->riprel_load_bridge_enabled &&
@@ -5318,7 +5381,8 @@ static int translit_riprel_readonly_rejection_test(unsigned scenario) {
     struct interp_block *block = (struct interp_block *)arena;
     uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
     void *body = context == NULL ? NULL : translit_build(context, block, source, NULL);
-    int result = body == NULL || block->profile_insns == 0 ? 0 : 248;
+    int admitted = body != NULL && block->profile_insns == 1;
+    int result = scenario <= 164 ? (admitted ? 248 : 0) : (admitted ? 0 : 248);
     (void)hl_option_unset("HL_TRANSLIT_RIPREL_READONLY");
     translit_fall_fixture_bytes = NULL;
     if (context != NULL) hl_x86_hot_context_destroy(context);
@@ -5688,7 +5752,7 @@ static int translit_riprel_load_bridge_gate_test(void) {
     g_nonpie_bias = saved_nonpie_bias;
     munmap(guest, mapping_size);
     munmap(arena, mapping_size);
-    return execution_exact && shared_alias_exact && counts[0] == 0 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
+    return execution_exact && shared_alias_exact && counts[0] == 1 && counts[1] == 1 && counts[2] == 1 && counts[3] == 0 &&
                    counts[4] == 0 && counts[5] == 0 && counts[6] == 0 && counts[7] == 0
                ? 0
                : (int)((execution_error << 28) | (counts[0] << 24) | (counts[1] << 16) |
