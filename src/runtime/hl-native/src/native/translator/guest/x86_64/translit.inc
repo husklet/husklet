@@ -1858,6 +1858,7 @@ typedef struct {
     uint8_t *save_end;
     uint8_t *target_end;
     uint8_t *rip_end;
+    uint8_t *restore_end;
     uint8_t *end;
 } translit_jcc_ibtc_site_ranges;
 
@@ -1867,6 +1868,7 @@ static translit_jcc_ibtc_site_ranges translit_test_jcc_ibtc_site;
 static uint64_t translit_test_jcc_ibtc_source_guest;
 static int translit_test_jcc_ibtc_stub_fail;
 static int translit_test_direct_jmp_ibtc_stub_fail;
+static int translit_test_jcc_guard;
 #endif
 
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
@@ -2216,7 +2218,47 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint6
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
+    int guard = translit_jcc_ibtc_dynamic_counter(TL_JCC_IBTC_COUNT_HIT) == 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    guard = translit_test_jcc_guard;
+#endif
+    if (!guard) {
+        translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
+        ranges.end = a->cursor;
+        return ranges;
+    }
+    /* Flags-neutral constant-site guard. The aligned pair is generation-owned by g_ibtc: fill publishes
+       only a current-arena body, invalidation atomically drops it, and a non-preserved fork clears the table.
+       A matching nonzero target therefore implies a nonnull current body. XMM state is canonical at every
+       transliteration terminal, leaving XMM0..5 available without touching guest architectural state. */
+    hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX); // expected target
+    hl_x64_load_gs(a, HL_X64_RAX, OFF_IBTC);
+    hl_x64_load_xmm_aligned_disp32(a, 0, HL_X64_RAX, (int32_t)(ibtc_index(target) * sizeof(ibtc_ent)));
+    hl_x64_movdqa_xmm(a, 2, 0);
+    hl_x64_psrldq(a, 2, 8);                   // candidate body
+    hl_x64_pcmpeqd(a, 0, 1);                  // SSE2 64-bit equality: both dwords must match
+    hl_x64_pshufd(a, 3, 0, 0x00);
+    hl_x64_pshufd(a, 0, 0, 0x55);
+    hl_x64_pand(a, 0, 3);                     // target mask
+    hl_x64_load_gs(a, HL_X64_RAX, OFF_IRQ);
+    hl_x64_movq_reg_to_xmm(a, 4, HL_X64_RAX);
+    hl_x64_pxor(a, 5, 5);
+    hl_x64_pcmpeqd(a, 4, 5);
+    hl_x64_pshufd(a, 3, 4, 0x00);
+    hl_x64_pshufd(a, 4, 4, 0x55);
+    hl_x64_pand(a, 4, 3);
+    hl_x64_pand(a, 0, 4);                     // hit only while irq == 0
+    hl_x64_movdqa_xmm(a, 3, 0);
+    translit_helper_lea(a, HL_X64_RAX, translit_jcc_ibtc_stub_entry, 0);
+    hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX);
+    hl_x64_pandn(a, 0, 1);                    // miss helper
+    hl_x64_pand(a, 2, 3);                     // hit body
+    hl_x64_por(a, 2, 0);
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 2);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+    hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.restore_end = a->cursor;
+    hl_x64_jmp_gs_indirect(a, TL_MM_ENTRY);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -2732,8 +2774,12 @@ static int translit_owner_append_ibtc(jit_body_owner_range ranges[TL_MAX_OWNER_R
     return translit_owner_append(ranges, count, instruction_start, site->save_end, guest, 0) &&
            translit_owner_append(ranges, count, site->save_end, site->rip_end, guest,
                                  1u << HL_X64_RAX) &&
-           translit_owner_append(ranges, count, site->rip_end, site->end,
+           translit_owner_append(ranges, count, site->rip_end,
+                                 site->restore_end != NULL ? site->restore_end : site->end,
                                  JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
+           (site->restore_end == NULL ||
+            translit_owner_append(ranges, count, site->restore_end, site->end,
+                                  JIT_BODY_OWNER_DYNAMIC_RIP, 0)) &&
            translit_owner_append(ranges, count, site->end, instruction_end, guest, 0);
 }
 
@@ -4419,6 +4465,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
     }
     if (scenario >= 89 && scenario <= 100) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
+    if (scenario >= 208 && scenario <= 216) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
@@ -7572,6 +7627,12 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
 }
 
 static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
+    unsigned requested_scenario = scenario;
+    if (scenario >= 208 && scenario <= 216) {
+        static const uint8_t guard_scenarios[] = {90, 92, 93, 94, 95, 99, 98, 90, 90};
+        scenario = guard_scenarios[scenario - 208];
+        translit_test_jcc_guard = 1;
+    }
     if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0}, a_off = {off, off + sizeof off, 0};
@@ -7613,6 +7674,13 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         }
         memset(guest_bytes + TL_STITCH_MAX_JMPS * 2, 0x90,
                TL_MAX_INSNS - TL_STITCH_MAX_JMPS);
+        if (requested_scenario == 214) {
+            // The guarded form is deliberately capped at the architectural
+            // eight-site stitch budget; stop after those sites so the fixture
+            // measures their complete emitted footprint against TL_MAX_BYTES.
+            guest_bytes[TL_STITCH_MAX_JMPS * 2] = 0x0f;
+            guest_bytes[TL_STITCH_MAX_JMPS * 2 + 1] = 0x0b;
+        }
     } else {
         guest_bytes[0] = 0x31; // xor eax,eax -> ZF=1
         guest_bytes[1] = 0xc0;
@@ -7632,7 +7700,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     g_cache = arena;
     g_cp = arena;
     g_rw2rx = 0;
-    g_cache_gen = UINT64_MAX - scenario;
+    g_cache_gen = UINT64_MAX - requested_scenario;
     map_clear();
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest_bytes;
@@ -7708,13 +7776,15 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         uint32_t published = 0;
         jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 0);
         if (set != NULL) published = atomic_load_explicit(&set->count, memory_order_acquire);
-        int covered = source_block->host_len < TL_MAX_BYTES && published == 37;
+        uint32_t expected_owners = translit_test_jcc_guard ? 44 : 37;
+        int covered = source_block->host_len < TL_MAX_BYTES && published == expected_owners;
         uint8_t *body = (uint8_t *)source_block + source_block->host_entry_off;
         for (uint32_t offset = 0; covered && offset < source_block->host_len; offset++) {
             uint64_t owner = 0;
             covered = jit_body_owner_lookup((uint64_t)(uintptr_t)(body + offset), &owner);
         }
-        result = source_block->profile_insns == TL_MAX_INSNS && covered &&
+        uint32_t expected_insns = requested_scenario == 214 ? TL_STITCH_MAX_JMPS : TL_MAX_INSNS;
+        result = source_block->profile_insns == expected_insns && covered &&
                          __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) ==
                              emitted_before + TL_STITCH_MAX_JMPS
                      ? 0
@@ -7773,6 +7843,30 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     if (published.target != target || published.body != (uint8_t *)target_block + target_block->host_entry_off ||
         __atomic_load_n(&translit_jcc_ibtc_fill_count, __ATOMIC_RELAXED) != fill_before + 1)
         goto done_ibtc;
+
+    if (requested_scenario == 215) {
+        int flushed = hl_x86_flush_for_thread_start();
+        ibtc_ent cleared = ibtc_snapshot(cell);
+        result = flushed && cleared.target == 0 && cleared.body == NULL ? 0 : 152;
+        goto done_ibtc;
+    }
+
+    if (requested_scenario == 216) {
+        pid_t child = fork();
+        if (child == 0) {
+            ibtc_clear_lazy();
+            ibtc_ent cleared = ibtc_snapshot(cell);
+            _exit(cleared.target == 0 && cleared.body == NULL ? 0 : 1);
+        }
+        int status = 0;
+        ibtc_ent parent_pair = ibtc_snapshot(cell);
+        result = child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                         WEXITSTATUS(status) == 0 && parent_pair.target == target &&
+                         parent_pair.body == published.body
+                     ? 0
+                     : 153;
+        goto done_ibtc;
+    }
 
     if (scenario == 92) {
         struct interp_block *collision_block = (struct interp_block *)g_cp;
@@ -7884,13 +7978,15 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
                      cpu.v[0] == UINT64_C(0x8877665544332211) && cpu.rip == target + 5 &&
                      cpu.nzcv == first_flags &&
                      __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before + 1 &&
-                     __atomic_load_n(&translit_jcc_ibtc_hit, __ATOMIC_RELAXED) == hit_before + 1 &&
+                     __atomic_load_n(&translit_jcc_ibtc_hit, __ATOMIC_RELAXED) ==
+                         hit_before + (translit_test_jcc_guard ? 0 : 1) &&
                      __atomic_load_n(&translit_jcc_ibtc_miss, __ATOMIC_RELAXED) == miss_before + 1 &&
                      __atomic_load_n(&translit_jcc_ibtc_irq, __ATOMIC_RELAXED) == irq_before
                  ? 0
                  : 143;
 
 done_ibtc:
+    translit_test_jcc_guard = 0;
     translit_test_jcc_ibtc_stub_fail = 0;
     (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
     translit_fall_fixture_bytes = NULL;
@@ -8896,23 +8992,30 @@ static int translit_jcc_ibtc_signal_stage_test(int direct_jmp) {
         uint64_t cpu_rip;
         uint64_t expected_rip;
         int flags_from_cpu;
+        int enabled;
     } stages[] = {
         {translit_test_jcc_ibtc_instruction_start, 0, dynamic_target,
-         translit_test_jcc_ibtc_source_guest, 0},
+         translit_test_jcc_ibtc_source_guest, 0, 1},
         {translit_test_jcc_ibtc_site.save_end, 1u << HL_X64_RAX,
-         translit_test_jcc_ibtc_source_guest, translit_test_jcc_ibtc_source_guest, 0},
+         translit_test_jcc_ibtc_source_guest, translit_test_jcc_ibtc_source_guest, 0, 1},
         {translit_test_jcc_ibtc_site.target_end, 1u << HL_X64_RAX,
-         translit_test_jcc_ibtc_source_guest, translit_test_jcc_ibtc_source_guest, 0},
-        {translit_test_jcc_ibtc_site.rip_end, 1u << HL_X64_RAX, dynamic_target, dynamic_target, 0},
-        {stub_entry, 1u << HL_X64_RAX, dynamic_target, dynamic_target, 0},
+         translit_test_jcc_ibtc_source_guest, translit_test_jcc_ibtc_source_guest, 0, 1},
+        {translit_test_jcc_ibtc_site.rip_end, 1u << HL_X64_RAX, dynamic_target, dynamic_target, 0, 1},
+        {translit_test_jcc_ibtc_site.restore_end != NULL ? translit_test_jcc_ibtc_site.restore_end - 1 : NULL,
+         1u << HL_X64_RAX, dynamic_target, dynamic_target, 0,
+         !direct_jmp && translit_test_jcc_ibtc_site.restore_end != NULL},
+        {translit_test_jcc_ibtc_site.restore_end, 0, dynamic_target, dynamic_target, 0,
+         !direct_jmp && translit_test_jcc_ibtc_site.restore_end != NULL},
+        {stub_entry, 1u << HL_X64_RAX, dynamic_target, dynamic_target, 0, 1},
         {stub_rsp, (1u << HL_X64_RAX) | (1u << HL_X64_RSP),
-         dynamic_target, dynamic_target, 0},
-        {stub_flags, UINT16_MAX, dynamic_target, dynamic_target, 1},
+         dynamic_target, dynamic_target, 0, 1},
+        {stub_flags, UINT16_MAX, dynamic_target, dynamic_target, 1, 1},
     };
     int saved_selected = translit_selected;
     translit_selected = 1;
     int exact = 1;
     for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; stage++) {
+        if (!stages[stage].enabled) continue;
         struct cpu cpu = {0}, expected_flags_cpu = {0};
         ucontext_t context;
         memset(&context, 0, sizeof context);
