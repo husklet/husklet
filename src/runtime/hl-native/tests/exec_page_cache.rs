@@ -122,9 +122,9 @@ fn x86_decode_authority_revalidates_after_fork() {
 #[test]
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
-        assert_eq!(exec_page_cache_test(isa, 15), Ok(2));
-        assert_eq!(exec_page_cache_test(isa, 16), Ok(3));
-        assert_eq!(exec_page_cache_test(isa, 17), Ok(2));
+        assert_eq!(exec_page_cache_test(isa, 15), Ok(if isa == 1 { 3 } else { 2 }), "isa={isa}");
+        assert_eq!(exec_page_cache_test(isa, 16), Ok(if isa == 1 { 4 } else { 3 }), "isa={isa}");
+        assert_eq!(exec_page_cache_test(isa, 17), Ok(2), "isa={isa}");
     }
 }
 

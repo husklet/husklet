@@ -3152,7 +3152,7 @@ static void pcache_save(void) {
     }
     if (g_pcache_loaded && g_coldprof) {
         uint64_t restored = 0, executed = 0;
-        for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        for (uint32_t i = 0; i < map_capacity(); i++) {
             if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
             struct interp_block *block = (struct interp_block *)g_map[i].body;
             if (INTERP_BLOCK_PCACHE_ORDINAL(block) == UINT16_MAX) continue;
@@ -3165,7 +3165,7 @@ static void pcache_save(void) {
             if (receipt_bytes != NULL) {
                 uint8_t *at = receipt_bytes;
                 x64_pc_put64(&at, restored); x64_pc_put64(&at, executed);
-                for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+                for (uint32_t i = 0; i < map_capacity(); i++) {
                     if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
                     struct interp_block *block = (struct interp_block *)g_map[i].body;
                     uint16_t ordinal = INTERP_BLOCK_PCACHE_ORDINAL(block);
@@ -3370,7 +3370,7 @@ static void pcache_save(void) {
         prior_reloc = offset;
     }
     uint64_t map_count = 0;
-    for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+    for (uint32_t i = 0; i < map_capacity(); i++) {
         if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
         uint64_t lo = g_map_metadata[i].guest_start, hi = g_map_metadata[i].guest_end;
         if (!x64_pc_fixed(lo, hi) && x64_pc_library_for(lo, hi) < 0) {
@@ -3393,7 +3393,8 @@ static void pcache_save(void) {
         translit_chain_site_count > SIZE_MAX / X64_PC_CHAIN_SIZE)
         return;
     x64_pc_map_save *saved_maps = calloc((size_t)map_count, sizeof *saved_maps);
-    uint32_t *map_ordinal_by_index = malloc((size_t)JIT_MAP_N * sizeof *map_ordinal_by_index);
+    uint32_t active_map_capacity = map_capacity();
+    uint32_t *map_ordinal_by_index = malloc((size_t)active_map_capacity * sizeof *map_ordinal_by_index);
     uint32_t *owner_map_ordinal = owner_count == 0 ? NULL : malloc((size_t)owner_count * sizeof *owner_map_ordinal);
     x64_pc_chain_save *saved_chains = translit_chain_site_count == 0 ? NULL :
         malloc((size_t)translit_chain_site_count * sizeof *saved_chains);
@@ -3403,9 +3404,9 @@ static void pcache_save(void) {
         free(saved_maps); free(map_ordinal_by_index); free(owner_map_ordinal); free(saved_chains);
         return;
     }
-    memset(map_ordinal_by_index, 0xff, (size_t)JIT_MAP_N * sizeof *map_ordinal_by_index);
+    memset(map_ordinal_by_index, 0xff, (size_t)active_map_capacity * sizeof *map_ordinal_by_index);
     uint64_t saved_map_count = 0;
-    for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+    for (uint32_t i = 0; i < active_map_capacity; i++) {
         if (!map_live(i) || g_map_metadata[i].cache_generation != g_cache_gen) continue;
         saved_maps[saved_map_count++] = (x64_pc_map_save){.index = i, .host = x64_pc_offset(g_map[i].host, used)};
     }

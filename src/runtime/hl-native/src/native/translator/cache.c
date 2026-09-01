@@ -443,6 +443,7 @@ static _Atomic int g_ever_threaded;
 // FULL table made map_put a no-op -> map_body() then returned NULL for a freshly-translated block, and
 // patch_links_to() back-patched a `b (NULL - slot)` wild branch (mongod, ~65K blocks of C++ static init,
 // crashed with SIGILL/SIGSEGV here). NOT the leaked container-state MAP_N (that one is unrelated, 64K).
+#define JIT_MAP_INITIAL_N (1u << 17)
 #define JIT_MAP_N (1u << 19)
 #define TXPG_N (1u << 18)
 #define TXLN_N (1u << 21)
@@ -483,6 +484,17 @@ _Static_assert(offsetof(hl_translation_map_entry, tombstone_epoch) == 12,
 _Static_assert(offsetof(hl_translation_map_entry, host) == 16, "translation host pointer moved");
 _Static_assert(offsetof(hl_translation_map_entry, body) == 24, "translation body pointer moved");
 
+/* Cold source ownership stays separate from the 32-byte lookup slot.  Growth rehashes these records in
+   lockstep, while lookup continues to touch only the hot slot. */
+typedef struct {
+    uint64_t guest_start;
+    uint64_t guest_end;
+    uint64_t cache_generation;
+} hl_translation_map_metadata;
+
+_Static_assert(sizeof(hl_translation_map_metadata) == 24, "cold translation record gained padding");
+_Static_assert(_Alignof(hl_translation_map_metadata) == 8, "cold translation record alignment changed");
+
 // All indexes describing the currently live translation generation share one owner. Keep these arrays
 // embedded (rather than separately allocated) so the hot lookup layout and zero-initialized lifetime stay
 // byte-for-byte equivalent. The compatibility aliases below intentionally leave the existing inline paths
@@ -499,10 +511,38 @@ typedef struct {
 // straddling). Without this the array's natural 8B alignment left ~half the 32B entries straddling two
 // lines, doubling the cold-miss traffic the smaller entry was meant to remove.
 static _Alignas(64) hl_translation_index g_translation_index;
-#define g_map g_translation_index.map
 #define g_txpg g_translation_index.pages
 #define g_txln g_translation_index.lines
 #define g_txlh g_translation_index.hashes
+
+static hl_translation_map_metadata g_bootstrap_map_metadata[JIT_MAP_N];
+static uint32_t g_bootstrap_live_map_indices[JIT_MAP_N];
+
+typedef struct hl_translation_map_table {
+    uint32_t capacity;
+    uint32_t mask;
+    hl_translation_map_entry *map;
+    hl_translation_map_metadata *metadata;
+    uint32_t *live_indices;
+    struct hl_translation_map_table *retired_next;
+    int dynamic;
+} hl_translation_map_table;
+
+static hl_translation_map_table g_bootstrap_map_table = {
+    JIT_MAP_INITIAL_N, JIT_MAP_INITIAL_N - 1u, g_translation_index.map, g_bootstrap_map_metadata,
+    g_bootstrap_live_map_indices, NULL, 0};
+static _Atomic(hl_translation_map_table *) g_active_map_table = &g_bootstrap_map_table;
+static hl_translation_map_table *g_retired_map_tables;
+
+static inline hl_translation_map_table *map_table_active(void) {
+    return atomic_load_explicit(&g_active_map_table, memory_order_acquire);
+}
+
+static inline uint32_t map_capacity(void) { return map_table_active()->capacity; }
+
+#define g_map (map_table_active()->map)
+#define g_map_metadata (map_table_active()->metadata)
+#define g_live_map_indices (map_table_active()->live_indices)
 
 // Clearing the 12 MiB translation hash on every in-place code patch made a correct SMC workload spend
 // almost all of its time in memset.  Entries belong to a logical generation instead: advancing the
@@ -511,8 +551,8 @@ static _Alignas(64) hl_translation_index g_translation_index;
 static uint32_t g_map_epoch = 1;
 static uint64_t g_map_host_generation = 1;
 static uint64_t g_cache_gen; /* generation of the current immutable code arena */
-static uint32_t g_live_map_indices[JIT_MAP_N];
 static uint32_t g_live_map_count;
+static uint32_t g_map_tombstone_count;
 #if HL_NATIVE_TEST_HOOKS
 static _Thread_local uint64_t g_map_host_probe_count;
 #endif
@@ -553,19 +593,9 @@ static void map_host_cache_invalidate(void) {
  * quarter more pages -- and a quarter more copy-on-write after fork -- to line-align a cold field
  * would spend exactly what this change is here to recover.
  */
-typedef struct {
-    uint64_t guest_start;
-    uint64_t guest_end;
-    uint64_t cache_generation;
-} hl_translation_map_metadata;
-
-_Static_assert(sizeof(hl_translation_map_metadata) == 24, "cold translation record gained padding");
-_Static_assert(_Alignof(hl_translation_map_metadata) == 8, "cold translation record alignment changed");
 _Static_assert(offsetof(hl_translation_map_metadata, guest_start) == 0, "cold guest start moved");
 _Static_assert(offsetof(hl_translation_map_metadata, guest_end) == 8, "cold guest end is no longer adjacent");
 _Static_assert(offsetof(hl_translation_map_metadata, cache_generation) == 16, "cold cache generation moved");
-
-static hl_translation_map_metadata g_map_metadata[JIT_MAP_N];
 
 /*
  * Guest-source page -> translation map slot reverse index.  A block contributes one compact node for
@@ -790,6 +820,7 @@ static void source_index_put(uint32_t map_index, uint64_t guest_start, uint64_t 
 
 static void map_clear(void) {
     g_live_map_count = 0;
+    g_map_tombstone_count = 0;
     g_source_node_count = 0;
     g_source_page_count = 0;
     g_source_index_overflow = 0;
@@ -797,7 +828,8 @@ static void map_clear(void) {
     if (g_map_epoch == 0) {
         // Epoch wrapped (2^32 flushes -- effectively never): no valid entry may carry generation 0, so
         // clear every entry's generation before restarting at 1. Cold path; correctness over speed.
-        for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        hl_translation_map_table *table = map_table_active();
+        for (uint32_t i = 0; i < table->capacity; i++) {
             g_map[i].generation = 0;
             g_map[i].tombstone_epoch = 0;
         }
@@ -815,16 +847,17 @@ static void map_clear(void) {
 
 // Crash-only reverse lookup: map a host RX pc back to the nearest translated block start.
 int jit_hostpc_lookup(uint64_t hpc, uint64_t *gpc, uint64_t *off, uint32_t *insn) {
+    hl_translation_map_table *table = map_table_active();
     uint64_t rwpc;
     if (!jit_host_to_rwpc(hpc, &rwpc)) return 0;
     uint64_t best = 0;
     uint64_t bgpc = 0;
-    for (uint32_t i = 0; i < JIT_MAP_N; i++) {
-        if (!map_live(i)) continue;
-        uint64_t h = (uint64_t)g_map[i].host;
+    for (uint32_t i = 0; i < table->capacity; i++) {
+        if (table->map[i].generation != g_map_epoch) continue;
+        uint64_t h = (uint64_t)table->map[i].host;
         if (h && h <= rwpc && h >= best) {
             best = h;
-            bgpc = g_map[i].gpc;
+            bgpc = table->map[i].gpc;
         }
     }
     if (!best) return 0;
@@ -1023,17 +1056,18 @@ static void txpg_clear(void) {
 static int map_idx(uint64_t gpc) {
     // hash shift is per-arch (frontend/<arch>/abi.h G_GPC_HASH_SHIFT): aarch64 PCs are 4-byte aligned
     // (>>2 spreads), x86 PCs are byte-granular (>>0). Pure tuning constant; aarch64 value is 2 (unchanged).
-    uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & (JIT_MAP_N - 1);
-    for (int i = 0; i < JIT_MAP_N; i++) {
+    hl_translation_map_table *table = map_table_active();
+    uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & table->mask;
+    for (uint32_t i = 0; i < table->capacity; i++) {
 #if HL_NATIVE_TEST_HOOKS
         g_map_host_probe_count++;
 #endif
-        uint32_t j = (h + i) & (JIT_MAP_N - 1);
-        if (!map_live(j)) {
-            if (map_tombstone(j)) continue;
+        uint32_t j = (h + i) & table->mask;
+        if (table->map[j].generation != g_map_epoch) {
+            if (table->map[j].tombstone_epoch == g_map_epoch) continue;
             return -1;
         }
-        if (g_map[j].gpc == gpc) return j;
+        if (table->map[j].gpc == gpc) return (int)j;
     }
     return -1;
 }
@@ -1087,12 +1121,14 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
     hl_translation_map_entry saved[3];
     hl_translation_map_metadata saved_meta[3];
     for (size_t i = 0; i < 3; i++) {
-        indices[i] = (uint32_t)((guests[i] >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & (JIT_MAP_N - 1);
+        indices[i] = (uint32_t)((guests[i] >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) &
+                     map_table_active()->mask;
         saved[i] = g_map[indices[i]];
         saved_meta[i] = g_map_metadata[indices[i]];
     }
     uint32_t saved_epoch = g_map_epoch;
     uint32_t saved_live_count = g_live_map_count;
+    uint32_t saved_tombstone_count = g_map_tombstone_count;
     uint32_t saved_live_indices[3] = {g_live_map_indices[0], g_live_map_indices[1], g_live_map_indices[2]};
     uint64_t saved_probe_count = g_map_host_probe_count;
     uint64_t saved_host_generation = __atomic_load_n(&g_map_host_generation, __ATOMIC_RELAXED);
@@ -1157,6 +1193,7 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
     }
     g_map_epoch = saved_epoch;
     g_live_map_count = saved_live_count;
+    g_map_tombstone_count = saved_tombstone_count;
     memcpy(g_live_map_indices, saved_live_indices, sizeof(saved_live_indices));
     g_map_host_probe_count = saved_probe_count;
     __atomic_store_n(&g_map_host_generation, saved_host_generation, __ATOMIC_RELAXED);
@@ -1170,14 +1207,82 @@ static void *map_body(uint64_t gpc) {
     return i < 0 ? NULL : g_map[i].body;
 }
 
+static void map_source_index_rebuild(void) {
+    g_source_node_count = 0;
+    g_source_page_count = 0;
+    g_source_index_overflow = 0;
+    if (g_source_pages != NULL)
+        memset(g_source_pages, 0, (size_t)g_source_page_capacity * sizeof(*g_source_pages));
+    hl_translation_map_table *table = map_table_active();
+    for (uint32_t position = 0; position < g_live_map_count; position++) {
+        uint32_t index = table->live_indices[position];
+        hl_translation_map_metadata *metadata = &table->metadata[index];
+        source_index_put(index, metadata->guest_start, metadata->guest_end);
+        if (!g_source_index_overflow) *live_position(index) = position;
+    }
+}
+
+/* Grow under g_jit_lock before publishing the body which crossed the occupancy threshold.  Signal-side
+   reverse lookup captures one release-published descriptor; old dynamic tables remain immutable and
+   reachable for the rest of the handler lifetime. */
+static int map_table_grow(void) {
+    hl_translation_map_table *old = map_table_active();
+    if (old->capacity >= JIT_MAP_N) return 1;
+    uint32_t capacity = old->capacity << 1;
+    hl_translation_map_table *next = calloc(1, sizeof(*next));
+    if (next == NULL) return 0;
+    next->capacity = capacity;
+    next->mask = capacity - 1u;
+    next->map = aligned_alloc(64, (size_t)capacity * sizeof(*next->map));
+    next->metadata = calloc(capacity, sizeof(*next->metadata));
+    next->live_indices = calloc(capacity, sizeof(*next->live_indices));
+    if (next->map == NULL || next->metadata == NULL || next->live_indices == NULL) {
+        free(next->map);
+        free(next->metadata);
+        free(next->live_indices);
+        free(next);
+        return 0;
+    }
+    memset(next->map, 0, (size_t)capacity * sizeof(*next->map));
+    next->dynamic = 1;
+    uint32_t live = 0;
+    for (uint32_t position = 0; position < g_live_map_count; position++) {
+        uint32_t source = old->live_indices[position];
+        if (old->map[source].generation != g_map_epoch) continue;
+        uint32_t hash = (uint32_t)((old->map[source].gpc >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & next->mask;
+        uint32_t destination = hash;
+        while (next->map[destination].generation == g_map_epoch)
+            destination = (destination + 1u) & next->mask;
+        next->map[destination] = old->map[source];
+        next->metadata[destination] = old->metadata[source];
+        next->live_indices[live++] = destination;
+    }
+    atomic_store_explicit(&g_active_map_table, next, memory_order_release);
+    g_live_map_count = live;
+    g_map_tombstone_count = 0;
+    map_source_index_rebuild();
+    map_host_cache_invalidate();
+    if (old->dynamic) {
+        old->retired_next = g_retired_map_tables;
+        g_retired_map_tables = old;
+    }
+    return 1;
+}
+
 static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body) {
-    uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & (JIT_MAP_N - 1);
+    hl_translation_map_table *table = map_table_active();
+    if (table->capacity < JIT_MAP_N &&
+        ((uint64_t)g_live_map_count + g_map_tombstone_count + 1u) * 5u > (uint64_t)table->capacity * 2u) {
+        if (!map_table_grow()) map_clear();
+        table = map_table_active();
+    }
+    uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & table->mask;
     uint32_t first_tombstone = UINT32_MAX;
     uint32_t destination = UINT32_MAX;
-    for (int i = 0; i < JIT_MAP_N; i++) {
-        uint32_t j = (h + i) & (JIT_MAP_N - 1);
-        if (!map_live(j)) {
-            if (map_tombstone(j)) {
+    for (uint32_t i = 0; i < table->capacity; i++) {
+        uint32_t j = (h + i) & table->mask;
+        if (table->map[j].generation != g_map_epoch) {
+            if (table->map[j].tombstone_epoch == g_map_epoch) {
                 if (first_tombstone == UINT32_MAX) first_tombstone = j;
                 continue;
             }
@@ -1187,18 +1292,20 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
     }
     if (destination == UINT32_MAX) destination = first_tombstone;
     if (destination != UINT32_MAX) {
+        int reused_tombstone = table->map[destination].tombstone_epoch == g_map_epoch;
         uint64_t source_end =
             guest_end > guest_start ? guest_end : (guest_start == UINT64_MAX ? UINT64_MAX : guest_start + 1);
-        g_map[destination].gpc = gpc;
-        g_map[destination].host = host;
-        g_map[destination].body = body;
-        g_map_metadata[destination].guest_start = guest_start;
-        g_map_metadata[destination].guest_end = source_end;
-        g_map_metadata[destination].cache_generation = g_cache_gen;
-        g_map[destination].tombstone_epoch = 0;
+        table->map[destination].gpc = gpc;
+        table->map[destination].host = host;
+        table->map[destination].body = body;
+        table->metadata[destination].guest_start = guest_start;
+        table->metadata[destination].guest_end = source_end;
+        table->metadata[destination].cache_generation = g_cache_gen;
+        table->map[destination].tombstone_epoch = 0;
         source_index_put(destination, guest_start, source_end);
         if (!g_source_index_overflow) *live_position(destination) = g_live_map_count;
-        g_live_map_indices[g_live_map_count++] = destination;
+        table->live_indices[g_live_map_count++] = destination;
+        if (reused_tombstone) g_map_tombstone_count--;
 #if HL_NATIVE_TEST_HOOKS
         if (g_source_index_publish_probe) {
             jit_source_page_entry *page = source_page_find(guest_start >> JIT_SOURCE_PAGE_SHIFT, 0);
@@ -1214,7 +1321,7 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
 #endif
         /* Publish liveness last: every live entry already has metadata, a live-list position, and either
            complete reverse-index nodes or the overflow latch which forces the authoritative full scan. */
-        g_map[destination].generation = g_map_epoch;
+        table->map[destination].generation = g_map_epoch;
         map_host_cache_invalidate();
     }
 }
@@ -1231,6 +1338,7 @@ static void map_remove_live(uint32_t index) {
     ibtc_drop_target(g_map[index].gpc);
     g_map[index].generation = 0;
     g_map[index].tombstone_epoch = g_map_epoch;
+    g_map_tombstone_count++;
 }
 
 static uint32_t map_invalidate_source_ranges_full(const uint64_t ranges[][2], uint32_t count) {
@@ -1253,6 +1361,7 @@ static uint32_t map_invalidate_source_ranges_full(const uint64_t ranges[][2], ui
         ibtc_drop_target(g_map[index].gpc);
         g_map[index].generation = 0;
         g_map[index].tombstone_epoch = g_map_epoch;
+        g_map_tombstone_count++;
         removed++;
     }
     g_live_map_count = retained;
@@ -1440,6 +1549,7 @@ static uint32_t map_invalidate_cache_generation(uint64_t generation) {
         ibtc_drop_target(g_map[index].gpc);
         g_map[index].generation = 0;
         g_map[index].tombstone_epoch = g_map_epoch;
+        g_map_tombstone_count++;
         removed++;
     }
     g_live_map_count = retained;

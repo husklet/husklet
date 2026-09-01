@@ -324,7 +324,7 @@ static void pcache_save(void) {
     // ---- consistent snapshot under the translation lock (peers may still be running/translating) ----
     pthread_mutex_lock(&g_jit_lock);
     uint64_t nmap = 0;
-    for (uint32_t i = 0; i < JIT_MAP_N; i++)
+    for (uint32_t i = 0; i < map_capacity(); i++)
         if (map_live(i) && (pc_range_fixed(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end) ||
                             pc_range_in_lib(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end)))
             nmap++;
@@ -373,7 +373,7 @@ static void pcache_save(void) {
         uint8_t *w = buf + sizeof h; // header written last (its csum covers everything after it)
         memcpy(w, g_reloc, (size_t)g_nreloc * sizeof(hl_reloc));
         w += (size_t)g_nreloc * sizeof(hl_reloc);
-        for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        for (uint32_t i = 0; i < map_capacity(); i++) {
             if (!map_live(i) || !(pc_range_fixed(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end) ||
                                   pc_range_in_lib(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end)))
                 continue;

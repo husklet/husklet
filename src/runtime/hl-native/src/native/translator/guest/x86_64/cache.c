@@ -527,7 +527,7 @@ static void pcache_save(void) {
     // by a kernel-chosen address that the next run won't reproduce -- persisting it would be dead weight
     // at best, and a stale-translation hazard if the next run reuses the address range for other code.
     uint64_t nmap = 0;
-    for (uint32_t i = 0; i < JIT_MAP_N; i++)
+    for (uint32_t i = 0; i < map_capacity(); i++)
         if (map_live(i) && (pc_gpc_fixed(g_map[i].gpc) || pc_gpc_in_lib(g_map[i].gpc))) nmap++;
     char path[1024];
     if (!pcache_file(path, sizeof path)) return;
@@ -560,7 +560,7 @@ static void pcache_save(void) {
         w += sizeof h; // header written last: its csum covers everything after it
         memcpy(w, g_reloc, (size_t)g_nreloc * sizeof g_reloc[0]);
         w += (size_t)g_nreloc * sizeof g_reloc[0];
-        for (uint32_t i = 0; i < JIT_MAP_N; i++) {
+        for (uint32_t i = 0; i < map_capacity(); i++) {
             if (!map_live(i) || !(pc_gpc_fixed(g_map[i].gpc) || pc_gpc_in_lib(g_map[i].gpc))) continue;
             // guest_start/guest_end are vestigial in the on-disk record (restore discards them; the SMC page
             // set is serialized separately). The live map entry no longer stores them, so emit 0 placeholders
