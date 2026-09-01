@@ -280,10 +280,11 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, const hl_host_file_m
         for (uint64_t j = 0; j < g_pc_ndefer; j++) {
             uint64_t gpc = g_pc_defer[j].gpc;
             if (gpc >= base && gpc < base + len && g_pc_defer[j].host_off) {
-                map_put(gpc, g_pc_defer[j].guest_start, g_pc_defer[j].guest_end, g_cache + g_pc_defer[j].host_off,
-                        g_cache + g_pc_defer[j].body_off);
-                g_pc_defer[j].host_off = 0; // consumed
-                g_pc_activated++;
+                if (map_put(gpc, g_pc_defer[j].guest_start, g_pc_defer[j].guest_end,
+                            g_cache + g_pc_defer[j].host_off, g_cache + g_pc_defer[j].body_off) == MAP_PUT_OK) {
+                    g_pc_defer[j].host_off = 0; // consumed only after publication
+                    g_pc_activated++;
+                }
             }
         }
         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
@@ -457,7 +458,12 @@ static int pcache_load(uint64_t entry_jump) {
     uint64_t nlive = 0, ndefer = 0;
     for (uint64_t i = 0; i < h.n_mapent; i++) {
         if (pc_gpc_fixed(me[i].gpc)) {
-            map_put(me[i].gpc, me[i].guest_start, me[i].guest_end, g_cache + me[i].host_off, g_cache + me[i].body_off);
+            if (map_put(me[i].gpc, me[i].guest_start, me[i].guest_end,
+                        g_cache + me[i].host_off, g_cache + me[i].body_off) != MAP_PUT_OK) {
+                free(me);
+                free(pe);
+                return 0;
+            }
             nlive++;
         } else if (pc_gpc_in_lib(me[i].gpc)) {
             ndefer++;

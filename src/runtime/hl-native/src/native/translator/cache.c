@@ -540,6 +540,7 @@ static _Atomic(hl_translation_map_table *) g_active_map_table = &g_bootstrap_map
 static hl_translation_map_table *g_retired_map_tables;
 #if HL_NATIVE_TEST_HOOKS
 static int g_map_growth_alloc_fail;
+static int g_map_put_force_full;
 #endif
 
 static inline hl_translation_map_table *map_table_active(void) {
@@ -1110,7 +1111,12 @@ static inline __attribute__((always_inline)) void *map_host_cached(hl_map_host_c
 static void *map_host(uint64_t gpc) { return map_host_cached(g_map_host_cache, gpc); }
 
 #if HL_NATIVE_TEST_HOOKS
-static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body);
+typedef enum {
+    MAP_PUT_OK = 0,
+    MAP_PUT_FULL,
+} map_put_result;
+
+static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body);
 typedef struct {
     uint64_t guest;
     uint64_t probes;
@@ -1300,13 +1306,16 @@ static int map_table_grow(void) {
     return 1;
 }
 
-static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body) {
+static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body) {
     hl_translation_map_table *table = map_table_active();
     if (table->capacity < JIT_MAP_N &&
         ((uint64_t)g_live_map_count + g_map_tombstone_count + 1u) * 5u > (uint64_t)table->capacity * 2u) {
         if (!map_table_grow()) map_clear();
         table = map_table_active();
     }
+#if HL_NATIVE_TEST_HOOKS
+    if (g_map_put_force_full && table->capacity == JIT_MAP_N) return MAP_PUT_FULL;
+#endif
     uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & table->mask;
     uint32_t first_tombstone = UINT32_MAX;
     uint32_t destination = UINT32_MAX;
@@ -1354,7 +1363,9 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
            complete reverse-index nodes or the overflow latch which forces the authoritative full scan. */
         table->map[destination].generation = g_map_epoch;
         map_host_cache_invalidate();
+        return MAP_PUT_OK;
     }
+    return MAP_PUT_FULL;
 }
 
 static int map_source_overlaps(uint32_t index, uint64_t lo, uint64_t hi) {
@@ -1634,6 +1645,25 @@ static uint64_t map_growth_guest(uint32_t ordinal, uint32_t capacity) {
 
 static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
     atomic_store_explicit(&g_active_map_table, &g_bootstrap_map_table, memory_order_release);
+    if (scenario == 64) {
+        g_bootstrap_map_table.capacity = JIT_MAP_N;
+        g_bootstrap_map_table.mask = JIT_MAP_N - 1u;
+        map_clear();
+        uint64_t guest = UINT64_C(0x12345000);
+        uint32_t live = g_live_map_count, nodes = g_source_node_count;
+        uint64_t host_generation = atomic_load_explicit(&g_map_host_generation, memory_order_relaxed);
+        g_map_put_force_full = 1;
+        map_put_result result = map_put(guest, guest, guest + 1u,
+                                        (void *)(uintptr_t)UINT64_C(0x111000),
+                                        (void *)(uintptr_t)UINT64_C(0x222000));
+        g_map_put_force_full = 0;
+        if (result != MAP_PUT_FULL || map_body(guest) != NULL || g_live_map_count != live ||
+            g_source_node_count != nodes ||
+            atomic_load_explicit(&g_map_host_generation, memory_order_relaxed) != host_generation)
+            return 14;
+        *answer = (uint64_t)result;
+        return 0;
+    }
     if (scenario == 63) {
         g_bootstrap_map_table.capacity = JIT_MAP_INITIAL_N;
         g_bootstrap_map_table.mask = JIT_MAP_INITIAL_N - 1u;
@@ -1751,7 +1781,7 @@ static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
 }
 
 static int map_growth_test(uint32_t scenario, uint64_t *answer) {
-    if (scenario < 55 || scenario > 63 || answer == NULL) return -EINVAL;
+    if (scenario < 55 || scenario > 64 || answer == NULL) return -EINVAL;
     pid_t child = fork();
     if (child == 0) {
         uint64_t child_answer = 0;
@@ -2408,7 +2438,8 @@ static int jit_body_owner_needs_rotation(uint64_t generation) {
 // would refuse permanently.
 static int jit_cache_needs_rotation(void) {
     return g_cp + CACHE_EMIT_HEADROOM > g_cache + CACHE_SZ ||
-           jit_body_owner_needs_rotation(g_cache_gen);
+           jit_body_owner_needs_rotation(g_cache_gen) ||
+           g_live_map_count >= map_capacity();
 }
 
 static int jit_flush_to_fresh(int retain_map_generations);

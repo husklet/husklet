@@ -110,7 +110,11 @@ static void *translate_block(uint64_t gpc) {
 
     // Key = entry PC; [guest_start, guest_end) is the SOURCE interval map_invalidate_source_ranges() intersects.
     // `body` = the same address (no prologue); non-NULL map_body() means "live translation" to patch_links_to().
-    map_put(gpc, gpc, cursor, block, block);
+    if (map_put(gpc, gpc, cursor, block, block) != MAP_PUT_OK) {
+        static const char message[] = "translation map is full";
+        (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
+        return NULL;
+    }
     // SMC precise gate: without the page marks and the 64-byte line set (what txln_flush_class() classifies
     // an `ic ivau` against), the cached block EXTENT survives a rewrite of the branch that determined it.
     txpg_mark(gpc, cursor);

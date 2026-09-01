@@ -485,7 +485,13 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.
-    map_put(gpc, block->guest_start, block->guest_end, block, block);
+    if (map_put(gpc, block->guest_start, block->guest_end, block, block) != MAP_PUT_OK) {
+        static const char message[] = "translation map is full";
+        (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
+        hl_x86_decode_transaction_abort(context);
+        hl_x86_decode_transaction_release(context);
+        return NULL;
+    }
     if (!hl_x86_decode_transaction_rejected(context) && translit_attempt_staging)
         translit_attempt_telemetry_publish();
 #if defined(HL_NATIVE_TEST_HOOKS)

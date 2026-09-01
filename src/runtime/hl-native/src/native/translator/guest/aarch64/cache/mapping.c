@@ -50,9 +50,9 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, const hl_host_file_m
         for (uint64_t j = 0; j < g_pc_ndefer; j++) {
             struct pc_mapent *entry = &g_pc_defer[j];
             if (entry->host_off && entry->gpc >= base && entry->gpc < base + len) {
-                map_put(entry->gpc, entry->guest_start, entry->guest_end, g_cache + entry->host_off,
-                        g_cache + entry->body_off);
-                entry->host_off = 0;
+                if (map_put(entry->gpc, entry->guest_start, entry->guest_end, g_cache + entry->host_off,
+                            g_cache + entry->body_off) == MAP_PUT_OK)
+                    entry->host_off = 0;
             }
         }
         for (uint64_t j = 0; j < g_pc_nprov_defer; j++) {

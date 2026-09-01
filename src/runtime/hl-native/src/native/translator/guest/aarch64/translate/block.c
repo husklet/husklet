@@ -37,7 +37,7 @@ struct deferred_branch {
     uint32_t instruction;
 };
 
-static void finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_end, void *host, void *body,
+static map_put_result finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_end, void *host, void *body,
                          uint64_t provenance_host, uint64_t provenance_guest, int provenance_fault_capable,
                          const struct deferred_branch *deferred, int deferred_count) {
     if (provenance_fault_capable) jit_instruction_map_put(provenance_host, (uint64_t)g_cp, provenance_guest);
@@ -79,9 +79,11 @@ static void finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_en
     g_last_guest_start = guest_start;
     g_last_guest_end = guest_end;
     if (!g_tier2_build) {
-        map_put(start, guest_start, guest_end, host, body);
+        map_put_result published = map_put(start, guest_start, guest_end, host, body);
+        if (published != MAP_PUT_OK) return published;
         txpg_mark(start, guest_end);
     }
+    return MAP_PUT_OK;
 }
 
 static int translate_tls_instruction(uint32_t instruction) {
@@ -865,8 +867,12 @@ static void *translate_block(uint64_t gpc) {
         translate_memory_or_fallback(gpc, in, in_excl);
         gpc += 4;
     }
-    finish_block(start, guest_start, guest_end, host, body, provenance_host, provenance_guest, provenance_fault_capable,
-                 defer, ndefer);
+    if (finish_block(start, guest_start, guest_end, host, body, provenance_host, provenance_guest,
+                     provenance_fault_capable, defer, ndefer) != MAP_PUT_OK) {
+        static const char message[] = "translation map is full";
+        (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
+        return NULL;
+    }
     // patch_links_to is MOVED to the dispatcher, AFTER the new block's icache is invalidated:
     // chaining an existing block X -> this new block before its code is icache-coherent on a peer
     // core lets that core fetch stale instructions. Only chain to it once it's visible everywhere.

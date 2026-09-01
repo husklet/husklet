@@ -2193,7 +2193,12 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
                                           0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
         return NULL;
     }
-    map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), block, block);
+    if (map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), block, block) != MAP_PUT_OK) {
+        expected = JIT_RESTORED_ACTIVATING;
+        (void)__atomic_compare_exchange_n(&g_x64_pc_restored_states[slot->ordinal], &expected, 0,
+                                          0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+        return NULL;
+    }
     hl_translation_map_ref reference;
     if (!map_ref_find(gpc, &reference) || reference.table->map[reference.index].body != block) {
         expected = JIT_RESTORED_ACTIVATING;
@@ -2689,8 +2694,10 @@ static int pcache_load(uint64_t entry_jump) {
         const uint8_t *record = map_records + i * X64_PC_MAP_SIZE;
         if (!x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16))) continue;
         struct interp_block *block = (struct interp_block *)(g_cache + x64_pc_get64(record + 32));
-        map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
-                g_cache + x64_pc_get64(record + 24), block);
+        if (map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
+                    g_cache + x64_pc_get64(record + 24), block) != MAP_PUT_OK) {
+            x64_pc_pristine_rewind(); free(fixed_chains); free(gpc_index); free(allocation); return 0;
+        }
         translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,
                                   block->host_len, block->profile_insns, 0);
         fixed_maps++;
@@ -3784,7 +3791,7 @@ static void x64_pc_activate_ready(uint64_t pc) {
         deferred_helpers++;
     }
     if (owner_at > JIT_BODY_OWNER_N - deferred_owners ||
-        g_live_map_count > JIT_MAP_N - deferred_maps ||
+        deferred_maps > map_capacity() - g_live_map_count ||
         translit_external_absolute_count > TL_EXTERNAL_ABSOLUTE_N - deferred_relocs ||
         translit_helper_relative_count > TL_HELPER_RELATIVE_N - deferred_helpers ||
         g_x64_pc_chain_count > g_x64_pc_snapshot_chains_count) goto cold;
@@ -3880,7 +3887,6 @@ static void x64_pc_activate_ready(uint64_t pc) {
                                                    x64_pc_get64(record + 16)};
         preserves[owner_at++] = x64_pc_get32(record + 8);
     }
-    atomic_store_explicit(&set->count, owner_at, memory_order_release);
     for (uint64_t i = 0; i < g_x64_pc_snapshot_relocs_count; i++) {
         const uint8_t *record = g_x64_pc_snapshot_relocs + i * X64_PC_RELOC_SIZE;
         uint32_t offset = x64_pc_get32(record);
@@ -3903,13 +3909,15 @@ static void x64_pc_activate_ready(uint64_t pc) {
         const uint8_t *record = g_x64_pc_snapshot_maps + i * X64_PC_MAP_SIZE;
         if (x64_pc_saved_map_library(record) < 0) continue;
         struct interp_block *block = (struct interp_block *)(g_cache + x64_pc_get64(record + 32));
-        map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
-                g_cache + x64_pc_get64(record + 24), block);
+        if (map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
+                    g_cache + x64_pc_get64(record + 24), block) != MAP_PUT_OK)
+            goto cold;
         translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,
                                   block->host_len, block->profile_insns, 0);
         g_x64_pc_activated_maps++;
         g_x64_pc_deferred_count--;
     }
+    atomic_store_explicit(&set->count, owner_at, memory_order_release);
     for (uint64_t i = 0; i < g_x64_pc_snapshot_chains_count; i++) {
         const uint8_t *saved = g_x64_pc_snapshot_chains + i * X64_PC_CHAIN_SIZE;
         if (x64_pc_saved_gpc_fixed(x64_pc_get64(saved + 8), g_x64_pc_snapshot_maps,

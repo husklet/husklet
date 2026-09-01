@@ -1356,7 +1356,11 @@ static void *translate_block(uint64_t gpc) {
     // AFTER icache-flushing the new code). Expose the body for it.
     g_last_body = body;
     if (!g_tier2_build) {
-        map_put(start, start, gpc > start ? gpc : start + 1, host, body);
+        if (map_put(start, start, gpc > start ? gpc : start + 1, host, body) != MAP_PUT_OK) {
+            static const char message[] = "translation map is full";
+            (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
+            return NULL;
+        }
         if (!g_threaded) patch_links_to(start, body); // chaining mutates live blocks -> off when threaded
     }
     return host;

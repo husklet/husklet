@@ -219,7 +219,14 @@ static int pcache_load(uint64_t entry_jump) {
     uint64_t map_deferred = 0;
     for (uint64_t i = 0; i < h.n_mapent; i++) {
         if (pc_range_fixed(me[i].guest_start, me[i].guest_end))
-            map_put(me[i].gpc, me[i].guest_start, me[i].guest_end, g_cache + me[i].host_off, g_cache + me[i].body_off);
+            if (map_put(me[i].gpc, me[i].guest_start, me[i].guest_end,
+                        g_cache + me[i].host_off, g_cache + me[i].body_off) != MAP_PUT_OK) {
+                free(me);
+                free(tx);
+                free(pv);
+                free(libs);
+                return 0;
+            }
         else if (pc_range_in_lib(me[i].guest_start, me[i].guest_end))
             map_deferred++;
     }
