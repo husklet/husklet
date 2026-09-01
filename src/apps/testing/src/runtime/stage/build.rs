@@ -15,19 +15,21 @@ pub(super) struct BuildArtifacts {
 
 pub(super) fn run(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Error> {
     let packages = PackageIds::discover(cargo, workspace)?;
+    let mut arguments = vec![
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "-p",
+        "testing",
+        "--bin",
+        "testing",
+    ];
+    arguments.extend(cargo_feature_arguments());
+    arguments.push("--message-format=json-render-diagnostics");
     let mut child = HostProcess::standard(cargo)
         .current_dir(workspace)
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "--offline",
-            "-p",
-            "testing",
-            "--bin",
-            "testing",
-            "--message-format=json-render-diagnostics",
-        ])
+        .args(arguments)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -39,6 +41,14 @@ pub(super) fn run(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Erro
         return Err(format!("exact runtime corpus build failed with {status}").into());
     }
     artifacts?.ok_or_else(|| "Cargo did not identify both the testing runner and hl-native library".into())
+}
+
+const fn cargo_feature_arguments() -> &'static [&'static str] {
+    if cfg!(feature = "production-runtime") && !cfg!(feature = "native-test-hooks") {
+        &["--no-default-features", "--features", "production-runtime"]
+    } else {
+        &[]
+    }
 }
 
 struct PackageIds {
@@ -149,5 +159,22 @@ fn unique(slot: &mut Option<PathBuf>, value: PathBuf, name: &str) -> Result<(), 
         Err(format!("Cargo identified more than one {name}").into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cargo_feature_arguments;
+
+    #[test]
+    fn stage_rebuilds_the_same_feature_surface_as_its_runner() {
+        #[cfg(all(feature = "production-runtime", not(feature = "native-test-hooks")))]
+        assert_eq!(
+            cargo_feature_arguments(),
+            ["--no-default-features", "--features", "production-runtime"]
+        );
+
+        #[cfg(feature = "native-test-hooks")]
+        assert!(cargo_feature_arguments().is_empty());
     }
 }

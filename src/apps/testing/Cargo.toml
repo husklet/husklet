@@ -8,18 +8,30 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = ["native-test-hooks"]
+native-test-hooks = [
+    "hl-container/native-test-hooks",
+    "hl-engine/native-test-hooks",
+    "hl-native/native-test-hooks",
+]
+# The runtime corpus measures the production engine surface. Spell this feature
+# explicitly with `--no-default-features` so an accidental default build cannot
+# silently put test hooks back into a measured artifact.
+production-runtime = []
+
 [dependencies]
 # The repository testing application owns the typed command surface that selects
 # its independent runtime, scenario, and benchmark runners.
 clap.workspace = true
 fs2.workspace = true
-hl-container = { path = "../../containers/hl-container", features = ["native-test-hooks"] }
+hl-container = { path = "../../containers/hl-container", default-features = false }
 hl-design = { path = "../../packages/hl-design" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }
-hl-native = { path = "../../runtime/hl-native", features = ["native-test-hooks"] }
+hl-native = { path = "../../runtime/hl-native", default-features = false }
 hl-process = { path = "../../packages/hl-process" }
-hl-engine = { path = "../../containers/hl-engine" }
+hl-engine = { path = "../../containers/hl-engine", default-features = false }
 reflink-copy.workspace = true
 regex.workspace = true
 ring = "0.17.14"

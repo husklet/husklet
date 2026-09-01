@@ -443,5 +443,41 @@ const fn native_library_receipt_path() -> &'static str {
     "lib/libhl_native_engine.so"
 }
 
+#[cfg(all(test, feature = "production-runtime"))]
+mod production_tests {
+    use super::{command_text, require_readelf_contract};
+    use crate::platform::HostProcess;
+
+    #[test]
+    fn production_runner_compiles_only_the_production_native_exports() {
+        let production = include_str!("../../../../../runtime/hl-native/src/native/bridge/exports.txt");
+        let hooks = include_str!("../../../../../runtime/hl-native/src/native/bridge/test_exports.txt");
+        assert_eq!(hl_native::artifact_export_manifest(), production);
+        assert_ne!(hl_native::artifact_export_manifest(), hooks);
+        assert!(!hl_native::artifact_export_manifest().contains("hl_aarch64_exec_page_cache_test"));
+        assert!(!hl_native::artifact_export_manifest().contains("hl_x86_64_exec_page_cache_test"));
+
+        let library = hl_native::artifact_paths()
+            .expect("load the Cargo-selected production native library")
+            .into_iter()
+            .next()
+            .expect("native library path");
+        let dynamic = command_text(
+            HostProcess::standard("readelf")
+                .args(["--wide", "--dynamic"])
+                .arg(&library),
+        )
+        .expect("inspect production native dynamic section");
+        let symbols = command_text(
+            HostProcess::standard("readelf")
+                .args(["--wide", "--dyn-syms"])
+                .arg(&library),
+        )
+        .expect("inspect production native exports");
+        require_readelf_contract("", &dynamic, &symbols, production)
+            .expect("compiled native library must expose only production exports");
+    }
+}
+
 #[cfg(test)]
 mod test;
