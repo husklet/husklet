@@ -23,8 +23,8 @@ static void tier2_promote(uint64_t gpc) {
     // safe: the loop keeps running its correct tier-1 body (the spent down-counter simply wraps past 0 and
     // stops re-raising R_TIER2), and it can promote later once a flush has reset the arena.
     if (g_cp + CACHE_EMIT_HEADROOM > g_cache + CACHE_SZ) return;
-    int mi = map_idx(gpc);
-    if (mi < 0) return;
+    hl_translation_map_ref map_reference;
+    if (!map_ref_find(gpc, &map_reference)) return;
     if (!jit_wprot(0)) return;
     g_emit_start = g_cp;
     g_tier2_build = 1;
@@ -40,7 +40,7 @@ static void tier2_promote(uint64_t gpc) {
     // predecessors were resolved to the old body when they were translated (patch_links_to only fixes
     // still-PENDING ones), so without this an outer loop re-entering this inner loop would keep hitting
     // the spent counter stub. The bounce costs one branch per loop ENTRY (negligible vs the loop body).
-    void *old_body = g_map[mi].body;
+    void *old_body = map_reference.table->map[map_reference.index].body;
     int64_t bd = ((uint8_t *)nb - (uint8_t *)old_body) / 4;
     *(uint32_t *)old_body = 0x14000000u | ((uint32_t)bd & 0x3FFFFFFu);
     // IRQSLIM: forward chains enter at body+8 (past the 2-insn poll) and would miss the body+0
@@ -54,8 +54,8 @@ static void tier2_promote(uint64_t gpc) {
         return;
     }
     // swap the live map entry: future dispatcher lookups + IBTC fills resolve to tier-2 directly
-    g_map[mi].host = nh;
-    g_map[mi].body = nb;
+    map_reference.table->map[map_reference.index].host = nh;
+    map_reference.table->map[map_reference.index].body = nb;
     // repoint any still-unresolved chains to this gpc straight at the tier-2 body
     patch_links_to(gpc, nb);
     // drop a stale IBTC entry (if this block is an indirect-branch target) so it refills to tier-2

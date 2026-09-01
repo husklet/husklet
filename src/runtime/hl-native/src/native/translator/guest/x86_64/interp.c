@@ -2162,8 +2162,8 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
             expected = __atomic_load_n(&g_x64_pc_restored_states[slot->ordinal], __ATOMIC_ACQUIRE);
         }
         if (expected == JIT_RESTORED_ACTIVE) {
-            int index = map_idx(gpc);
-            return index < 0 ? NULL : g_map[index].body;
+            hl_translation_map_ref reference;
+            return map_ref_find(gpc, &reference) ? reference.table->map[reference.index].body : NULL;
         }
         return NULL;
     }
@@ -2194,8 +2194,8 @@ static void *x64_pc_restored_activate(uint64_t gpc) {
         return NULL;
     }
     map_put(gpc, x64_pc_get64(record + 8), x64_pc_get64(record + 16), block, block);
-    int index = map_idx(gpc);
-    if (index < 0 || g_map[index].body != block) {
+    hl_translation_map_ref reference;
+    if (!map_ref_find(gpc, &reference) || reference.table->map[reference.index].body != block) {
         expected = JIT_RESTORED_ACTIVATING;
         (void)__atomic_compare_exchange_n(&g_x64_pc_restored_states[slot->ordinal], &expected, 0,
                                           0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);

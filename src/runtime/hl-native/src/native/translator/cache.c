@@ -528,6 +528,11 @@ typedef struct hl_translation_map_table {
     int dynamic;
 } hl_translation_map_table;
 
+typedef struct {
+    hl_translation_map_table *table;
+    uint32_t index;
+} hl_translation_map_ref;
+
 static hl_translation_map_table g_bootstrap_map_table = {
     JIT_MAP_INITIAL_N, JIT_MAP_INITIAL_N - 1u, g_translation_index.map, g_bootstrap_map_metadata,
     g_bootstrap_live_map_indices, NULL, 0};
@@ -558,6 +563,8 @@ static uint32_t g_live_map_count;
 static uint32_t g_map_tombstone_count;
 #if HL_NATIVE_TEST_HOOKS
 static _Thread_local uint64_t g_map_host_probe_count;
+static _Atomic int *g_map_body_pause_ready;
+static _Atomic int *g_map_body_pause_grown;
 #endif
 
 typedef struct {
@@ -1056,7 +1063,7 @@ static void txpg_clear(void) {
     memset(g_txpg, 0, sizeof g_txpg);
 }
 
-static int map_idx(uint64_t gpc) {
+static int map_ref_find(uint64_t gpc, hl_translation_map_ref *result) {
     // hash shift is per-arch (frontend/<arch>/abi.h G_GPC_HASH_SHIFT): aarch64 PCs are 4-byte aligned
     // (>>2 spreads), x86 PCs are byte-granular (>>0). Pure tuning constant; aarch64 value is 2 (unchanged).
     hl_translation_map_table *table = map_table_active();
@@ -1068,11 +1075,19 @@ static int map_idx(uint64_t gpc) {
         uint32_t j = (h + i) & table->mask;
         if (table->map[j].generation != g_map_epoch) {
             if (table->map[j].tombstone_epoch == g_map_epoch) continue;
-            return -1;
+            return 0;
         }
-        if (table->map[j].gpc == gpc) return (int)j;
+        if (table->map[j].gpc == gpc) {
+            if (result != NULL) *result = (hl_translation_map_ref){table, j};
+            return 1;
+        }
     }
-    return -1;
+    return 0;
+}
+
+static int map_idx(uint64_t gpc) {
+    hl_translation_map_ref reference;
+    return map_ref_find(gpc, &reference) ? (int)reference.index : -1;
 }
 
 static inline __attribute__((always_inline)) void *map_host_cached(hl_map_host_cache_entry cache[2], uint64_t gpc) {
@@ -1085,11 +1100,11 @@ static inline __attribute__((always_inline)) void *map_host_cached(hl_map_host_c
         cache[0] = hit;
         return hit.host;
     }
-    int i = map_idx(gpc);
-    if (i < 0) return NULL;
+    hl_translation_map_ref reference;
+    if (!map_ref_find(gpc, &reference)) return NULL;
     cache[1] = cache[0];
-    cache[0] = (hl_map_host_cache_entry){gpc, generation, g_map[i].host};
-    return g_map[i].host;
+    cache[0] = (hl_map_host_cache_entry){gpc, generation, reference.table->map[reference.index].host};
+    return reference.table->map[reference.index].host;
 }
 
 static void *map_host(uint64_t gpc) { return map_host_cached(g_map_host_cache, gpc); }
@@ -1206,8 +1221,15 @@ static int map_host_cache_test(uint32_t scenario, uint64_t *probes) {
 #endif
 
 static void *map_body(uint64_t gpc) {
-    int i = map_idx(gpc);
-    return i < 0 ? NULL : g_map[i].body;
+    hl_translation_map_ref reference;
+    if (!map_ref_find(gpc, &reference)) return NULL;
+#if HL_NATIVE_TEST_HOOKS
+    if (g_map_body_pause_ready != NULL && g_map_body_pause_grown != NULL) {
+        atomic_store_explicit(g_map_body_pause_ready, 1, memory_order_release);
+        while (!atomic_load_explicit(g_map_body_pause_grown, memory_order_acquire)) sched_yield();
+    }
+#endif
+    return reference.table->map[reference.index].body;
 }
 
 static void map_source_index_rebuild(void) {
@@ -1596,8 +1618,11 @@ static void *map_growth_reader(void *opaque) {
             break;
         }
     }
-    atomic_store_explicit(&test->ready, 1, memory_order_release);
-    while (!atomic_load_explicit(&test->grown, memory_order_acquire)) sched_yield();
+    g_map_body_pause_ready = &test->ready;
+    g_map_body_pause_grown = &test->grown;
+    test->body = map_body(test->guest);
+    g_map_body_pause_ready = NULL;
+    g_map_body_pause_grown = NULL;
     test->valid = test->body != NULL && test->table->capacity == 32 &&
                   test->table->map[hash].generation == g_map_epoch;
     return NULL;

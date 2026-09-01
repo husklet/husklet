@@ -1373,8 +1373,8 @@ static void *translate_block(uint64_t gpc) {
 // (g_tier2_build/g_last_body/g_prof_t2/map_idx/patch_links_to/g_ibtc).
 static void tier2_promote(uint64_t gpc) {
     if (g_threaded) return;
-    int mi = map_idx(gpc);
-    if (mi < 0) return;
+    hl_translation_map_ref map_reference;
+    if (!map_ref_find(gpc, &map_reference)) return;
     if (!jit_wprot(0)) return;
     g_emit_start = g_cp;
     g_tier2_build = 1;
@@ -1389,7 +1389,7 @@ static void tier2_promote(uint64_t gpc) {
     // redirect the OLD tier-1 body to tier-2 (predecessor chains were resolved to the old body when they
     // were translated; patch_links_to only fixes still-PENDING edges) -- overwrite its first insn with
     // `b nb`. Costs one branch per loop ENTRY (negligible vs the loop body).
-    void *old_body = g_map[mi].body;
+    void *old_body = map_reference.table->map[map_reference.index].body;
     int64_t bd = ((uint8_t *)nb - (uint8_t *)old_body) / 4;
     *(uint32_t *)old_body = 0x14000000u | ((uint32_t)bd & 0x3FFFFFFu);
     // IRQSLIM: forward chains enter at body+8 (past the 2-insn poll) and would miss the body+0
@@ -1403,8 +1403,8 @@ static void tier2_promote(uint64_t gpc) {
         return;
     }
     // swap the live map entry: future dispatcher lookups + IBTC fills resolve to tier-2 directly
-    g_map[mi].host = nh;
-    g_map[mi].body = nb;
+    map_reference.table->map[map_reference.index].host = nh;
+    map_reference.table->map[map_reference.index].body = nb;
     patch_links_to(gpc, nb); // repoint any still-unresolved chains to this gpc straight at tier-2
     uint32_t h = (uint32_t)((gpc >> 2) & (IBTC_N - 1)); // drop a stale IBTC entry (refills to tier-2)
     if (g_ibtc[h].target == gpc) {
