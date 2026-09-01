@@ -135,6 +135,13 @@ mod tests {
         roots.open_overlay(&reference).unwrap();
         assert_eq!(snapshots.view_open_count(), after_cached + 1, "upper was not reopened");
 
+        let lower_resource = format!("snapshot:{}", lower.as_str());
+        leases.remove(reference.lease_id(), &lower_resource).unwrap();
+        let error = roots.open_overlay(&reference).unwrap_err();
+        assert!(matches!(error, Error::NotOwned { .. }));
+        assert_eq!(snapshots.view_open_count(), after_cached + 1, "cache was served after ownership refusal");
+        leases.add(reference.lease_id(), lower_resource).unwrap();
+
         leases.delete(reference.lease_id()).unwrap();
         let error = roots.open_overlay(&reference).unwrap_err();
         assert!(matches!(error, Error::NotOwned { .. }));
