@@ -632,7 +632,7 @@
               done
               timeout --kill-after=30s 10m \
                 cargo test -p testing --no-default-features --features production-runtime \
-                production_runner_compiles_only_the_production_native_exports \
+                runtime::stage::production_tests::production_runner_compiles_only_the_production_native_exports \
                 --locked --offline -- --exact
             } 2>&1 | tee native-hook-tests.log
             verdict='test outstanding_participants_are_classified_by_liveness_and_registration ... ok'
