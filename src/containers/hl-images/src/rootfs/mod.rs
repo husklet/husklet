@@ -1,6 +1,7 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, VecDeque},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -90,6 +91,112 @@ mod tests {
         assert!(view.work().is_dir());
         roots.release(&reference).unwrap();
         assert!(!view.work().exists());
+    }
+
+    #[test]
+    fn overlay_reuses_only_lower_after_fresh_lease_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(root.path().join("snapshots")).unwrap();
+        let leases = Leases::open(root.path().join("metadata")).unwrap();
+        let lower = Id::new("lower-reuse").unwrap();
+        snapshots
+            .prepare(lower.clone(), None)
+            .unwrap()
+            .commit(lower.clone())
+            .unwrap();
+        let roots = Roots::new(snapshots.clone(), leases.clone());
+        let reference = roots.fork_overlay(&lower).unwrap();
+        let views_before = snapshots.view_open_count();
+        let leases_before = leases.get_count();
+
+        roots.open_overlay(&reference).unwrap();
+        roots.open_overlay(&reference).unwrap();
+
+        // First open loads lower+upper; second loads only the always-fresh upper.
+        assert_eq!(snapshots.view_open_count() - views_before, 3);
+        assert_eq!(leases.get_count() - leases_before, 2);
+    }
+
+    #[test]
+    fn cached_lower_never_bypasses_missing_lease_or_fresh_upper() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(root.path().join("snapshots")).unwrap();
+        let leases = Leases::open(root.path().join("metadata")).unwrap();
+        let lower = Id::new("lower-refusal").unwrap();
+        snapshots
+            .prepare(lower.clone(), None)
+            .unwrap()
+            .commit(lower.clone())
+            .unwrap();
+        let roots = Roots::new(snapshots.clone(), leases.clone());
+        let reference = roots.fork_overlay(&lower).unwrap();
+        roots.open_overlay(&reference).unwrap();
+        let after_cached = snapshots.view_open_count();
+        roots.open_overlay(&reference).unwrap();
+        assert_eq!(snapshots.view_open_count(), after_cached + 1, "upper was not reopened");
+
+        leases.delete(reference.lease_id()).unwrap();
+        let error = roots.open_overlay(&reference).unwrap_err();
+        assert!(matches!(error, Error::NotOwned { .. }));
+        assert_eq!(
+            snapshots.view_open_count(),
+            after_cached + 1,
+            "cache was consulted after lease refusal"
+        );
+    }
+
+    #[test]
+    fn lower_cache_is_bounded_clears_with_manager_and_coalesces_concurrent_misses() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(root.path().join("snapshots")).unwrap();
+        let leases = Leases::open(root.path().join("metadata")).unwrap();
+        let mut ids = Vec::new();
+        for ordinal in 0..=LowerViews::CAPACITY {
+            let id = Id::new(format!("bounded-{ordinal}")).unwrap();
+            snapshots.prepare(id.clone(), None).unwrap().commit(id.clone()).unwrap();
+            ids.push(id);
+        }
+        let roots = Roots::new(snapshots.clone(), leases.clone());
+        for id in &ids {
+            roots.lower_view(id).unwrap();
+        }
+        let after_fill = snapshots.view_open_count();
+        roots.lower_view(&ids[0]).unwrap();
+        assert_eq!(
+            snapshots.view_open_count(),
+            after_fill + 1,
+            "oldest entry was not evicted"
+        );
+
+        let restarted = Roots::new(snapshots.clone(), leases);
+        restarted.lower_view(&ids[1]).unwrap();
+        assert_eq!(
+            snapshots.view_open_count(),
+            after_fill + 2,
+            "new manager inherited old cache"
+        );
+
+        let concurrent = Arc::new(Roots::new(
+            snapshots.clone(),
+            Leases::open(root.path().join("other-meta")).unwrap(),
+        ));
+        let before_concurrent = snapshots.view_open_count();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let threads = (0..8)
+            .map(|_| {
+                let roots = Arc::clone(&concurrent);
+                let barrier = Arc::clone(&barrier);
+                let id = ids[2].clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    roots.lower_view(&id).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(snapshots.view_open_count(), before_concurrent + 1);
     }
 
     /// Forks are reflinked, not fsynced; a write through one must still never reach
@@ -214,11 +321,68 @@ impl View {
 pub struct Roots {
     snapshots: Snapshots,
     leases: Leases,
+    lower_views: Arc<Mutex<LowerViews>>,
 }
+
+/// Immutable lower snapshots are shared by many container overlays. Keeping a small process-local
+/// window avoids reparsing their durable ownership/name sidecars on every exec without retaining an
+/// unbounded image working set. Lease ownership is deliberately not cached here: every caller must
+/// refresh and validate its lease before consulting this cache.
+#[derive(Debug, Default)]
+struct LowerViews {
+    views: HashMap<Id, SnapshotView>,
+    recency: VecDeque<Id>,
+}
+
+impl LowerViews {
+    const CAPACITY: usize = 16;
+
+    fn get(&mut self, id: &Id) -> Option<SnapshotView> {
+        let view = self.views.get(id).cloned()?;
+        self.touch(id);
+        Some(view)
+    }
+
+    fn insert(&mut self, id: Id, view: SnapshotView) {
+        self.views.insert(id.clone(), view);
+        self.touch(&id);
+        while self.views.len() > Self::CAPACITY {
+            let Some(expired) = self.recency.pop_front() else {
+                break;
+            };
+            self.views.remove(&expired);
+        }
+    }
+
+    fn touch(&mut self, id: &Id) {
+        self.recency.retain(|candidate| candidate != id);
+        self.recency.push_back(id.clone());
+    }
+}
+
 impl Roots {
     #[must_use]
     pub fn new(snapshots: Snapshots, leases: Leases) -> Self {
-        Self { snapshots, leases }
+        Self {
+            snapshots,
+            leases,
+            lower_views: Arc::new(Mutex::new(LowerViews::default())),
+        }
+    }
+
+    fn lower_view(&self, id: &Id) -> Result<SnapshotView> {
+        let mut cache = self
+            .lower_views
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("lower snapshot cache lock poisoned".into()))?;
+        if let Some(view) = cache.get(id) {
+            return Ok(view);
+        }
+        // Hold the lock through the synchronous open so concurrent callers of the same ID cannot
+        // duplicate its expensive sidecar load. Distinct cold IDs are rare and bounded by capacity.
+        let view = self.snapshots.view(id)?;
+        cache.insert(id.clone(), view.clone());
+        Ok(view)
     }
 
     /// Construct the digest authority owned by an immutable snapshot.
@@ -356,7 +520,7 @@ impl Roots {
         std::fs::create_dir_all(&work).at(&work)?;
         Ok(OverlayView {
             reference: reference.clone(),
-            lower: self.snapshots.view(&overlay.lower)?,
+            lower: self.lower_view(&overlay.lower)?,
             upper: self.snapshots.view(&overlay.upper)?,
             work,
         })

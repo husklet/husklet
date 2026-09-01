@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -29,6 +31,8 @@ pub struct Snapshots {
     root: PathBuf,
     publications: Arc<Directory>,
     indexes: Arc<Directory>,
+    #[cfg(test)]
+    view_opens: Arc<AtomicUsize>,
 }
 impl Snapshots {
     pub(crate) fn root(&self) -> &Path {
@@ -64,6 +68,8 @@ impl Snapshots {
             root,
             publications,
             indexes,
+            #[cfg(test)]
+            view_opens: Arc::new(AtomicUsize::new(0)),
         };
         snapshots.recover_abandoned_drafts()?;
         Ok(snapshots)
@@ -137,6 +143,8 @@ impl Snapshots {
     /// # Errors
     /// Returns an error when the committed snapshot does not exist.
     pub fn view(&self, id: &Id) -> Result<View> {
+        #[cfg(test)]
+        self.view_opens.fetch_add(1, Ordering::Relaxed);
         self.publication(id)?;
         let path = self.root.join("committed").join(id.as_str());
         if !path.is_dir() {
@@ -148,6 +156,11 @@ impl Snapshots {
             ownership: Ownerships::open(self.ownership_path("committed", id))?,
             names: Names::open(self.names_path("committed", id))?,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn view_open_count(&self) -> usize {
+        self.view_opens.load(Ordering::Relaxed)
     }
 
     /// Check whether a committed snapshot and both metadata sidecars exist.

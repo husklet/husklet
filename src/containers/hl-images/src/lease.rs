@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
@@ -58,8 +60,15 @@ pub struct Leases {
     path: PathBuf,
     state: Arc<RwLock<BTreeMap<String, Lease>>>,
     writers: Arc<Mutex<()>>,
+    #[cfg(test)]
+    gets: Arc<AtomicUsize>,
 }
 impl Leases {
+    #[cfg(test)]
+    pub(crate) fn get_count(&self) -> usize {
+        self.gets.load(Ordering::Relaxed)
+    }
+
     /// # Errors
     /// Returns an error when lease storage cannot be opened or decoded.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
@@ -82,6 +91,8 @@ impl Leases {
             writers,
             path,
             state: Arc::new(RwLock::new(state)),
+            #[cfg(test)]
+            gets: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -150,6 +161,8 @@ impl LeaseStore for Leases {
         self.create_with(labels, [])
     }
     fn get(&self, id: &str) -> Result<Option<Lease>> {
+        #[cfg(test)]
+        self.gets.fetch_add(1, Ordering::Relaxed);
         self.refresh()?;
         Ok(self
             .state
