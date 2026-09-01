@@ -751,15 +751,28 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 
 #[cfg(not(debug_assertions))]
 fn candidates() -> Result<Vec<PathBuf>, LoadError> {
-    let executable = std::env::current_exe().map_err(LoadError::CurrentExecutable)?;
-    release_candidates(&executable)
+    release_candidates_with(selected(), std::env::current_exe)
+}
+
+#[cfg(test)]
+fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
+    release_candidates_with(selected(), || Ok(executable.to_owned()))
 }
 
 #[cfg(any(not(debug_assertions), test))]
-fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
+fn release_candidates_with(
+    selected: Vec<PathBuf>,
+    current_executable: impl FnOnce() -> std::io::Result<PathBuf>,
+) -> Result<Vec<PathBuf>, LoadError> {
+    // An explicit selection was canonicalized and proven to be a file by `select`.  It is complete
+    // authority, not one more search hint: in particular, translated workers need not implement
+    // `/proc/self/exe` merely to open the exact host path their parent already supplied.
+    if !selected.is_empty() {
+        return Ok(selected);
+    }
+    let executable = current_executable().map_err(LoadError::CurrentExecutable)?;
     let directory = executable.parent().ok_or_else(|| LoadError::NotFound(Vec::new()))?;
-    let mut candidates = selected();
-    candidates.extend(installed_candidates(directory));
+    let mut candidates = installed_candidates(directory);
     // A `--release` **test** binary lives in the Cargo target directory, which carries none of the
     // installed layouts above: `deps/`, `../lib/` and `../Frameworks/` are all absent, so the engine
     // was simply not found and every test that needs one ran against whatever fallback its subject
@@ -856,6 +869,42 @@ mod tests {
         assert_eq!(paths[..installed.len()], installed[..]);
         // Every candidate is absolute, so none of them is resolved against the working directory.
         assert!(paths.iter().all(|path| path.is_absolute()), "{paths:?}");
+    }
+
+    #[test]
+    fn explicit_selection_does_not_require_a_current_executable() {
+        let selected = PathBuf::from("/authority/libhl_native_engine.so");
+        let paths = release_candidates_with(vec![selected.clone()], || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "translated procfs has no executable link",
+            ))
+        })
+        .unwrap();
+        assert_eq!(paths, [selected]);
+    }
+
+    #[test]
+    fn absent_selection_preserves_current_executable_failure() {
+        let error = release_candidates_with(Vec::new(), || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "current executable unavailable",
+            ))
+        })
+        .unwrap_err();
+        assert!(matches!(error, LoadError::CurrentExecutable(_)));
+        assert!(error.to_string().contains("current executable unavailable"));
+    }
+
+    #[test]
+    fn explicit_missing_selection_is_not_replaced_by_an_installed_fallback() {
+        let missing = PathBuf::from("/authority/missing/libhl_native_engine.so");
+        let paths = release_candidates_with(vec![missing.clone()], || {
+            Ok(PathBuf::from("/opt/husklet/bin/hl-engine"))
+        })
+        .unwrap();
+        assert_eq!(paths, [missing]);
     }
 
     /// A `--release` test binary is the one caller with no installed layout anywhere above it, and

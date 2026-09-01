@@ -679,7 +679,10 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
 
 #[cfg(unix)]
 fn loader_receipt() -> Result<String, String> {
-    let paths = hl_native::artifact_paths().ok_or_else(|| "the native loader exposed no path".to_owned())?;
+    let paths = receipt_paths(
+        hl_native::artifact_paths(),
+        hl_native::artifact_load_error().map(ToString::to_string),
+    )?;
     let mut canonical = paths
         .iter()
         .map(|path| std::fs::canonicalize(path).map_err(|error| format!("cannot resolve {}: {error}", path.display())))
@@ -698,6 +701,19 @@ fn loader_receipt() -> Result<String, String> {
         "library_path": library,
     })
     .to_string())
+}
+
+#[cfg(unix)]
+fn receipt_paths(
+    paths: Option<Vec<std::path::PathBuf>>,
+    load_error: Option<String>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    paths.ok_or_else(|| {
+        load_error.map_or_else(
+            || "the native loader exposed no path and no load error".to_owned(),
+            |error| format!("the native loader failed: {error}"),
+        )
+    })
 }
 
 #[cfg(not(unix))]
@@ -731,6 +747,8 @@ fn hash_path(path: &std::path::Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{Failure, Guest, LaunchArguments, backend_receipt, execute, rootfs_plan};
+    #[cfg(unix)]
+    use super::receipt_paths;
     use clap::Parser;
 
     fn launch(arguments: &[&str]) -> LaunchArguments {
@@ -784,6 +802,16 @@ mod tests {
                 None,
             )
             .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loader_receipt_preserves_the_exact_load_failure() {
+        let error = receipt_paths(None, Some("open native engine /chosen/lib.so: incompatible ABI".into())).unwrap_err();
+        assert_eq!(
+            error,
+            "the native loader failed: open native engine /chosen/lib.so: incompatible ABI"
         );
     }
 
