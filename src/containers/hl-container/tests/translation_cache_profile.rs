@@ -75,6 +75,7 @@ enum Mode {
     ForkExec,
     RelocationMissing,
     CwdRelative,
+    LiveNative,
 }
 
 impl Mode {
@@ -117,16 +118,20 @@ impl Mode {
             "fork-exec" => Ok(Self::ForkExec),
             "relocation-missing" => Ok(Self::RelocationMissing),
             "cwd-relative" => Ok(Self::CwdRelative),
+            "live-native" => Ok(Self::LiveNative),
             value => Err(format!("unknown HL_PCACHE_PROFILE_MODE {value:?}").into()),
         }
     }
 
     const fn cached(self) -> bool {
-        !matches!(self, Self::Interpreter | Self::Translated | Self::CwdRelative)
+        !matches!(
+            self,
+            Self::Interpreter | Self::Translated | Self::CwdRelative | Self::LiveNative
+        )
     }
 
     const fn translated(self) -> bool {
-        !matches!(self, Self::Interpreter)
+        !matches!(self, Self::Interpreter | Self::LiveNative)
     }
 }
 
@@ -682,12 +687,14 @@ int main(void) {
     }
     // Launch cc1 itself: a shell parent forks before exit, and the production cache deliberately refuses to
     // publish a fork-inherited arena. This is the real compiler process whose reuse the fixture characterizes.
-    let process = if mode == Mode::CwdRelative {
+    let cwd_command = if mode == Mode::LiveNative {
+        "sleep 1; cd /work || exit 40; ls . >/dev/null || exit 41; ls src | grep -qx unit_127.c || exit 45; set -- src/*.c; [ \"$#\" -eq 128 ] || exit 46; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok"
+    } else {
+        "cd /work || exit 40; ls . >/dev/null || exit 41; ls src | grep -qx unit_127.c || exit 45; set -- src/*.c; [ \"$#\" -eq 128 ] || exit 46; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok"
+    };
+    let process = if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
         Process::new("/bin/sh")
-            .args([
-                "-c",
-                "cd /work || exit 40; ls . >/dev/null || exit 41; ls src | grep -qx unit_127.c || exit 45; set -- src/*.c; [ \"$#\" -eq 128 ] || exit 46; rm -rf .cwd-upper; mkdir .cwd-upper || exit 42; : >.cwd-upper/child || exit 43; ls .cwd-upper | grep -qx child || exit 44; echo cwd-relative-ok",
-            ])
+            .args(["-c", cwd_command])
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
             .env("LANG", "C.UTF-8")
@@ -722,7 +729,7 @@ int main(void) {
         ])
     };
     let repeat_process = process.clone();
-    let initial_process = if mode == Mode::CwdRelative {
+    let initial_process = if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
         Process::new("/bin/sh").args(["-c", "while :; do sleep 3600; done"])
     } else {
         process.clone()
@@ -730,7 +737,7 @@ int main(void) {
     let spec = ContainerSpec::new(root, initial_process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
-        .execution(if matches!(mode, Mode::Interpreter | Mode::CwdRelative) {
+        .execution(if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
             Execution::Interpreted
         } else {
             Execution::Auto
@@ -744,7 +751,7 @@ int main(void) {
     containers.create(spec).await?;
     if !matches!(
         mode,
-        Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CwdRelative
+        Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CwdRelative | Mode::LiveNative
     ) {
         benchmark_barrier("ready", "release")?;
     }
@@ -752,17 +759,31 @@ int main(void) {
     containers.start("pcache-profile").await?;
     let activation_close_failure = mode == Mode::CacheStageFailure
         && std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE").as_deref() == Ok("activation-close");
-    let (waited, logs) = if mode == Mode::CwdRelative {
+    let (waited, logs) = if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
         let executions = containers.executions();
         let exec = executions
             .create(
                 "pcache-profile",
                 ExecSpec::new(process)
-                    .lifetime(ExecLifetime::Ephemeral)
-                    .execution(Execution::Auto),
+                    .lifetime(if mode == Mode::LiveNative {
+                        ExecLifetime::Live
+                    } else {
+                        ExecLifetime::Ephemeral
+                    })
+                    .execution(if mode == Mode::LiveNative {
+                        Execution::native(false)
+                    } else {
+                        Execution::Auto
+                    }),
             )
             .await?;
         let mut session = executions.start(&exec.id).await?;
+        if mode == Mode::LiveNative {
+            drop(session);
+            let running = executions.inspect(&exec.id).await?;
+            require(running.id == exec.id, "live execution identity changed before reattach")?;
+            session = executions.attach(&exec.id, None).await?;
+        }
         let mut logs = Logs::default();
         while let Some(record) = session.next().await? {
             match record.stream {
@@ -856,7 +877,7 @@ int main(void) {
         require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
         eprintln!("pcache-profile authority_hit_elapsed_us={}", repeat_elapsed.as_micros());
     }
-    if mode != Mode::CwdRelative {
+    if !matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
         benchmark_barrier("done", "finish")?;
     }
     if status != ExitStatus::Code(0) {
@@ -867,7 +888,7 @@ int main(void) {
         .into());
     }
     let output: [u8; 32] = Sha256::digest(&logs.stdout).into();
-    if mode == Mode::CwdRelative {
+    if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
         require(
             logs.stdout == b"cwd-relative-ok\n",
             "relative cwd workload output changed",
@@ -1295,7 +1316,7 @@ int main(void) {
                 }),
                 "unrecorded emitted absolute did not refuse cache publication",
             )?,
-            Mode::Interpreter | Mode::Translated | Mode::CwdRelative => unreachable!(),
+            Mode::Interpreter | Mode::Translated | Mode::CwdRelative | Mode::LiveNative => unreachable!(),
         }
     }
     eprintln!(

@@ -72,6 +72,7 @@ fn is_false(value: &bool) -> bool {
 pub enum ExecLifetime {
     #[default]
     Persisted,
+    Live,
     Ephemeral,
 }
 
@@ -306,6 +307,13 @@ mod tests {
         assert_eq!(encoded["HuskletLifetime"], "ephemeral");
         assert_eq!(encoded["HuskletNetwork"], "isolated");
         assert_eq!(encoded["HuskletNative"], true);
+
+        let live = serde_json::to_value(ExecConfig {
+            lifetime: ExecLifetime::Live,
+            ..ExecConfig::default()
+        })
+        .unwrap();
+        assert_eq!(live["HuskletLifetime"], "live");
     }
 
     #[cfg(feature = "runtime")]

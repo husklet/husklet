@@ -98,6 +98,9 @@ impl Worker {
             crate::config::ExecutionLifetime::Persisted => {
                 crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot)
             }
+            crate::config::ExecutionLifetime::Live => {
+                crate::runtime::execution::launch_live(&workspace, columns, rows, cwd, slot)
+            }
             crate::config::ExecutionLifetime::Ephemeral => {
                 crate::runtime::execution::launch_ephemeral(&workspace, columns, rows, cwd)
             }

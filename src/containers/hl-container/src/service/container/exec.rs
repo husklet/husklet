@@ -94,7 +94,7 @@ impl Service {
         }
         let container = self.required(&exec.container).await?;
         container.require_exec()?;
-        let ephemeral = exec.spec.lifetime == crate::ExecLifetime::Ephemeral;
+        let checkpoint_member = exec.spec.lifetime == crate::ExecLifetime::Persisted;
         let networks = if exec.spec.network == crate::ExecNetwork::Isolated {
             Vec::new()
         } else {
@@ -107,16 +107,16 @@ impl Service {
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.open(&container)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
-        let domain = if ephemeral {
-            None
-        } else {
+        let domain = if checkpoint_member {
             Some(self.process_domain(&container.id).await?)
+        } else {
+            None
         };
         // An exec session holds the far ends of the container's sockets and pipes, so
         // it is a member of the container's freeze rather than the subject of a
         // capture of its own. It therefore opens no image: there is no `exec-<id>`
         // namespace for a second, invisible generation to be committed into.
-        let checkpoint = (!ephemeral).then_some(crate::service::CheckpointRole::DomainMember);
+        let checkpoint = checkpoint_member.then_some(crate::service::CheckpointRole::DomainMember);
         let mut isolation = container.spec.isolation;
         if exec.spec.network == crate::ExecNetwork::Isolated {
             isolation.network_isolated = true;

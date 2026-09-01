@@ -110,7 +110,7 @@ fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
 }
 
 #[test]
-fn execution_lifetime_is_backward_compatible_and_ephemeral_round_trips_explicitly() {
+fn execution_lifetime_is_backward_compatible_and_nondefault_modes_round_trip_explicitly() {
     let path = tmp_path("execution-lifetime");
     std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = amd64\n").unwrap();
     assert_eq!(
@@ -132,6 +132,16 @@ fn execution_lifetime_is_backward_compatible_and_ephemeral_round_trips_explicitl
             .contains("execution_lifetime = ephemeral\n")
     );
     assert_eq!(WorkspaceStore::load(&path).unwrap().get("fast"), Some(&workspace));
+
+    workspace.name = "live".into();
+    workspace.execution_lifetime = ExecutionLifetime::Live;
+    store.upsert(workspace.clone()).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("execution_lifetime = live\n")
+    );
+    assert_eq!(WorkspaceStore::load(&path).unwrap().get("live"), Some(&workspace));
     let _ = std::fs::remove_file(path);
 }
 

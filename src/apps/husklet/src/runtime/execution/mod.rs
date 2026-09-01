@@ -90,6 +90,7 @@ impl LauncherError {
 pub enum PaneLifetime {
     #[default]
     Persisted,
+    Live,
     Ephemeral,
 }
 
@@ -97,6 +98,7 @@ impl PaneLifetime {
     fn wire(self) -> (ExecLifetime, ExecNetwork, bool) {
         match self {
             Self::Persisted => (ExecLifetime::Persisted, ExecNetwork::Container, false),
+            Self::Live => (ExecLifetime::Live, ExecNetwork::Isolated, true),
             Self::Ephemeral => (ExecLifetime::Ephemeral, ExecNetwork::Isolated, true),
         }
     }
@@ -122,6 +124,20 @@ pub fn launch_ephemeral(
     cwd: Option<&str>,
 ) -> io::Result<Box<dyn PtyBackend>> {
     launch_with_lifetime(workspace, columns, rows, cwd, None, PaneLifetime::Ephemeral)
+}
+
+/// Launches a durable live-reattachable pane through the native supervised backend.
+///
+/// The execution remains addressable while its workspace domain is alive, but deliberately stays outside
+/// that domain's checkpoint. Workspace shutdown must therefore refuse while this pane is active.
+pub fn launch_live(
+    workspace: &WorkspaceConfig,
+    columns: u16,
+    rows: u16,
+    cwd: Option<&str>,
+    slot: Option<&str>,
+) -> io::Result<Box<dyn PtyBackend>> {
+    launch_with_lifetime(workspace, columns, rows, cwd, slot, PaneLifetime::Live)
 }
 
 fn launch_with_lifetime(
@@ -155,7 +171,7 @@ fn launch_with_lifetime(
     let (working_dir, command) = terminal_start(cwd, terminal_home, &base);
     let size = Size::new(rows.max(1), columns.max(1)).map_err(LauncherError::io)?;
     let pane = match lifetime {
-        PaneLifetime::Persisted => PaneExecution::new(workspace, slot)?,
+        PaneLifetime::Persisted | PaneLifetime::Live => PaneExecution::new(workspace, slot)?,
         PaneLifetime::Ephemeral => None,
     };
     let (exec_lifetime, network, native) = lifetime.wire();
@@ -552,10 +568,14 @@ mod pane_execution_tests {
     }
 
     #[test]
-    fn ephemeral_panes_request_native_isolation_without_changing_persisted_defaults() {
+    fn native_pane_modes_request_isolation_without_changing_persisted_defaults() {
         assert_eq!(
             PaneLifetime::Persisted.wire(),
             (ExecLifetime::Persisted, ExecNetwork::Container, false)
+        );
+        assert_eq!(
+            PaneLifetime::Live.wire(),
+            (ExecLifetime::Live, ExecNetwork::Isolated, true)
         );
         assert_eq!(
             PaneLifetime::Ephemeral.wire(),
