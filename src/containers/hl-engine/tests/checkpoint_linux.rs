@@ -3329,7 +3329,11 @@ fn checkpoint_round_trip(
             executable,
             &release,
             &final_release,
-            &["HL_RESTORE", "HL_CKPT_TEST_FAIL_AFTER_FORK"],
+            &[
+                "HL_RESTORE",
+                "HL_CKPT_TEST_FAIL_AFTER_FORK",
+                "HL_CKPT_TEST_PRIVATE_FD_INHERIT",
+            ],
         ),
         streams(terminal),
         store.clone(),
@@ -3352,7 +3356,12 @@ fn checkpoint_round_trip(
     let second_store = Arc::new(Store::default());
     let recapture = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+        plan(
+            executable,
+            &release,
+            &final_release,
+            &["HL_RESTORE", "HL_CHECKPOINT", "HL_CKPT_TEST_PRIVATE_FD_INHERIT"],
+        ),
         streams(terminal),
         second_store.clone(),
         store.clone(),
@@ -3381,7 +3390,12 @@ fn checkpoint_round_trip(
     std::fs::write(&final_release, []).unwrap();
     let restore = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, &final_release, &["HL_RESTORE"]),
+        plan(
+            executable,
+            &release,
+            &final_release,
+            &["HL_RESTORE", "HL_CKPT_TEST_PRIVATE_FD_INHERIT"],
+        ),
         streams(terminal),
         second_store.clone(),
         second_store,

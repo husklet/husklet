@@ -1170,6 +1170,40 @@ static int ckpt_restore_reaped_children(const char *procdir, const struct ckpt_m
 
 static void ckpt_restore_proc_run(int gpid); // fwd
 
+/* A restore-created member is still a forked engine process. Keep its host clone
+ * behind the private-descriptor snapshot/publication protocol used by guest
+ * fork(2), so inherited engine descriptors acquire this child's identity. */
+static pid_t ckpt_restore_clone_current(int *completion_status) {
+    pid_t child = hl_host_process_clone_current();
+    int fork_error = errno;
+    *completion_status = hl_host_process_fd_private_fork_complete(child == 0);
+    errno = fork_error;
+    return child;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+static int ckpt_restore_private_fork_roundtrip(void) {
+    int descriptor = hl_host_process_fd_private_adopt(dup(STDERR_FILENO));
+    if (descriptor < 0) return 92;
+    int status = hl_host_process_fd_private_fork_prepare();
+    if (status != 0) {
+        hl_host_process_fd_private_remove(descriptor);
+        close(descriptor);
+        return 93;
+    }
+    pid_t child = ckpt_restore_clone_current(&status);
+    if (child == 0) _exit(status == 0 && hl_host_process_fd_private_current(descriptor) ? 0 : 94);
+    int waited = 0;
+    if (child < 0 || status != 0 || waitpid(child, &waited, 0) != child)
+        status = 95;
+    else
+        status = WIFEXITED(waited) && WEXITSTATUS(waited) == 0 ? 0 : 96;
+    hl_host_process_fd_private_remove(descriptor);
+    close(descriptor);
+    return status;
+}
+#endif
+
 // Re-fork every child of `gpid` (per the checkpoint ppid table); each child restores its own subtree and
 // resumes. Records the checkpoint-gpid -> live-hostpid mapping so this process's guest pids resolve.
 static void ckpt_fork_children(int gpid, struct cpu *parent) {
@@ -1187,11 +1221,30 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
         if (!g_rprocs[i].viable || ckpt_restore_parent_gpid(&g_rprocs[i]) != gpid || g_rprocs[i].gpid == gpid) continue;
         int cg = g_rprocs[i].gpid;
         int source = cpu_tid(parent);
+        int private_status = hl_host_process_fd_private_fork_prepare();
+        if (private_status != 0) {
+            fprintf(stderr, "[restore] cannot prepare inherited private descriptors for gpid %d: %s\n", cg,
+                    strerror(-private_status));
+            continue;
+        }
         if (!hl_target_task_event(parent, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)source, 0)) {
+            (void)hl_host_process_fd_private_fork_complete(0);
             fprintf(stderr, "[restore] runtime refused fork preparation for gpid %d\n", cg);
             continue;
         }
-        pid_t p = hl_host_process_clone_current();
+        pid_t p = ckpt_restore_clone_current(&private_status);
+        if (private_status != 0) {
+            (void)hl_target_task_event(parent, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)source, 0);
+            if (p == 0) _exit(127);
+            if (p > 0) {
+                int status;
+                kill(p, SIGKILL);
+                while (waitpid(p, &status, 0) < 0 && errno == EINTR) {}
+            }
+            fprintf(stderr, "[restore] cannot publish inherited private descriptors for gpid %d: %s\n", cg,
+                    strerror(-private_status));
+            continue;
+        }
         if (p < 0) {
             (void)hl_target_task_event(parent, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)source, 0);
         } else if (!hl_target_task_event(parent, HL_TASK_EVENT_FORK_PROCESS, (uint64_t)cg, (uint64_t)source, p == 0)) {
@@ -1203,6 +1256,14 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
             continue;
         }
         if (p == 0) {
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+            if (hl_option_get("HL_CKPT_TEST_PRIVATE_FD_INHERIT") != NULL &&
+                (g_namespace_transaction_fd < 0 ||
+                 !hl_host_process_fd_private_current(g_namespace_transaction_fd))) {
+                fprintf(stderr, "[restore] injected private-descriptor inheritance check failed for gpid %d\n", cg);
+                _exit(125);
+            }
+#endif
             ckpt_restore_proc_run(cg); // never returns
             _exit(0);
         } else if (p > 0) {

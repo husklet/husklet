@@ -70,6 +70,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_AFTER_FORK", "test-only restore failure after rebuilding descendants",
                         HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PRIVATE_FD_INHERIT",
+                        "test-only restored-child private descriptor ownership check", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
                         "test-only restored checkpoint trigger reattachment failure", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TTY_MASK", "test-only terminal-claim mask failure", HL_OPTION_FLAG),

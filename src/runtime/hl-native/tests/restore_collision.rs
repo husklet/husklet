@@ -33,6 +33,26 @@ fn descriptor_reset_scans_only_the_inherited_population_and_preserves_desired_pi
     }
 }
 
+#[test]
+fn a_restore_created_process_reclaims_its_inherited_private_descriptors() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let restore = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi/checkpoint/socket_restore.c"),
+    )
+    .expect("read checkpoint process-tree restore implementation");
+    assert!(
+        restore.contains("pid_t p = ckpt_restore_clone_current(&private_status);"),
+        "the process-tree restore bypasses the private-descriptor lifecycle helper"
+    );
+    for isa in [1, 2] {
+        assert_eq!(
+            hl_native::checkpoint_restore_fd_reset_test(isa, 2).unwrap(),
+            1,
+            "ISA {isa} restore fork did not publish private-descriptor ownership"
+        );
+    }
+}
+
 /// A rounded host claim must step over the host page a neighbouring guest region of the same image
 /// already claimed, instead of colliding with this restore's own mapping. Reproduces the real
 /// Apple Silicon addresses; on a 4 KiB host the two regions never share a page at all.

@@ -207,6 +207,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_PRIVATE_FD_INHERIT",
+        "test-only restored-child private descriptor ownership check",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
         "test-only restored checkpoint trigger reattachment failure",
         Flag

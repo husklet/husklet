@@ -54,6 +54,8 @@ static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int 
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static int ckpt_restore_private_fork_roundtrip(void);
+
 HL_API int hl_checkpoint_restore_fd_reset_test(uint32_t scenario, uint64_t *inspected) {
     if (inspected == NULL) return 90;
     g_ckpt_restore_reset_inspected = 0;
@@ -62,6 +64,10 @@ HL_API int hl_checkpoint_restore_fd_reset_test(uint32_t scenario, uint64_t *insp
         ckpt_restore_reset_inherited_fds(NULL, 0);
         *inspected = g_ckpt_restore_reset_inspected;
         return *inspected == 0 ? 0 : 1;
+    }
+    if (scenario == 2) {
+        *inspected = 1;
+        return ckpt_restore_private_fork_roundtrip();
     }
     if (scenario != 1) return 91;
 
