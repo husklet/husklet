@@ -1,6 +1,11 @@
 use std::{fs, path::PathBuf, process::Command};
 
 #[test]
+fn jitdump_is_one_process_lifetime_stream_across_cache_generations() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(207), 0);
+}
+
+#[test]
 fn sampling_exit_flush_joins_translation_serialization() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let source = fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read transliterator");
