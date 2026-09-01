@@ -870,16 +870,15 @@ static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t
         translit_sampling_overflow = 0;
         translit_profile_stream_discard_inherited(&translit_perf_map_file);
         translit_profile_stream_discard_inherited(&translit_jitdump_file);
+        if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
+        translit_jitdump_marker = NULL;
+        translit_jitdump_pid = 0;
+        translit_jitdump_index = 0;
     } else {
         translit_sampling_flush();
         translit_profile_stream_close(&translit_perf_map_file);
-        translit_profile_stream_close(&translit_jitdump_file);
     }
-    if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
-    translit_jitdump_marker = NULL;
     translit_perf_map_pid = 0;
-    translit_jitdump_pid = 0;
-    translit_jitdump_index = 0;
     translit_sampling_record_count = 0;
     translit_sampling_overflow = 0;
     translit_profile_active = next;
@@ -912,9 +911,10 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
     translit_jitdump_file = NULL;
     translit_jitdump_marker = NULL;
     char path[PATH_MAX];
-    int length = snprintf(path, sizeof path, "%s/jit-%lld-g%llu-rx%llx.dump", directory, (long long)pid,
-                          (unsigned long long)translit_profile_active.generation,
-                          (unsigned long long)(uintptr_t)translit_profile_active.rx);
+    /* perf's jitdump protocol identifies one process-lifetime stream by this
+       standard basename.  Cache generations are address ranges inside that
+       stream, not separate jitdump identities. */
+    int length = snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)pid);
     if (length <= 0 || (size_t)length >= sizeof path) return;
     int descriptor = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (descriptor < 0) {
@@ -947,6 +947,18 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
     (void)setvbuf(translit_jitdump_file, NULL, _IOFBF, 64u * 1024u);
     translit_jitdump_pid = pid;
     translit_jitdump_index = 0;
+}
+
+static void translit_jitdump_publish(const char *directory, pid_t pid, const char *name, size_t name_length,
+                                     const uint8_t *start, uint32_t host_len, uint64_t address) {
+    if (translit_jitdump_file == NULL || translit_jitdump_pid != pid) translit_jitdump_open(directory, pid);
+    if (translit_jitdump_file == NULL) return;
+    translit_jitdump_load load = {0, (uint32_t)(sizeof load + name_length + 1u + host_len),
+                                  translit_jitdump_now(), (uint32_t)pid, (uint32_t)syscall(SYS_gettid),
+                                  address, address, host_len, ++translit_jitdump_index};
+    (void)fwrite(&load, sizeof load, 1, translit_jitdump_file);
+    (void)fwrite(name, name_length + 1u, 1, translit_jitdump_file);
+    (void)fwrite(start, host_len, 1, translit_jitdump_file);
 }
 
 static void translit_perf_map_publish_named(const char *name, const uint8_t *start, uint32_t host_len) {
@@ -1006,22 +1018,7 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
         return;
     }
     (void)fprintf(translit_perf_map_file, "%llx %x %s\n", (unsigned long long)address, host_len, name);
-    if (translit_jitdump_file == NULL || translit_jitdump_pid != pid) translit_jitdump_open(directory, pid);
-    if (translit_jitdump_file == NULL) return;
-    translit_jitdump_load load = {0,
-                                  (uint32_t)(sizeof load + (size_t)name_length + 1u + host_len),
-                                  translit_jitdump_now(),
-                                  (uint32_t)pid,
-                                  (uint32_t)syscall(SYS_gettid),
-                                  (uint64_t)(uintptr_t)(translit_profile_active.rx +
-                                                        (start - translit_profile_active.rw)),
-                                  (uint64_t)(uintptr_t)(translit_profile_active.rx +
-                                                        (start - translit_profile_active.rw)),
-                                  host_len,
-                                  ++translit_jitdump_index};
-    (void)fwrite(&load, sizeof load, 1, translit_jitdump_file);
-    (void)fwrite(name, name_length + 1u, 1, translit_jitdump_file);
-    (void)fwrite(start, host_len, 1, translit_jitdump_file);
+    translit_jitdump_publish(directory, pid, name, name_length, start, host_len, address);
 }
 
 static void translit_perf_map_publish_helper(const char *name, const uint8_t *start, const uint8_t *end,
@@ -1111,6 +1108,82 @@ static void translit_perf_map_flush_at_exit(void) {
     translit_perf_map_flush();
     pthread_mutex_unlock(&g_jit_lock);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_jitdump_lifecycle_test(void) {
+    pid_t child = fork();
+    if (child < 0) return 217;
+    if (child == 0) {
+        alarm(3);
+        char directory[] = "/tmp/hl-jitdump-lifecycle-XXXXXX";
+        if (mkdtemp(directory) == NULL) _exit(1);
+        memset(&translit_profile_options, 0, sizeof translit_profile_options);
+        snprintf(translit_profile_options.directory, sizeof translit_profile_options.directory, "%s", directory);
+        translit_profile_options.enabled = 1;
+        uint8_t *code = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (code == MAP_FAILED) _exit(1);
+        memset(code, 0x90, 12);
+        g_emit.base = g_emit.start = code;
+        g_emit.cursor = code + 12;
+        g_emit.rx_delta = 0;
+        for (uint64_t generation = 0; generation != 3; ++generation) {
+            g_cache_gen = generation;
+            translit_perf_map_generation_bind(generation, g_cache, J_RX(g_cache), CACHE_SZ);
+            translit_perf_map_publish_named("hl_jitdump_lifecycle", code + generation * 4, 4);
+        }
+        translit_perf_map_flush();
+        char path[PATH_MAX];
+        snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)getpid());
+        FILE *input = fopen(path, "rb");
+        translit_jitdump_header header;
+        int ok = input != NULL && fread(&header, sizeof header, 1, input) == 1 &&
+                 header.magic == UINT32_C(0x4A695444) && header.pid == (uint32_t)getpid();
+        if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle header failed: input=%p errno=%d\n", (void *)input, errno);
+        for (uint64_t index = 1; ok && index <= 3; ++index) {
+            translit_jitdump_load load;
+            ok = fread(&load, sizeof load, 1, input) == 1 && load.id == 0 && load.pid == (uint32_t)getpid() &&
+                 load.code_index == index &&
+                 load.code_addr == (uint64_t)(uintptr_t)(code + (index - 1) * 4) &&
+                 load.total_size >= sizeof load;
+            if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle record %llu failed: id=%u pid=%u index=%llu address=%llx size=%u\n",
+                             (unsigned long long)index, load.id, load.pid,
+                             (unsigned long long)load.code_index, (unsigned long long)load.code_addr, load.total_size);
+            if (ok) ok = fseek(input, (long)(load.total_size - sizeof load), SEEK_CUR) == 0;
+        }
+        if (ok) ok = fgetc(input) == EOF;
+        if (input != NULL) fclose(input);
+        if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle parse failed: %s\n", path);
+        translit_profile_stream_close(&translit_perf_map_file);
+        translit_profile_stream_close(&translit_jitdump_file);
+        if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
+        for (uint64_t generation = 0; generation != 3; ++generation) {
+            char map_path[PATH_MAX];
+            snprintf(map_path, sizeof map_path, "%s/perf-%lld-g%llu-rx%llx.map", directory,
+                     (long long)getpid(), (unsigned long long)generation,
+                     (unsigned long long)(uintptr_t)code);
+            FILE *map = fopen(map_path, "r");
+            char line[256];
+            if (map == NULL || fgets(line, sizeof line, map) == NULL || strstr(line, "hl_jitdump_lifecycle") == NULL)
+                ok = 0;
+            if (map != NULL) fclose(map);
+            if (unlink(map_path) != 0) ok = 0;
+        }
+        if (unlink(path) != 0 || rmdir(directory) != 0) ok = 0;
+        _exit(ok ? 0 : 2);
+    }
+    int status = 0;
+    for (unsigned attempt = 0; attempt != 300; ++attempt) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 217;
+        if (waited < 0) return 217;
+        struct timespec pause = {0, 10000000};
+        (void)nanosleep(&pause, NULL);
+    }
+    (void)kill(child, SIGKILL);
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return 217;
+}
+#endif
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
 static uint64_t translit_natural_lea_lowered;
@@ -3163,6 +3236,7 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    if (scenario == 217) return translit_jitdump_lifecycle_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
         struct insn jump = {.len = 2, .op = 0xff, .has_modrm = 1, .reg = 4, .is_mem = 1,

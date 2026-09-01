@@ -622,6 +622,7 @@
                 checkpoint_rendezvous \
                 errno_namespace \
                 identity_registry \
+                logging \
                 x86_store_preflight \
                 restore_collision
               do
@@ -634,6 +635,12 @@
             count=$(grep -Fxc "$verdict" native-hook-tests.log || true)
             if [ "$count" -ne 1 ]; then
               echo "native hook checkpoint verdict appeared $count times, expected exactly once: $verdict" >&2
+              exit 1
+            fi
+            jitdump_verdict='test jitdump_is_one_process_lifetime_stream_across_cache_generations ... ok'
+            count=$(grep -Fxc "$jitdump_verdict" native-hook-tests.log || true)
+            if [ "$count" -ne 1 ]; then
+              echo "native hook jitdump verdict appeared $count times, expected exactly once: $jitdump_verdict" >&2
               exit 1
             fi
             runHook postBuild
