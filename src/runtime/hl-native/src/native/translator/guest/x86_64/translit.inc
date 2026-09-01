@@ -1112,7 +1112,7 @@ static void translit_perf_map_flush_at_exit(void) {
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int translit_jitdump_lifecycle_test(void) {
     pid_t child = fork();
-    if (child < 0) return 207;
+    if (child < 0) return 217;
     if (child == 0) {
         alarm(3);
         char directory[] = "/tmp/hl-jitdump-lifecycle-XXXXXX";
@@ -1174,14 +1174,14 @@ static int translit_jitdump_lifecycle_test(void) {
     int status = 0;
     for (unsigned attempt = 0; attempt != 300; ++attempt) {
         pid_t waited = waitpid(child, &status, WNOHANG);
-        if (waited == child) return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 207;
-        if (waited < 0) return 207;
+        if (waited == child) return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 217;
+        if (waited < 0) return 217;
         struct timespec pause = {0, 10000000};
         (void)nanosleep(&pause, NULL);
     }
     (void)kill(child, SIGKILL);
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-    return 207;
+    return 217;
 }
 #endif
 static uint64_t translit_displaced_lea_lowered;
@@ -3236,7 +3236,7 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
-    if (scenario == 207) return translit_jitdump_lifecycle_test();
+    if (scenario == 217) return translit_jitdump_lifecycle_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
         struct insn jump = {.len = 2, .op = 0xff, .has_modrm = 1, .reg = 4, .is_mem = 1,
