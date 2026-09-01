@@ -528,6 +528,22 @@ static void translit_external_absolute_generation_reset(void) {}
 static void translit_ret_ibtc_reset(void) {}
 static void translit_ret_ibtc_drop_target(uint64_t target) { (void)target; }
 static void translit_cache_rewind_in_place(void) { jit_cache_rewind_in_place(); }
+static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu) { (void)cpu; }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* The fall-through byte fixture and unsupported-opcode census exercise the
+ * same-ISA transliterator.  Keep hook-enabled AArch64-host builds linkable,
+ * while leaving the x86-on-ARM JIT's independent tests and execution intact. */
+static const uint8_t *translit_fall_fixture_bytes;
+static uint64_t translit_fall_fixture_guest;
+static size_t translit_fall_fixture_length;
+static _Atomic uint64_t translit_fall_direct_fetches;
+static int translit_unsupported_report(char *out, size_t size) {
+    (void)out;
+    (void)size;
+    return 0;
+}
+#endif
 
 #if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_HOST_CPU_X86_64)
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
