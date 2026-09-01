@@ -1114,16 +1114,22 @@ static int translit_jitdump_lifecycle_test(void) {
     pid_t child = fork();
     if (child < 0) return 207;
     if (child == 0) {
+        alarm(3);
         char directory[] = "/tmp/hl-jitdump-lifecycle-XXXXXX";
         if (mkdtemp(directory) == NULL) _exit(1);
         memset(&translit_profile_options, 0, sizeof translit_profile_options);
         snprintf(translit_profile_options.directory, sizeof translit_profile_options.directory, "%s", directory);
         translit_profile_options.enabled = 1;
-        uint8_t code[4] = {0x90, 0x90, 0x90, 0xc3};
+        uint8_t *code = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (code == MAP_FAILED) _exit(1);
+        memset(code, 0x90, 12);
+        g_emit.base = g_emit.start = code;
+        g_emit.cursor = code + 12;
+        g_emit.rx_delta = 0;
         for (uint64_t generation = 0; generation != 3; ++generation) {
-            const uint64_t address = UINT64_C(0x700000000000) + generation * 0x10000;
-            translit_perf_map_generation_bind(generation, code, (const uint8_t *)(uintptr_t)address, sizeof code);
-            translit_jitdump_publish(directory, getpid(), "hl_jitdump_lifecycle", 20, code, sizeof code, address);
+            g_cache_gen = generation;
+            translit_perf_map_generation_bind(generation, g_cache, J_RX(g_cache), CACHE_SZ);
+            translit_perf_map_publish_named("hl_jitdump_lifecycle", code + generation * 4, 4);
         }
         translit_perf_map_flush();
         char path[PATH_MAX];
@@ -1132,12 +1138,16 @@ static int translit_jitdump_lifecycle_test(void) {
         translit_jitdump_header header;
         int ok = input != NULL && fread(&header, sizeof header, 1, input) == 1 &&
                  header.magic == UINT32_C(0x4A695444) && header.pid == (uint32_t)getpid();
+        if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle header failed: input=%p errno=%d\n", (void *)input, errno);
         for (uint64_t index = 1; ok && index <= 3; ++index) {
             translit_jitdump_load load;
             ok = fread(&load, sizeof load, 1, input) == 1 && load.id == 0 && load.pid == (uint32_t)getpid() &&
                  load.code_index == index &&
-                 load.code_addr == UINT64_C(0x700000000000) + (index - 1) * 0x10000 &&
+                 load.code_addr == (uint64_t)(uintptr_t)(code + (index - 1) * 4) &&
                  load.total_size >= sizeof load;
+            if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle record %llu failed: id=%u pid=%u index=%llu address=%llx size=%u\n",
+                             (unsigned long long)index, load.id, load.pid,
+                             (unsigned long long)load.code_index, (unsigned long long)load.code_addr, load.total_size);
             if (ok) ok = fseek(input, (long)(load.total_size - sizeof load), SEEK_CUR) == 0;
         }
         if (ok) ok = fgetc(input) == EOF;
@@ -1146,11 +1156,32 @@ static int translit_jitdump_lifecycle_test(void) {
         translit_profile_stream_close(&translit_perf_map_file);
         translit_profile_stream_close(&translit_jitdump_file);
         if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
+        for (uint64_t generation = 0; generation != 3; ++generation) {
+            char map_path[PATH_MAX];
+            snprintf(map_path, sizeof map_path, "%s/perf-%lld-g%llu-rx%llx.map", directory,
+                     (long long)getpid(), (unsigned long long)generation,
+                     (unsigned long long)(uintptr_t)code);
+            FILE *map = fopen(map_path, "r");
+            char line[256];
+            if (map == NULL || fgets(line, sizeof line, map) == NULL || strstr(line, "hl_jitdump_lifecycle") == NULL)
+                ok = 0;
+            if (map != NULL) fclose(map);
+            if (unlink(map_path) != 0) ok = 0;
+        }
         if (unlink(path) != 0 || rmdir(directory) != 0) ok = 0;
         _exit(ok ? 0 : 2);
     }
     int status = 0;
-    return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 207;
+    for (unsigned attempt = 0; attempt != 300; ++attempt) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 207;
+        if (waited < 0) return 207;
+        struct timespec pause = {0, 10000000};
+        (void)nanosleep(&pause, NULL);
+    }
+    (void)kill(child, SIGKILL);
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return 207;
 }
 #endif
 static uint64_t translit_displaced_lea_lowered;

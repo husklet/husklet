@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf, process::Command};
 
+#[cfg(feature = "native-test-hooks")]
 #[test]
 fn jitdump_is_one_process_lifetime_stream_across_cache_generations() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(207), 0);
