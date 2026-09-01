@@ -16,8 +16,8 @@ mod build;
 
 const RECEIPT_SCHEMA: &str = "husklet-runtime-corpus-artifacts-v1";
 const SMOKE_RECEIPT: &str = "hl-native-artifact-smoke-v1";
-// The testing application enables hl-native's test hooks, so its exact Cargo-emitted library has
-// the test export surface rather than the smaller production-package surface.
+// Native hooks win when both runner modes are enabled. Production staging exists only for the
+// explicit `production-runtime && !native-test-hooks` configuration.
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -443,7 +443,7 @@ const fn native_library_receipt_path() -> &'static str {
     "lib/libhl_native_engine.so"
 }
 
-#[cfg(all(test, feature = "production-runtime"))]
+#[cfg(all(test, feature = "production-runtime", not(feature = "native-test-hooks")))]
 mod production_tests {
     use super::{command_text, require_readelf_contract};
     use crate::platform::HostProcess;

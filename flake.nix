@@ -630,11 +630,21 @@
                   cargo test -p hl-native --features native-test-hooks --test "$native_test" \
                   --locked --offline -- --test-threads=1
               done
+              timeout --kill-after=30s 10m \
+                cargo test -p testing --no-default-features --features production-runtime \
+                production_runner_compiles_only_the_production_native_exports \
+                --locked --offline -- --exact
             } 2>&1 | tee native-hook-tests.log
             verdict='test outstanding_participants_are_classified_by_liveness_and_registration ... ok'
             count=$(grep -Fxc "$verdict" native-hook-tests.log || true)
             if [ "$count" -ne 1 ]; then
               echo "native hook checkpoint verdict appeared $count times, expected exactly once: $verdict" >&2
+              exit 1
+            fi
+            production_verdict='test runtime::stage::production_tests::production_runner_compiles_only_the_production_native_exports ... ok'
+            count=$(grep -Fxc "$production_verdict" native-hook-tests.log || true)
+            if [ "$count" -ne 1 ]; then
+              echo "production runtime verdict appeared $count times, expected exactly once: $production_verdict" >&2
               exit 1
             fi
             jitdump_verdict='test jitdump_is_one_process_lifetime_stream_across_cache_generations ... ok'

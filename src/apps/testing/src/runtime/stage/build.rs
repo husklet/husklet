@@ -25,7 +25,7 @@ pub(super) fn run(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Erro
         "--bin",
         "testing",
     ];
-    arguments.extend(cargo_feature_arguments());
+    arguments.extend(configured_cargo_feature_arguments());
     arguments.push("--message-format=json-render-diagnostics");
     let mut child = HostProcess::standard(cargo)
         .current_dir(workspace)
@@ -43,12 +43,19 @@ pub(super) fn run(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Erro
     artifacts?.ok_or_else(|| "Cargo did not identify both the testing runner and hl-native library".into())
 }
 
-const fn cargo_feature_arguments() -> &'static [&'static str] {
-    if cfg!(feature = "production-runtime") && !cfg!(feature = "native-test-hooks") {
+const fn cargo_feature_arguments(production: bool, hooks: bool) -> &'static [&'static str] {
+    if production && !hooks {
         &["--no-default-features", "--features", "production-runtime"]
     } else {
         &[]
     }
+}
+
+const fn configured_cargo_feature_arguments() -> &'static [&'static str] {
+    cargo_feature_arguments(
+        cfg!(feature = "production-runtime"),
+        cfg!(feature = "native-test-hooks"),
+    )
 }
 
 struct PackageIds {
@@ -167,14 +174,15 @@ mod tests {
     use super::cargo_feature_arguments;
 
     #[test]
-    fn stage_rebuilds_the_same_feature_surface_as_its_runner() {
-        #[cfg(all(feature = "production-runtime", not(feature = "native-test-hooks")))]
+    fn stage_feature_arguments_resolve_default_production_and_all_features() {
+        assert!(cargo_feature_arguments(false, true).is_empty(), "default hook runner");
         assert_eq!(
-            cargo_feature_arguments(),
+            cargo_feature_arguments(true, false),
             ["--no-default-features", "--features", "production-runtime"]
         );
-
-        #[cfg(feature = "native-test-hooks")]
-        assert!(cargo_feature_arguments().is_empty());
+        assert!(
+            cargo_feature_arguments(true, true).is_empty(),
+            "hooks take precedence under all-features"
+        );
     }
 }
