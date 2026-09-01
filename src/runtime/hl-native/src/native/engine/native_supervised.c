@@ -413,6 +413,35 @@ static int hl_native_supervised_overlay_mount(const hl_engine_config *config, co
 
 #include "native_overlay_projection.c"
 
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
+HL_API int hl_native_supervised_name_projection_test(uint32_t scenario) {
+    if (scenario != 0) return 90;
+    char root[] = "/var/tmp/husklet-name-projection.XXXXXX";
+    if (mkdtemp(root) == NULL) return 91;
+    char source_path[PATH_MAX], guest_path[PATH_MAX];
+    int status = 0;
+    if (snprintf(source_path, sizeof source_path, "%s/source", root) >= (int)sizeof source_path ||
+        snprintf(guest_path, sizeof guest_path, "%s/guest", root) >= (int)sizeof guest_path)
+        status = 92;
+    int file = status == 0 ? open(source_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600) : -1;
+    if (status == 0 && file < 0) status = 93;
+    if (file >= 0) close(file);
+    /* Model the winner completing between the loser's source stat and destination check. */
+    int root_fd = status == 0 ? open(root, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW) : -1;
+    struct stat source_status, guest_status;
+    if (status == 0 && (root_fd < 0 || fstatat(root_fd, "source", &source_status, AT_SYMLINK_NOFOLLOW) != 0)) status = 94;
+    if (status == 0 && rename(source_path, guest_path) != 0) status = 95;
+    if (status == 0 &&
+        (fstatat(root_fd, "guest", &guest_status, AT_SYMLINK_NOFOLLOW) != 0 ||
+         !hl_native_supervised_name_completed(root_fd, "source", &source_status, &guest_status)))
+        status = 96;
+    if (root_fd >= 0) close(root_fd);
+    unlink(guest_path);
+    rmdir(root);
+    return status;
+}
+#endif
+
 static int hl_native_supervised_id_compare(const void *left, const void *right) {
     uint32_t a = *(const uint32_t *)left, b = *(const uint32_t *)right;
     return a > b ? 1 : a < b ? -1 : 0;

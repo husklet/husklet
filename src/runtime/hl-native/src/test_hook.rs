@@ -22,6 +22,13 @@ pub fn native_supervised_hostname_projection_test(scenario: u32) -> i32 {
     bindings::native_supervised_hostname_projection_test(scenario)
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn native_supervised_name_projection_test(scenario: u32) -> i32 {
+    bindings::native_supervised_name_projection_test(scenario)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {

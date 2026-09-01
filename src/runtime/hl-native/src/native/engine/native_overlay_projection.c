@@ -62,6 +62,13 @@ static int hl_native_supervised_name_parent(int root, char *path, const char **l
     return (int)syscall(SYS_openat2, root, parent, &how, sizeof how);
 }
 
+static int hl_native_supervised_name_completed(int source_parent, const char *source_leaf,
+                                               const struct stat *source_status, const struct stat *guest_status) {
+    struct stat current;
+    return fstatat(source_parent, source_leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 && errno == ENOENT &&
+           guest_status->st_dev == source_status->st_dev && guest_status->st_ino == source_status->st_ino;
+}
+
 static int hl_native_supervised_name_project(int root, char *source, char *guest) {
     const char *source_leaf = NULL, *guest_leaf = NULL;
     int source_parent = hl_native_supervised_name_parent(root, source, &source_leaf);
@@ -75,13 +82,17 @@ static int hl_native_supervised_name_project(int root, char *source, char *guest
         if (failure == ENOENT) return 0;
         return errno = failure, -1;
     }
-    if (S_ISDIR(source_status.st_mode) && hl_native_supervised_name_copyup(source_parent, source_leaf) != 0) {
+    if (hl_native_supervised_name_copyup(source_parent, source_leaf) != 0 ||
+        fstatat(source_parent, source_leaf, &source_status, AT_SYMLINK_NOFOLLOW) != 0) {
         int failure = errno;
         close(guest_parent); close(source_parent); return errno = failure, -1;
     }
     struct stat guest_status;
     if (fstatat(guest_parent, guest_leaf, &guest_status, AT_SYMLINK_NOFOLLOW) == 0) {
-        close(guest_parent); close(source_parent); return errno = EEXIST, -1;
+        int completed = hl_native_supervised_name_completed(source_parent, source_leaf, &source_status, &guest_status);
+        close(guest_parent); close(source_parent);
+        if (completed) return 0;
+        return errno = EEXIST, -1;
     }
     if (errno != ENOENT) {
         int failure = errno;
