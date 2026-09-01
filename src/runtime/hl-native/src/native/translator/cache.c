@@ -1110,12 +1110,12 @@ static inline __attribute__((always_inline)) void *map_host_cached(hl_map_host_c
 
 static void *map_host(uint64_t gpc) { return map_host_cached(g_map_host_cache, gpc); }
 
-#if HL_NATIVE_TEST_HOOKS
 typedef enum {
     MAP_PUT_OK = 0,
     MAP_PUT_FULL,
 } map_put_result;
 
+#if HL_NATIVE_TEST_HOOKS
 static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void *host, void *body);
 typedef struct {
     uint64_t guest;
