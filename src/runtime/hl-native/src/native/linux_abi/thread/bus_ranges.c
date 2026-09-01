@@ -910,7 +910,8 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 59:
     case 60:
     case 61:
-    case 62: result = map_growth_test(scenario, scans); break;
+    case 62:
+    case 63: result = map_growth_test(scenario, scans); break;
     case 19: { // Fetch-span hits reuse the page verdict until its authority changes.
         _Alignas(4096) unsigned char page_bytes[4096] = {0};
         unsigned char byte = 0;

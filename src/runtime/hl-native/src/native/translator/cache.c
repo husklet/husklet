@@ -1609,6 +1609,26 @@ static uint64_t map_growth_guest(uint32_t ordinal, uint32_t capacity) {
 
 static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
     atomic_store_explicit(&g_active_map_table, &g_bootstrap_map_table, memory_order_release);
+    if (scenario == 63) {
+        g_bootstrap_map_table.capacity = JIT_MAP_INITIAL_N;
+        g_bootstrap_map_table.mask = JIT_MAP_INITIAL_N - 1u;
+        map_clear();
+        const uint32_t threshold = (JIT_MAP_INITIAL_N * 2u) / 5u;
+        for (uint32_t i = 0; i <= threshold; i++) {
+            uint64_t guest = UINT64_C(0x100000) + ((uint64_t)i << G_GPC_HASH_SHIFT);
+            map_put(guest, guest, guest + 1u, (void *)(uintptr_t)(UINT64_C(0x1000000) + i),
+                    (void *)(uintptr_t)(UINT64_C(0x2000000) + i));
+        }
+        if (map_capacity() != JIT_MAP_INITIAL_N * 2u || g_live_map_count != threshold + 1u ||
+            g_map_tombstone_count != 0)
+            return 12;
+        for (uint32_t i = 0; i <= threshold; i += threshold / 4u) {
+            uint64_t guest = UINT64_C(0x100000) + ((uint64_t)i << G_GPC_HASH_SHIFT);
+            if ((uintptr_t)map_body(guest) != UINT64_C(0x2000000) + i) return 13;
+        }
+        *answer = map_capacity();
+        return 0;
+    }
     g_bootstrap_map_table.capacity = 16;
     g_bootstrap_map_table.mask = 15;
     map_clear();
@@ -1703,7 +1723,7 @@ static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
 }
 
 static int map_growth_test(uint32_t scenario, uint64_t *answer) {
-    if (scenario < 55 || scenario > 62 || answer == NULL) return -EINVAL;
+    if (scenario < 55 || scenario > 63 || answer == NULL) return -EINVAL;
     pid_t child = fork();
     if (child == 0) {
         uint64_t child_answer = 0;

@@ -131,7 +131,7 @@ fn alternating_translation_targets_expose_every_authoritative_map_probe() {
 #[test]
 fn translation_map_growth_preserves_every_index_and_lifecycle_boundary() {
     for isa in [1, 2] {
-        for scenario in 55..=62 {
+        for scenario in 55..=63 {
             assert!(
                 exec_page_cache_test(isa, scenario).is_ok(),
                 "isa={isa} scenario={scenario}"
