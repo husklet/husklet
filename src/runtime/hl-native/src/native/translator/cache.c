@@ -533,6 +533,9 @@ static hl_translation_map_table g_bootstrap_map_table = {
     g_bootstrap_live_map_indices, NULL, 0};
 static _Atomic(hl_translation_map_table *) g_active_map_table = &g_bootstrap_map_table;
 static hl_translation_map_table *g_retired_map_tables;
+#if HL_NATIVE_TEST_HOOKS
+static int g_map_growth_alloc_fail;
+#endif
 
 static inline hl_translation_map_table *map_table_active(void) {
     return atomic_load_explicit(&g_active_map_table, memory_order_acquire);
@@ -1228,6 +1231,12 @@ static void map_source_index_rebuild(void) {
 static int map_table_grow(void) {
     hl_translation_map_table *old = map_table_active();
     if (old->capacity >= JIT_MAP_N) return 1;
+#if HL_NATIVE_TEST_HOOKS
+    if (g_map_growth_alloc_fail) {
+        g_map_growth_alloc_fail = 0;
+        return 0;
+    }
+#endif
     uint32_t capacity = old->capacity << 1;
     hl_translation_map_table *next = calloc(1, sizeof(*next));
     if (next == NULL) return 0;
@@ -1564,6 +1573,149 @@ static int map_has_cache_generation(uint64_t generation) {
     }
     return 0;
 }
+
+#if HL_NATIVE_TEST_HOOKS
+typedef struct {
+    hl_translation_map_table *table;
+    uint64_t guest;
+    void *body;
+    _Atomic int ready;
+    _Atomic int grown;
+    int valid;
+} map_growth_reader_test;
+
+static void *map_growth_reader(void *opaque) {
+    map_growth_reader_test *test = opaque;
+    test->table = map_table_active();
+    uint32_t hash = (uint32_t)((test->guest >> G_GPC_HASH_SHIFT) * UINT32_C(2654435761)) & test->table->mask;
+    for (uint32_t probe = 0; probe < test->table->capacity; probe++) {
+        uint32_t index = (hash + probe) & test->table->mask;
+        if (test->table->map[index].generation != g_map_epoch) break;
+        if (test->table->map[index].gpc == test->guest) {
+            test->body = test->table->map[index].body;
+            break;
+        }
+    }
+    atomic_store_explicit(&test->ready, 1, memory_order_release);
+    while (!atomic_load_explicit(&test->grown, memory_order_acquire)) sched_yield();
+    test->valid = test->body != NULL && test->table->capacity == 32 &&
+                  test->table->map[hash].generation == g_map_epoch;
+    return NULL;
+}
+
+static uint64_t map_growth_guest(uint32_t ordinal, uint32_t capacity) {
+    return UINT64_C(0x100000) + ((uint64_t)ordinal * capacity << G_GPC_HASH_SHIFT);
+}
+
+static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
+    atomic_store_explicit(&g_active_map_table, &g_bootstrap_map_table, memory_order_release);
+    g_bootstrap_map_table.capacity = 16;
+    g_bootstrap_map_table.mask = 15;
+    map_clear();
+    for (uint32_t i = 0; i < 6; i++) {
+        uint64_t guest = map_growth_guest(i, 16);
+        map_put(guest, guest, guest + 1u, (void *)(uintptr_t)(UINT64_C(0x1000) + i),
+                (void *)(uintptr_t)(UINT64_C(0x2000) + i));
+    }
+    if (scenario == 55 || scenario == 57 || scenario == 58) {
+        uint64_t seventh = map_growth_guest(6, 16);
+        map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
+                (void *)(uintptr_t)UINT64_C(0x2006));
+        if (map_capacity() != 32 || g_live_map_count != 7 || g_map_tombstone_count != 0) return 1;
+        for (uint32_t i = 0; i < 7; i++)
+            if ((uintptr_t)map_body(map_growth_guest(i, 16)) != UINT64_C(0x2000) + i) return 2;
+        if (scenario == 58) {
+            const uint64_t dirty[1][2] = {{seventh, seventh + 1u}};
+            if (map_invalidate_source_ranges(dirty, 1) != 1 || map_body(seventh) != NULL ||
+                g_live_map_count != 6 || g_map_tombstone_count != 1)
+                return 3;
+        }
+        *answer = map_capacity();
+        return 0;
+    }
+    if (scenario == 56) {
+        uint64_t removed = map_growth_guest(2, 16);
+        const uint64_t dirty[1][2] = {{removed, removed + 1u}};
+        if (map_invalidate_source_ranges(dirty, 1) != 1 || g_live_map_count != 5 || g_map_tombstone_count != 1)
+            return 4;
+        uint64_t seventh = map_growth_guest(6, 16);
+        map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
+                (void *)(uintptr_t)UINT64_C(0x2006));
+        if (map_capacity() != 32 || g_live_map_count != 6 || g_map_tombstone_count != 0 ||
+            map_body(removed) != NULL || (uintptr_t)map_body(seventh) != UINT64_C(0x2006))
+            return 5;
+        *answer = map_capacity();
+        return 0;
+    }
+    if (scenario == 59) {
+        uint64_t seventh = map_growth_guest(6, 16);
+        map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
+                (void *)(uintptr_t)UINT64_C(0x2006));
+        if (map_capacity() != 32) return 6;
+        map_growth_reader_test reader = {.guest = seventh};
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, map_growth_reader, &reader) != 0) return 7;
+        while (!atomic_load_explicit(&reader.ready, memory_order_acquire)) sched_yield();
+        for (uint32_t i = 7; i < 13; i++) {
+            uint64_t guest = map_growth_guest(i, 32);
+            map_put(guest, guest, guest + 1u, (void *)(uintptr_t)(UINT64_C(0x1000) + i),
+                    (void *)(uintptr_t)(UINT64_C(0x2000) + i));
+        }
+        atomic_store_explicit(&reader.grown, 1, memory_order_release);
+        if (pthread_join(thread, NULL) != 0 || !reader.valid || map_capacity() != 64) return 8;
+        *answer = map_capacity();
+        return 0;
+    }
+    if (scenario == 60) {
+        g_map_growth_alloc_fail = 1;
+        uint64_t seventh = map_growth_guest(6, 16);
+        map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
+                (void *)(uintptr_t)UINT64_C(0x2006));
+        if (map_capacity() != 16 || g_live_map_count != 1 || map_body(map_growth_guest(0, 16)) != NULL ||
+            (uintptr_t)map_body(seventh) != UINT64_C(0x2006))
+            return 9;
+        *answer = g_live_map_count;
+        return 0;
+    }
+    if (scenario == 61) {
+        hl_translation_map_table *table = map_table_active();
+        table->capacity = JIT_MAP_N;
+        table->mask = JIT_MAP_N - 1u;
+        if (!map_table_grow() || map_table_active() != table || map_capacity() != JIT_MAP_N) return 10;
+        *answer = map_capacity();
+        return 0;
+    }
+    if (scenario == 62) {
+        uint64_t seventh = map_growth_guest(6, 16);
+        map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
+                (void *)(uintptr_t)UINT64_C(0x2006));
+        pid_t child = fork();
+        if (child == 0)
+            _exit(map_capacity() == 32 && (uintptr_t)map_body(seventh) == UINT64_C(0x2006) ? 0 : 1);
+        int status = 0;
+        if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            return 11;
+        *answer = map_capacity();
+        return 0;
+    }
+    return -EINVAL;
+}
+
+static int map_growth_test(uint32_t scenario, uint64_t *answer) {
+    if (scenario < 55 || scenario > 62 || answer == NULL) return -EINVAL;
+    pid_t child = fork();
+    if (child == 0) {
+        uint64_t child_answer = 0;
+        int result = map_growth_test_child(scenario, &child_answer);
+        _exit(result == 0 && child_answer != 0 ? 0 : (result > 0 && result < 255 ? result : 254));
+    }
+    int status = 0;
+    if (child < 0 || waitpid(child, &status, 0) != child) return -errno;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return -EIO;
+    *answer = 1;
+    return 0;
+}
+#endif
 
 // IBTC: a shared, direct-mapped hash table {guest target -> host body_ind} probed
 // inline by indirect branches. Handles polymorphic dispatch (interpreters) that a
