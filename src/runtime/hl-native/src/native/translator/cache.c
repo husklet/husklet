@@ -1625,8 +1625,9 @@ static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
         for (uint32_t i = 0; i < 7; i++)
             if ((uintptr_t)map_body(map_growth_guest(i, 16)) != UINT64_C(0x2000) + i) return 2;
         if (scenario == 58) {
-            const uint64_t dirty[1][2] = {{seventh, seventh + 1u}};
-            if (map_invalidate_source_ranges(dirty, 1) != 1 || map_body(seventh) != NULL ||
+            uint64_t moved = map_growth_guest(1, 16);
+            const uint64_t dirty[1][2] = {{moved, moved + 1u}};
+            if (map_invalidate_source_ranges(dirty, 1) != 1 || map_body(moved) != NULL ||
                 g_live_map_count != 6 || g_map_tombstone_count != 1)
                 return 3;
         }
