@@ -292,6 +292,47 @@ impl OverlayView {
     pub fn upper_ownership(&self) -> &crate::snapshot::Ownerships {
         self.upper.ownership()
     }
+    /// Physical snapshot names that must be projected into their guest-visible names
+    /// after the lower/upper overlay has been mounted.
+    ///
+    /// Parent mappings precede descendants. A descendant's returned source already
+    /// reflects every ancestor rename, so a projector can apply this sequence once
+    /// without knowing how snapshot name encoding works.
+    #[must_use]
+    pub fn name_projections(&self) -> Vec<(PathBuf, PathBuf)> {
+        let mut by_guest = std::collections::BTreeMap::new();
+        for (physical, guest) in self.lower.names().iter().chain(self.upper.names().iter()) {
+            by_guest.insert(guest.to_owned(), physical.to_owned());
+        }
+        let mut mappings = by_guest
+            .into_iter()
+            .map(|(guest, physical)| (physical, guest))
+            .collect::<Vec<_>>();
+        mappings.sort_by(|(left, _), (right, _)| {
+            left.components()
+                .count()
+                .cmp(&right.components().count())
+                .then_with(|| left.cmp(right))
+        });
+        let mut applied = Vec::<(PathBuf, PathBuf)>::new();
+        mappings
+            .into_iter()
+            .map(|(physical, guest)| {
+                let source = applied
+                    .iter()
+                    .filter_map(|(ancestor, projected)| {
+                        physical
+                            .strip_prefix(ancestor)
+                            .ok()
+                            .map(|suffix| (ancestor.components().count(), projected.join(suffix)))
+                    })
+                    .max_by_key(|(depth, _)| *depth)
+                    .map_or_else(|| physical.clone(), |(_, projected)| projected);
+                applied.push((physical, guest.clone()));
+                (source, guest)
+            })
+            .collect()
+    }
     /// Archive only the writable overlay layer with guest names and ownership metadata.
     /// The immutable lower tree is never traversed or materialized.
     ///

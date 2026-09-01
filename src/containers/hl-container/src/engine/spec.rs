@@ -365,6 +365,16 @@ impl Spec {
             .join("\n")
     }
 
+    fn name_records(launch: &ProcessConfig) -> String {
+        launch
+            .overlay
+            .iter()
+            .flat_map(|overlay| &overlay.names)
+            .map(|(physical, guest)| format!("{}\t{}", physical.display(), guest.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn process(options: &mut Options, launch: &ProcessConfig, domain: hl_engine::Domain) -> Result<()> {
         Self::set(
             options,
@@ -429,6 +439,10 @@ impl Spec {
                 overlay.upper.as_os_str().as_encoded_bytes(),
             )?;
             Self::set(options, "HL_OVERLAY_WORK", overlay.work.as_os_str().as_encoded_bytes())?;
+        }
+        let names = Self::name_records(launch);
+        if !names.is_empty() {
+            Self::set(options, "HL_FILE_NAMES", names)?;
         }
         let owners = Self::owner_records(launch);
         if !owners.is_empty() {

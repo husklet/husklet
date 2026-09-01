@@ -136,6 +136,7 @@ impl Containers {
                     lower: view.lower().to_owned(),
                     upper: view.upper().to_owned(),
                     work: view.work().to_owned(),
+                    names: view.name_projections(),
                 }) =>
             {
                 candidate

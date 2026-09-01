@@ -89,6 +89,7 @@ const DEFINITIONS: &[Definition] = &[
     launch!("HL_EGRESS_SOCKS", "SOCKS5 endpoint for external TCP egress", Text),
     launch!("HL_FSGEN_FILE", "shared overlay filesystem-generation file", Path),
     launch!("HL_FILE_OWNERS", "initial guest file ownership records", Records),
+    launch!("HL_FILE_NAMES", "encoded snapshot name projection records", Records),
     launch!("HL_GID", "initial guest group identity", Integer),
     launch!("HL_GUEST_ENV", "serialized Linux guest environment", Records),
     launch!("HL_HOSTNAME", "Linux guest hostname", Text),

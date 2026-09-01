@@ -500,6 +500,7 @@ mod tests {
             lower: root.path().join("snapshots/committed/chain-test"),
             upper: launch.rootfs.clone(),
             work: root.path().join("work"),
+            names: Vec::new(),
         });
         launch.executable_digest_authority = Some(authority);
         launch.translation_cache = Some(root.path().join("translation-cache"));
@@ -517,6 +518,7 @@ mod tests {
             lower: "/lower".into(),
             upper: "/upper".into(),
             work: "/work".into(),
+            names: vec![("headers/.hl-name-123".into(), "headers/xt_connmark.h".into())],
         });
         launch.owners = vec![("bin/tool".into(), 123, 456)];
         let spec = Spec::try_from(&launch).unwrap();
@@ -524,6 +526,10 @@ mod tests {
         assert_eq!(
             spec.plan.box_policy.file_owners.as_deref(),
             Some(b"bin/tool\t123\t456".as_slice())
+        );
+        assert_eq!(
+            spec.plan.options.get("HL_FILE_NAMES").map(|value| value.as_bytes()),
+            Some(b"headers/.hl-name-123\theaders/xt_connmark.h".as_slice())
         );
     }
 

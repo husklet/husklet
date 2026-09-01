@@ -105,6 +105,7 @@ impl Service {
                                 lower: handle.lower().to_owned(),
                                 upper: handle.upper().to_owned(),
                                 work: handle.work().to_owned(),
+                                names: handle.name_projections(),
                             };
                             let authority = manager
                                 .executable_digest_authority(reference.overlay().expect("overlay checked").lower());

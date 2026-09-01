@@ -44,6 +44,8 @@ pub(crate) struct OverlayConfig {
     pub(crate) lower: PathBuf,
     pub(crate) upper: PathBuf,
     pub(crate) work: PathBuf,
+    /// Ordered physical-to-guest renames required by encoded snapshot names.
+    pub(crate) names: Vec<(PathBuf, PathBuf)>,
 }
 
 /// Runtime-neutral, fully resolved launch request.

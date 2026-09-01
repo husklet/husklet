@@ -14,6 +14,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/sysmacros.h>
 #include <termios.h>
 #include <linux/capability.h>
 #include <linux/sched.h>
@@ -136,6 +137,35 @@ int main(int argc, char **argv) {
         if (fd < 0 || write(fd, "upper\n", 6) != 6) return 92;
         close(fd);
         fputs("overlay-owned", stdout);
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "overlay-names")) {
+        char lower[32] = {0}, upper[32] = {0}, nested[32] = {0};
+        int lower_fd = open("/usr/include/linux/netfilter/xt_connmark.h", O_RDONLY);
+        int upper_fd = open("/usr/include/linux/netfilter/xt_CONNMARK.h", O_RDONLY);
+        int nested_fd = open("/usr/include/linux/CaseDir/value", O_RDONLY);
+        if (lower_fd < 0 || upper_fd < 0 || nested_fd < 0 ||
+            read(lower_fd, lower, sizeof lower) != 15 || memcmp(lower, "lower-connmark\n", 15) != 0 ||
+            read(upper_fd, upper, sizeof upper) != 15 || memcmp(upper, "upper-CONNMARK\n", 15) != 0 ||
+            read(nested_fd, nested, sizeof nested) != 7 || memcmp(nested, "nested\n", 7) != 0)
+            return 93;
+        close(nested_fd); close(upper_fd); close(lower_fd);
+        struct stat lower_status, upper_status, link_status, hard_a, hard_b, device_status;
+        if (lstat("/usr/include/linux/netfilter/xt_connmark.h", &lower_status) != 0 ||
+            lstat("/usr/include/linux/netfilter/xt_CONNMARK.h", &upper_status) != 0 ||
+            !S_ISREG(lower_status.st_mode) || !S_ISREG(upper_status.st_mode) ||
+            lower_status.st_uid != 123 || lower_status.st_gid != 456 ||
+            lstat("/usr/include/linux/case-link", &link_status) != 0 || !S_ISLNK(link_status.st_mode) ||
+            lstat("/usr/include/linux/netfilter/.hl-name-bookworm", &link_status) == 0 || errno != ENOENT ||
+            lstat("/usr/include/linux/.hl-name-directory", &link_status) == 0 || errno != ENOENT ||
+            lstat("/usr/include/linux/.hl-name-link", &link_status) == 0 || errno != ENOENT ||
+            lstat("/usr/include/linux/CaseDir/hard-a", &hard_a) != 0 ||
+            lstat("/usr/include/linux/CaseDir/hard-b", &hard_b) != 0 ||
+            hard_a.st_ino != hard_b.st_ino || hard_a.st_nlink < 2 ||
+            lstat("/usr/include/linux/CaseDir/device", &device_status) != 0 ||
+            !S_ISCHR(device_status.st_mode) || device_status.st_rdev != makedev(1, 3))
+            return 94;
+        fputs("overlay-names-projected", stdout);
         return 0;
     }
     if (argc > 2 && !strcmp(argv[1], "filesystem-generation")) {

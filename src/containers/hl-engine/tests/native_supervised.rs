@@ -449,6 +449,117 @@ fn supervised_overlay_preserves_lower_upper_and_declared_ownership() {
 }
 
 #[test]
+fn supervised_overlay_projects_case_distinct_bookworm_names_before_ownership() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let lower = work.path().join("lower");
+    let upper = work.path().join("upper");
+    let overlay_work = work.path().join("work");
+    let headers = lower.join("usr/include/linux");
+    let netfilter = headers.join("netfilter");
+    let encoded_directory = headers.join(".hl-name-directory");
+    for directory in [
+        &upper,
+        &overlay_work,
+        &lower.join("bin"),
+        &lower.join("proc"),
+        &netfilter,
+        &encoded_directory,
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let executable = lower.join("bin/fixture");
+    std::fs::copy(&built, &executable).unwrap();
+    std::fs::write(netfilter.join("xt_CONNMARK.h"), b"upper-CONNMARK\n").unwrap();
+    std::fs::write(netfilter.join(".hl-name-bookworm"), b"lower-connmark\n").unwrap();
+    std::fs::write(encoded_directory.join(".hl-name-child"), b"nested\n").unwrap();
+    std::fs::write(encoded_directory.join("hard-a"), b"hardlink\n").unwrap();
+    std::fs::hard_link(encoded_directory.join("hard-a"), encoded_directory.join("hard-b")).unwrap();
+    std::os::unix::fs::symlink("netfilter/xt_CONNMARK.h", headers.join(".hl-name-link")).unwrap();
+    assert!(
+        std::process::Command::new("mknod")
+            .args(["-m", "600"])
+            .arg(encoded_directory.join("device"))
+            .args(["c", "1", "3"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("setcap")
+            .arg("cap_net_bind_service=ep")
+            .arg(encoded_directory.join("hard-a"))
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let mut options = Options::default();
+    options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+    options
+        .set_bytes("HL_OVERLAY_WORK", overlay_work.as_os_str().as_encoded_bytes(), true)
+        .unwrap();
+    options
+        .set(
+            "HL_FILE_NAMES",
+            concat!(
+                "usr/include/linux/.hl-name-directory\tusr/include/linux/CaseDir\n",
+                "usr/include/linux/.hl-name-link\tusr/include/linux/case-link\n",
+                "usr/include/linux/netfilter/.hl-name-bookworm\tusr/include/linux/netfilter/xt_connmark.h\n",
+                "usr/include/linux/CaseDir/.hl-name-child\tusr/include/linux/CaseDir/value"
+            ),
+            true,
+        )
+        .unwrap();
+    options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    let output = Arc::new(Output::default());
+    let plan = RuntimePlan {
+        rootfs: Some(upper.as_os_str().as_encoded_bytes().to_vec()),
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            b"overlay-names".to_vec(),
+        ],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: RuntimeBoxPolicy {
+            lower_layers: Some(lower.as_os_str().as_encoded_bytes().to_vec()),
+            file_owners: Some(b"usr/include/linux/netfilter/xt_connmark.h\t123\t456".to_vec()),
+            ..isolated_policy()
+        },
+    };
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    let exit = engine.wait();
+    engine.destroy().unwrap();
+    assert!(
+        exit.is_ok(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr.lock().unwrap())
+    );
+    let exit = exit.unwrap();
+    assert_eq!(exit.guest_status, 0);
+    assert_eq!(*output.stdout.lock().unwrap(), b"overlay-names-projected");
+    assert_eq!(std::fs::metadata(netfilter.join(".hl-name-bookworm")).unwrap().uid(), 0);
+    assert_eq!(
+        std::fs::read(upper.join("usr/include/linux/CaseDir/value")).unwrap(),
+        b"nested\n"
+    );
+    let capabilities = std::process::Command::new("getcap")
+        .arg(upper.join("usr/include/linux/CaseDir/hard-a"))
+        .output()
+        .unwrap();
+    assert!(capabilities.status.success());
+    assert!(String::from_utf8_lossy(&capabilities.stdout).contains("cap_net_bind_service=ep"));
+}
+
+#[test]
 fn supervised_overlay_owner_failure_leaves_no_projection_directory() {
     let work = TempDir::new().unwrap();
     let built = fixture(work.path());

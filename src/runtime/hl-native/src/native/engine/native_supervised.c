@@ -391,6 +391,8 @@ static int hl_native_supervised_overlay_mount(const hl_engine_config *config, co
     if (filesystem >= 0 && syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "lowerdir", lower, 0) == 0 &&
         syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "upperdir", config->rootfs, 0) == 0 &&
         syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "workdir", work, 0) == 0 &&
+        syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "index", "on", 0) == 0 &&
+        syscall(SYS_fsconfig, filesystem, FSCONFIG_SET_STRING, "redirect_dir", "on", 0) == 0 &&
         syscall(SYS_fsconfig, filesystem, FSCONFIG_CMD_CREATE, NULL, NULL, 0) == 0) {
         int tree = (int)syscall(SYS_fsmount, filesystem, FSMOUNT_CLOEXEC, 0);
         int directory = open(target, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
@@ -409,33 +411,7 @@ static int hl_native_supervised_overlay_mount(const hl_engine_config *config, co
     return mounted;
 }
 
-static int hl_native_supervised_owners_apply(const char *rootfs, const char *records) {
-    if (records == NULL) return 0;
-    int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    char *copy = strdup(records);
-    if (root < 0 || copy == NULL) { if (root >= 0) close(root); free(copy); return -1; }
-    char *save = NULL;
-    for (char *record = strtok_r(copy, "\n", &save); record != NULL; record = strtok_r(NULL, "\n", &save)) {
-        char *uid_text = strchr(record, '\t');
-        char *gid_text = uid_text == NULL ? NULL : strchr(uid_text + 1, '\t');
-        char *end_uid = NULL, *end_gid = NULL;
-        if (uid_text == NULL || gid_text == NULL) { close(root); free(copy); return -1; }
-        *uid_text++ = 0; *gid_text++ = 0;
-        unsigned long uid = strtoul(uid_text, &end_uid, 10), gid = strtoul(gid_text, &end_gid, 10);
-        struct open_how how = {.flags = O_PATH | O_CLOEXEC | O_NOFOLLOW,
-                               .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS};
-        int entry = (int)syscall(SYS_openat2, root, record, &how, sizeof(how));
-        if (record[0] == 0 || *end_uid != 0 || *end_gid != 0 || uid > UINT_MAX || gid > UINT_MAX || entry < 0 ||
-            fchownat(entry, "", (uid_t)uid, (gid_t)gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0) {
-            if (entry >= 0) close(entry);
-            close(root);
-            free(copy);
-            return -1;
-        }
-        close(entry);
-    }
-    close(root); free(copy); return 0;
-}
+#include "native_overlay_projection.c"
 
 static int hl_native_supervised_id_compare(const void *left, const void *right) {
     uint32_t a = *(const uint32_t *)left, b = *(const uint32_t *)right;
@@ -834,8 +810,22 @@ static int hl_native_supervised_project_container(const hl_engine_config *config
                         atomic_load_explicit(&bootstrap->target_pid, memory_order_acquire) == -1 &&
                         atomic_load_explicit(&bootstrap->acknowledged, memory_order_acquire) == 0 &&
                         atomic_load_explicit(&bootstrap->clone_stages, memory_order_acquire) == 1;
-    if (projected_overlay && !private_setup) goto projection_failed;
-    if (hl_native_supervised_owners_apply(projected_root, box->file_owners) != 0) goto projection_failed;
+    if (projected_overlay && !private_setup) {
+        if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-supervised]\tprojector_stage=private_setup errno=%d\n", errno);
+        goto projection_failed;
+    }
+    int diagnostics = hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL;
+    if (hl_native_supervised_names_apply(projected_root, hl_options_get(options, "HL_FILE_NAMES"), diagnostics) != 0) {
+        if (diagnostics)
+            fprintf(stderr, "[hl-native-supervised]\tprojector_stage=names errno=%d\n", errno);
+        goto projection_failed;
+    }
+    if (hl_native_supervised_owners_apply(projected_root, box->file_owners, diagnostics) != 0) {
+        if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-supervised]\tprojector_stage=owners errno=%d\n", errno);
+        goto projection_failed;
+    }
     char byte;
     if (config->box->lower_layers == NULL && strcmp(projected_root, "/") != 0 &&
         mount(projected_root, projected_root, NULL, MS_BIND, NULL) != 0) return -1;

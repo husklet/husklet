@@ -2,6 +2,7 @@ use std::{fs, path::Path};
 
 use hl_images::layer::Layer;
 use hl_images::snapshot::{Id, Snapshots};
+use hl_images::{Leases, rootfs::Roots};
 
 fn id(value: &str) -> Id {
     Id::new(value).unwrap()
@@ -206,6 +207,61 @@ fn case_distinct_layer_names_persist_and_export_as_guest_names() {
         .unwrap()
         .into_owned();
     assert_eq!(target, Path::new("FOO"));
+}
+
+#[test]
+fn overlay_name_projections_order_parents_and_rebase_nested_sources() {
+    let mut tar = Vec::new();
+    {
+        let mut archive = tar::Builder::new(&mut tar);
+        for directory in ["data/Foo", "data/foo"] {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, directory, &[][..]).unwrap();
+        }
+        for (name, body) in [
+            ("data/foo/CHILD", b"upper".as_slice()),
+            ("data/foo/child", b"lower".as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, name, body).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let snapshots = Snapshots::open(temp.path().join("snapshots")).unwrap();
+    let mut draft = snapshots.prepare(id("active"), None).unwrap();
+    let root = draft.path().to_owned();
+    let (owners, names) = draft.metadata_mut();
+    Layer::new(tar.as_slice())
+        .apply_with_metadata(&root, owners, names)
+        .unwrap();
+    let parent_physical = draft.names().physical(Path::new("data/foo")).to_owned();
+    let child_physical = draft.names().physical(Path::new("data/foo/child")).to_owned();
+    assert_ne!(parent_physical, Path::new("data/foo"));
+    assert!(child_physical.starts_with(&parent_physical));
+    draft.commit(id("lower")).unwrap();
+
+    let roots = Roots::new(snapshots, Leases::open(temp.path().join("leases")).unwrap());
+    let reference = roots.fork_overlay(&id("lower")).unwrap();
+    let projections = roots.open_overlay(&reference).unwrap().name_projections();
+    assert_eq!(
+        projections[0],
+        (parent_physical.clone(), Path::new("data/foo").to_owned())
+    );
+    assert_eq!(
+        projections[1],
+        (
+            Path::new("data/foo").join(child_physical.strip_prefix(parent_physical).unwrap()),
+            Path::new("data/foo/child").to_owned(),
+        )
+    );
 }
 
 #[cfg(unix)]
