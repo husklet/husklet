@@ -1698,7 +1698,10 @@ static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
         map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
                 (void *)(uintptr_t)UINT64_C(0x2006));
         if (map_capacity() != 32) return 6;
-        map_growth_reader_test reader = {.guest = seventh};
+        /* Odd ordinals collide in the 16-slot table but rehash to the upper half at 32 slots.  Holding
+           this lookup across the second growth therefore proves the saved descriptor, not a coincidentally
+           identical index in both tables. */
+        map_growth_reader_test reader = {.guest = map_growth_guest(5, 16)};
         pthread_t thread;
         if (pthread_create(&thread, NULL, map_growth_reader, &reader) != 0) return 7;
         while (!atomic_load_explicit(&reader.ready, memory_order_acquire)) sched_yield();
