@@ -1799,7 +1799,7 @@ right: .skip 134217728
         let engine = unsafe { Engine::create(config) }.unwrap();
         let faults = minor_faults().saturating_sub(before);
         assert!(
-            faults < 1024,
+            faults < 800,
             "native construction faulted in {faults} pages of an executable consumed by execveat"
         );
         drop(engine);
