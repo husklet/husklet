@@ -44,7 +44,7 @@ fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
         eprintln!("skipped: no display connection");
         return;
     }
-    let scenarios: [(&str, fn()); 8] = [
+    let scenarios: [(&str, fn()); 9] = [
         (
             "a_model_describes_the_whole_source_while_holding_a_viewport",
             a_model_describes_the_whole_source_while_holding_a_viewport,
@@ -60,6 +60,10 @@ fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
         (
             "an_oversized_window_never_reaches_the_gtk_model",
             an_oversized_window_never_reaches_the_gtk_model,
+        ),
+        (
+            "an_oversized_cell_never_reaches_the_gtk_model",
+            an_oversized_cell_never_reaches_the_gtk_model,
         ),
         (
             "scrolling_a_large_source_holds_only_a_bounded_number_of_rows",
@@ -85,6 +89,22 @@ fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
         ran += 1;
     }
     assert_eq!(ran, scenarios.len(), "every scenario must actually execute");
+}
+
+fn an_oversized_cell_never_reaches_the_gtk_model() {
+    let rows = Rows::new(SOURCE);
+    rows.resize(Version::new(1), LENGTH);
+    let _ = rows.item(0);
+    let request = rows.drain().remove(0);
+    let mut oversized = answer(&request);
+    oversized.rows[0].cells = vec![Cell::text("x".repeat(Cell::MAX_TEXT_BYTES + 1))];
+
+    rows.deliver(&oversized);
+    assert_eq!(rows.held(), 0, "invalid text never enters the GTK model");
+    assert!(rows.is_pending(0));
+
+    rows.deliver(&answer(&request));
+    assert!(!rows.is_pending(0), "the valid Unicode-safe path remains recoverable");
 }
 
 fn an_oversized_window_never_reaches_the_gtk_model() {

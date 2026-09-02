@@ -190,6 +190,9 @@ impl RowCache {
         if window.source != self.source || window.version < self.version {
             return false;
         }
+        if !window.text_is_bounded() {
+            return false;
+        }
         let Ok(delivered) = u32::try_from(window.rows.len()) else {
             return false;
         };

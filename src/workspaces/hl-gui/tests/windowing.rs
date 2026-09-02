@@ -109,6 +109,24 @@ fn a_response_cannot_smuggle_rows_beyond_the_requested_window() {
 }
 
 #[test]
+fn oversized_text_is_refused_without_consuming_the_source_generation() {
+    let (mut cache, mut producer) = opened(100_000);
+    let request = cache.observe(RowRange::new(0, 40), 0).remove(0);
+    let generation = cache.version();
+    let mut oversized = producer.answer(&request);
+    oversized.rows[0].cells = vec![Cell::text("界".repeat(Cell::MAX_TEXT_BYTES))];
+
+    assert!(!cache.deliver(&oversized));
+    assert_eq!(cache.version(), generation);
+    assert_eq!(cache.row(0), Lookup::Pending);
+
+    let mut valid = producer.answer(&request);
+    valid.rows[0].cells = vec![Cell::text("界面 remains valid Unicode")];
+    assert!(cache.deliver(&valid));
+    assert!(matches!(cache.row(0), Lookup::Ready(_)));
+}
+
+#[test]
 fn a_long_scroll_requests_the_landing_block_not_every_block_crossed() {
     let (mut cache, mut producer) = opened(100_000);
     settle(&mut cache, &mut producer, 900, 0);

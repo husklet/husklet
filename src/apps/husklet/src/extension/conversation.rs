@@ -82,6 +82,11 @@ impl Queue {
     /// panicked mid-deposit leaves it stale at worst, never unsound.
     fn deposit(&self, frames: Vec<SurfaceFrame>, mutations: Vec<SurfaceMutation>) -> Result<(), Fault> {
         let mut held = self.hold();
+        if mutations.iter().any(|mutation| {
+            matches!(&mutation.mutation, hl_gui::SourceMutation::Window(window) if !window.text_is_bounded())
+        }) {
+            return Err(Fault::Malformed("a row window exceeded the text payload limit".into()));
+        }
         let cost = |frames: &[SurfaceFrame], mutations: &[SurfaceMutation]| {
             frames
                 .iter()
@@ -1747,6 +1752,28 @@ mod tests {
         let overflow = queue.deposit(Vec::new(), vec![mutation]);
         assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
         assert!(queue.is_empty(), "the oversized source answer is rejected atomically");
+    }
+
+    #[test]
+    fn an_oversized_cell_faults_before_the_row_window_is_queued() {
+        let queue = Queue::new();
+        let mutation = hl_extension::SurfaceMutation {
+            slot: "table-pane".into(),
+            mutation: hl_gui::SourceMutation::Window(hl_gui::RowWindow {
+                source: hl_gui::SourceId::new(1),
+                version: hl_gui::Version::new(1),
+                request: hl_gui::RequestId::new(1),
+                range: hl_gui::RowRange::new(0, 1),
+                rows: vec![hl_gui::Row::new(
+                    0,
+                    [hl_gui::Cell::text("x".repeat(hl_gui::Cell::MAX_TEXT_BYTES + 1))],
+                )],
+            }),
+        };
+
+        let overflow = queue.deposit(Vec::new(), vec![mutation]);
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("text payload")));
+        assert!(queue.is_empty(), "invalid text never becomes pending GTK work");
     }
 
     #[test]
