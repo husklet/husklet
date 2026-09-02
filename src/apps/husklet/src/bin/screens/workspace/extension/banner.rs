@@ -14,6 +14,7 @@ use super::sink::{Signal, Sink};
 pub struct Banner {
     widget: gtk::Box,
     reason: gtk::Label,
+    retry: gtk::Button,
 }
 
 impl Banner {
@@ -29,9 +30,14 @@ impl Banner {
         widget.append(&reason);
         let retry = gtk::Button::with_label("Retry");
         retry.add_css_class("hl-extension-retry");
-        retry.connect_clicked(move |_| sink.accept(Signal::Retry));
+        retry.connect_clicked(move |button| {
+            if button.is_sensitive() {
+                button.set_sensitive(false);
+                sink.accept(Signal::Retry);
+            }
+        });
         widget.append(&retry);
-        Self { widget, reason }
+        Self { widget, reason, retry }
     }
 
     /// The strip, for placing above the surface.
@@ -43,12 +49,19 @@ impl Banner {
     /// Shows the strip and says why the extension stopped.
     pub fn show(&self, reason: &str) {
         self.reason.set_text(&format!("The extension stopped: {reason}"));
+        self.retry.set_sensitive(true);
         self.widget.set_visible(true);
     }
 
     /// Hides the strip, which is what a fresh frame means.
     pub fn hide(&self) {
+        self.retry.set_sensitive(true);
         self.widget.set_visible(false);
+    }
+
+    /// Marks the one recovery request as in flight until a fresh frame arrives.
+    pub fn pending(&self) {
+        self.retry.set_sensitive(false);
     }
 
     /// Whether the strip is currently shown.

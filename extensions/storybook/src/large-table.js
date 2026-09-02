@@ -1,9 +1,10 @@
 import React from 'react';
-import { Banner, Button, Column, DataTable, EmptyState, Entry, Heading, Progress, Row, Select, Text } from '@husklet/react';
+import { Banner, Button, Column, DataTable, EmptyState, Entry, Heading, InlineMessage, Progress, Row, Select, Text } from '@husklet/react';
 
-const { createElement: h, useState } = React;
+const { createElement: h, useRef, useState } = React;
 export const LOGICAL_ROWS = 100_000;
 export const WINDOW_LIMIT = 128;
+export const OPERATION_HISTORY_LIMIT = 6;
 export const SOURCE = 100;
 export const SCHEMA = Object.freeze([
   { key: 'id', title: 'ID', width: { chars: 12 }, sortable: true },
@@ -61,6 +62,13 @@ export function LargeDataTableStory({ source }) {
   const [filter, setFilter] = useState('');
   const [descending, setDescending] = useState(false);
   const [state, setState] = useState('ready');
+  const [selected, setSelected] = useState('No record selected');
+  const [interactions, setInteractions] = useState([]);
+  const sequence = useRef(0);
+  const record = (label) => {
+    const item = `#${++sequence.current} ${label}`;
+    setInteractions((current) => [...current, item].slice(-OPERATION_HISTORY_LIMIT));
+  };
   const update = (next) => {
     const changed = { filter, descending, state, ...next };
     setFilter(changed.filter); setDescending(changed.descending); setState(changed.state);
@@ -70,13 +78,53 @@ export function LargeDataTableStory({ source }) {
     h(Heading, { label: '100,000 logical records', scale: 'title' }),
     h(Text, { label: 'Only host-requested 128-row windows exist in memory. Resize or scroll to request another window.', wrap: true }),
     h(Row, { gap: 2 },
-      h(Entry, { value: filter, placeholder: 'Filter records', onChange: (event) => update({ filter: String(event.value ?? '') }) }),
-      h(Button, { label: descending ? 'Sort ascending' : 'Sort descending', onInvoke: () => update({ descending: !descending }) }),
-      h(Select, { value: state, choices: ['ready', 'loading', 'empty', 'error'].map((value) => ({ value, label: value })), onChange: (event) => update({ state: String(event.value) }) }),
+      h(Entry, {
+        value: filter,
+        placeholder: 'Filter records',
+        onFocus: () => record('focused filter'),
+        onChange: (event) => {
+          update({ filter: String(event.value ?? '') });
+          record('filtered records');
+        },
+      }),
+      h(Button, {
+        label: descending ? 'Sort ascending' : 'Sort descending',
+        onFocus: () => record('focused sort'),
+        onInvoke: () => {
+          update({ descending: !descending });
+          record(descending ? 'sorted ascending' : 'sorted descending');
+        },
+      }),
+      h(Select, {
+        value: state,
+        choices: ['ready', 'loading', 'empty', 'error'].map((value) => ({ value, label: value })),
+        onFocus: () => record('focused state'),
+        onChange: (event) => {
+          const next = String(event.value);
+          update({ state: next });
+          record(`state ${next}`);
+        },
+      }),
     ),
     ...(state === 'loading' ? [h(Progress, { key: 'loading', label: 'Waiting for a row window' })]
       : state === 'empty' ? [h(EmptyState, { key: 'empty', label: 'No matching records', detail: 'Change the filter or state control.' })]
       : state === 'error' ? [h(Banner, { key: 'error', label: 'The source rejected this window', tone: 'danger' })] : []),
-    h(DataTable, { source: SOURCE, schema: SCHEMA, grow: true }),
+    h(DataTable, {
+      source: SOURCE,
+      schema: SCHEMA,
+      grow: true,
+      onFocus: () => record('focused records'),
+      onSelect: (event) => {
+        const rows = Array.isArray(event.rows) ? event.rows.slice(0, 1) : [];
+        const label = rows.length === 0 ? 'No record selected' : `Selected logical row ${String(rows[0])}`;
+        setSelected(label);
+        record(label.toLowerCase());
+      },
+    }),
+    h(Text, { label: selected, color: 'text-dim' }),
+    h(Text, { label: `Recent operations (${interactions.length}/${OPERATION_HISTORY_LIMIT})`, color: 'text-dim' }),
+    ...(interactions.length === 0
+      ? [h(InlineMessage, { label: 'Focus a control or select a record to inspect its bounded event history.', tone: 'neutral' })]
+      : interactions.map((item) => h(InlineMessage, { key: item, label: item, tone: 'positive' }))),
   );
 }

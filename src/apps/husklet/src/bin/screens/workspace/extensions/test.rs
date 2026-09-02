@@ -39,6 +39,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
         the_settings_actions_drive_the_installation();
+        lifecycle_actions_share_keyboard_and_semantic_focus();
         native_extension_cards_are_semantic_and_actionable();
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
@@ -259,6 +260,33 @@ fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
     found
 }
 
+fn focus_chain(window: &gtk::Window) -> Vec<gtk::Widget> {
+    gtk::prelude::RootExt::set_focus(window, gtk::Widget::NONE);
+    let mut found = Vec::new();
+    for _ in 0..64 {
+        if !window.child_focus(gtk::DirectionType::TabForward) {
+            break;
+        }
+        let Some(focus) = gtk::prelude::RootExt::focus(window) else { break };
+        if found.iter().any(|seen| seen == &focus) {
+            break;
+        }
+        found.push(focus);
+    }
+    found
+}
+
+fn has_focusable_ancestor(widget: &gtk::Widget) -> bool {
+    let mut parent = widget.parent();
+    while let Some(widget) = parent {
+        if widget.is_focusable() {
+            return true;
+        }
+        parent = widget.parent();
+    }
+    false
+}
+
 /// Waits for something another thread reaches on its own schedule.
 fn until(condition: impl Fn() -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -378,6 +406,118 @@ fn the_settings_actions_drive_the_installation() {
         fixture.extension_tagged("alpha", settings::ENABLE).is_some(),
         "the page was rebuilt from what the policy now says"
     );
+}
+
+fn lifecycle_actions_share_keyboard_and_semantic_focus() {
+    use super::super::semantic::{Action, ActionKind, Refusal};
+    let fixture = Fixture::new(&[("alpha", false)]);
+    fixture.view.select_name(Page::Extensions.title());
+    let window = gtk::Window::builder()
+        .default_width(900)
+        .default_height(700)
+        .child(&fixture.view.widget)
+        .build();
+    window.present();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    let focusable: Vec<_> = descendants(fixture.view.widget.upcast_ref())
+        .into_iter()
+        .filter(|widget| {
+            (widget.is::<gtk::Entry>() || widget.is::<gtk::Button>() || widget.is::<gtk::ToggleButton>())
+                && widget.is_focusable()
+                && widget.is_sensitive()
+                && widget.is_visible()
+                && !has_focusable_ancestor(widget)
+        })
+        .collect();
+    let traversed = focus_chain(&window);
+    assert!(
+        focusable
+            .iter()
+            .all(|widget| traversed.iter().any(|focused| focused == widget)),
+        "Tab reaches every visible enabled catalogue/lifecycle control"
+    );
+
+    let initial = fixture.view.semantic_snapshot();
+    let enable = initial
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Enable"))
+        .expect("visible Enable semantics");
+    assert!(enable.actions.contains(&ActionKind::Focus));
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: initial.revision,
+            node: enable.id,
+            action: ActionKind::Focus,
+            value: None,
+        })
+        .unwrap();
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Enable".into())
+    );
+
+    let removal = fixture.view.semantic_snapshot();
+    let remove = removal
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Remove"))
+        .unwrap();
+    let confirm = removal
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Confirm removal"))
+        .unwrap();
+    assert!(confirm.disabled, "hidden confirmation is not focusable");
+    assert!(matches!(
+        fixture.view.semantic_action(&Action {
+            revision: removal.revision,
+            node: confirm.id,
+            action: ActionKind::Focus,
+            value: None,
+        }),
+        Err(Refusal::Disabled(id)) if id == confirm.id
+    ));
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: removal.revision,
+            node: remove.id,
+            action: ActionKind::Invoke,
+            value: None,
+        })
+        .unwrap();
+    let asking = fixture.view.semantic_snapshot();
+    let confirm = asking
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Confirm removal"))
+        .unwrap();
+    assert!(!confirm.disabled);
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: asking.revision,
+            node: confirm.id,
+            action: ActionKind::Focus,
+            value: None,
+        })
+        .unwrap();
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Confirm removal".into()),
+        "semantic Focus follows the currently visible confirmation"
+    );
+    window.close();
 }
 
 fn removing_an_extension_takes_its_pages_with_it() {
@@ -719,6 +859,19 @@ fn an_image_is_read_before_anybody_is_asked() {
         .collect();
     assert!(proposal.contains(&"Image: sample:1".to_owned()));
     assert!(proposal.contains(&"Digest: sha256:bbbb".to_owned()));
+    let proposed = fixture.view.semantic_snapshot();
+    for label in ["Install", "Cancel"] {
+        let action = proposed
+            .root
+            .children
+            .iter()
+            .find(|node| node.label.as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("proposal lacks {label} semantics"));
+        assert!(
+            action.actions.contains(&super::super::semantic::ActionKind::Focus),
+            "{label} is focusable without invoking consent"
+        );
+    }
 
     page.consent();
 
@@ -1969,6 +2122,11 @@ mod panes {
     pub(super) fn a_pane_can_hold_an_extensions_interface_beside_a_shell() {
         let bench = Bench::new();
         let (first, one) = bench.shell();
+        assert_ne!(
+            Slots::new(&bench.window).adopt(Some(&one)),
+            one,
+            "duplicated persisted slots cannot alias an already live pane"
+        );
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -2037,6 +2195,74 @@ mod panes {
             Some(home.upcast_ref::<gtk::Widget>()),
             "and hands the interface back to its page rather than taking it away"
         );
+        let replacement = Window::slot(&bench.window);
+        assert_ne!(replacement, slot, "a replacement at the same UI position gets a fresh authority identity");
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || sent.send(request.write(&stale, b"stale")).unwrap());
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || {
+            sent.send(request.resize_grid(&stale, hl_extension::port::GridSize { columns: 80, rows: 24 }))
+                .unwrap()
+        });
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || sent.send(request.semantics(&stale)).unwrap());
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || {
+            sent.send(request.semantic_action(
+                &stale,
+                &hl_extension::PaneSemanticAction {
+                    revision: 0,
+                    node: 0,
+                    action: hl_extension::SemanticActionKind::Invoke,
+                    value: None,
+                },
+            ))
+            .unwrap()
+        });
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
         drop(first);
     }
 

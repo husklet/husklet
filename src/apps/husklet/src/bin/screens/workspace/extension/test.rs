@@ -96,12 +96,48 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_structured_fault_reaches_lifecycle_on_the_toolkit_tick();
         a_rendered_button_reaches_the_sink();
         retained_pane_actions_keep_their_slot();
+        retiring_a_pane_discards_its_queued_interaction();
         semantics_are_redacted_and_actions_reject_stale_revisions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn retiring_a_pane_discards_its_queued_interaction() {
+    let mut fixture = Fixture::new();
+    let pane = fixture.page.pane("pane-gone");
+    let frame = Reconciliation::new().reconcile(&panel("Gone"));
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-gone".into(),
+            frame,
+        })
+        .expect("the page is listening");
+    fixture.page.tick();
+    let button = descendants(&pane)
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .expect("retained pane button");
+    button.emit_clicked();
+    fixture.page.retire("pane-gone");
+    fixture.page.tick();
+    assert!(
+        fixture.recorded.borrow().is_empty(),
+        "a retired pane cannot leak its queued event"
+    );
+}
+
+fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut found = vec![widget.clone()];
+    let mut index = 0;
+    while index < found.len() {
+        found.extend(offspring(&found[index]));
+        index += 1;
+    }
+    found
 }
 
 fn retained_pane_actions_keep_their_slot() {
@@ -271,6 +307,7 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
     fixture.page.tick();
     let widgets = fixture.page.surface().len();
     let live = fixture.widgets().len();
+    let live_semantics = fixture.page.semantics("pane-1").expect("live semantics");
 
     fixture
         .post
@@ -291,6 +328,65 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         "the banner says why, got {:?}",
         fixture.page.banner().text()
     );
+    let faulted = fixture.page.semantics("pane-1").expect("fault semantics");
+    assert_ne!(
+        faulted.revision, live_semantics.revision,
+        "the fault invalidates semantic observers"
+    );
+    let fault = faulted
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Extension stopped"))
+        .expect("the visible fault has a semantic projection");
+    assert!(fault
+        .value
+        .as_deref()
+        .is_some_and(|value| value.contains("socket closed")));
+    assert_eq!(fault.actions, vec![hl_extension::SemanticActionKind::Invoke]);
+    fixture
+        .page
+        .semantic_action_at(
+            "pane-1",
+            &hl_extension::PaneSemanticAction {
+                revision: faulted.revision,
+                node: fault.id,
+                action: hl_extension::SemanticActionKind::Invoke,
+                value: None,
+            },
+        )
+        .expect("semantic retry");
+    assert_eq!(fixture.recorded.borrow().as_slice(), [Signal::Retry]);
+    let pending = fixture.page.semantics("pane-1").expect("pending recovery semantics");
+    assert_ne!(
+        pending.revision, faulted.revision,
+        "requesting recovery invalidates observers"
+    );
+    let pending_fault = pending
+        .root
+        .children
+        .iter()
+        .find(|node| node.id == fault.id)
+        .expect("the fault remains until a fresh frame");
+    assert!(
+        pending_fault.disabled,
+        "a pending retry cannot launch a duplicate recovery"
+    );
+    assert!(
+        fixture
+            .page
+            .semantic_action_at(
+                "pane-1",
+                &hl_extension::PaneSemanticAction {
+                    revision: pending.revision,
+                    node: fault.id,
+                    action: hl_extension::SemanticActionKind::Invoke,
+                    value: None,
+                },
+            )
+            .is_err(),
+        "a second semantic retry fails closed"
+    );
     let retry = fixture
         .widgets()
         .into_iter()
@@ -302,7 +398,22 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
     assert_eq!(
         fixture.recorded.borrow().as_slice(),
         [Signal::Retry],
-        "retry reaches the sink"
+        "the visible button cannot duplicate a pending semantic retry"
+    );
+    fixture.describe(&panel("Containers recovered"));
+    fixture.page.tick();
+    let recovered = fixture.page.semantics("pane-1").expect("recovered semantics");
+    assert_ne!(
+        recovered.revision, pending.revision,
+        "the fresh frame invalidates pending state"
+    );
+    assert!(
+        !fixture.page.banner().is_visible(),
+        "only a valid fresh frame clears the fault"
+    );
+    assert!(
+        recovered.root.children.iter().all(|node| node.id != fault.id),
+        "the recovered pane no longer advertises the fault"
     );
 }
 

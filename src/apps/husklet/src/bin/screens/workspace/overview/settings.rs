@@ -261,6 +261,10 @@ impl Overview<'_> {
         register_text(semantics, "settings/shell", "Default shell", &form.shell, false);
         register_text(semantics, "settings/scrollback", "Scrollback", &form.scrollback, false);
         register_text(semantics, "settings/vpn", "VPN or proxy", &form.features.vpn, true);
+        register_font(semantics, "settings/font-family", "Font family", &form.font);
+        register_color(semantics, "settings/background", "Background color", &form.background);
+        register_color(semantics, "settings/foreground", "Text color", &form.foreground);
+        register_cursor(semantics, form);
         register_spin(semantics, "settings/cpus", "CPU cores", &form.cpus);
         register_spin(semantics, "settings/memory", "Memory MB", &form.mem);
         register_spin(semantics, "settings/font-size", "Font size", &form.font_size);
@@ -334,6 +338,112 @@ impl Overview<'_> {
         let registry = semantics.clone();
         save.connect_sensitive_notify(move |button| registry.set_disabled("settings/save", !button.is_sensitive()));
     }
+}
+
+fn register_cursor(semantics: &screens::workspace::semantic::Registry, form: &Form) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let current = form.cursor.get().as_str();
+    let buttons = form.cursor_buttons.clone();
+    semantics.register(
+        "settings/cursor-shape",
+        "combobox",
+        Some("Cursor shape"),
+        Some(Value::Public(current)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => {
+                let index = match value {
+                    Some("block") => Some(0),
+                    Some("beam") => Some(1),
+                    Some("underline") => Some(2),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    buttons[index].set_active(true);
+                }
+            }
+            ActionKind::Focus => {
+                buttons
+                    .iter()
+                    .find(|button| button.is_active())
+                    .unwrap_or(&buttons[0])
+                    .grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    for (button, value) in form.cursor_buttons.iter().zip(["block", "beam", "underline"]) {
+        let registry = semantics.clone();
+        button.connect_toggled(move |button| {
+            if button.is_active() {
+                registry.update("settings/cursor-shape", Value::Public(value), !button.is_sensitive());
+            }
+        });
+    }
+}
+
+fn register_color(
+    semantics: &screens::workspace::semantic::Registry,
+    path: &str,
+    label: &str,
+    input: &ColorPicker,
+) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.value();
+    let changed = input.clone();
+    let focused = input.widget().clone();
+    semantics.register(
+        path,
+        "colorbutton",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => changed.set_value(value.unwrap_or_default()),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.connect_value_changed(move |value| registry.update(&path, Value::Public(value), false));
+}
+
+fn register_font(
+    semantics: &screens::workspace::semantic::Registry,
+    path: &str,
+    label: &str,
+    input: &FontPicker,
+) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.value();
+    let changed = input.clone();
+    let focused = input.widget().clone();
+    semantics.register(
+        path,
+        "combobox",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => changed.set_value(value.unwrap_or_default()),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.widget().connect_font_desc_notify(move |input| {
+        let family = input
+            .font_desc()
+            .and_then(|description| description.family().map(|family| family.to_string()))
+            .unwrap_or_default();
+        registry.update(&path, Value::Public(&family), !input.is_sensitive());
+    });
 }
 
 fn register_text(
@@ -534,8 +644,56 @@ mod tests {
         if !crate::test_support::on_the_toolkit_thread(|| {
             use crate::screens::workspace::semantic::{Action, ActionKind, Registry};
             let workspace = WorkspaceConfig::new("semantic", "alpine:3.20", Arch::Amd64);
+            let expected_font = workspace.terminal_config().font_family;
             let registry = Registry::new("workspace");
             let page = Overview::new(&workspace, None).settings(&registry);
+            let window = gtk::Window::builder()
+                .default_width(1000)
+                .default_height(760)
+                .child(&page)
+                .build();
+            window.present();
+            while gtk::glib::MainContext::default().iteration(false) {}
+            let initial_focus = focus_chain(&window);
+            let eligible: Vec<_> = descendants(page.upcast_ref())
+                .into_iter()
+                .filter(|widget| {
+                    (widget.is::<gtk::Entry>()
+                        || widget.is::<gtk::SpinButton>()
+                        || widget.is::<gtk::Switch>()
+                        || widget.is::<gtk::Button>()
+                        || widget.is::<gtk::ToggleButton>()
+                        || widget.is::<gtk::CheckButton>()
+                        || widget.is::<gtk::FontDialogButton>())
+                        && widget.is_focusable()
+                        && widget.is_sensitive()
+                        && widget.is_visible()
+                        && !has_focusable_ancestor(widget)
+                })
+                .collect();
+            let missed: Vec<_> = eligible
+                .iter()
+                .filter(|widget| !initial_focus.iter().any(|focused| focused == *widget))
+                .map(|widget| {
+                    widget.downcast_ref::<gtk::Button>().and_then(gtk::Button::label).map_or_else(
+                        || widget.type_().name().to_string(),
+                        |label| format!("{}:{label}", widget.type_().name()),
+                    )
+                })
+                .collect();
+            assert!(missed.is_empty(), "Tab traversal missed {missed:?}");
+            assert!(
+                initial_focus.iter().all(|widget| !widget.has_css_class("settings-card")),
+                "card containers never enter keyboard traversal"
+            );
+            assert!(
+                initial_focus.iter().all(|widget| {
+                    widget
+                        .downcast_ref::<gtk::Button>()
+                        .is_none_or(|button| button.label().as_deref() != Some("Save changes"))
+                }),
+                "disabled Apply is skipped"
+            );
             let snapshot = registry.snapshot();
             let labels: Vec<_> = snapshot
                 .root
@@ -544,9 +702,42 @@ mod tests {
                 .filter_map(|node| node.label.as_deref())
                 .collect();
             assert!(labels.contains(&"Default shell"));
+            assert!(labels.contains(&"Font family"));
+            assert!(labels.contains(&"Background color"));
+            assert!(labels.contains(&"Text color"));
             assert!(labels.contains(&"CPU cores"));
             assert!(labels.contains(&"Docker socket"));
             assert!(labels.contains(&"Save changes"));
+            let editable_contract = [
+                ("Default shell", "textbox", ActionKind::Change, false),
+                ("Scrollback", "textbox", ActionKind::Change, false),
+                ("VPN or proxy", "textbox", ActionKind::Change, true),
+                ("Font family", "combobox", ActionKind::Change, false),
+                ("Background color", "colorbutton", ActionKind::Change, false),
+                ("Text color", "colorbutton", ActionKind::Change, false),
+                ("Cursor shape", "combobox", ActionKind::Change, false),
+                ("CPU cores", "spinbutton", ActionKind::Change, false),
+                ("Memory MB", "spinbutton", ActionKind::Change, false),
+                ("Font size", "spinbutton", ActionKind::Change, false),
+                ("Cursor blink", "switch", ActionKind::Toggle, false),
+                ("Docker socket", "switch", ActionKind::Toggle, false),
+                ("Save changes", "button", ActionKind::Invoke, false),
+            ];
+            for (label, role, action, redacted) in editable_contract {
+                let node = snapshot
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.label.as_deref() == Some(label))
+                    .unwrap_or_else(|| panic!("visible Settings control {label:?} lacks semantics"));
+                assert_eq!(node.role, role, "{label} has the wrong semantic role");
+                assert!(node.actions.contains(&action), "{label} is not actionable");
+                if redacted {
+                    assert_eq!(node.value.as_deref(), Some("[redacted]"), "{label} leaked a sensitive value");
+                } else {
+                    assert_ne!(node.value.as_deref(), Some("[redacted]"), "{label} was needlessly hidden");
+                }
+            }
             let vpn = snapshot
                 .root
                 .children
@@ -560,6 +751,81 @@ mod tests {
                 .iter()
                 .find(|node| node.label.as_deref() == Some("Default shell"))
                 .unwrap();
+            let font = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Font family"))
+                .unwrap();
+            assert_eq!(font.value.as_deref(), Some(expected_font.as_str()));
+            let cursor = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Cursor shape"))
+                .unwrap();
+            let cursor_revision = registry.snapshot().revision;
+            registry
+                .act(&Action {
+                    revision: cursor_revision,
+                    node: cursor.id,
+                    action: ActionKind::Change,
+                    value: Some("beam".to_owned()),
+                })
+                .unwrap();
+            assert_eq!(
+                registry
+                    .snapshot()
+                    .root
+                    .children
+                    .iter()
+                    .find(|candidate| candidate.id == cursor.id)
+                    .and_then(|candidate| candidate.value.as_deref()),
+                Some("beam")
+            );
+            let cursor_focus_revision = registry.snapshot().revision;
+            registry
+                .act(&Action {
+                    revision: cursor_focus_revision,
+                    node: cursor.id,
+                    action: ActionKind::Focus,
+                    value: None,
+                })
+                .unwrap();
+            assert_eq!(
+                gtk::prelude::RootExt::focus(&window)
+                    .and_downcast::<gtk::ToggleButton>()
+                    .and_then(|button| button.label()),
+                Some("beam".into()),
+                "semantic Focus targets the selected visible cursor control"
+            );
+            for (label, value) in [("Background color", "#101820"), ("Text color", "#f0f4f8")] {
+                let current = registry.snapshot();
+                let node = current
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.label.as_deref() == Some(label))
+                    .expect("every visible terminal color has semantics");
+                registry
+                    .act(&Action {
+                        revision: current.revision,
+                        node: node.id,
+                        action: ActionKind::Change,
+                        value: Some(value.to_owned()),
+                    })
+                    .unwrap();
+                assert_eq!(
+                    registry
+                        .snapshot()
+                        .root
+                        .children
+                        .iter()
+                        .find(|candidate| candidate.id == node.id)
+                        .and_then(|candidate| candidate.value.as_deref()),
+                    Some(value)
+                );
+            }
             let save = descendants(page.upcast_ref())
                 .into_iter()
                 .find_map(|widget| {
@@ -570,20 +836,47 @@ mod tests {
                 })
                 .expect("settings has a save action");
             assert!(!save.is_sensitive(), "unchanged settings cannot be redundantly saved");
+            let shell_revision = registry.snapshot().revision;
             registry
                 .act(&Action {
-                    revision: snapshot.revision,
+                    revision: shell_revision,
                     node: shell.id,
                     action: ActionKind::Change,
                     value: Some("/bin/zsh -l".to_owned()),
                 })
                 .unwrap();
+            let font_revision = registry.snapshot().revision;
+            registry
+                .act(&Action {
+                    revision: font_revision,
+                    node: font.id,
+                    action: ActionKind::Change,
+                    value: Some("Fira Code".to_owned()),
+                })
+                .unwrap();
+            let changed_font = registry.snapshot();
+            assert_eq!(
+                changed_font
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.id == font.id)
+                    .and_then(|node| node.value.as_deref()),
+                Some("Fira Code"),
+                "assistive changes and the visible font picker share one value"
+            );
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             while !save.is_sensitive() && std::time::Instant::now() < deadline {
                 gtk::glib::MainContext::default().iteration(false);
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             assert!(save.is_sensitive(), "editing a setting exposes the pending save");
+            assert!(
+                focus_chain(&window)
+                    .iter()
+                    .any(|widget| widget == save.upcast_ref::<gtk::Widget>()),
+                "enabled Apply joins ordinary Tab traversal"
+            );
             let changed = registry.snapshot();
             assert!(changed.revision > snapshot.revision);
             assert_eq!(
@@ -605,6 +898,7 @@ mod tests {
                     .disabled,
                 "assistive actions see that saving is now available"
             );
+            window.close();
         }) {
             eprintln!("skipped: no display connection");
         }
@@ -618,5 +912,32 @@ mod tests {
             child = widget.next_sibling();
         }
         found
+    }
+
+    fn focus_chain(window: &gtk::Window) -> Vec<gtk::Widget> {
+        gtk::prelude::RootExt::set_focus(window, gtk::Widget::NONE);
+        let mut found = Vec::new();
+        for _ in 0..64 {
+            if !window.child_focus(gtk::DirectionType::TabForward) {
+                break;
+            }
+            let Some(focus) = gtk::prelude::RootExt::focus(window) else { break };
+            if found.iter().any(|seen| seen == &focus) {
+                break;
+            }
+            found.push(focus);
+        }
+        found
+    }
+
+    fn has_focusable_ancestor(widget: &gtk::Widget) -> bool {
+        let mut parent = widget.parent();
+        while let Some(widget) = parent {
+            if widget.is_focusable() {
+                return true;
+            }
+            parent = widget.parent();
+        }
+        false
     }
 }

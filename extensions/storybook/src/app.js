@@ -31,6 +31,8 @@ import { amountOf, lengthValue, modeOf, rows } from './editors.js';
 import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
+import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
+import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -42,7 +44,7 @@ export function Playground({ largeSource } = {}) {
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY;
+  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY || selected === NAVIGATION_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -74,7 +76,7 @@ export function Playground({ largeSource } = {}) {
 export function Sidebar({ families, selected, onSelect }) {
   return h(
     Scroll,
-    { width: { chars: 26 }, height: 'fill' },
+    { width: 'fill', height: 'fill' },
     h(
       List,
       { pad: 1 },
@@ -86,10 +88,22 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(ACQUISITION_STORY),
       }),
       h(ListItemButton, {
+        key: KEYBOARD_STORY,
+        label: KEYBOARD_STORY,
+        selected: selected === KEYBOARD_STORY,
+        onInvoke: () => onSelect(KEYBOARD_STORY),
+      }),
+      h(ListItemButton, {
         key: FORM_STORY,
         label: FORM_STORY,
         selected: selected === FORM_STORY,
         onInvoke: () => onSelect(FORM_STORY),
+      }),
+      h(ListItemButton, {
+        key: NAVIGATION_STORY,
+        label: NAVIGATION_STORY,
+        selected: selected === NAVIGATION_STORY,
+        onInvoke: () => onSelect(NAVIGATION_STORY),
       }),
       ...families.flatMap((family) => [
         h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
@@ -117,7 +131,7 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
   return h(
     Column,
     { grow: true, gap: 2, pad: 4 },
-    h(Heading, { key: 'title', label: spaced(name), scale: 'title' }),
+    h(Heading, { key: 'title', label: spaced(name), scale: 'title', wrap: true }),
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
@@ -125,6 +139,10 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
         ? h(AcquisitionProgressStory)
         : name === FORM_STORY
         ? h(ValidatedSettingsFormStory)
+        : name === KEYBOARD_STORY
+        ? h(KeyboardAccessibilityStory)
+        : name === NAVIGATION_STORY
+        ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource
         ? h(LargeDataTableStory, { source: largeSource })
         : h(components[name], { ...present(opened.props), ...handlers }, ...opened.children.map(child)),
@@ -226,7 +244,7 @@ export function Inspector({ name, properties, triggers, props, onChange }) {
   }
   return h(
     Scroll,
-    { width: { chars: 40 }, height: 'fill' },
+    { width: 'fill', height: 'fill' },
     h(
       Column,
       { pad: 3, gap: 2 },

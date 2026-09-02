@@ -139,6 +139,7 @@ pub struct ColorPicker {
     stored: Rc<RefCell<String>>,
     label: gtk::Label,
     swatch: gtk::DrawingArea,
+    changed: Rc<RefCell<Vec<Rc<dyn Fn(&str)>>>>,
 }
 
 enum ColorValue {
@@ -167,6 +168,7 @@ impl ColorPicker {
         let stored = Rc::new(RefCell::new(value.to_owned()));
         let label = gtk::Label::new(None);
         let swatch = gtk::DrawingArea::new();
+        let changed: Rc<RefCell<Vec<Rc<dyn Fn(&str)>>>> = Rc::new(RefCell::new(Vec::new()));
         swatch.set_content_width(28);
         swatch.set_content_height(18);
         {
@@ -205,8 +207,9 @@ impl ColorPicker {
             let stored = stored.clone();
             let label = label.clone();
             let swatch = swatch.clone();
+            let changed = changed.clone();
             button.connect_clicked(move |button| {
-                Self::choose(button, &dialog, &active, &color, &stored, &label, &swatch);
+                Self::choose(button, &dialog, &active, &color, &stored, &label, &swatch, &changed);
             });
         }
 
@@ -216,6 +219,7 @@ impl ColorPicker {
             stored,
             label,
             swatch,
+            changed,
         };
         picker.set_value(value);
         picker
@@ -229,6 +233,7 @@ impl ColorPicker {
         stored: &Rc<RefCell<String>>,
         label: &gtk::Label,
         swatch: &gtk::DrawingArea,
+        changed: &Rc<RefCell<Vec<Rc<dyn Fn(&str)>>>>,
     ) {
         if active.replace(true) {
             return;
@@ -241,12 +246,13 @@ impl ColorPicker {
         let stored = stored.clone();
         let label = label.clone();
         let swatch = swatch.clone();
+        let changed = changed.clone();
         dialog.choose_rgba(
             parent.as_ref(),
             Some(&initial),
             gtk::gio::Cancellable::NONE,
             move |result| {
-                Self::apply(&result, &button, &active, &color, &stored, &label, &swatch);
+                Self::apply(&result, &button, &active, &color, &stored, &label, &swatch, &changed);
             },
         );
     }
@@ -259,6 +265,7 @@ impl ColorPicker {
         stored: &Rc<RefCell<String>>,
         label: &gtk::Label,
         swatch: &gtk::DrawingArea,
+        changed: &Rc<RefCell<Vec<Rc<dyn Fn(&str)>>>>,
     ) {
         if let Ok(selected) = result {
             let value = Self::format(selected);
@@ -268,6 +275,9 @@ impl ColorPicker {
             swatch.set_visible(true);
             button.set_tooltip_text(None);
             swatch.queue_draw();
+            for listener in changed.borrow().iter() {
+                listener(&value);
+            }
         }
         active.set(false);
     }
@@ -294,6 +304,14 @@ impl ColorPicker {
                     .set_tooltip_text(Some(&format!("Invalid terminal color: {original}")));
             }
         }
+        let value = self.value();
+        for listener in self.changed.borrow().iter() {
+            listener(&value);
+        }
+    }
+
+    pub fn connect_value_changed(&self, listener: impl Fn(&str) + 'static) {
+        self.changed.borrow_mut().push(Rc::new(listener));
     }
 
     pub fn value(&self) -> String {

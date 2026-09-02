@@ -9,6 +9,7 @@ import {
   CardContent,
   CardHeader,
   Column,
+  Heading,
   InlineMessage,
   Progress,
   Row,
@@ -58,6 +59,7 @@ export function AcquisitionProgressStory() {
   return h(
     Column,
     { gap: 3, grow: true },
+    h(Heading, { key: 'title', label: 'Extension acquisition states', scale: 'title', wrap: true }),
     h(Text, {
       key: 'explanation',
       label: 'Acquisition is read-only until the ready state. Cancel exists only while work is pending; Retry exists only after failure.',

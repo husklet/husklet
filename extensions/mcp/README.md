@@ -1,12 +1,36 @@
 # @husklet/mcp
 
-An MCP server for an LLM agent running as a Husklet extension. It connects only
-to `HUSKLET_EXTENSION_SOCKET` and receives exactly the capabilities granted to
-that extension.
+An MCP server for an LLM agent using a capability-scoped Husklet extension
+socket. It receives exactly the capabilities granted to that socket credential.
 
 ```sh
-npx @husklet/mcp
+npx -y @husklet/mcp --socket /path/to/extension.sock --workspace dev
 ```
+
+Common stdio MCP clients accept this copy-paste configuration shape:
+
+```json
+{
+  "mcpServers": {
+    "husklet": {
+      "command": "npx",
+      "args": ["-y", "@husklet/mcp", "--socket", "/path/to/extension.sock", "--workspace", "dev"]
+    }
+  }
+}
+```
+
+The socket path is a credential, not a discovery endpoint: install an observer
+extension with only the grants the client needs and use its host-provisioned
+socket. Both arguments are mandatory, duplicates and unknown flags are refused,
+and startup verifies `workspace_info.name` before exposing MCP tools. Diagnostics
+go to stderr so they cannot corrupt the JSON-RPC stream on stdout. This command
+does not install extensions, discover credentials, or modify client settings.
+Startup abandons a socket that does not complete its host greeting within five
+seconds. Host EOF or socket removal terminates the MCP process with an actionable
+stderr diagnostic; client EOF, SIGINT, and SIGTERM close both transports cleanly.
+The CLI never reconnects automatically: a replacement socket may carry different
+authority and must be selected and workspace-verified explicitly by the client.
 
 Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,
@@ -104,3 +128,48 @@ the host's credit-controlled subscription either reports a coalesced change or
 times out. Only a reported change causes one fresh snapshot. There is no polling
 loop. A stale-revision error is authoritative: read a fresh tree and reconsider
 the action instead of replaying an old node ID.
+
+## Day-one control workflow
+
+[`examples/agent-day-one.mjs`](examples/agent-day-one.mjs) composes a complete,
+bounded workflow over an initialized MCP `Client`:
+
+```js
+import { runAgentDayOne } from '@husklet/mcp/examples/agent-day-one.mjs';
+
+const observation = await runAgentDayOne(client, {
+  workspaceName: 'dev-target',
+  updatedConfiguration,
+  container: {
+    image: 'example/worker@sha256:...',
+    name: 'agent-check',
+    command: ['/usr/bin/worker', '--once'],
+  },
+  terminalInput: 'status\n',
+  actionLabel: 'Refresh',
+});
+```
+
+It inspects and temporarily updates a target workspace, creates and starts one
+container, executes a bounded argv vector, inspects processes, discovers panes,
+reads and writes a terminal, reads semantic XML, and invokes a node at the exact
+observed revision. One-shot pane waits are armed before terminal input and UI
+action. A `finally` block uses confirmed container stop/removal and restores the
+original workspace configuration. It never accepts shell command text and does
+not retry a stale semantic action.
+
+## Administrative lifecycle workflow
+
+[`examples/agent-admin.mjs`](examples/agent-admin.mjs) creates and starts one
+named workspace, performs confined directory/file create, write, and read, arms
+one pane-change wait, then removes every created resource in reverse order with
+literal confirmations. Cleanup also runs after intermediate failure.
+
+Filesystem and pane authority belongs to the socket's hosting workspace; it is
+not redirected by a workspace name passed to lifecycle tools. The helper first
+calls `husklet_workspace_info`, requires the caller's `hostingWorkspace` to
+match, and requires the separately managed workspace to have another name. This
+prevents an administrator from assuming that creating `target` makes subsequent
+file paths resolve inside `target`. The protocol currently has no workspace
+lifecycle event topic, so the example observes the existing credit-controlled
+pane-change topic and does not claim create/start/stop notifications exist.

@@ -27,6 +27,7 @@ struct Exhibit {
     semantics: Option<Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>>,
     action: Option<Rc<dyn Fn(&str, &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
     pane: Option<Rc<dyn Fn(&str) -> gtk::Widget>>,
+    retire: Option<Rc<dyn Fn(&str)>>,
 }
 
 /// One choice shown by a terminal pane, tied to the extension that owns it.
@@ -124,6 +125,7 @@ impl Gallery {
             semantics: None,
             action: None,
             pane: None,
+            retire: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
     }
@@ -144,6 +146,19 @@ impl Gallery {
     pub fn enrol_panes(&self, extension: &str, pane: Rc<dyn Fn(&str) -> gtk::Widget>) {
         if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
             exhibit.pane = Some(pane);
+        }
+    }
+
+    pub fn enrol_retirement(&self, extension: &str, retire: Rc<dyn Fn(&str)>) {
+        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+            exhibit.retire = Some(retire);
+        }
+    }
+
+    pub fn retire(&self, extension: &str, slot: &str) {
+        let endpoint = self.0.borrow().get(extension).and_then(|entry| entry.retire.clone());
+        if let Some(endpoint) = endpoint {
+            endpoint(slot);
         }
     }
 
