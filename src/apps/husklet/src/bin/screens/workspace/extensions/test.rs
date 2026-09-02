@@ -50,7 +50,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
-        panes::a_failed_pane_swap_preserves_the_terminal_and_provider_home();
+        panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::splitting_an_interface_again_moves_its_one_surface();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
         panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
@@ -718,12 +718,12 @@ mod panes {
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
-    use hl_extension::port::{Division, HostError, Occupant};
+    use hl_extension::port::{Division, HostError, LayoutNode, Occupant};
     use hl_extension::ExtensionName;
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneChooser, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin,
+        Adjustment, PaneChooser, PaneChrome, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin,
         Window, WindowSession, ABSENCE,
     };
     use super::super::Console;
@@ -753,7 +753,7 @@ mod panes {
             let terminal = vte4::Terminal::new();
             let slot = Window::slot(&self.window);
             Slots::new(&self.window).hold(&terminal, slot.clone());
-            self.page.append(&terminal);
+            self.page.append(&PaneChrome::wrap(&self.window, &terminal));
             (terminal, slot)
         }
 
@@ -763,10 +763,11 @@ mod panes {
             let slot = Window::slot(&self.window);
             Slots::new(&self.window).hold(&terminal, slot.clone());
             assert!(
-                PaneSplit::insert(
-                    pane.clone().upcast_ref::<gtk::Widget>(),
+                Panes::divide(
+                    &self.window,
+                    &Slots::new(&self.window).of(pane).expect("slot"),
                     gtk::Orientation::Horizontal,
-                    terminal.clone().upcast_ref::<gtk::Widget>(),
+                    terminal.upcast_ref()
                 ),
                 "a pane in a tab can be divided"
             );
@@ -888,9 +889,8 @@ mod panes {
         home.append(&interface);
         gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
         Window::exhibit(&bench.window, gallery.clone());
-
         let slot = Window::slot(&bench.window);
-        let pane = Surface::build(&bench.window, "sample", slot.clone());
+        let pane = Surface::build(&bench.window, "sample", None, slot.clone());
         assert!(Panes::divide(&bench.window, &one, gtk::Orientation::Horizontal, &pane));
 
         let held = Panes::at(&bench.window, &slot).expect("the surface pane is addressable");
@@ -943,6 +943,7 @@ mod panes {
             Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
         );
         Window::exhibit(&bench.window, gallery.clone());
+        let chrome = Panes::at(&bench.window, &slot).expect("pane chrome").widget;
 
         assert_eq!(gallery.providers()[0].title, "Postgres");
         PaneChooser::provider(&bench.window, "postgres", "database");
@@ -962,11 +963,22 @@ mod panes {
             Some("database"),
             "the extension is told which named view it should render"
         );
+        let topology = Console::topology(&bench.window).expect("provider topology");
+        let LayoutNode::Pane { pane, .. } = &topology.tabs[0].root else {
+            panic!("the unsplit provider is one pane")
+        };
+        let identity = pane.provider.as_ref().expect("surface provider identity");
+        assert_eq!(identity.extension, "postgres");
+        assert_eq!(identity.provider, "database");
 
         PaneChooser::terminal(&bench.window);
         let restored = Panes::at(&bench.window, &slot).expect("restored pane");
         assert_eq!(restored.occupant, Occupant::Terminal);
-        assert_eq!(restored.widget, terminal.upcast::<gtk::Widget>());
+        assert_eq!(
+            restored.widget, chrome,
+            "the pane keeps one stable chrome across occupants"
+        );
+        assert_eq!(restored.content, terminal.upcast::<gtk::Widget>());
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
     }
 
@@ -1009,45 +1021,39 @@ mod panes {
         );
     }
 
-    pub(super) fn a_failed_pane_swap_preserves_the_terminal_and_provider_home() {
+    pub(super) fn every_split_leaf_owns_its_chooser_and_topology_is_nested() {
         let bench = Bench::new();
-        let (terminal, slot) = bench.shell();
-        let gallery = Gallery::new();
-        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        home.append(&interface);
-        gallery.enrol(
-            "postgres",
-            &interface,
-            &home,
-            &[hl_extension::PaneProvider {
-                id: ExtensionName::new("database").expect("provider id"),
-                title: "Postgres".to_owned(),
-                icon: None,
-            }],
-            Rc::new(|_| panic!("a failed swap cannot select the provider")),
-        );
-        Window::exhibit(&bench.window, gallery);
+        let (first, one) = bench.shell();
+        let (_second, two) = bench.beside(&first);
+        for slot in [&one, &two] {
+            let pane = Panes::at(&bench.window, slot).expect("split leaf");
+            assert!(PaneChrome::is(&pane.widget), "{slot} has stable pane chrome");
+            assert!(
+                super::descendants(&pane.widget)
+                    .iter()
+                    .any(|widget| widget.is::<gtk::MenuButton>()),
+                "{slot} owns its chooser"
+            );
+        }
 
-        // A Grid is deliberately not a terminal-layout parent. The pane stays
-        // discoverable, but replacement must refuse it without borrowing the
-        // provider interface or recording a displaced shell.
-        let old_parent = terminal.parent().expect("shell parent");
-        old_parent
-            .downcast_ref::<gtk::Box>()
-            .expect("bench page")
-            .remove(&terminal);
-        let grid = gtk::Grid::new();
-        grid.attach(&terminal, 0, 0, 1, 1);
-        old_parent.downcast_ref::<gtk::Box>().expect("bench page").append(&grid);
-
-        PaneChooser::provider(&bench.window, "postgres", "database");
-        assert_eq!(
-            Panes::at(&bench.window, &slot).expect("same pane").widget,
-            terminal.upcast::<gtk::Widget>()
-        );
-        assert_eq!(Window::displaced(&bench.window), 0);
-        assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+        let topology = Console::topology(&bench.window).expect("topology");
+        assert_eq!(topology.active_tab.as_deref(), Some("p0"));
+        assert_eq!(topology.tabs.len(), 1);
+        let LayoutNode::Split {
+            division,
+            first,
+            second,
+            ..
+        } = &topology.tabs[0].root
+        else {
+            panic!("two leaves are reported as one nested split")
+        };
+        assert_eq!(*division, Division::Beside);
+        let slots = [first.as_ref(), second.as_ref()].map(|node| match node {
+            LayoutNode::Pane { pane, .. } => pane.slot.as_str(),
+            LayoutNode::Split { .. } => panic!("a leaf became another split"),
+        });
+        assert_eq!(slots, [one.as_str(), two.as_str()]);
     }
 
     pub(super) fn splitting_an_interface_again_moves_its_one_surface() {
@@ -1105,7 +1111,7 @@ mod panes {
         let unsupported_slot = Window::slot(&bench.window);
         Slots::new(&bench.window).hold(&unsupported, unsupported_slot.clone());
         let grid = gtk::Grid::new();
-        grid.attach(&unsupported, 0, 0, 1, 1);
+        grid.attach(&PaneChrome::wrap(&bench.window, &unsupported), 0, 0, 1, 1);
         bench.page.append(&grid);
 
         let failure = Console::surface(&bench.window, Some("sample"), &unsupported_slot, Division::Below);
@@ -1133,6 +1139,7 @@ mod panes {
         let storage = tempfile::tempdir().expect("temporary directory");
         let node = PaneNode::Surface(SurfacePane {
             extension: "departed".to_owned(),
+            provider: None,
             slot: Some("7".to_owned()),
         });
 

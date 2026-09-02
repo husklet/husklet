@@ -51,6 +51,12 @@ const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);
 ```
 
+Terminal control is pane-addressed and promise-based as well. `terminal.read`
+returns at most 2,000 lines, `terminal.writeInput` accepts at most 65,536 raw
+bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
+through 1,000. `terminal.topology()` returns the current nested tab/split tree;
+it is an observation call, not a claimed global change stream.
+
 `protocolCoverage` is the machine-readable inventory of what this protocol
 version really supports. Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace

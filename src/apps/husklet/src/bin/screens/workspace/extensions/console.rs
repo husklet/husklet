@@ -8,10 +8,15 @@
 use std::rc::Rc;
 
 use hl::extension::{Answer, Errand, Errands, Request};
-use hl_extension::port::{Division, HostError, PaneSummary, PaneText, TabSummary};
+use hl_extension::port::{
+    Division, GridSize, HostError, LayoutNode, PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology,
+    TerminalTopology,
+};
 use vte4::prelude::*;
 
-use super::super::terminal::{Adjustment, Occupancy, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin, Window};
+use super::super::terminal::{
+    Adjustment, Occupancy, PaneChrome, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+};
 
 /// How often the window looks for errands.
 ///
@@ -69,10 +74,13 @@ impl Console {
     fn serve(window: &Rc<TermWin>, errand: Errand) {
         let answer = match errand.request() {
             Request::Tabs => Ok(Answer::Tabs(Self::tabs(window))),
+            Request::Topology => Self::topology(window).map(Answer::Topology),
             Request::OpenTab(title) => Ok(Answer::Slot(Self::open(window, title))),
             Request::Split { slot, division } => Self::split(window, slot, *division).map(Answer::Slot),
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
             Request::Read { slot, lines } => Self::read(window, slot, *lines).map(Answer::Text),
+            Request::Write { slot, contents } => Self::write(window, slot, contents).map(|()| Answer::Done),
+            Request::ResizeGrid { slot, grid } => Self::resize_grid(window, slot, *grid).map(|()| Answer::Done),
             Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
             Request::Focus { slot } => Self::focus(window, slot).map(|()| Answer::Done),
             Request::Ratio { slot, ratio } => Self::ratio(window, slot, *ratio).map(|()| Answer::Done),
@@ -90,9 +98,76 @@ impl Console {
             .map(|(name, widget, _)| TabSummary {
                 id: name.clone(),
                 title: name,
-                panes: Panes::under(window, &widget).into_iter().map(pane).collect(),
+                panes: Panes::under(window, &widget)
+                    .into_iter()
+                    .map(|occupancy| pane(window, occupancy))
+                    .collect(),
             })
             .collect()
+    }
+
+    pub(super) fn topology(window: &Rc<TermWin>) -> Result<TerminalTopology, HostError> {
+        let active = Window::active_tab(window);
+        let tabs: Vec<TabTopology> = Window::tabs(window)
+            .into_iter()
+            .filter_map(|(id, widget, _)| {
+                Some(TabTopology {
+                    title: Window::tab_title(window, &id).unwrap_or_else(|| id.clone()),
+                    id,
+                    root: Self::node(window, &widget)?,
+                })
+            })
+            .collect();
+        let active_tab = active.filter(|active| tabs.iter().any(|tab| &tab.id == active));
+        Ok(TerminalTopology { active_tab, tabs })
+    }
+
+    fn node(window: &Rc<TermWin>, widget: &gtk::Widget) -> Option<LayoutNode> {
+        if PaneChrome::is(widget) {
+            let occupancy = Panes::under(window, widget).into_iter().next()?;
+            let grid = occupancy.content.downcast_ref::<vte4::Terminal>().and_then(|terminal| {
+                Some(GridSize {
+                    columns: u16::try_from(terminal.column_count()).ok()?,
+                    rows: u16::try_from(terminal.row_count()).ok()?,
+                })
+            });
+            let focused = occupancy.content.has_focus();
+            return Some(LayoutNode::Pane {
+                pane: pane(window, occupancy),
+                grid,
+                focused,
+            });
+        }
+        if let Some(split) = widget.downcast_ref::<gtk::Paned>() {
+            let dimension = if split.orientation() == gtk::Orientation::Horizontal {
+                split.width()
+            } else {
+                split.height()
+            };
+            let ratio_per_mille = if dimension > 0 {
+                u16::try_from((split.position() * 1000 / dimension).clamp(0, 1000)).unwrap_or(500)
+            } else {
+                500
+            };
+            return Some(LayoutNode::Split {
+                division: if split.orientation() == gtk::Orientation::Horizontal {
+                    Division::Beside
+                } else {
+                    Division::Below
+                },
+                ratio_per_mille,
+                first: Box::new(Self::node(window, &split.start_child()?)?),
+                second: Box::new(Self::node(window, &split.end_child()?)?),
+            });
+        }
+        let mut child = widget.first_child();
+        while let Some(candidate) = child {
+            if let Some(node) = Self::node(window, &candidate) {
+                return Some(node);
+            }
+            child = candidate.next_sibling();
+        }
+        None
     }
 
     /// A bounded tail of what one pane is showing.
@@ -108,6 +183,21 @@ impl Console {
             ))),
             Reading::Absent => Err(absent(slot)),
         }
+    }
+
+    fn write(window: &Rc<TermWin>, slot: &str, contents: &[u8]) -> Result<(), HostError> {
+        let terminal = Window::pane(window, slot).ok_or_else(|| absent(slot))?;
+        terminal.feed_child(contents);
+        Ok(())
+    }
+
+    fn resize_grid(window: &Rc<TermWin>, slot: &str, grid: hl_extension::port::GridSize) -> Result<(), HostError> {
+        let terminal = Window::pane(window, slot).ok_or_else(|| absent(slot))?;
+        let pty = terminal
+            .pty()
+            .ok_or_else(|| HostError::Conflict(format!("{slot} has no attached PTY")))?;
+        pty.set_size(i32::from(grid.rows), i32::from(grid.columns))
+            .map_err(|error| HostError::Failed(error.to_string()))
     }
 
     /// Closes one pane. The last pane of a tab takes the tab with it, which is
@@ -159,13 +249,13 @@ impl Console {
         }
         let previous = Surface::of(window, origin);
         let held = Window::slot(window);
-        let content = Surface::build(window, origin, held.clone());
+        let content = Surface::build(window, origin, None, held.clone());
         if Panes::divide(window, slot, orientation(division), &content) {
             // One reconciliation stream owns one widget tree. Once the new
             // half is real, collapse the old holder; `build` already moved its
             // interface into `content`, so closing it cannot send it home.
             if let Some(previous) = previous {
-                if let Some((old, _)) = Slots::new(window).surface(&previous) {
+                if let Some((old, _, _)) = Slots::new(window).surface(&previous) {
                     let _ = Panes::close(window, &old);
                 }
             }
@@ -229,12 +319,16 @@ impl Console {
 ///
 /// The working directory and the running command are left unsaid rather than
 /// guessed: the window knows a pane's shell, not what that shell is doing.
-fn pane(occupancy: Occupancy) -> PaneSummary {
+fn pane(window: &Rc<TermWin>, occupancy: Occupancy) -> PaneSummary {
+    let provider = Slots::new(window)
+        .surface(&occupancy.content)
+        .and_then(|(_, extension, provider)| provider.map(|provider| PaneProviderIdentity { extension, provider }));
     PaneSummary {
         slot: occupancy.slot,
         working_directory: None,
         command: None,
         occupant: occupancy.occupant,
+        provider,
     }
 }
 

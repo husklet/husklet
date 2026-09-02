@@ -65,10 +65,22 @@ export function workspace(session) {
     },
     terminal: {
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
+      topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
       split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
       spawn: (slot, command) => done('terminal_spawn', { slot, command }),
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+      writeInput: (slot, input) => {
+        const contents = typeof input === 'string' ? new TextEncoder().encode(input) : Uint8Array.from(input);
+        if (contents.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+        return done('terminal_write_pane', { slot, contents: [...contents] });
+      },
+      resizeGrid: (slot, columns, rows) => {
+        if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) {
+          throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
+        }
+        return done('terminal_resize_grid', { slot, columns, rows });
+      },
       close: (slot) => done('terminal_close_pane', { slot }),
       focus: (slot) => done('terminal_focus_pane', { slot }),
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
@@ -157,14 +169,14 @@ export const protocolCoverage = Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'create', 'start', 'stop', 'remove'],
     images: ['list', 'pull'],
-    terminal: ['tabs', 'openTab', 'split', 'spawn', 'read', 'close', 'focus', 'ratio'],
+    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select'],
   }),
   unavailable: Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: ['processes', 'exec', 'logs', 'pause', 'unpause', 'restart', 'kill'],
-    terminal: ['writeInput', 'resizeGrid', 'switchOccupant', 'paneProviders'],
+    terminal: ['switchOccupant'],
     events: ['hostSnapshots', 'keyboard', 'focus', 'pointer', 'drag', 'drop'],
   }),
 });

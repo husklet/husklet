@@ -9,6 +9,35 @@ pub(super) struct PaneFocus;
 /// The small control that selects what the current pane draws.
 pub(crate) struct PaneChooser;
 
+/// Stable visual and layout identity of one leaf pane.
+///
+/// The occupant is the overlay's primary child and may change between a live
+/// terminal and an extension surface. Splits, ratios, close, and persistence
+/// address the overlay, so changing the occupant never changes topology.
+pub(crate) struct PaneChrome;
+
+impl PaneChrome {
+    pub(crate) const CLASS: &'static str = "hl-pane";
+
+    pub(crate) fn wrap(window: &Rc<TermWin>, occupant: &impl IsA<gtk::Widget>) -> gtk::Widget {
+        let chrome = gtk::Overlay::new();
+        chrome.add_css_class(Self::CLASS);
+        chrome.set_hexpand(true);
+        chrome.set_vexpand(true);
+        chrome.set_child(Some(occupant));
+        chrome.add_overlay(&PaneChooser::button(window));
+        chrome.upcast()
+    }
+
+    pub(crate) fn is(widget: &gtk::Widget) -> bool {
+        widget.is::<gtk::Overlay>() && widget.has_css_class(Self::CLASS)
+    }
+
+    pub(crate) fn occupant(widget: &gtk::Widget) -> Option<gtk::Widget> {
+        widget.downcast_ref::<gtk::Overlay>()?.child()
+    }
+}
+
 impl PaneChooser {
     /// A chooser whose contents are rebuilt when it opens.
     ///
@@ -74,25 +103,25 @@ impl PaneChooser {
             return;
         }
         let Some(current) = Self::selected(window) else { return };
-        if !PaneSwap::can_replace(&current.widget) {
+        if !PaneSwap::can_replace(&current.content) {
             return;
         }
         let previous_surface = (current.occupant == hl_extension::port::Occupant::Surface)
             .then(|| {
                 Slots::new(window)
-                    .surface(&current.widget)
-                    .map(|(_, extension)| extension)
+                    .surface(&current.content)
+                    .map(|(_, extension, provider)| (extension, provider))
             })
             .flatten();
-        let displaced = current.widget.clone().downcast::<vte4::Terminal>().ok();
+        let displaced = current.content.clone().downcast::<vte4::Terminal>().ok();
         // A shell is kept locally until replacement succeeds: a failed swap
         // must leave both layout and displaced-shell registry alone.
         if current.occupant == hl_extension::port::Occupant::Surface {
-            Surface::retire(window, &current.widget);
-            Slots::new(window).release(&current.widget);
+            Surface::retire(window, &current.content);
+            Slots::new(window).release(&current.content);
         }
-        let surface = Surface::build(window, extension, current.slot.clone());
-        if PaneSwap::replace(&current.widget, &surface) {
+        let surface = Surface::build(window, extension, Some(provider), current.slot.clone());
+        if PaneSwap::replace(&current.content, &surface) {
             if let Some(terminal) = displaced {
                 window.displaced.borrow_mut().insert(current.slot, terminal);
             }
@@ -103,9 +132,9 @@ impl PaneChooser {
         // borrow/registration and put the old interface back exactly where it
         // was; the terminal case never entered the displaced registry.
         Surface::discard(window, &surface);
-        if let Some(previous) = previous_surface {
-            Slots::new(window).enrol(&current.widget, current.slot, previous.clone());
-            Surface::restore(window, &previous, &current.widget);
+        if let Some((previous, provider)) = previous_surface {
+            Slots::new(window).enrol(&current.content, current.slot, previous.clone(), provider);
+            Surface::restore(window, &previous, &current.content);
         }
     }
 
@@ -114,24 +143,24 @@ impl PaneChooser {
         if current.occupant != hl_extension::port::Occupant::Surface {
             return;
         }
-        if !PaneSwap::can_replace(&current.widget) {
+        if !PaneSwap::can_replace(&current.content) {
             return;
         }
-        let extension = Slots::new(window)
-            .surface(&current.widget)
-            .map(|(_, extension)| extension);
+        let identity = Slots::new(window)
+            .surface(&current.content)
+            .map(|(_, extension, provider)| (extension, provider));
         let Some(terminal) = window.displaced.borrow_mut().remove(&current.slot) else {
             return;
         };
-        Surface::retire(window, &current.widget);
-        Slots::new(window).release(&current.widget);
-        if PaneSwap::replace(&current.widget, terminal.upcast_ref()) {
+        Surface::retire(window, &current.content);
+        Slots::new(window).release(&current.content);
+        if PaneSwap::replace(&current.content, terminal.upcast_ref()) {
             terminal.grab_focus();
             return;
         }
-        if let Some(extension) = extension {
-            Slots::new(window).enrol(&current.widget, current.slot.clone(), extension.clone());
-            Surface::restore(window, &extension, &current.widget);
+        if let Some((extension, provider)) = identity {
+            Slots::new(window).enrol(&current.content, current.slot.clone(), extension.clone(), provider);
+            Surface::restore(window, &extension, &current.content);
         }
         window.displaced.borrow_mut().insert(current.slot, terminal);
     }
@@ -229,13 +258,17 @@ impl PaneWidget {
                 let slot = Slots::new(tw).adopt(pane.slot.as_deref());
                 let (term, pid) = make_terminal_with(tw, pane.cwd.clone(), history, &slot, launcher);
                 pids.push(pid);
-                (term.clone().upcast(), Some(term))
+                (PaneChrome::wrap(tw, &term), Some(term))
             }
             PaneNode::Surface(pane) => {
                 // Reuse the pane's saved slot so an extension addressing its own
                 // pane still finds it after a restart.
                 let slot = Slots::new(tw).adopt(pane.slot.as_deref());
-                (Surface::build(tw, &pane.extension, slot), None)
+                let surface = Surface::build(tw, &pane.extension, pane.provider.as_deref(), slot);
+                if let (Some(provider), Some(gallery)) = (pane.provider.as_deref(), Window::gallery(tw)) {
+                    gallery.select(&pane.extension, provider);
+                }
+                (PaneChrome::wrap(tw, &surface), None)
             }
             PaneNode::Split { dir, ratio, a, b } => {
                 let orient = if *dir == SplitDir::Horizontal {
@@ -352,7 +385,7 @@ impl<'a> Tabs<'a> {
         let tw = self.window;
         let n = tw.shell_no.get() + 1;
         tw.shell_no.set(n);
-        let paneroot = gtk::Overlay::new();
+        let paneroot = gtk::Box::new(gtk::Orientation::Vertical, 0);
         paneroot.set_hexpand(true);
         paneroot.set_vexpand(true);
         // OSC-7: open the new tab in the currently-focused shell's cwd. A brand-new tab gets a fresh slot
@@ -363,8 +396,7 @@ impl<'a> Tabs<'a> {
             .as_ref()
             .and_then(|terminal| Terminal::new(terminal).working_directory());
         let (term, pid) = make_terminal_ex(tw, cwd, None, &Slots::new(tw).allocate());
-        paneroot.set_child(Some(&term));
-        paneroot.add_overlay(&PaneChooser::button(tw));
+        paneroot.append(&PaneChrome::wrap(tw, &term));
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
         tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
@@ -563,7 +595,9 @@ impl<'a> PaneView<'a> {
         if let Some(name) = &page {
             tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         }
-        if PaneSplit::insert(old.upcast_ref::<gtk::Widget>(), orient, new.upcast_ref::<gtk::Widget>()) {
+        let Some(slot) = Slots::new(tw).of(&old) else { return };
+        let wrapped = PaneChrome::wrap(tw, &new);
+        if Panes::divide(tw, &slot, orient, &wrapped) {
             new.grab_focus();
         }
     }

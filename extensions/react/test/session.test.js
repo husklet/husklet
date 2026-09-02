@@ -136,5 +136,32 @@ test('coverage names deep-control protocol gaps without exposing fake methods', 
   const api = workspace({ call() { throw new Error('not called'); } });
   assert.equal(api.renameWorkspace, undefined);
   assert.equal(api.containers.processes, undefined);
-  assert.equal(api.terminal.writeInput, undefined);
+  assert.equal(typeof api.terminal.writeInput, 'function');
+  assert.equal(api.terminal.switchOccupant, undefined);
+});
+
+test('terminal topology, bounded input and grid resize use exact typed calls', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const terminal = workspace(stage.session).terminal;
+  const topology = terminal.topology();
+  const writing = terminal.writeInput('s1', 'echo hello\n');
+  const resizing = terminal.resizeGrid('s1', 120, 40);
+  assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_write_pane', with: { slot: 's1', contents: [...new TextEncoder().encode('echo hello\n')] },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_resize_grid', with: { slot: 's1', columns: 120, rows: 40 },
+  });
+  const tree = { active_tab: 't1', tabs: [] };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await topology, tree);
+  await Promise.all([writing, resizing]);
+  assert.throws(() => terminal.writeInput('s1', new Uint8Array(65_537)), /65536 byte limit/);
+  assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });

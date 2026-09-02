@@ -9,8 +9,8 @@ use std::cell::RefCell;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    HostError, ImageStore, ImageSummary, Occupant, PaneSummary, PaneText, ProcessList, TabSummary, TerminalSurface,
-    WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    GridSize, HostError, ImageStore, ImageSummary, Occupant, PaneSummary, PaneText, ProcessList, TabSummary,
+    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -182,8 +182,17 @@ impl TerminalSurface for Host {
                 working_directory: Some("/root".into()),
                 command: Some("bash".into()),
                 occupant: Occupant::Terminal,
+                provider: None,
             }],
         }])
+    }
+
+    fn topology(&self) -> Result<TerminalTopology, HostError> {
+        self.ledger.note("terminal.topology");
+        Ok(TerminalTopology {
+            active_tab: Some("t1".into()),
+            tabs: Vec::new(),
+        })
     }
 
     fn open_tab(&self, title: &str) -> Result<String, HostError> {
@@ -206,6 +215,16 @@ impl TerminalSurface for Host {
             lines: vec![format!("at most {lines}")],
             truncated: true,
         })
+    }
+
+    fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
+        self.ledger.note("terminal.write");
+        Ok(())
+    }
+
+    fn resize_grid(&self, _slot: &str, _grid: GridSize) -> Result<(), HostError> {
+        self.ledger.note("terminal.resize_grid");
+        Ok(())
     }
 
     fn close(&self, _slot: &str) -> Result<(), HostError> {
@@ -445,6 +464,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ImageWrite,
         ),
         (Request::TerminalTabs, Capability::TerminalRead),
+        (Request::TerminalTopology, Capability::TerminalRead),
         (
             Request::TerminalOpenTab { title: "logs".into() },
             Capability::TerminalControl,
@@ -460,6 +480,21 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::TerminalSpawn {
                 slot: "s1".into(),
                 command: vec!["ls".into()],
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalWritePane {
+                slot: "s1".into(),
+                contents: b"pwd\n".to_vec(),
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalResizeGrid {
+                slot: "s1".into(),
+                columns: 120,
+                rows: 40,
             },
             Capability::TerminalControl,
         ),
@@ -521,6 +556,32 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
             refused_host.ledger.reached()
         );
     }
+}
+
+#[test]
+fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalControl], &[]);
+    let oversized = Request::TerminalWritePane {
+        slot: "s1".into(),
+        contents: vec![0; hl_extension::port::PANE_INPUT_BYTES + 1],
+    };
+    assert!(matches!(
+        session.dispatch(&oversized, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
+
+    let invalid = Request::TerminalResizeGrid {
+        slot: "s1".into(),
+        columns: 0,
+        rows: 24,
+    };
+    assert!(matches!(
+        session.dispatch(&invalid, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, Reply,
-    Services, Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome, Wire, codec,
+    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, Permission,
+    Reply, Services, Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -122,6 +122,7 @@ impl From<io::Error> for Fault {
 fn fault(transit: Transit) -> Fault {
     match transit {
         Transit::Closed => Fault::Socket("the extension closed the connection".to_owned()),
+        Transit::Pending => Fault::Socket("the extension connection unexpectedly had no frame ready".to_owned()),
         Transit::Malformed(reason) => Fault::Malformed(reason.to_string()),
         Transit::Io(detail) => Fault::Socket(detail),
     }
@@ -141,6 +142,7 @@ pub struct Conversation {
     queue: Queue,
     workspace: String,
     settle: Duration,
+    observed: std::collections::BTreeMap<Topic, Snapshot>,
 }
 
 impl Conversation {
@@ -172,6 +174,7 @@ impl Conversation {
             queue,
             workspace: workspace.into(),
             settle: Self::SETTLE,
+            observed: std::collections::BTreeMap::new(),
         })
     }
 
@@ -228,13 +231,49 @@ impl Conversation {
     /// Returns why the conversation ended, except a clean hangup, which is the
     /// ordinary end of a session and is reported as success.
     pub fn serve(&mut self, services: &Services<'_>) -> Result<(), Fault> {
+        const OBSERVE: Duration = Duration::from_millis(250);
+        self.control.set_read_timeout(Some(OBSERVE))?;
         loop {
             match self.wire.receive() {
                 Ok(frame) => self.exchange(&frame, services)?,
+                Err(Transit::Pending) => self.observe(services)?,
                 Err(Transit::Closed) => return Ok(()),
                 Err(other) => return Err(fault(other)),
             }
         }
+    }
+
+    /// Publishes changed full listings for topics backed by real production ports.
+    ///
+    /// Failed reads produce no event: publishing an empty list would falsely
+    /// report that resources disappeared. `publish` retains the existing
+    /// capability check, channel credit, and latest-snapshot coalescing.
+    fn observe(&mut self, services: &Services<'_>) -> Result<(), Fault> {
+        let mut snapshots = Vec::new();
+        if self.session.may_emit(Topic::Containers) {
+            if let Ok(containers) = services.containers.list() {
+                snapshots.push(Snapshot::Containers(containers));
+            }
+        }
+        if self.session.may_emit(Topic::Images) {
+            if let Ok(images) = services.images.list() {
+                snapshots.push(Snapshot::Images(images));
+            }
+        }
+        if self.session.may_emit(Topic::Terminal) {
+            if let Ok(tabs) = services.terminal.tabs() {
+                snapshots.push(Snapshot::Terminal(tabs));
+            }
+        }
+        for snapshot in snapshots {
+            let topic = snapshot.topic();
+            if self.observed.get(&topic) == Some(&snapshot) {
+                continue;
+            }
+            self.publish(&snapshot)?;
+            self.observed.insert(topic, snapshot);
+        }
+        Ok(())
     }
 
     /// Queues a listing for an extension that follows its topic.
@@ -256,7 +295,9 @@ impl Conversation {
         let emission = self
             .subscriptions
             .emit(topic, payload, &self.session, &mut self.channels, &mut self.outbox);
-        self.flush()?;
+        if emission == Emission::Queued {
+            self.flush()?;
+        }
         Ok(emission)
     }
 
@@ -308,6 +349,12 @@ impl Conversation {
 
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
+        if frame.kind == Kind::Credit {
+            if let Some(topic) = self.replenish(frame) {
+                self.carry(topic)?;
+            }
+            return Ok(());
+        }
         let Some(answer) = self.answer(frame, services) else {
             return Ok(());
         };
@@ -323,10 +370,7 @@ impl Conversation {
     fn answer(&mut self, frame: &Frame, services: &Services<'_>) -> Option<Result<Reply, Failure>> {
         match frame.kind {
             Kind::Request => Some(self.call(frame, services)),
-            Kind::Credit => {
-                self.replenish(frame);
-                None
-            }
+            Kind::Credit => None,
             _ => None,
         }
     }
@@ -344,11 +388,20 @@ impl Conversation {
     /// Returns the credit a peer released as it consumed frames. A payload that
     /// is not a count, or a channel that has since closed, is ignored: stale
     /// credit is ordinary on a channel the host already tore down.
-    fn replenish(&mut self, frame: &Frame) {
+    fn replenish(&mut self, frame: &Frame) -> Option<Topic> {
         let Ok(frames) = serde_json::from_slice::<u32>(&frame.payload) else {
-            return;
+            return None;
         };
-        let _ = self.channels.replenish(frame.channel, frames);
+        self.channels.replenish(frame.channel, frames).ok()?;
+        let topic = self
+            .session
+            .topics()
+            .into_iter()
+            .find(|topic| self.subscriptions.channel(*topic) == Some(frame.channel))?;
+        if self.outbox.depth(frame.channel) == 0 {
+            return None;
+        }
+        matches!(self.channels.reserve(frame.channel), Ok(Permission::Send)).then_some(topic)
     }
 
     /// Writes the answer to one call.
@@ -411,11 +464,11 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, codec,
+        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
+        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
-    use super::{Compatibility, Conversation, Fault, Queue};
+    use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
 
     /// What the adapters were actually asked for, so a refusal that still
     /// reached a service would be visible rather than silent.
@@ -507,6 +560,7 @@ mod tests {
                     working_directory: None,
                     command: None,
                     occupant: hl_extension::port::Occupant::Terminal,
+                    provider: None,
                 }],
             }])
         }
@@ -664,6 +718,100 @@ mod tests {
         assert_eq!(ledger.reached(), vec!["containers.list"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()), "a hangup is not a fault");
+    }
+
+    #[test]
+    fn a_production_subscription_receives_changed_full_snapshots_without_duplicates() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(650)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Containers,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+
+        let event = wire.receive().expect("initial production snapshot");
+        assert_eq!(event.kind, Kind::Event);
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::Containers(containers) if containers.len() == 1));
+
+        assert_eq!(
+            wire.receive(),
+            Err(Transit::Pending),
+            "an unchanged listing is observed but not published again"
+        );
+        assert!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "containers.list")
+                .count()
+                >= 2,
+            "the absence of a duplicate is from equality, not a stopped producer"
+        );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn production_publication_waits_for_returned_credit_and_releases_the_latest_snapshot() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("peer deadline");
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::Containers);
+        let snapshot = |created| {
+            Snapshot::Containers(vec![ContainerSummary {
+                id: "c1".into(),
+                name: "api".into(),
+                image: "image".into(),
+                state: "running".into(),
+                created,
+            }])
+        };
+
+        for created in 0..hl_extension::Channels::CREDIT {
+            assert_eq!(
+                conversation.publish(&snapshot(i64::from(created))),
+                Ok(Emission::Queued)
+            );
+        }
+        assert_eq!(conversation.publish(&snapshot(99)), Ok(Emission::Superseded));
+        let channel = conversation
+            .subscriptions
+            .channel(hl_extension::Topic::Containers)
+            .expect("subscription route");
+        assert_eq!(conversation.outbox.depth(channel), 1, "only the latest state waits");
+
+        let mut peer = Wire::new(theirs);
+        for _ in 0..hl_extension::Channels::CREDIT {
+            assert_eq!(peer.receive().expect("credited event").kind, Kind::Event);
+        }
+        assert_eq!(
+            peer.receive(),
+            Err(Transit::Pending),
+            "the uncredited event was not sent"
+        );
+
+        let credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&1_u32).expect("credit"));
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+        conversation
+            .exchange(&credit, &services(&host))
+            .expect("credit returned");
+        let released = peer.receive().expect("latest event released");
+        let latest: Snapshot = serde_json::from_slice(&released.payload).expect("snapshot");
+        assert!(matches!(latest, Snapshot::Containers(containers) if containers[0].created == 99));
     }
 
     #[test]

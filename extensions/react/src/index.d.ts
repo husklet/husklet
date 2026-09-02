@@ -4064,9 +4064,16 @@ export interface PaneSummary {
   working_directory: string | null;
   command: string | null;
   occupant: 'terminal' | 'surface';
+  provider: { extension: string; provider: string } | null;
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
 export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface GridSize { columns: number; rows: number }
+export type LayoutNode =
+  | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
+  | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
+export interface TabTopology { id: string; title: string; root: LayoutNode }
+export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
 export interface FileEntry { path: string; directory: boolean; size: number }
 export interface VolumeSummary { name: string; driver: string; size: number }
 export interface NetworkSummary { name: string; driver: string; scope: string }
@@ -4118,10 +4125,13 @@ export interface WorkspaceApi {
   images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
   terminal: {
     tabs(): Promise<TabSummary[]>;
+    topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
     split(slot: string, division: Division): Promise<string>;
     spawn(slot: string, command: string[]): Promise<void>;
     read(slot: string, lines?: number): Promise<PaneText>;
+    writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
+    resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
     focus(slot: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;
@@ -4140,14 +4150,14 @@ export const protocolCoverage: Readonly<{
     workspace: readonly ('info' | 'list' | 'inspect' | 'create' | 'update' | 'delete' | 'start' | 'stop' | 'restart')[];
     containers: readonly ('list' | 'inspect' | 'create' | 'start' | 'stop' | 'remove')[];
     images: readonly ('list' | 'pull')[];
-    terminal: readonly ('tabs' | 'openTab' | 'split' | 'spawn' | 'read' | 'close' | 'focus' | 'ratio')[];
+    terminal: readonly ('tabs' | 'topology' | 'openTab' | 'split' | 'spawn' | 'read' | 'writeInput' | 'resizeGrid' | 'close' | 'focus' | 'ratio')[];
     files: readonly ('list' | 'read' | 'write')[];
     interfaceEvents: readonly ('invoke' | 'submit' | 'change' | 'select')[];
   }>;
   unavailable: Readonly<{
     workspace: readonly ('renameWhileUpdating' | 'mutateWhileRunning' | 'controlHostingWorkspace')[];
     containers: readonly ('processes' | 'exec' | 'logs' | 'pause' | 'unpause' | 'restart' | 'kill')[];
-    terminal: readonly ('writeInput' | 'resizeGrid' | 'switchOccupant' | 'paneProviders')[];
+    terminal: readonly 'switchOccupant'[];
     events: readonly ('hostSnapshots' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];
   }>;
 }>;

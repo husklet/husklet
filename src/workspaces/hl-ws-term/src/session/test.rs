@@ -236,6 +236,7 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
                 })),
                 b: Box::new(PaneNode::Surface(SurfacePane {
                     extension: "sample".to_string(),
+                    provider: Some("database".to_string()),
                     slot: Some("1".to_string()),
                 })),
             },
@@ -243,8 +244,11 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
     };
 
     let parsed = Session::parse(&session.serialize()).expect("a layout with a surface pane");
+    assert_eq!(
+        parsed, session,
+        "provider identity survives beside the stable pane slot"
+    );
 
-    assert_eq!(parsed, session);
     assert_eq!(
         parsed.tabs[0].root.leaves().len(),
         1,

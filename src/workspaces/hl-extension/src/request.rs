@@ -9,7 +9,7 @@ use hl_rpc::{CapabilityKey, RelativePath};
 use crate::capability::Capability;
 use crate::port::{
     ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageSummary, PaneText,
-    ProcessList, TabSummary, WorkspaceConfiguration, WorkspaceState,
+    ProcessList, TabSummary, TerminalTopology, WorkspaceConfiguration, WorkspaceState,
 };
 
 /// A call from an extension.
@@ -99,6 +99,7 @@ pub enum Request {
         reference: String,
     },
     TerminalTabs,
+    TerminalTopology,
     TerminalOpenTab {
         title: String,
     },
@@ -113,6 +114,15 @@ pub enum Request {
     TerminalReadPane {
         slot: String,
         lines: Option<usize>,
+    },
+    TerminalWritePane {
+        slot: String,
+        contents: Vec<u8>,
+    },
+    TerminalResizeGrid {
+        slot: String,
+        columns: u16,
+        rows: u16,
     },
     TerminalClosePane {
         slot: String,
@@ -184,10 +194,12 @@ impl Request {
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList => Capability::ImageRead,
             Self::ImagePull { .. } => Capability::ImageWrite,
-            Self::TerminalTabs => Capability::TerminalRead,
+            Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::TerminalOpenTab { .. }
             | Self::TerminalSplit { .. }
             | Self::TerminalSpawn { .. }
+            | Self::TerminalWritePane { .. }
+            | Self::TerminalResizeGrid { .. }
             | Self::TerminalClosePane { .. }
             | Self::TerminalFocusPane { .. }
             | Self::TerminalRatio { .. } => Capability::TerminalControl,
@@ -287,6 +299,7 @@ pub enum Reply {
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
     Tabs(Vec<TabSummary>),
+    Topology(TerminalTopology),
     Text(PaneText),
     Entries(Vec<Entry>),
     Contents(Vec<u8>),

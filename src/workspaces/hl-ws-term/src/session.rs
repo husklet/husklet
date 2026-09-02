@@ -65,6 +65,8 @@ pub struct Pane {
 pub struct SurfacePane {
     /// The extension whose interface belongs in this pane.
     pub extension: String,
+    /// Named provider drawn here; absent for layouts written before providers.
+    pub provider: Option<String>,
     /// Stable per-pane layout identity persisted across close and reopen.
     pub slot: Option<String>,
 }
@@ -105,7 +107,11 @@ impl PaneNode {
             }
             Self::Surface(pane) => {
                 out.push_str("surface ");
-                out.push_str(&Layout::escape(&pane.extension));
+                let identity = pane.provider.as_ref().map_or_else(
+                    || pane.extension.clone(),
+                    |provider| format!("{}@{provider}", pane.extension),
+                );
+                out.push_str(&Layout::escape(&identity));
                 out.push(' ');
                 out.push_str(&Layout::escape(pane.slot.as_deref().unwrap_or("-")));
             }
@@ -316,16 +322,24 @@ impl<'a> Layout<'a> {
                 }))
             }
             "surface" => {
-                let extension = Self::value(
+                let identity = Self::value(
                     self.next()
                         .ok_or_else(|| Layout::invalid("surface is missing its extension"))?,
                 )
                 .ok_or_else(|| Layout::invalid("surface is missing its extension"))?;
+                let (extension, provider) = identity.split_once('@').map_or_else(
+                    || (identity.clone(), None),
+                    |(extension, provider)| (extension.to_owned(), Some(provider.to_owned())),
+                );
                 let slot = Self::value(
                     self.next()
                         .ok_or_else(|| Layout::invalid("surface is missing its slot"))?,
                 );
-                Ok(PaneNode::Surface(SurfacePane { extension, slot }))
+                Ok(PaneNode::Surface(SurfacePane {
+                    extension,
+                    provider,
+                    slot,
+                }))
             }
             direction @ ("hsplit" | "vsplit") => {
                 let dir = if direction == "hsplit" {

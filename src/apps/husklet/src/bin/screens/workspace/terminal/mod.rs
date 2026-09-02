@@ -53,14 +53,16 @@ pub(crate) struct SurfaceRegistration {
     /// The extension whose interface belongs in this pane, which is what a
     /// restored layout has to name.
     extension: String,
+    provider: Option<String>,
 }
 
 impl SurfaceRegistration {
-    pub(crate) fn new(widget: &gtk::Widget, slot: String, extension: String) -> Self {
+    pub(crate) fn new(widget: &gtk::Widget, slot: String, extension: String, provider: Option<String>) -> Self {
         Self {
             widget: widget.downgrade(),
             slot,
             extension,
+            provider,
         }
     }
 }
@@ -278,7 +280,7 @@ impl Window {
     /// A surface pane answers `None`: it holds no shell, and a caller asking to
     /// type into one is asking for something that is not there.
     pub(crate) fn pane(window: &Rc<TermWin>, slot: &str) -> Option<vte4::Terminal> {
-        Panes::at(window, slot)?.widget.downcast::<vte4::Terminal>().ok()
+        Panes::at(window, slot)?.content.downcast::<vte4::Terminal>().ok()
     }
 
     /// A fresh pane identity, for a pane this window is about to build.
@@ -296,10 +298,17 @@ impl Window {
         window.gallery.borrow().clone()
     }
 
-    /// Number of live shells retained behind provider surfaces.
-    #[cfg(test)]
-    pub(crate) fn displaced(window: &Rc<TermWin>) -> usize {
-        window.displaced.borrow().len()
+    pub(crate) fn tab_title(window: &Rc<TermWin>, name: &str) -> Option<String> {
+        window
+            .entries
+            .borrow()
+            .iter()
+            .find(|entry| entry.name == name)
+            .map(TabEntry::title)
+    }
+
+    pub(crate) fn active_tab(window: &Rc<TermWin>) -> Option<String> {
+        window.stack.visible_child_name().map(|name| name.to_string())
     }
 
     /// A window with no application behind it, for scenarios about panes.

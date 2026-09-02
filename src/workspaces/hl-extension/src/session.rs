@@ -9,8 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ImageStore, TerminalSurface, WorkspaceControl,
-    WorkspaceFiles, WorkspaceInventory,
+    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, TerminalSurface,
+    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -113,10 +113,13 @@ impl Session {
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList | Request::ImagePull { .. } => self.images(request, services),
             Request::TerminalTabs
+            | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
             | Request::TerminalSplit { .. }
             | Request::TerminalSpawn { .. }
             | Request::TerminalReadPane { .. }
+            | Request::TerminalWritePane { .. }
+            | Request::TerminalResizeGrid { .. }
             | Request::TerminalClosePane { .. }
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRatio { .. } => self.terminal(request, services),
@@ -226,12 +229,16 @@ impl Session {
     }
 
     fn terminal(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
-        if matches!(request, Request::TerminalTabs) {
+        if matches!(request, Request::TerminalTabs | Request::TerminalTopology) {
             let port = self
                 .peer
                 .authority()
                 .port(Capability::TerminalRead, services.terminal)?;
-            return Ok(Reply::Tabs(port.tabs()?));
+            return match request {
+                Request::TerminalTabs => Ok(Reply::Tabs(port.tabs()?)),
+                Request::TerminalTopology => Ok(Reply::Topology(port.topology()?)),
+                _ => unreachable!(),
+            };
         }
         if let Request::TerminalReadPane { slot, lines } = request {
             return self.text(slot, *lines, services);
@@ -249,6 +256,30 @@ impl Session {
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalWritePane { slot, contents } => {
+                if contents.len() > PANE_INPUT_BYTES {
+                    return Err(Failure::Conflict {
+                        detail: format!("terminal input exceeds the {PANE_INPUT_BYTES} byte limit"),
+                    });
+                }
+                port.write(slot, contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalResizeGrid { slot, columns, rows } => {
+                if *columns == 0 || *rows == 0 || *columns > PANE_GRID_EDGE || *rows > PANE_GRID_EDGE {
+                    return Err(Failure::Conflict {
+                        detail: format!("terminal grid must be within 1..={PANE_GRID_EDGE} rows and columns"),
+                    });
+                }
+                port.resize_grid(
+                    slot,
+                    GridSize {
+                        columns: *columns,
+                        rows: *rows,
+                    },
+                )
+                .map(|()| Reply::Done)
+                .map_err(Failure::from)
             }
             Request::TerminalClosePane { slot } => port.close(slot).map(|()| Reply::Done).map_err(Failure::from),
             Request::TerminalFocusPane { slot } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),

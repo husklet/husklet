@@ -41,6 +41,7 @@ impl From<Transit> for Outcome {
     fn from(transit: Transit) -> Self {
         match transit {
             Transit::Closed => Self::Closed,
+            Transit::Pending => Self::Transit("the host did not finish a frame".into()),
             Transit::Malformed(malformed) => Self::Malformed(malformed.to_string()),
             Transit::Io(detail) => Self::Transit(detail),
         }
