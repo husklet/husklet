@@ -402,7 +402,7 @@ impl Console {
         if command.is_empty() {
             return Err(HostError::Conflict("no command was given".to_owned()));
         }
-        terminal.feed_child(format!("{}\n", command.join(" ")).as_bytes());
+        terminal.feed_child(shell_command(command).as_bytes());
         Ok(())
     }
 
@@ -412,6 +412,52 @@ impl Console {
             .into_iter()
             .flat_map(|(_, _, slots)| slots)
             .collect()
+    }
+}
+
+/// Encodes argv as one command for the pane's existing POSIX shell without
+/// allowing argument bytes to become shell syntax. The protocol has already
+/// rejected NUL, which is the only byte a shell word cannot carry.
+fn shell_command(command: &[String]) -> String {
+    let words = command
+        .iter()
+        .map(|argument| format!("'{}'", argument.replace('\'', "'\"'\"'")));
+    format!("{}\n", words.collect::<Vec<_>>().join(" "))
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::shell_command;
+
+    #[test]
+    fn exact_argv_cannot_add_shell_syntax() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let marker = scratch.path().join("injected");
+        let substitution = format!("$(touch {})", marker.display());
+        let command = vec![
+            "printf".to_owned(),
+            "<%s><%s><%s><%s>".to_owned(),
+            "two words".to_owned(),
+            substitution.clone(),
+            "single'quote".to_owned(),
+            String::new(),
+        ];
+        let line = shell_command(&command);
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", line.trim_end_matches('\n')])
+            .output()
+            .expect("run encoded argv");
+
+        assert!(
+            output.status.success(),
+            "shell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("UTF-8 output"),
+            format!("<two words><{substitution}><single'quote><>")
+        );
+        assert!(!marker.exists(), "an argument became executable shell syntax");
     }
 }
 
