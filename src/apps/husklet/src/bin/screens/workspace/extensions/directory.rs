@@ -139,11 +139,25 @@ impl Catalogue {
     /// Nothing is recorded and nothing is asked yet: this only reads.
     pub fn inspect(self: &Rc<Self>) {
         let reference = self.reference.text().trim().to_owned();
+        self.forget();
         if reference.is_empty() {
-            self.say("type the image to register first");
+            self.say("Enter a Docker Hub image, for example acme/my-extension:1.2.3");
             return;
         }
-        self.forget();
+        if reference.len() > 512 {
+            self.say("Image references must be 512 characters or fewer");
+            return;
+        }
+        let reference = match reference.parse::<hl_images::Reference>() {
+            Ok(reference) => reference.to_string(),
+            Err(_) => {
+                self.say(
+                    "That is not a valid image reference. Try acme/my-extension:1.2.3 or acme/my-extension@sha256:…",
+                );
+                return;
+            }
+        };
+        self.reference.set_text(&reference);
         self.say(&format!("reading {reference}"));
         self.reference.set_sensitive(false);
         self.inspect.set_sensitive(false);
@@ -279,7 +293,10 @@ impl Catalogue {
                 self.shelf.refresh(&candidate.manifest.name);
                 self.forget();
                 self.refresh();
-                self.say(&format!("{} was updated", candidate.manifest.name));
+                self.say(&format!(
+                    "{} was updated from {} at {}",
+                    candidate.manifest.name, candidate.reference, candidate.digest
+                ));
             }
         }
     }
@@ -308,7 +325,10 @@ impl Catalogue {
         }
         self.forget();
         self.refresh();
-        self.say(&format!("{} is installed and disabled", candidate.manifest.name));
+        self.say(&format!(
+            "{} is installed and disabled from {} at {}",
+            candidate.manifest.name, candidate.reference, candidate.digest
+        ));
     }
 
     /// Shows what an image asks for, and asks.
@@ -318,7 +338,10 @@ impl Catalogue {
             &format!("{} {} — {}", manifest.name, manifest.version, manifest.display_name),
             "dhead",
         ));
-        self.proposal.append(&text(&candidate.digest, "fhint"));
+        self.proposal
+            .append(&text(&format!("Image: {}", candidate.reference), "fhint"));
+        self.proposal
+            .append(&text(&format!("Digest: {}", candidate.digest), "fhint"));
         let summary = Summary::of(&manifest.capabilities);
         if summary.execution {
             self.proposal.append(&text(Summary::EXECUTION_NOTICE, "fhint"));
@@ -500,7 +523,8 @@ impl Catalogue {
         self.widget.append(&self.listing);
         self.widget.append(&text("Register an image", "dhead"));
         self.reference.add_css_class(REFERENCE);
-        self.reference.set_placeholder_text(Some("image reference"));
+        self.reference
+            .set_placeholder_text(Some("Docker Hub image, e.g. acme/my-extension:1.2.3"));
         self.semantics.register(
             "extensions/reference",
             "textbox",
@@ -530,6 +554,10 @@ impl Catalogue {
             });
         }
         self.widget.append(&self.reference);
+        self.widget.append(&text(
+            "Docker Hub examples: acme/my-extension:1.2.3 · acme/my-extension@sha256:…",
+            "dhint",
+        ));
         self.inspect.add_css_class(INSPECT);
         let page = Rc::clone(self);
         self.inspect.connect_clicked(move |_| page.inspect());

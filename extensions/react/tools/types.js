@@ -15,8 +15,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const CATALOGUE = path.resolve(here, '../catalogue.json');
-const DECLARATIONS = path.resolve(here, '../src/index.d.ts');
+const CATALOGUE = process.env.HUSKLET_CATALOGUE ?? path.resolve(here, '../catalogue.json');
+const DECLARATIONS = process.env.HUSKLET_DECLARATIONS ?? path.resolve(here, '../src/index.d.ts');
 
 /** The value shapes a property accepts, as the TypeScript that describes them. */
 const SHAPES = {
@@ -269,6 +269,7 @@ export interface WorkspaceApi {
     processes(id: string): Promise<ProcessList>;
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
+    signalExecution(id: string, signal: string): Promise<void>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;
@@ -313,6 +314,9 @@ export interface WorkspaceApi {
     list(path: string): Promise<FileEntry[]>;
     read(path: string): Promise<number[]>;
     write(path: string, contents: Iterable<number>): Promise<void>;
+    mkdir(path: string): Promise<void>;
+    rename(from: string, to: string): Promise<void>;
+    remove(path: string): Promise<void>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;

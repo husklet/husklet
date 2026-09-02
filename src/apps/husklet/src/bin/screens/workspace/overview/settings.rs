@@ -67,7 +67,7 @@ impl Overview<'_> {
         main.append(&sections);
 
         Self::populate(&form, workspace);
-        let save = Self::save_row(Rc::clone(&form));
+        let save = Self::save_row(Rc::clone(&form), workspace.clone());
         main.append(&save.0);
         Self::register_semantics(semantics, &form, &save.1, workspace);
 
@@ -183,10 +183,10 @@ impl Overview<'_> {
         scrollback.map_or_else(|| "unlimited".to_owned(), |lines| lines.to_string())
     }
 
-    fn save_row(form: Rc<Form>) -> (gtk::Box, gtk::Button) {
+    fn save_row(form: Rc<Form>, initial: WorkspaceConfig) -> (gtk::Box, gtk::Button) {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("settings-save-row");
-        let status = gtk::Label::new(None);
+        let status = gtk::Label::new(Some("No unsaved changes."));
         status.add_css_class("fhint");
         status.set_xalign(0.0);
         status.set_hexpand(true);
@@ -195,14 +195,25 @@ impl Overview<'_> {
         save.add_css_class("btn");
         save.add_css_class("primary");
         save.set_halign(gtk::Align::End);
+        save.set_sensitive(false);
+        let saved = Rc::new(RefCell::new(initial));
+        let dirty = Rc::new(Cell::new(false));
         {
             let status = status.clone();
+            let save_button = save.clone();
+            let form = Rc::clone(&form);
+            let saved = Rc::clone(&saved);
+            let dirty = Rc::clone(&dirty);
             save.connect_clicked(move |_| {
-                let result = form
-                    .configuration()
-                    .and_then(|workspace| WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace));
+                let result = form.configuration().and_then(|workspace| {
+                    WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace.clone())?;
+                    Ok(workspace)
+                });
                 match result {
-                    Ok(()) => {
+                    Ok(workspace) => {
+                        *saved.borrow_mut() = workspace;
+                        dirty.set(false);
+                        save_button.set_sensitive(false);
                         status.remove_css_class("err");
                         status.set_text("Saved — applies to newly-opened tabs (⌘T) and future launches.");
                     }
@@ -211,6 +222,25 @@ impl Overview<'_> {
                         status.set_text(&error.to_string());
                     }
                 }
+            });
+        }
+        {
+            let save = save.downgrade();
+            let status = status.clone();
+            gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+                let Some(save) = save.upgrade() else {
+                    return gtk::glib::ControlFlow::Break;
+                };
+                let changed = form
+                    .configuration()
+                    .map_or(true, |current| current != *saved.borrow());
+                if changed != dirty.get() {
+                    dirty.set(changed);
+                    save.set_sensitive(changed);
+                    status.remove_css_class("err");
+                    status.set_text(if changed { "Unsaved changes." } else { "No unsaved changes." });
+                }
+                gtk::glib::ControlFlow::Continue
             });
         }
 
@@ -299,6 +329,9 @@ impl Overview<'_> {
             &[ActionKind::Invoke],
             Rc::new(move |_, _| button.emit_clicked()),
         );
+        semantics.set_disabled("settings/save", !save.is_sensitive());
+        let registry = semantics.clone();
+        save.connect_sensitive_notify(move |button| registry.set_disabled("settings/save", !button.is_sensitive()));
     }
 }
 
@@ -485,7 +518,7 @@ mod tests {
             use crate::screens::workspace::semantic::{Action, ActionKind, Registry};
             let workspace = WorkspaceConfig::new("semantic", "alpine:3.20", Arch::Amd64);
             let registry = Registry::new("workspace");
-            let _page = Overview::new(&workspace, None).settings(&registry);
+            let page = Overview::new(&workspace, None).settings(&registry);
             let snapshot = registry.snapshot();
             let labels: Vec<_> = snapshot
                 .root
@@ -510,6 +543,16 @@ mod tests {
                 .iter()
                 .find(|node| node.label.as_deref() == Some("Default shell"))
                 .unwrap();
+            let save = descendants(page.upcast_ref())
+                .into_iter()
+                .find_map(|widget| {
+                    widget
+                        .downcast::<gtk::Button>()
+                        .ok()
+                        .filter(|button| button.label().as_deref() == Some("Save changes"))
+                })
+                .expect("settings has a save action");
+            assert!(!save.is_sensitive(), "unchanged settings cannot be redundantly saved");
             registry
                 .act(&Action {
                     revision: snapshot.revision,
@@ -518,6 +561,12 @@ mod tests {
                     value: Some("/bin/zsh -l".to_owned()),
                 })
                 .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while !save.is_sensitive() && std::time::Instant::now() < deadline {
+                gtk::glib::MainContext::default().iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(save.is_sensitive(), "editing a setting exposes the pending save");
             let changed = registry.snapshot();
             assert!(changed.revision > snapshot.revision);
             assert_eq!(
@@ -528,6 +577,16 @@ mod tests {
                     .find(|node| node.id == shell.id)
                     .and_then(|node| node.value.as_deref()),
                 Some("/bin/zsh -l")
+            );
+            assert!(
+                !changed
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.label.as_deref() == Some("Save changes"))
+                    .expect("save semantics remain live")
+                    .disabled,
+                "assistive actions see that saving is now available"
             );
         }) {
             eprintln!("skipped: no display connection");

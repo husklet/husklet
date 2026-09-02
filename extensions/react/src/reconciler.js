@@ -6,10 +6,10 @@
 
 import Reconciler from 'react-reconciler';
 import { DefaultEventPriority } from 'react-reconciler/constants.js';
-import catalogue from './catalogue.json' with { type: 'json' };
+import catalogue from '../catalogue.json' with { type: 'json' };
 import { ROOT, children, partition, same } from './protocol.js';
 
-const TAGS = new Map(catalogue.tags.map((entry) => [entry.tag, entry]));
+const TAGS = new Map(catalogue.tags.map((entry) => [entry.name, entry]));
 
 /**
  * Collects patches and hands them over one frame at a time.

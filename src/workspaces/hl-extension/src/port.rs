@@ -436,6 +436,14 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Delivers a validated signal to one additional execution, without
+    /// signaling its owning container.
+    fn execution_kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "execution signaling is unsupported by this host".into(),
+        ))
+    }
+
     /// Starts an additional process detached from the extension connection and
     /// returns its durable exec identity.
     fn execute(
@@ -649,6 +657,18 @@ pub trait WorkspaceFiles {
     /// # Errors
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
+
+    fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
+        Err(HostError::Unsupported("directory creation is unavailable".into()))
+    }
+
+    fn rename(&self, _from: &RelativePath, _to: &RelativePath) -> Result<(), HostError> {
+        Err(HostError::Unsupported("filesystem rename is unavailable".into()))
+    }
+
+    fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
+        Err(HostError::Unsupported("filesystem removal is unavailable".into()))
+    }
 }
 
 #[cfg(test)]

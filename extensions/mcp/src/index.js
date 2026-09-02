@@ -7,6 +7,39 @@ export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
 const path = z.string().min(1).max(4096);
+const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
+const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
+const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
+  if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
+  const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
+  if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
+});
+const nullable = (schema) => schema.nullable();
+const absolutePath = z.string().min(1).max(4096).startsWith('/');
+const workspaceConfiguration = z.object({
+  name: z.string().min(1).max(128).refine((value) => value.trim() === value),
+  image: imageReference,
+  architecture: z.enum(['arm64', 'amd64']),
+  storage: nullable(absolutePath),
+  shell: nullable(z.string().max(4096)),
+  cpus: nullable(z.number().int().min(1).max(1024)),
+  memory_mb: nullable(z.number().int().min(1).max(1024 * 1024)),
+  environment: z.array(z.tuple([z.string().min(1).max(256), z.string().max(8192)])).max(256),
+  mounts: z.array(z.object({ host: absolutePath, container: absolutePath, read_only: z.boolean() }).strict()).max(128),
+  docker_socket: z.boolean(),
+  scrollback: nullable(z.number().int().min(0).max(10_000_000)),
+  vpn: nullable(z.string().min(1).max(2048)),
+  execution_lifetime: z.enum(['persisted', 'live', 'ephemeral']),
+  terminal: z.object({
+    font_family: nullable(z.string().min(1).max(256)), font_size: nullable(z.number().int().min(1).max(256)),
+    foreground: nullable(z.string().max(64)), background: nullable(z.string().max(64)),
+    cursor_shape: nullable(z.string().max(64)), cursor_blink: nullable(z.boolean()),
+  }).strict(),
+}).strict();
+const workspaceUpdate = z.object({ name: id, configuration: workspaceConfiguration, confirm: z.literal(true) }).strict()
+  .superRefine(({ name, configuration }, context) => {
+    if (name !== configuration.name) context.addIssue({ code: z.ZodIssueCode.custom, message: 'renaming a workspace is not supported' });
+  });
 const empty = z.object({}).strict();
 const slot = z.object({ slot: id }).strict();
 const define = (name, description, inputSchema, run) => ({ name, description, inputSchema, run: async (input) => result(await run(input)) });
@@ -16,25 +49,52 @@ export function tools(api) {
     define('husklet_workspace_info', 'Describe the hosting workspace.', empty, () => api.info()),
     define('husklet_workspace_list', 'List bounded workspace summaries.', empty, () => api.list()),
     define('husklet_workspace_inspect', 'Inspect one named workspace.', z.object({ name: id }).strict(), ({ name }) => api.inspect(name)),
+    define('husklet_workspace_create', 'Create one workspace from a complete bounded configuration.', z.object({ configuration: workspaceConfiguration }).strict(), ({ configuration }) => api.create(configuration)),
+    define('husklet_workspace_update', 'Replace a stopped workspace configuration after explicit confirmation; renaming is not supported.', workspaceUpdate, ({ name, configuration }) => api.update(name, configuration)),
     ...['start', 'stop', 'restart'].map((action) => define(`husklet_workspace_${action}`, `${action} a named workspace.`, z.object({ name: id }).strict(), async ({ name }) => { await api[action](name); return { done: true }; })),
     define('husklet_workspace_delete', 'Delete a stopped workspace after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.delete(name); return { done: true }; }),
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
+    define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
+    define('husklet_execution_signal', 'Signal one execution without signaling its owning container.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
+    define('husklet_container_create', 'Create a container from an image already present in this workspace; this never pulls an image.', z.object({ image: imageReference, name: containerName }).strict(), ({ image, name }) => api.containers.create(image, name)),
+    define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: z.string().min(1).max(256).optional(), working_directory: z.string().min(1).max(4096).startsWith('/').optional() }).strict(), ({ id: value, command: argv, user, working_directory: workingDirectory }) => api.containers.exec(value, { command: argv, user, workingDirectory })),
     ...['start', 'stop', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_remove', 'Remove one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
     define('husklet_container_kill', 'Signal one container; signal must be explicit.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
+    define('husklet_volume_list', 'List bounded local volume summaries.', empty, () => api.volumes.list()),
+    define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.inspect(name)),
+    define('husklet_volume_create', 'Create one named local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.create(name)),
+    define('husklet_volume_remove', 'Remove one volume after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.volumes.remove(name); return { done: true }; }),
+    define('husklet_network_list', 'List bounded local network summaries.', empty, () => api.networks.list()),
+    define('husklet_network_inspect', 'Inspect one local network.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference)),
+    define('husklet_network_create', 'Create one named local network.', z.object({ name: id }).strict(), ({ name }) => api.networks.create(name)),
+    define('husklet_network_remove', 'Remove one network after explicit confirmation.', z.object({ reference: id, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.networks.remove(reference); return { done: true }; }),
+    define('husklet_network_connect', 'Connect one container to a network.', z.object({ reference: id, container: id }).strict(), async ({ reference, container }) => { await api.networks.connect(reference, container); return { done: true }; }),
+    define('husklet_network_disconnect', 'Disconnect one container from a network after explicit confirmation.', z.object({ reference: id, container: id, confirm: z.literal(true) }).strict(), async ({ reference, container }) => { await api.networks.disconnect(reference, container); return { done: true }; }),
+    define('husklet_image_list', 'List bounded local image summaries.', empty, () => api.images.list()),
+    define('husklet_image_inspect', 'Inspect one local image.', z.object({ reference: id }).strict(), ({ reference }) => api.images.inspect(reference)),
+    define('husklet_image_pull', 'Pull one explicit image reference.', z.object({ reference: id }).strict(), ({ reference }) => api.images.pull(reference)),
+    define('husklet_image_remove', 'Remove one image after explicit confirmation.', z.object({ reference: id, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
+    define('husklet_image_prune', 'Prune unused images after explicit confirmation.', z.object({ confirm: z.literal(true) }).strict(), () => api.images.prune()),
     define('husklet_terminal_tabs', 'List terminal tabs.', empty, () => api.terminal.tabs()),
     define('husklet_terminal_topology', 'Read terminal split topology.', empty, () => api.terminal.topology()),
     define('husklet_terminal_read', 'Read at most 500 lines from one pane.', z.object({ slot: id, lines: z.number().int().min(1).max(500) }).strict(), ({ slot: value, lines }) => api.terminal.read(value, lines)),
     define('husklet_terminal_write', 'Write bounded literal input to a pane; this does not spawn a shell command.', z.object({ slot: id, input: z.string().max(8192) }).strict(), async ({ slot: value, input }) => { await api.terminal.writeInput(value, input); return { done: true }; }),
     define('husklet_terminal_open', 'Open a terminal tab.', z.object({ title: z.string().max(256).optional() }).strict(), ({ title }) => api.terminal.openTab(title ?? null)),
-    define('husklet_terminal_split', 'Split a pane in an explicit direction.', z.object({ slot: id, division: z.enum(['horizontal', 'vertical']) }).strict(), ({ slot: value, division }) => api.terminal.split(value, division)),
+    define('husklet_terminal_split', 'Split a pane beside or below the selected pane.', z.object({ slot: id, division: z.enum(['beside', 'below']) }).strict(), ({ slot: value, division }) => api.terminal.split(value, division)),
     define('husklet_terminal_focus', 'Focus one pane.', slot, async ({ slot: value }) => { await api.terminal.focus(value); return { done: true }; }),
+    define('husklet_terminal_resize', 'Request a bounded terminal grid size.', z.object({ slot: id, columns: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }).strict(), async ({ slot: value, columns, rows }) => { await api.terminal.resizeGrid(value, columns, rows); return { done: true }; }),
+    define('husklet_terminal_ratio', 'Set the pane share of its split.', z.object({ slot: id, ratio: z.number().min(0.05).max(0.95) }).strict(), async ({ slot: value, ratio }) => { await api.terminal.ratio(value, ratio); return { done: true }; }),
+    define('husklet_terminal_close', 'Close one pane after explicit confirmation.', z.object({ slot: id, confirm: z.literal(true) }).strict(), async ({ slot: value }) => { await api.terminal.close(value); return { done: true }; }),
     define('husklet_file_list', 'List a workspace-relative directory.', z.object({ path }).strict(), ({ path: value }) => api.files.list(value)),
     define('husklet_file_read', 'Read one bounded workspace-relative file.', z.object({ path }).strict(), ({ path: value }) => api.files.read(value)),
     define('husklet_file_write', 'Write bounded UTF-8 contents to a workspace-relative file.', z.object({ path, contents: z.string().max(64 * 1024) }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
+    define('husklet_file_mkdir', 'Create one workspace-relative directory.', z.object({ path }).strict(), async ({ path: value }) => { await api.files.mkdir(value); return { done: true }; }),
+    define('husklet_file_rename', 'Rename one workspace-relative entry without overwriting.', z.object({ from: path, to: path }).strict(), async ({ from, to }) => { await api.files.rename(from, to); return { done: true }; }),
+    define('husklet_file_remove', 'Remove one file or empty directory after explicit confirmation.', z.object({ path, confirm: z.literal(true) }).strict(), async ({ path: value }) => { await api.files.remove(value); return { done: true }; }),
   ];
   if (typeof api.watchPaneChanges === 'function') definitions.push(define(
     'husklet_pane_wait',

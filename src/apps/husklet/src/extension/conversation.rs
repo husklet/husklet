@@ -21,17 +21,17 @@ use std::time::{Duration, Instant};
 use hl_extension::port::Occupant;
 use hl_extension::{
     codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
-    PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome,
-    Wire, PROTOCOL,
+    PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
 #[derive(Debug, Default)]
 pub struct Interface {
     /// Descriptions of what to draw, in the order the extension sent them.
-    pub frames: Vec<hl_gui::Frame>,
+    pub frames: Vec<SurfaceFrame>,
     /// Changes to the windowed sources the extension's tables draw from.
-    pub mutations: Vec<hl_gui::SourceMutation>,
+    pub mutations: Vec<SurfaceMutation>,
 }
 
 impl Interface {
@@ -78,7 +78,7 @@ impl Queue {
     /// Adds what a session drained. Poisoning is recovered from rather than
     /// propagated: the queue is a list of drawing work, so a thread that
     /// panicked mid-deposit leaves it stale at worst, never unsound.
-    fn deposit(&self, frames: Vec<hl_gui::Frame>, mutations: Vec<hl_gui::SourceMutation>) {
+    fn deposit(&self, frames: Vec<SurfaceFrame>, mutations: Vec<SurfaceMutation>) {
         let mut held = self.hold();
         held.frames.extend(frames);
         held.mutations.extend(mutations);
@@ -1080,7 +1080,8 @@ mod tests {
         assert_eq!(codec::read_reply(&drawn).expect("a reply"), Reply::Done);
         let collected = queue.collect();
         assert_eq!(collected.frames.len(), 1, "the frame is held for the window");
-        assert_eq!(collected.frames[0].sequence, 1);
+        assert_eq!(collected.frames[0].slot, "tab-Sample");
+        assert_eq!(collected.frames[0].frame.sequence, 1);
         assert!(queue.is_empty(), "collecting empties the queue");
         drop(wire);
         let _ = served.join().expect("joined");

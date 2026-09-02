@@ -107,6 +107,12 @@ pub struct PaneProvider {
 #[serde(deny_unknown_fields)]
 pub struct PaneSelection {
     pub pane_provider: ExtensionName,
+    /// Stable workspace slot mounting this provider.
+    ///
+    /// Provider selection is pane-addressed: without this identity an
+    /// extension cannot distinguish two simultaneous mounts of the same
+    /// provider, nor target their subsequent render streams independently.
+    pub slot: String,
 }
 
 /// Everything an extension declares, parsed from its image label.

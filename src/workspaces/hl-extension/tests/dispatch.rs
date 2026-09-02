@@ -206,6 +206,11 @@ impl ContainerControl for Host {
         Ok(())
     }
 
+    fn execution_kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+        self.ledger.note("executions.kill");
+        Ok(())
+    }
+
     fn execute(
         &self,
         _id: &str,
@@ -489,6 +494,21 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.write");
         Ok(())
     }
+
+    fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
+        self.ledger.note("files.mkdir");
+        Ok(())
+    }
+
+    fn rename(&self, _from: &RelativePath, _to: &RelativePath) -> Result<(), HostError> {
+        self.ledger.note("files.rename");
+        Ok(())
+    }
+
+    fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
+        self.ledger.note("files.remove");
+        Ok(())
+    }
 }
 
 fn services(host: &Host) -> Services<'_> {
@@ -633,6 +653,13 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
+            Request::ExecutionKill {
+                id: "e1".into(),
+                signal: "SIGTERM".into(),
+            },
+            Capability::ContainerControl,
+        ),
+        (
             Request::ContainerExec {
                 id: "c1".into(),
                 command: vec!["worker".into()],
@@ -714,6 +741,21 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemWrite,
         ),
         (
+            Request::FilesystemMkdir { path: path("logs/new") },
+            Capability::FilesystemWrite,
+        ),
+        (
+            Request::FilesystemRename {
+                from: path("logs/a"),
+                to: path("logs/b"),
+            },
+            Capability::FilesystemWrite,
+        ),
+        (
+            Request::FilesystemRemove { path: path("logs/old") },
+            Capability::FilesystemWrite,
+        ),
+        (
             Request::InterfaceOpenTab {
                 title: "Postgres".into(),
             },
@@ -783,6 +825,25 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
 }
 
 #[test]
+fn execution_signals_are_bounded_before_the_container_port_is_reached() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    for signal in [String::new(), "x".repeat(33)] {
+        assert!(matches!(
+            session.dispatch(
+                &Request::ExecutionKill {
+                    id: "e1".into(),
+                    signal,
+                },
+                &services(&host),
+            ),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
 fn a_refusal_is_reported_rather_than_answered_emptily() {
     let host = Host::new();
     let mut session = session(&[Capability::WorkspaceRead], &[]);
@@ -813,6 +874,26 @@ fn a_path_outside_the_declared_roots_is_refused_before_the_service() {
 
     assert!(matches!(failure, Failure::Denied { .. }));
     assert!(host.ledger.reached().is_empty(), "confinement precedes the read");
+}
+
+#[test]
+fn a_rename_destination_outside_the_declared_roots_is_refused_before_the_service() {
+    let host = Host::new();
+    let mut session = session(&[Capability::FilesystemWrite], &["logs"]);
+    let failure = session
+        .dispatch(
+            &Request::FilesystemRename {
+                from: path("logs/old"),
+                to: path("state/new"),
+            },
+            &services(&host),
+        )
+        .expect_err("destination refused");
+    assert!(matches!(failure, Failure::Denied { .. }));
+    assert!(
+        host.ledger.reached().is_empty(),
+        "both paths are confined before rename"
+    );
 }
 
 #[test]
@@ -1029,24 +1110,149 @@ fn unsubscribing_stops_emission() {
 }
 
 #[test]
-fn a_session_owns_one_tab_however_often_it_asks() {
+fn a_session_records_each_surface_it_opens() {
     let host = Host::new();
     let mut session = session(&[Capability::Interface], &[]);
     let services = services(&host);
-    let request = Request::InterfaceOpenTab {
-        title: "Postgres".into(),
-    };
+    let first = session
+        .dispatch(
+            &Request::InterfaceOpenTab {
+                title: "Postgres".into(),
+            },
+            &services,
+        )
+        .expect("opened");
+    let second = session
+        .dispatch(
+            &Request::InterfaceOpenTab { title: "Logs".into() },
+            &services,
+        )
+        .expect("opened again");
 
-    let first = session.dispatch(&request, &services).expect("opened");
-    let second = session.dispatch(&request, &services).expect("opened again");
-
-    assert_eq!(first, second);
+    assert_ne!(first, second);
     assert_eq!(
         host.ledger.reached(),
-        vec!["terminal.open_tab"],
-        "asking twice must not accumulate surfaces the extension forgot about"
+        vec!["terminal.open_tab", "terminal.open_tab"],
+        "each independent tree gets a real host surface"
     );
-    assert_eq!(session.tab(), Some("tab-Postgres"));
+    assert_eq!(
+        session.tab(),
+        None,
+        "there is no truthful singular identity after two opens"
+    );
+}
+
+#[test]
+fn addressed_frames_remain_separate_across_two_owned_surfaces() {
+    let host = Host::new();
+    let mut session = session(&[Capability::Interface], &[]);
+    let services = services(&host);
+    for title in ["Containers", "Logs"] {
+        session
+            .dispatch(
+                &Request::InterfaceOpenTab { title: title.into() },
+                &services,
+            )
+            .expect("surface opened");
+    }
+    let first = hl_gui::Frame::new(7);
+    let second = hl_gui::Frame::new(3);
+    session
+        .dispatch(
+            &Request::InterfaceRenderAt {
+                slot: "tab-Containers".into(),
+                frame: first.clone(),
+            },
+            &services,
+        )
+        .expect("first surface rendered");
+    session
+        .dispatch(
+            &Request::InterfaceRenderAt {
+                slot: "tab-Logs".into(),
+                frame: second.clone(),
+            },
+            &services,
+        )
+        .expect("second surface rendered");
+
+    let drained = session.drain();
+    assert_eq!(drained[0].slot, "tab-Containers");
+    assert_eq!(drained[0].frame, first);
+    assert_eq!(drained[1].slot, "tab-Logs");
+    assert_eq!(drained[1].frame, second);
+    let mutation = hl_gui::SourceMutation::Length {
+        source: hl_gui::SourceId::new(4),
+        version: hl_gui::Version::new(2),
+        rows: 100_000,
+    };
+    session
+        .dispatch(
+            &Request::SourceResizeAt {
+                slot: "tab-Logs".into(),
+                mutation: mutation.clone(),
+            },
+            &services,
+        )
+        .expect("second surface source resized");
+    let mutations = session.drain_sources();
+    assert_eq!(mutations.len(), 1);
+    assert_eq!(mutations[0].slot, "tab-Logs");
+    assert_eq!(mutations[0].mutation, mutation);
+    assert!(
+        session
+            .dispatch(
+                &Request::InterfaceRender {
+                    frame: hl_gui::Frame::new(8),
+                },
+                &services,
+            )
+            .is_err(),
+        "legacy unaddressed rendering cannot silently choose between surfaces"
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::InterfaceRenderAt {
+                    slot: "somebody-elses-pane".into(),
+                    frame: hl_gui::Frame::new(9),
+                },
+                &services,
+            )
+            .is_err(),
+        "addressing does not grant authority over arbitrary workspace panes"
+    );
+}
+
+#[test]
+fn a_session_cannot_accumulate_unbounded_interface_surfaces() {
+    let host = Host::new();
+    let mut session = session(&[Capability::Interface], &[]);
+    let services = services(&host);
+    for index in 0..32 {
+        session
+            .dispatch(
+                &Request::InterfaceOpenTab {
+                    title: format!("surface-{index}"),
+                },
+                &services,
+            )
+            .expect("within the surface bound");
+    }
+    let failure = session
+        .dispatch(
+            &Request::InterfaceOpenTab {
+                title: "overflow".into(),
+            },
+            &services,
+        )
+        .expect_err("surface registry is bounded");
+    assert!(matches!(failure, Failure::Conflict { .. }));
+    assert_eq!(
+        host.ledger.reached().len(),
+        32,
+        "the refused surface never reaches the window adapter"
+    );
 }
 
 #[test]
@@ -1108,7 +1314,9 @@ fn an_interface_is_rendered_only_into_a_tab_the_session_opened() {
         .expect("rendered");
 
     let collected = session.drain();
-    assert_eq!(collected, vec![frame], "the host receives exactly what was sent");
+    assert_eq!(collected.len(), 1);
+    assert_eq!(collected[0].slot, "tab-Containers");
+    assert_eq!(collected[0].frame, frame, "the host receives exactly what was sent");
     assert!(session.drain().is_empty(), "frames are handed over once");
 }
 

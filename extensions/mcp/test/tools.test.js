@@ -8,22 +8,198 @@ function fake() {
   const calls = [];
   const record = (name, answer = { ok: true }) => async (...args) => { calls.push([name, ...args]); return answer; };
   return { calls, api: {
-    info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'),
+    info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
-    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus') },
-    files: { list: record('files.list'), read: record('files.read'), write: record('files.write') },
+    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
+    volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
+    networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
+    files: { list: record('files.list'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
   }};
 }
 
-test('schemas are strict, controls map exactly, and no shell shortcut exists', async () => {
+const configuration = () => ({
+  name: 'dev', image: 'alpine:3.20', architecture: 'arm64', storage: null, shell: '/bin/sh -l',
+  cpus: 4, memory_mb: 4096, environment: [['MODE', 'dev']],
+  mounts: [{ host: '/source', container: '/workspace', read_only: true }], docker_socket: true,
+  scrollback: 100000, vpn: null, execution_lifetime: 'persisted',
+  terminal: { font_family: 'Mono', font_size: 13, foreground: '#fff', background: '#000', cursor_shape: 'block', cursor_blink: false },
+});
+
+test('workspace create and confirmed update preserve the complete typed configuration', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
-  assert(!listed.some(({ name }) => /exec|spawn|shell/.test(name)));
+  const create = listed.find(({ name }) => name === 'husklet_workspace_create');
+  const update = listed.find(({ name }) => name === 'husklet_workspace_update');
+  const value = configuration();
+  assert.equal(create.inputSchema.safeParse({ configuration: value }).success, true);
+  assert.equal(create.inputSchema.safeParse({ configuration: { ...value, architecture: 'mips' } }).success, false);
+  assert.equal(create.inputSchema.safeParse({ configuration: { ...value, mounts: [{ host: 'relative', container: '/x', read_only: false }] } }).success, false);
+  assert.equal(update.inputSchema.safeParse({ name: 'dev', configuration: value }).success, false);
+  assert.equal(update.inputSchema.safeParse({ name: 'other', configuration: value, confirm: true }).success, false);
+  await create.run({ configuration: value });
+  await update.run({ name: 'dev', configuration: value, confirm: true });
+  assert.deepEqual(calls, [['workspace.create', value], ['workspace.update', 'dev', value]]);
+});
+
+test('live MCP transport carries workspace configuration and host authority failures', async () => {
+  const value = configuration();
+  const calls = [];
+  const session = { call: async (name, argument) => {
+    calls.push([name, argument]);
+    if (name === 'workspace_create') return { reply: 'workspace_configuration', with: value };
+    if (name === 'workspace_update') throw new Error('denied: workspace-control');
+    throw new Error(`unexpected call ${name}`);
+  } };
+  const server = createServer(session);
+  const client = new Client({ name: 'workspace-config-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const created = await client.callTool({ name: 'husklet_workspace_create', arguments: { configuration: value } });
+  assert.deepEqual(JSON.parse(created.content[0].text), value);
+  const denied = await client.callTool({
+    name: 'husklet_workspace_update', arguments: { name: 'dev', configuration: value, confirm: true },
+  });
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /workspace-control/);
+  assert.deepEqual(calls, [
+    ['workspace_create', { configuration: value }],
+    ['workspace_update', { name: 'dev', configuration: value }],
+  ]);
+  await client.close();
+  await server.close();
+});
+
+test('schemas are strict, controls map exactly, and no terminal shell shortcut exists', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  assert(!listed.some(({ name }) => /spawn|shell/.test(name)));
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
   assert.deepEqual(calls, [['containers.start', 'abc']]);
+});
+
+test('container create and exec accept only bounded structured authority', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const create = listed.find(({ name }) => name === 'husklet_container_create');
+  const exec = listed.find(({ name }) => name === 'husklet_container_exec');
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
+  await create.run({ image: 'alpine:3.20', name: 'worker-1' });
+  await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' });
+  assert.deepEqual(calls, [
+    ['containers.create', 'alpine:3.20', 'worker-1'],
+    ['containers.exec', 'c1', { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
+  ]);
+});
+
+test('filesystem controls are strict and removal requires explicit confirmation', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt' }).success, false);
+  assert.equal(byName('husklet_file_rename').inputSchema.safeParse({ from: 'a', to: 'b', extra: true }).success, false);
+  await byName('husklet_file_mkdir').run({ path: 'logs/new' });
+  await byName('husklet_file_rename').run({ from: 'logs/a', to: 'logs/b' });
+  await byName('husklet_file_remove').run({ path: 'logs/b', confirm: true });
+  assert.deepEqual(calls, [['files.mkdir', 'logs/new'], ['files.rename', 'logs/a', 'logs/b'], ['files.remove', 'logs/b']]);
+});
+
+test('container execution inspection is a strict bounded read through the typed API', async () => {
+  const { api, calls } = fake();
+  const execution = tools(api).find(({ name }) => name === 'husklet_container_execution');
+  assert(execution);
+  assert.equal(execution.inputSchema.safeParse({ id: 'exec-1', extra: true }).success, false);
+  await execution.run({ id: 'exec-1' });
+  assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
+});
+
+test('execution signaling targets an execution with a strict bounded signal', async () => {
+  const { api, calls } = fake();
+  const signal = tools(api).find(({ name }) => name === 'husklet_execution_signal');
+  assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: '' }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'x'.repeat(33) }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
+  await signal.run({ id: 'e1', signal: 'SIGTERM' });
+  assert.deepEqual(calls, [['containers.signalExecution', 'e1', 'SIGTERM']]);
+});
+
+test('terminal layout tools use the host wire vocabulary and bounded destructive controls', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const split = listed.find(({ name }) => name === 'husklet_terminal_split');
+  const resize = listed.find(({ name }) => name === 'husklet_terminal_resize');
+  const ratio = listed.find(({ name }) => name === 'husklet_terminal_ratio');
+  const close = listed.find(({ name }) => name === 'husklet_terminal_close');
+  assert.equal(split.inputSchema.safeParse({ slot: 'pane-1', division: 'horizontal' }).success, false);
+  assert.equal(split.inputSchema.safeParse({ slot: 'pane-1', division: 'beside' }).success, true);
+  assert.equal(resize.inputSchema.safeParse({ slot: 'pane-1', columns: 0, rows: 24 }).success, false);
+  assert.equal(ratio.inputSchema.safeParse({ slot: 'pane-1', ratio: 0.99 }).success, false);
+  assert.equal(close.inputSchema.safeParse({ slot: 'pane-1' }).success, false);
+  await split.run({ slot: 'pane-1', division: 'below' });
+  await resize.run({ slot: 'pane-1', columns: 120, rows: 40 });
+  await ratio.run({ slot: 'pane-1', ratio: 0.6 });
+  await close.run({ slot: 'pane-1', confirm: true });
+  assert.deepEqual(calls, [
+    ['terminal.split', 'pane-1', 'below'],
+    ['terminal.resizeGrid', 'pane-1', 120, 40],
+    ['terminal.ratio', 'pane-1', 0.6],
+    ['terminal.close', 'pane-1'],
+  ]);
+});
+
+test('image tools use typed reads and require confirmation for destructive controls', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_image_inspect').inputSchema.safeParse({ reference: 'a'.repeat(257) }).success, false);
+  assert.equal(byName('husklet_image_remove').inputSchema.safeParse({ reference: 'alpine:3.20' }).success, false);
+  assert.equal(byName('husklet_image_prune').inputSchema.safeParse({ confirm: false }).success, false);
+  await byName('husklet_image_list').run({});
+  await byName('husklet_image_inspect').run({ reference: 'sha256:abc' });
+  await byName('husklet_image_pull').run({ reference: 'alpine:3.20' });
+  await byName('husklet_image_remove').run({ reference: 'old:tag', confirm: true });
+  await byName('husklet_image_prune').run({ confirm: true });
+  assert.deepEqual(calls, [
+    ['images.list'],
+    ['images.inspect', 'sha256:abc'],
+    ['images.pull', 'alpine:3.20'],
+    ['images.remove', 'old:tag'],
+    ['images.prune'],
+  ]);
+});
+
+test('volume and network tools preserve typed read/control operations and confirmations', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_volume_remove').inputSchema.safeParse({ name: 'cache' }).success, false);
+  assert.equal(byName('husklet_network_remove').inputSchema.safeParse({ reference: 'private' }).success, false);
+  assert.equal(byName('husklet_network_disconnect').inputSchema.safeParse({ reference: 'private', container: 'c1' }).success, false);
+  assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: 'private', container: 'c1', extra: true }).success, false);
+  await byName('husklet_volume_list').run({});
+  await byName('husklet_volume_inspect').run({ name: 'cache' });
+  await byName('husklet_volume_create').run({ name: 'build' });
+  await byName('husklet_volume_remove').run({ name: 'old', confirm: true });
+  await byName('husklet_network_list').run({});
+  await byName('husklet_network_inspect').run({ reference: 'private' });
+  await byName('husklet_network_create').run({ name: 'backend' });
+  await byName('husklet_network_remove').run({ reference: 'old-net', confirm: true });
+  await byName('husklet_network_connect').run({ reference: 'backend', container: 'c1' });
+  await byName('husklet_network_disconnect').run({ reference: 'backend', container: 'c1', confirm: true });
+  assert.deepEqual(calls, [
+    ['volumes.list'], ['volumes.inspect', 'cache'], ['volumes.create', 'build'], ['volumes.remove', 'old'],
+    ['networks.list'], ['networks.inspect', 'private'], ['networks.create', 'backend'], ['networks.remove', 'old-net'],
+    ['networks.connect', 'backend', 'c1'], ['networks.disconnect', 'backend', 'c1'],
+  ]);
 });
 
 test('unified pane XML packs terminal metadata and escaped bounded screen lines', async () => {
@@ -174,6 +350,13 @@ test('a real MCP client lists strict tools and calls through the React session c
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
+      if (name === 'execution_inspect') return { reply: 'execution', with: {
+        id: argument.id, container_id: 'container-1', running: true, exit_code: null,
+      } };
+      if (name === 'execution_kill') return { reply: 'done' };
+      if (name === 'image_list') return { reply: 'images', with: [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }] };
+      if (name === 'volume_list') return { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] };
+      if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: argument.slot, revision: 11, truncated: false,
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
@@ -195,12 +378,28 @@ test('a real MCP client lists strict tools and calls through the React session c
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_execution_signal'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_image_list'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_volume_list'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_network_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
+  const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: 'exec-live' } });
+  assert.deepEqual(JSON.parse(execution.content[0].text), {
+    id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
+  });
+  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
+  const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
+  assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
+  const volumes = await client.callTool({ name: 'husklet_volume_list', arguments: {} });
+  assert.deepEqual(JSON.parse(volumes.content[0].text), [{ name: 'cache', driver: 'local' }]);
+  const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
+  assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
@@ -210,6 +409,11 @@ test('a real MCP client lists strict tools and calls through the React session c
   });
   assert.deepEqual(calls, [
     ['workspace_info', undefined],
+    ['execution_inspect', { id: 'exec-live' }],
+    ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
+    ['image_list', undefined],
+    ['volume_list', undefined],
+    ['network_list', undefined],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],

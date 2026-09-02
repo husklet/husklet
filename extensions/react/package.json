@@ -23,11 +23,12 @@
       "import": "./src/index.js",
       "default": "./src/index.js"
     },
-    "./catalogue": "./src/catalogue.json",
+    "./catalogue": "./catalogue.json",
     "./package.json": "./package.json"
   },
   "sideEffects": false,
   "files": [
+    "catalogue.json",
     "src",
     "README.md",
     "LICENSE"

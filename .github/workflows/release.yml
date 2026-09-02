@@ -54,6 +54,11 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo fetch --locked
 
+      - name: Verify generated extension contracts
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          bash .github/scripts/check-extension-contracts.sh
+
       - name: Verify Linux native shared-library reproducibility
         timeout-minutes: 10
         run: >-

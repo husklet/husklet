@@ -102,8 +102,8 @@ impl<'a> Overview<'a> {
             events,
             Box::new(move |report| {
                 let delivery = match report {
-                    Report::Frame(frame) => Delivery::Frame(frame),
-                    Report::Source(mutation) => Delivery::Source(mutation),
+                    Report::Frame(frame) => Delivery::Frame(frame.frame),
+                    Report::Source(mutation) => Delivery::Source(mutation.mutation),
                     Report::Loss(reason) => Delivery::Loss(reason),
                     Report::Fault { restarts } => Delivery::Fault { restarts },
                 };

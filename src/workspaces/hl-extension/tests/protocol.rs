@@ -3,7 +3,7 @@
 
 use hl_extension::{
     Activation, Capability, ChannelId, Compatibility, ExtensionName, Flags, Frame, Grant, Hello, Invalid, Kind, Limits,
-    Malformed, Manifest, RelativePath, Resources, Welcome, PROTOCOL,
+    Malformed, Manifest, PaneSelection, RelativePath, Resources, Welcome, PROTOCOL,
 };
 
 /// The document an extension image carries, with extra lines appended.
@@ -16,6 +16,30 @@ fn manifest_document(extra: &str) -> String {
          capabilities = [\"container-read\"]\n\
          {extra}"
     )
+}
+
+#[test]
+fn pane_selection_names_the_provider_and_its_independent_mount() {
+    let selection = PaneSelection {
+        pane_provider: ExtensionName::new("database").expect("provider"),
+        slot: "pane-17".to_owned(),
+    };
+
+    let value = serde_json::to_value(&selection).expect("wire selection");
+    assert_eq!(
+        value,
+        serde_json::json!({"pane_provider": "database", "slot": "pane-17"}),
+        "two mounts of one provider must not collapse into one global selection"
+    );
+    assert_eq!(
+        serde_json::from_value::<PaneSelection>(value).expect("selection round trip"),
+        selection
+    );
+    assert!(
+        serde_json::from_value::<PaneSelection>(serde_json::json!({"pane_provider": "database"}))
+            .is_err(),
+        "a global provider selection is no longer an adequate wire event"
+    );
 }
 
 #[test]

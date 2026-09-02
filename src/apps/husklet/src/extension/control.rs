@@ -5,7 +5,7 @@ use std::sync::Arc;
 use hl_client::model::{CreateContainer, ExecConfig, ExecStart};
 use hl_extension::port::{ContainerControl, HostError};
 
-use super::{Bridge, failure};
+use super::{failure, Bridge};
 
 /// How long a stop waits for the initial process before the daemon forces it.
 const STOP_SECONDS: u64 = 10;
@@ -104,6 +104,13 @@ impl ContainerControl for ContainerLifecycle {
         let client = self.bridge.client();
         self.bridge
             .wait(client.containers().kill(id, signal))
+            .map_err(|error| failure(&error))
+    }
+
+    fn execution_kill(&self, id: &str, signal: &str) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        self.bridge
+            .wait(client.executions().signal(id, signal))
             .map_err(|error| failure(&error))
     }
 

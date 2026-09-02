@@ -244,7 +244,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
     api.containers.execution('e1'), api.containers.pause('c1'), api.containers.unpause('c1'),
-    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'),
+    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
@@ -258,6 +258,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_unpause', with: { id: 'c1' } },
     { call: 'container_restart', with: { id: 'c1' } },
     { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
+    { call: 'execution_kill', with: { id: 'e1', signal: 'SIGHUP' } },
     { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
@@ -265,7 +266,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'processes', with: { titles: [], processes: [] } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
     { reply: 'execution', with: { id: 'e1' } },
-    ...Array(4).fill({ reply: 'done' }),
+    ...Array(5).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
     { reply: 'done' },
   ];
@@ -273,7 +274,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
-  assert.equal(results[7], 'e2');
+  assert.equal(results[8], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -323,6 +324,22 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   await Promise.all([writing, resizing]);
   assert.throws(() => terminal.writeInput('s1', new Uint8Array(65_537)), /65536 byte limit/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('filesystem controls use exact confined protocol request shapes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const files = workspace(stage.session).files;
+  const operations = [files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
+  assert.deepEqual((await next()).payload, { call: 'filesystem_mkdir', with: { path: 'logs/new' } });
+  assert.deepEqual((await next()).payload, { call: 'filesystem_rename', with: { from: 'logs/a', to: 'logs/b' } });
+  assert.deepEqual((await next()).payload, { call: 'filesystem_remove', with: { path: 'logs/b' } });
+  for (let index = 0; index < operations.length; index += 1) {
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  }
+  await Promise.all(operations);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

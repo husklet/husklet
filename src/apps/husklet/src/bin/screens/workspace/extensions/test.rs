@@ -43,6 +43,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
+        docker_hub_references_are_explained_and_validated_before_acquisition();
         an_image_is_read_before_anybody_is_asked();
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
@@ -58,7 +59,9 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
+        panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
+        panes::pane_chooser_groups_and_filters_many_extension_views();
         panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
         panes::removing_an_extension_tombstones_without_displacing_its_shell();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
@@ -622,6 +625,32 @@ fn candidate() -> Candidate {
     }
 }
 
+fn docker_hub_references_are_explained_and_validated_before_acquisition() {
+    let fixture = Fixture::new(&[]);
+    let attempts = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&attempts);
+    let inspection: Inspection = Rc::new(move |reference| {
+        recorded.borrow_mut().push(reference.to_owned());
+        PendingInspection::detached(std::sync::mpsc::channel().1)
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    let copy: Vec<_> = descendants(page.widget().upcast_ref())
+        .iter()
+        .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+        .map(|label| label.text().to_string())
+        .collect();
+    assert!(copy.iter().any(|line| line.contains("Docker Hub examples")));
+
+    typed(&page, "not a reference with spaces");
+    page.inspect();
+    assert!(attempts.borrow().is_empty(), "invalid input never starts acquisition");
+    assert!(page.notice().contains("not a valid image reference"));
+
+    typed(&page, "alpine:3.20");
+    page.inspect();
+    assert_eq!(attempts.borrow().as_slice(), ["docker.io/library/alpine:3.20"]);
+}
+
 fn update_candidate(digest: &str, version: &str) -> Candidate {
     let mut manifest = manifest("sample");
     manifest.version = version.to_owned();
@@ -650,6 +679,13 @@ fn an_image_is_read_before_anybody_is_asked() {
         "what it asks for is put to a person, got {:?}",
         page.notice()
     );
+    let proposal: Vec<_> = descendants(page.widget().upcast_ref())
+        .iter()
+        .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+        .map(|label| label.text().to_string())
+        .collect();
+    assert!(proposal.contains(&"Image: sample:1".to_owned()));
+    assert!(proposal.contains(&"Digest: sha256:bbbb".to_owned()));
 
     page.consent();
 
@@ -658,6 +694,7 @@ fn an_image_is_read_before_anybody_is_asked() {
     assert_eq!(entries[0].image_digest, "sha256:bbbb");
     assert!(entries[0].granted.holds(Capability::Interface));
     assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
+    assert!(page.notice().contains("sample:1 at sha256:bbbb"));
     assert!(
         fixture.view.holds("sample"),
         "and it is on the sidebar without a restart"
@@ -932,7 +969,7 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     );
     assert_eq!(
         *attempts.lock().expect("attempts"),
-        ["team/tool:latest", "team/tool:latest"],
+        ["docker.io/team/tool:latest", "docker.io/team/tool:latest"],
         "only the two explicit attempts reached the registry"
     );
 }
@@ -1721,6 +1758,11 @@ mod panes {
             Some("database"),
             "the extension is told which named view it should render"
         );
+        assert_eq!(
+            selected.borrow().as_ref().map(|selection| selection.slot.as_str()),
+            Some(slot.as_str()),
+            "the selection identifies this mount rather than a global provider"
+        );
         let topology = Console::topology(&bench.window).expect("provider topology");
         let LayoutNode::Pane { pane, .. } = &topology.tabs[0].root else {
             panic!("the unsplit provider is one pane")
@@ -1743,6 +1785,11 @@ mod panes {
     pub(super) fn an_existing_pane_chooser_discovers_a_later_provider() {
         let bench = Bench::new();
         let chooser = PaneChooser::button(&bench.window);
+        assert_eq!(chooser.icon_name().as_deref(), Some("view-grid-symbolic"));
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose what this pane displays")
+        );
         let labels = || {
             chooser
                 .popover()
@@ -1754,6 +1801,15 @@ mod panes {
                 .collect::<Vec<String>>()
         };
         assert_eq!(labels(), ["Terminal"], "the chooser exists before providers do");
+        let empty_copy: Vec<_> = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+            .map(|label| label.text().to_string())
+            .collect();
+        assert!(empty_copy.iter().any(|label| label == "No extension views available"));
+        assert!(empty_copy.iter().any(|label| label.contains("Install or enable")));
 
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1777,6 +1833,155 @@ mod panes {
             ["Terminal", "Postgres"],
             "an old tab reads the live catalogue"
         );
+    }
+
+    pub(super) fn each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus() {
+        let bench = Bench::new();
+        let (first, first_slot) = bench.shell();
+        let (second, second_slot) = bench.beside(&first);
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
+        Window::exhibit(&bench.window, gallery);
+        assert!(Panes::focus(&bench.window, &first_slot));
+        assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
+
+        let second_pane = Panes::at(&bench.window, &second_slot).expect("second pane");
+        let chooser = super::descendants(&second_pane.widget)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("every split leaf owns a chooser");
+        assert!(chooser.is_focusable(), "the chooser is keyboard reachable");
+        PaneChooser::populate(&bench.window, &chooser);
+        let postgres = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Postgres"))
+            .expect("provider choice");
+        postgres.emit_clicked();
+
+        assert_eq!(
+            Panes::at(&bench.window, &first_slot)
+                .expect("focused first pane")
+                .content,
+            first.clone().upcast::<gtk::Widget>(),
+            "the globally focused pane is not replaced"
+        );
+        assert_eq!(
+            Panes::at(&bench.window, &second_slot)
+                .expect("chosen second pane")
+                .occupant,
+            Occupant::Surface,
+            "the chooser replaces its own leaf"
+        );
+        assert!(
+            first.has_focus(),
+            "switching an adjacent pane preserves terminal keyboard focus"
+        );
+
+        PaneChooser::populate(&bench.window, &chooser);
+        let terminal = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Terminal"))
+            .expect("terminal is always available");
+        terminal.emit_clicked();
+        assert_eq!(
+            Panes::at(&bench.window, &second_slot)
+                .expect("restored second pane")
+                .content,
+            second.upcast::<gtk::Widget>(),
+            "the displaced terminal identity is restored"
+        );
+    }
+
+    pub(super) fn pane_chooser_groups_and_filters_many_extension_views() {
+        let bench = Bench::new();
+        let gallery = Gallery::new();
+        let mut homes = Vec::new();
+        for (extension, providers) in [
+            (
+                "database-tools",
+                [("postgres", "Postgres"), ("mysql", "MySQL"), ("redis", "Redis")],
+            ),
+            (
+                "workspace-tools",
+                [
+                    ("containers", "Containers"),
+                    ("images", "Images"),
+                    ("networks", "Networks"),
+                ],
+            ),
+        ] {
+            let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            home.append(&interface);
+            let providers: Vec<_> = providers
+                .into_iter()
+                .map(|(id, title)| hl_extension::PaneProvider {
+                    id: ExtensionName::new(id).expect("provider id"),
+                    title: title.to_owned(),
+                    icon: None,
+                })
+                .collect();
+            gallery.enrol(extension, &interface, &home, &providers, Rc::new(|_| {}));
+            homes.push(home);
+        }
+        Window::exhibit(&bench.window, gallery);
+        let chooser = PaneChooser::button(&bench.window);
+        let popover = chooser.popover().expect("chooser popover");
+        let widgets = super::descendants(popover.upcast_ref::<gtk::Widget>());
+        let labels: Vec<_> = widgets
+            .iter()
+            .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+            .map(|label| label.text().to_string())
+            .collect();
+        assert!(labels.contains(&"database-tools".to_owned()));
+        assert!(labels.contains(&"workspace-tools".to_owned()));
+        let search = widgets
+            .iter()
+            .find_map(|widget| widget.downcast_ref::<gtk::SearchEntry>())
+            .expect("six providers expose search");
+        search.set_text("image");
+        assert!(until(|| {
+            widgets.iter().any(|widget| {
+                widget.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                    button.label().as_deref() == Some("Postgres") && !button.property::<bool>("visible")
+                })
+            })
+        }));
+        let visible: Vec<_> = widgets
+            .iter()
+            .filter_map(|widget| widget.downcast_ref::<gtk::Button>())
+            .filter(|button| button.property::<bool>("visible"))
+            .filter_map(gtk::Button::label)
+            .map(|label| label.to_string())
+            .collect();
+        assert_eq!(visible, ["Terminal", "Images"]);
+        let visible_groups: Vec<_> = widgets
+            .iter()
+            .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+            .filter(|label| label.has_css_class("caption") && label.property::<bool>("visible"))
+            .map(|label| label.text().to_string())
+            .collect();
+        assert_eq!(visible_groups, ["workspace-tools"]);
+        drop(homes);
     }
 
     fn lifecycle_withdrawal(remove: bool) {
