@@ -174,7 +174,7 @@ impl Gallery {
     }
 
     /// Reports a provider choice to the extension that owns it.
-    pub fn select(&self, extension: &str, provider: &str) {
+    pub fn select(&self, extension: &str, provider: &str, slot: &str) {
         let held = self.0.borrow();
         let Some(exhibit) = held.get(extension) else { return };
         let Some(provider) = exhibit
@@ -186,6 +186,7 @@ impl Gallery {
         };
         (exhibit.selected)(hl_extension::PaneSelection {
             pane_provider: provider.id.clone(),
+            slot: slot.to_owned(),
         });
     }
 

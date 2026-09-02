@@ -192,9 +192,9 @@ impl PaneChooser {
         let surface = Surface::build(window, extension, Some(provider), current.slot.clone());
         if PaneSwap::replace(&current.content, &surface) {
             if let Some(terminal) = displaced {
-                window.displaced.borrow_mut().insert(current.slot, terminal);
+                window.displaced.borrow_mut().insert(current.slot.clone(), terminal);
             }
-            gallery.select(extension, provider);
+            gallery.select(extension, provider, &current.slot);
             return;
         }
         // The parent changed between preflight and replacement. Undo every
@@ -237,13 +237,13 @@ impl PaneChooser {
             .filter_map(|pane| {
                 let (_, owner, provider) = Slots::new(window).surface(&pane.content)?;
                 (owner == extension && provider.as_deref().map_or(true, |id| gallery.offers(extension, id)))
-                    .then_some((pane.content, provider))
+                    .then_some((pane.content, pane.slot, provider))
             })
             .collect();
-        for (pane, provider) in held {
+        for (pane, slot, provider) in held {
             Surface::restore(window, extension, &pane);
             if let Some(provider) = provider {
-                gallery.select(extension, &provider);
+                gallery.select(extension, &provider, &slot);
             }
         }
     }
@@ -375,9 +375,9 @@ impl PaneWidget {
                 // Reuse the pane's saved slot so an extension addressing its own
                 // pane still finds it after a restart.
                 let slot = Slots::new(tw).adopt(pane.slot.as_deref());
-                let surface = Surface::build(tw, &pane.extension, pane.provider.as_deref(), slot);
+                let surface = Surface::build(tw, &pane.extension, pane.provider.as_deref(), slot.clone());
                 if let (Some(provider), Some(gallery)) = (pane.provider.as_deref(), Window::gallery(tw)) {
-                    gallery.select(&pane.extension, provider);
+                    gallery.select(&pane.extension, provider, &slot);
                 }
                 (PaneChrome::wrap(tw, &surface), None)
             }

@@ -1757,6 +1757,11 @@ mod panes {
             Some("database"),
             "the extension is told which named view it should render"
         );
+        assert_eq!(
+            selected.borrow().as_ref().map(|selection| selection.slot.as_str()),
+            Some(slot.as_str()),
+            "the selection identifies this mount rather than a global provider"
+        );
         let topology = Console::topology(&bench.window).expect("provider topology");
         let LayoutNode::Pane { pane, .. } = &topology.tabs[0].root else {
             panic!("the unsplit provider is one pane")
