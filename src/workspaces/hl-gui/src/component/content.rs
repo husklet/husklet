@@ -126,6 +126,58 @@ impl TimelineEvent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TestStatus {
+    Passed,
+    Failed,
+    Skipped,
+}
+impl TestStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TestCase {
+    suite: String,
+    name: String,
+    status: TestStatus,
+    duration_ms: u64,
+    failure: String,
+}
+impl TestCase {
+    #[must_use]
+    pub fn new(
+        suite: impl Into<String>,
+        name: impl Into<String>,
+        status: TestStatus,
+        duration_ms: u64,
+        failure: impl Into<String>,
+    ) -> Option<Self> {
+        fn clean(value: String) -> String {
+            value.replace(['\t', '\n', '\r'], " ")
+        }
+        let suite = clean(suite.into());
+        let name = clean(name.into());
+        let failure = clean(failure.into())
+            .chars()
+            .take(crate::TEST_REPORT_FAILURE_CHARACTER_LIMIT)
+            .collect();
+        (!suite.trim().is_empty() && !name.trim().is_empty()).then_some(Self {
+            suite,
+            name,
+            status,
+            duration_ms,
+            failure,
+        })
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -444,6 +496,26 @@ impl Element {
         Self::new(Tag::TimelineView).value(value)
     }
 
+    #[must_use]
+    pub fn test_report_view(cases: impl IntoIterator<Item = TestCase>) -> Self {
+        let value = cases
+            .into_iter()
+            .take(crate::TEST_REPORT_CASE_LIMIT)
+            .map(|case| {
+                format!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    case.suite,
+                    case.name,
+                    case.status.as_str(),
+                    case.duration_ms,
+                    case.failure
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::TestReportView).value(value)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -453,7 +525,7 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TimelineEvent};
+    use super::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase, TestStatus, TimelineEvent};
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -618,5 +690,49 @@ mod tests {
             .expect("timeline value");
         assert_eq!(value.lines().count(), 256, "the event ceiling is a fixed contract");
         assert!(value.starts_with("0\truntime\tevent 0\tdetail"));
+    }
+
+    #[test]
+    fn test_report_bounds_cases_and_failure_detail_independently() {
+        assert!(TestCase::new("", "works", TestStatus::Passed, 1, "").is_none());
+        let cases = (0..300).filter_map(|index| {
+            TestCase::new(
+                "api",
+                format!("case\t{index}"),
+                TestStatus::Failed,
+                index,
+                "x".repeat(600),
+            )
+        });
+        let element = Element::test_report_view(cases);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("report value");
+        assert_eq!(value.lines().count(), 256, "the case ceiling is fixed");
+        assert_eq!(
+            value
+                .lines()
+                .next()
+                .unwrap()
+                .split('\t')
+                .nth(4)
+                .unwrap()
+                .chars()
+                .count(),
+            512,
+            "failure detail is independently bounded"
+        );
+        assert!(value.starts_with("api\tcase 0\tfailed\t0\t"));
     }
 }

@@ -113,6 +113,9 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::TimelineView {
         return content::timeline(widget, content);
     }
+    if tag == Tag::TestReportView {
+        return content::test_report(widget, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }

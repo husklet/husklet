@@ -139,12 +139,37 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         memory_map_projects_exact_regions_into_semantics();
         disassembly_projects_exact_instructions_into_semantics();
         timeline_projects_exact_events_into_semantics();
+        test_report_projects_exact_cases_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn test_report_projects_exact_cases_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::test_report_view([
+        hl_gui::TestCase::new("api", "creates user", hl_gui::TestStatus::Passed, 14, "").expect("case"),
+        hl_gui::TestCase::new(
+            "api",
+            "rejects duplicate",
+            hl_gui::TestStatus::Failed,
+            8,
+            "expected 409",
+        )
+        .expect("case"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let report = &tree.root.children[0];
+    assert_eq!(report.role, "TestReportView");
+    assert_eq!(
+        report.value.as_deref(),
+        Some("api\tcreates user\tpassed\t14\t\napi\trejects duplicate\tfailed\t8\texpected 409")
+    );
+    assert!(report.actions.is_empty());
 }
 
 fn timeline_projects_exact_events_into_semantics() {

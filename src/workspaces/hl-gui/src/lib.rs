@@ -32,7 +32,7 @@ mod size;
 mod style;
 
 pub use builder::Surface;
-pub use component::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TimelineEvent};
+pub use component::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase, TestStatus, TimelineEvent};
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
     Version,
@@ -71,3 +71,6 @@ pub const DISASSEMBLY_INSTRUCTION_LIMIT: usize = 256;
 
 /// Maximum number of chronological events retained by a [`Tag::TimelineView`].
 pub const TIMELINE_EVENT_LIMIT: usize = 256;
+
+pub const TEST_REPORT_CASE_LIMIT: usize = 256;
+pub const TEST_REPORT_FAILURE_CHARACTER_LIMIT: usize = 512;

@@ -167,6 +167,7 @@ export const {
   MemoryMap,
   DisassemblyView,
   TimelineView,
+  TestReportView,
   DiffViewer,
   DiffLine,
   StackTrace,

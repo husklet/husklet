@@ -47,6 +47,7 @@ import { PROFILE_STORY, ProfileInspectionStory } from './profile-inspection.js';
 import { MEMORY_STORY, MemoryInspectionStory } from './memory-inspection.js';
 import { DISASSEMBLY_STORY, DisassemblyInspectionStory } from './disassembly-inspection.js';
 import { TIMELINE_VIEW_STORY, TimelineInspectionStory } from './timeline-inspection.js';
+import { TEST_REPORT_STORY, TestReportStory } from './test-report.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -63,7 +64,8 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
     || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY
     || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
     || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
-    || selected === MEMORY_STORY || selected === DISASSEMBLY_STORY || selected === TIMELINE_VIEW_STORY;
+    || selected === MEMORY_STORY || selected === DISASSEMBLY_STORY || selected === TIMELINE_VIEW_STORY
+    || selected === TEST_REPORT_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -100,6 +102,7 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, { key: TEST_REPORT_STORY, label: TEST_REPORT_STORY, selected: selected === TEST_REPORT_STORY, onInvoke: () => onSelect(TEST_REPORT_STORY) }),
       h(ListItemButton, { key: TIMELINE_VIEW_STORY, label: TIMELINE_VIEW_STORY, selected: selected === TIMELINE_VIEW_STORY, onInvoke: () => onSelect(TIMELINE_VIEW_STORY) }),
       h(ListItemButton, { key: DISASSEMBLY_STORY, label: DISASSEMBLY_STORY, selected: selected === DISASSEMBLY_STORY, onInvoke: () => onSelect(DISASSEMBLY_STORY) }),
       h(ListItemButton, { key: MEMORY_STORY, label: MEMORY_STORY, selected: selected === MEMORY_STORY, onInvoke: () => onSelect(MEMORY_STORY) }),
@@ -218,7 +221,9 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      name === TIMELINE_VIEW_STORY
+      name === TEST_REPORT_STORY
+        ? h(TestReportStory)
+        : name === TIMELINE_VIEW_STORY
         ? h(TimelineInspectionStory)
         : name === DISASSEMBLY_STORY
         ? h(DisassemblyInspectionStory)

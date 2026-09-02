@@ -23,6 +23,7 @@ import { ProfileInspectionStory, boundedFrames, FRAME_LIMIT } from '../src/profi
 import { MemoryInspectionStory, boundedRegions, REGION_LIMIT } from '../src/memory-inspection.js';
 import { DisassemblyInspectionStory, boundedInstructions, INSTRUCTION_LIMIT } from '../src/disassembly-inspection.js';
 import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/timeline-inspection.js';
+import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src/test-report.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -72,6 +73,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['memory inspection', h(MemoryInspectionStory)],
     ['disassembly inspection', h(DisassemblyInspectionStory)],
     ['timeline view', h(TimelineInspectionStory)],
+    ['test report', h(TestReportStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -81,6 +83,12 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('test report bounds cases and failure detail independently', () => {
+  const cases = Array.from({ length: CASE_LIMIT + 3 }, (_, index) => ({ suite: 'api', name: `case-${index}`, status: 'failed', durationMs: index, failure: 'x'.repeat(FAILURE_LIMIT + 20) }));
+  cases.splice(1, 0, { suite: '', name: 'invalid', status: 'passed', durationMs: 1, failure: '' }); const value = boundedCases(cases);
+  assert.equal(value.split('\n').length, CASE_LIMIT); assert(!value.includes('invalid')); assert.equal(value.split('\n')[0].split('\t')[4].length, FAILURE_LIMIT);
 });
 
 test('timeline view rejects blank events and enforces its hard ceiling', () => {
