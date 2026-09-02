@@ -444,6 +444,24 @@ mod tests {
             Request::ContainerStop { id: "a".into() }.capability(),
             Capability::ContainerControl
         );
+        assert_eq!(
+            Request::ContainerCreate {
+                image: "alpine:3.20".into(),
+                name: "worker".into(),
+            }
+            .capability(),
+            Capability::ContainerControl
+        );
+        assert_eq!(
+            Request::ContainerExec {
+                id: "a".into(),
+                command: vec!["true".into()],
+                user: None,
+                working_directory: None,
+            }
+            .capability(),
+            Capability::ContainerControl
+        );
         assert_eq!(Request::ImageList.capability(), Capability::ImageRead);
         assert_eq!(
             Request::ImagePull {

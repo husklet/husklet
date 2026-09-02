@@ -7,6 +7,13 @@ export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
 const path = z.string().min(1).max(4096);
+const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
+const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
+const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
+  if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
+  const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
+  if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
+});
 const empty = z.object({}).strict();
 const slot = z.object({ slot: id }).strict();
 const define = (name, description, inputSchema, run) => ({ name, description, inputSchema, run: async (input) => result(await run(input)) });
@@ -23,6 +30,8 @@ export function tools(api) {
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
     define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
+    define('husklet_container_create', 'Create a container from an image already present in this workspace; this never pulls an image.', z.object({ image: imageReference, name: containerName }).strict(), ({ image, name }) => api.containers.create(image, name)),
+    define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: z.string().min(1).max(256).optional(), working_directory: z.string().min(1).max(4096).startsWith('/').optional() }).strict(), ({ id: value, command: argv, user, working_directory: workingDirectory }) => api.containers.exec(value, { command: argv, user, workingDirectory })),
     ...['start', 'stop', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_remove', 'Remove one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
     define('husklet_container_kill', 'Signal one container; signal must be explicit.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),

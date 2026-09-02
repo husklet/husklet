@@ -10,7 +10,7 @@ function fake() {
   return { calls, api: {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
-    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
@@ -19,14 +19,34 @@ function fake() {
   }};
 }
 
-test('schemas are strict, controls map exactly, and no shell shortcut exists', async () => {
+test('schemas are strict, controls map exactly, and no terminal shell shortcut exists', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
-  assert(!listed.some(({ name }) => /(?:_exec|spawn|shell)(?:_|$)/.test(name)));
+  assert(!listed.some(({ name }) => /spawn|shell/.test(name)));
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
   assert.deepEqual(calls, [['containers.start', 'abc']]);
+});
+
+test('container create and exec accept only bounded structured authority', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const create = listed.find(({ name }) => name === 'husklet_container_create');
+  const exec = listed.find(({ name }) => name === 'husklet_container_exec');
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
+  await create.run({ image: 'alpine:3.20', name: 'worker-1' });
+  await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' });
+  assert.deepEqual(calls, [
+    ['containers.create', 'alpine:3.20', 'worker-1'],
+    ['containers.exec', 'c1', { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
+  ]);
 });
 
 test('container execution inspection is a strict bounded read through the typed API', async () => {
