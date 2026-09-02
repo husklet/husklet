@@ -24,6 +24,7 @@ hl-fs = { path = "../../packages/hl-fs", default-features = false }
 # features = false` consumer (e.g. hl-gui) gets just the light config and none of the engine stack.
 hl-ws = { path = "../../workspaces/hl-ws" }
 hl-log = { path = "../../packages/hl-log" }
+uuid.workspace = true
 
 hl-ws-term = { path = "../../workspaces/hl-ws-term", optional = true }
 hl-extension = { path = "../../workspaces/hl-extension", optional = true }

@@ -5,7 +5,7 @@
 //! decorative: if the protocol had reached for a service directly, none of this
 //! could be written.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
@@ -38,6 +38,7 @@ impl Ledger {
 
 struct Host {
     ledger: Ledger,
+    cancelled_revision: Cell<Option<u64>>,
 }
 impl hl_extension::port::VolumeStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
@@ -110,6 +111,7 @@ impl Host {
     fn new() -> Self {
         Self {
             ledger: Ledger::default(),
+            cancelled_revision: Cell::new(None),
         }
     }
 
@@ -571,11 +573,17 @@ impl hl_extension::port::WorkspaceControl for Host {
         self.ledger.note("workspace.create");
         Ok(configuration.clone())
     }
-    fn update(&self, _name: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+    fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        self.ledger.note("workspace.adopt");
+        let mut adopted = configuration.clone();
+        adopted.generation = "0123456789abcdef0123456789abcdef".into();
+        Ok(adopted)
+    }
+    fn update(&self, _name: &str, _generation: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         self.ledger.note("workspace.update");
         Ok(configuration.clone())
     }
-    fn delete(&self, _name: &str) -> Result<(), HostError> {
+    fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         self.ledger.note("workspace.delete");
         Ok(())
     }
@@ -654,15 +662,15 @@ impl ExtensionStore for Host {
             status: "duty".into(),
         })
     }
-    fn enable(&self, _name: &str) -> Result<(), HostError> {
+    fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.enable");
         Ok(())
     }
-    fn disable(&self, _name: &str) -> Result<(), HostError> {
+    fn disable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.disable");
         Ok(())
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.remove");
         Ok(())
     }
@@ -682,8 +690,9 @@ impl ExtensionStore for Host {
             error: None,
         })
     }
-    fn acquisition_cancel(&self, _job: &str) -> Result<(), HostError> {
+    fn acquisition_cancel(&self, _job: &str, revision: u64) -> Result<(), HostError> {
         self.ledger.note("extensions.acquisition_cancel");
+        self.cancelled_revision.set(Some(revision));
         Ok(())
     }
     fn install(&self, job: &str, _revision: u64, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
@@ -733,6 +742,7 @@ fn path(value: &str) -> RelativePath {
 
 fn workspace_configuration() -> WorkspaceConfiguration {
     WorkspaceConfiguration {
+        generation: "0123456789abcdef0123456789abcdef".into(),
         name: "other".into(),
         image: "alpine:3.20".into(),
         architecture: "arm64".into(),
@@ -766,14 +776,27 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::WorkspaceControl,
         ),
         (
+            Request::WorkspaceAdopt {
+                configuration: WorkspaceConfiguration {
+                    generation: String::new(),
+                    ..workspace_configuration()
+                },
+            },
+            Capability::WorkspaceControl,
+        ),
+        (
             Request::WorkspaceUpdate {
                 name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
                 configuration: workspace_configuration(),
             },
             Capability::WorkspaceControl,
         ),
         (
-            Request::WorkspaceDelete { name: "other".into() },
+            Request::WorkspaceDelete {
+                name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
+            },
             Capability::WorkspaceControl,
         ),
         (
@@ -794,15 +817,24 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionRead,
         ),
         (
-            Request::ExtensionEnable { name: "sample".into() },
+            Request::ExtensionEnable {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             Capability::ExtensionControl,
         ),
         (
-            Request::ExtensionDisable { name: "sample".into() },
+            Request::ExtensionDisable {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             Capability::ExtensionControl,
         ),
         (
-            Request::ExtensionRemove { name: "sample".into() },
+            Request::ExtensionRemove {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             Capability::ExtensionControl,
         ),
         (
@@ -816,7 +848,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionInstall,
         ),
         (
-            Request::ExtensionAcquisitionCancel { job: "job-1".into() },
+            Request::ExtensionAcquisitionCancel { job: "job-1".into(), revision: 7 },
             Capability::ExtensionInstall,
         ),
         (
@@ -1073,6 +1105,26 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
 }
 
 #[test]
+fn workspace_mutations_require_a_complete_generation_before_host_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::WorkspaceControl], &[]);
+    for request in [
+        Request::WorkspaceUpdate {
+            name: "other".into(),
+            generation: "short".into(),
+            configuration: workspace_configuration(),
+        },
+        Request::WorkspaceDelete {
+            name: "other".into(),
+            generation: String::new(),
+        },
+    ] {
+        assert!(session.dispatch(&request, &services(&host)).is_err());
+    }
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
 fn extension_acquisition_identifiers_are_bounded_before_the_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionInstall], &[]);
@@ -1098,6 +1150,39 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
             &services(&host)
         )
         .is_err());
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn extension_acquisition_cancellation_preserves_the_observed_revision() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ExtensionInstall], &[]);
+    assert_eq!(
+        session
+            .dispatch(
+                &Request::ExtensionAcquisitionCancel {
+                    job: "job-1".into(),
+                    revision: 41,
+                },
+                &services(&host),
+            )
+            .unwrap(),
+        Reply::Done
+    );
+    assert_eq!(host.cancelled_revision.get(), Some(41));
+}
+
+#[test]
+fn extension_controls_refuse_partial_digests_before_host_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ExtensionControl], &[]);
+    for request in [
+        Request::ExtensionEnable { name: "sample".into(), image_digest: "sha256:abc".into() },
+        Request::ExtensionDisable { name: "sample".into(), image_digest: String::new() },
+        Request::ExtensionRemove { name: "sample".into(), image_digest: "sha256:abc".into() },
+    ] {
+        assert!(session.dispatch(&request, &services(&host)).is_err());
+    }
     assert!(host.ledger.reached().is_empty());
 }
 

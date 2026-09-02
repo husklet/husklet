@@ -130,12 +130,112 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         validation_summary_is_readable_and_keeps_corrective_actions();
         diff_lines_project_status_and_bounded_text();
         markdown_preserves_bounded_source_in_semantics();
+        json_preserves_source_in_semantics();
+        stack_frames_project_function_and_location();
+        hex_view_projects_binary_text_into_semantics();
+        sparkline_projects_bounded_samples_into_semantics();
+        file_browser_keeps_its_semantic_role();
+        flame_graph_projects_profile_frames_into_semantics();
+        memory_map_projects_exact_regions_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn memory_map_projects_exact_regions_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::memory_map([
+        hl_gui::MemoryRegion::new(0x1000, 0x2000, "r-xp", "/bin/demo").expect("region"),
+        hl_gui::MemoryRegion::new(0x3000, 0x5000, "rw-p", "[heap]").expect("region"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let map = &tree.root.children[0];
+    assert_eq!(map.role, "MemoryMap");
+    assert_eq!(
+        map.value.as_deref(),
+        Some(
+            "0000000000001000-0000000000002000\tr-xp\t4096\t/bin/demo\n0000000000003000-0000000000005000\trw-p\t8192\t[heap]"
+        )
+    );
+    assert!(map.actions.is_empty());
+}
+
+fn file_browser_keeps_its_semantic_role() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::file_browser());
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let browser = &tree.root.children[0];
+    assert_eq!(browser.role, "FileBrowser");
+    assert!(browser.actions.is_empty());
+}
+
+fn flame_graph_projects_profile_frames_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::flame_graph([
+        hl_gui::FlameFrame::new("compiler::parse", 91).expect("frame"),
+        hl_gui::FlameFrame::new("compiler::emit", 34).expect("frame"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let profile = &tree.root.children[0];
+    assert_eq!(profile.role, "FlameGraph");
+    assert_eq!(
+        profile.value.as_deref(),
+        Some("91\tcompiler::parse\n34\tcompiler::emit")
+    );
+    assert!(profile.actions.is_empty());
+}
+
+fn json_preserves_source_in_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::json_view(r#"{"nested":{"ready":true}}"#));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let document = &tree.root.children[0];
+    assert_eq!(document.role, "JsonView");
+    assert_eq!(document.value.as_deref(), Some(r#"{"nested":{"ready":true}}"#));
+    assert!(document.actions.is_empty());
+}
+
+fn stack_frames_project_function_and_location() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::stack_trace().child(Element::stack_frame("host::dispatch", "src/host.rs:42")));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let frame = &tree.root.children[0].children[0];
+    assert_eq!(frame.role, "StackFrame");
+    assert_eq!(frame.label.as_deref(), Some("host::dispatch"));
+    assert_eq!(frame.value.as_deref(), Some("src/host.rs:42"));
+}
+
+fn sparkline_projects_bounded_samples_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::sparkline([1.0, 3.0, 2.0]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let trend = &tree.root.children[0];
+    assert_eq!(trend.role, "Sparkline");
+    assert_eq!(trend.value.as_deref(), Some("1,3,2"));
+    assert!(trend.actions.is_empty());
+}
+
+fn hex_view_projects_binary_text_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::hex_view(hl_gui::HexSource::Exact(b"\x7fELF")));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let binary = &tree.root.children[0];
+    assert_eq!(binary.role, "HexView");
+    assert_eq!(
+        binary.value.as_deref(),
+        Some("00000000  7f 45 4c 46                                       |.ELF|\n")
+    );
+    assert!(binary.actions.is_empty());
 }
 
 fn diff_lines_project_status_and_bounded_text() {
@@ -168,7 +268,10 @@ fn validation_summary_is_readable_and_keeps_corrective_actions() {
     assert_eq!(summary.label.as_deref(), Some("2 problems found"));
     assert_eq!(summary.value.as_deref(), Some("Correct the highlighted fields"));
     assert_eq!(summary.children[0].label.as_deref(), Some("Review name"));
-    assert_eq!(summary.children[0].actions, vec![hl_extension::SemanticActionKind::Invoke]);
+    assert_eq!(
+        summary.children[0].actions,
+        vec![hl_extension::SemanticActionKind::Invoke]
+    );
 }
 
 fn tag_input_exposes_value_actions_and_authored_tags() {
@@ -478,11 +581,18 @@ fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
 
     let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
     let controls = &tree.root.children[0].children;
-    assert_eq!(controls.len(), 1, "hidden controls stay out of the visible semantic tree");
+    assert_eq!(
+        controls.len(),
+        1,
+        "hidden controls stay out of the visible semantic tree"
+    );
     let disabled = &controls[0];
     assert_eq!(disabled.label.as_deref(), Some("Unavailable"));
     assert!(disabled.disabled, "disabled state remains understandable");
-    assert!(disabled.actions.is_empty(), "disabled controls advertise no executable actions");
+    assert!(
+        disabled.actions.is_empty(),
+        "disabled controls advertise no executable actions"
+    );
 
     let rejected = fixture.page.semantic_action(&hl_extension::PaneSemanticAction {
         revision: tree.revision,
@@ -491,7 +601,10 @@ fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
         value: None,
     });
     assert!(matches!(rejected, Err(hl_extension::HostError::Conflict(_))));
-    assert!(fixture.recorded.borrow().is_empty(), "a rejected action never reaches the extension");
+    assert!(
+        fixture.recorded.borrow().is_empty(),
+        "a rejected action never reaches the extension"
+    );
 
     let button = fixture
         .widgets()

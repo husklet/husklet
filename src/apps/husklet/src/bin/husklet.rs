@@ -436,6 +436,7 @@ impl Application {
         remove.add_css_class("menuitem");
         {
             let name = ws.name.clone();
+            let generation = ws.generation.clone();
             let app2 = self.0.clone();
             let list2 = list.clone();
             let pop2 = pop.clone();
@@ -446,11 +447,13 @@ impl Application {
                 let app = app2.clone();
                 let list = list2.clone();
                 let workspace_name = name.clone();
+                let workspace_generation = generation.clone();
                 RemoveWorkspace::new(name.clone()).present(parent.as_ref(), move || {
                     let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
                     remove_workspace(
                         &mut store,
                         &workspace_name,
+                        &workspace_generation,
                         |workspace| hl::runtime::domain::Domain::new(workspace).close(hl::runtime::domain::Close::Kill),
                         |workspace| Processes::close_workspace(&hl_ws::Workspace::storage_component(&workspace.name)),
                     )?;
@@ -491,20 +494,31 @@ impl Application {
 fn remove_workspace(
     store: &mut WorkspaceStore,
     name: &str,
+    generation: &str,
     close_domain: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
     close_launchers: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let workspace = store.get(name).cloned().ok_or_else(|| {
+    let mut workspace = store.get(name).cloned().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("Workspace {name:?} no longer exists."),
         )
     })?;
+    if workspace.generation != generation {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Workspace changed; inspect and consent again.",
+        ));
+    }
+    if generation.is_empty() {
+        workspace = store.adopt_generation(&workspace)?;
+    }
+    let generation = workspace.generation.clone();
     // Keep the persisted entry until teardown succeeds: it is the authority needed to locate and
     // verify the runtime. Removing it first makes a live domain impossible to reclaim safely.
     close_domain(&workspace)?;
     close_launchers(&workspace)?;
-    if store.remove(name)? {
+    if store.remove_if_generation(name, &generation)? {
         Ok(())
     } else {
         Err(std::io::Error::new(

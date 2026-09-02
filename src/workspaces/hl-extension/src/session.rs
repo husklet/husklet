@@ -131,6 +131,7 @@ impl Session {
             Request::WorkspaceList => self.workspaces(services),
             Request::WorkspaceInspect { .. }
             | Request::WorkspaceCreate { .. }
+            | Request::WorkspaceAdopt { .. }
             | Request::WorkspaceUpdate { .. }
             | Request::WorkspaceDelete { .. }
             | Request::WorkspaceStart { .. }
@@ -385,7 +386,9 @@ impl Session {
             Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
             Request::VolumeRemove { name, generation } => {
                 immutable_identity(generation, &[32], "volume generation")?;
-                port.remove(name, generation).map(|()| Reply::Done).map_err(Failure::from)
+                port.remove(name, generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             _ => unreachable!(),
         }
@@ -437,10 +440,27 @@ impl Session {
             Request::WorkspaceCreate { configuration } => {
                 Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
             }
-            Request::WorkspaceUpdate { name, configuration } => {
-                Ok(Reply::WorkspaceConfiguration(port.update(name, configuration)?))
+            Request::WorkspaceAdopt { configuration } => {
+                Ok(Reply::WorkspaceConfiguration(port.adopt(configuration)?))
             }
-            Request::WorkspaceDelete { name } => port.delete(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::WorkspaceUpdate {
+                name,
+                generation,
+                configuration,
+            } => {
+                immutable_identity(generation, &[32], "workspace generation")?;
+                Ok(Reply::WorkspaceConfiguration(port.update(
+                    name,
+                    generation,
+                    configuration,
+                )?))
+            }
+            Request::WorkspaceDelete { name, generation } => {
+                immutable_identity(generation, &[32], "workspace generation")?;
+                port.delete(name, generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             Request::WorkspaceStart { name } => port.start(name).map(|()| Reply::Done).map_err(Failure::from),
             Request::WorkspaceStop { name } => port.stop(name).map(|()| Reply::Done).map_err(Failure::from),
             Request::WorkspaceRestart { name } => port.restart(name).map(|()| Reply::Done).map_err(Failure::from),
@@ -455,9 +475,18 @@ impl Session {
         match request {
             Request::ExtensionList => Ok(Reply::Extensions(port.list()?)),
             Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
-            Request::ExtensionEnable { name } => port.enable(name).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ExtensionDisable { name } => port.disable(name).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ExtensionRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionEnable { name, image_digest } => {
+                immutable_digest(image_digest, "extension image")?;
+                port.enable(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ExtensionDisable { name, image_digest } => {
+                immutable_digest(image_digest, "extension image")?;
+                port.disable(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ExtensionRemove { name, image_digest } => {
+                immutable_digest(image_digest, "extension image")?;
+                port.remove(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ExtensionAcquisitionStart { reference } => {
                 acquisition_reference(reference)?;
                 Ok(Reply::ExtensionAcquisitionJob(port.acquisition_start(reference)?))
@@ -466,9 +495,9 @@ impl Session {
                 acquisition_job(job)?;
                 Ok(Reply::ExtensionAcquisition(port.acquisition_status(job)?))
             }
-            Request::ExtensionAcquisitionCancel { job } => {
+            Request::ExtensionAcquisitionCancel { job, revision } => {
                 acquisition_job(job)?;
-                port.acquisition_cancel(job)
+                port.acquisition_cancel(job, *revision)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
@@ -753,7 +782,9 @@ fn immutable_reference<'a>(id: &'a str, widths: &[usize], noun: &str) -> Result<
 fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
     let digest = value.strip_prefix("sha256:").unwrap_or_default();
     if digest.len() == 64
-        && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Ok(());
     }

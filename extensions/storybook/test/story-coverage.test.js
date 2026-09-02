@@ -14,6 +14,13 @@ import { KeyValueInspectorStory, KeyValueSource } from '../src/key-value-inspect
 import { MarkdownReviewStory } from '../src/markdown-review.js';
 import { storyCoverage } from '../src/story-coverage.js';
 import { DIFF_STORY, DiffReviewStory } from '../src/diff-review.js';
+import { JsonResponseStory } from '../src/json-response.js';
+import { StackTraceStory } from '../src/stack-trace.js';
+import { BinaryInspectionStory } from '../src/binary-inspection.js';
+import { ResourceMetricsStory } from '../src/resource-metrics.js';
+import { FileBrowserStory } from '../src/file-browser.js';
+import { ProfileInspectionStory, boundedFrames, FRAME_LIMIT } from '../src/profile-inspection.js';
+import { MemoryInspectionStory, boundedRegions, REGION_LIMIT } from '../src/memory-inspection.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -53,7 +60,14 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['event timeline', h(EventStreamStory, { source: new TimelineSource() })],
     ['key/value inspector', h(KeyValueInspectorStory, { source: new KeyValueSource() })],
     ['diff review', h(DiffReviewStory)],
+    ['JSON response', h(JsonResponseStory)],
+    ['stack trace', h(StackTraceStory)],
     ['markdown review', h(MarkdownReviewStory)],
+    ['binary inspection', h(BinaryInspectionStory)],
+    ['resource metrics', h(ResourceMetricsStory)],
+    ['file browser', h(FileBrowserStory)],
+    ['profile inspection', h(ProfileInspectionStory)],
+    ['memory inspection', h(MemoryInspectionStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -63,6 +77,24 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('memory inspection rejects invalid regions and enforces its hard ceiling', () => {
+  const regions = Array.from({ length: REGION_LIMIT + 9 }, (_, index) => ({ start: index * 4096, end: (index + 1) * 4096, permissions: 'r-xp', mapping: `segment-${index}` }));
+  regions.splice(1, 0, { start: 4, end: 4, permissions: 'rw-p', mapping: 'empty' });
+  const value = boundedRegions(regions);
+  assert.equal(value.split('\n').length, REGION_LIMIT);
+  assert(!value.includes('empty'));
+  assert(value.startsWith('0000000000000000-0000000000001000\tr-xp\t4096\tsegment-0'));
+});
+
+test('profile inspection rejects invalid frames and enforces its hard ceiling', () => {
+  const frames = Array.from({ length: FRAME_LIMIT + 17 }, (_, index) => ({ label: `frame-${index}`, samples: index + 1 }));
+  frames.splice(2, 0, { label: 'idle', samples: 0 }, { label: '', samples: 4 });
+  const value = boundedFrames(frames);
+  assert.equal(value.split('\n').length, FRAME_LIMIT);
+  assert(!value.includes('idle'));
+  assert(value.startsWith('1\tframe-0'));
 });
 
 test('the diff review is bounded, selectable, and switches presentation', () => {

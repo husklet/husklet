@@ -8,6 +8,8 @@
 //! reduces to the same frame a hand-built one would.
 
 mod content;
+
+pub use content::{FlameFrame, HexSource, HexView, MemoryRegion};
 mod control;
 mod structure;
 

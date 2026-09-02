@@ -167,7 +167,7 @@ export type ExtensionCapability =
   | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
   | 'extension-control' | 'extension-install' | 'filesystem-read'
   | 'filesystem-write' | 'interface';
-export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[] }
+export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[]; installed_image_digest: string | null }
 export interface ExtensionAcquisitionJob { job: string }
 export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }
 export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; progress: ExtensionAcquisitionProgress | null; candidate: ExtensionCandidate | null; error: string | null }
@@ -183,6 +183,7 @@ export interface WorkspaceTerminal {
   cursor_blink: boolean | null;
 }
 export interface WorkspaceConfiguration extends WorkspaceInfo {
+  generation?: string;
   storage: string | null;
   shell: string | null;
   cpus: number | null;
@@ -313,20 +314,22 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  update(name: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  delete(name: string): Promise<void>;
+  /** Assign identity to the exact still-unchanged generation-less legacy record. */
+  adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;
   extensions: {
     list(): Promise<ExtensionSummary[]>;
     inspect(name: string): Promise<ExtensionSummary>;
-    enable(name: string): Promise<void>;
-    disable(name: string): Promise<void>;
+    enable(name: string, imageDigest: string): Promise<void>;
+    disable(name: string, imageDigest: string): Promise<void>;
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
-    cancelAcquisition(job: string): Promise<void>;
+    cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
   };
@@ -352,7 +355,7 @@ export interface WorkspaceApi {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
-    remove(name: string): Promise<void>;
+    remove(name: string, imageDigest: string): Promise<void>;
   };
   networks: {
     list(): Promise<NetworkSummary[]>;

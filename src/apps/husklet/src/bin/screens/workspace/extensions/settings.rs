@@ -261,9 +261,11 @@ fn action(
     let semantic_refusal = refusal.clone();
     let shelf = Rc::clone(shelf);
     let name = entry.name.clone();
+    let image_digest = entry.image_digest.clone();
     let refusal = refusal.clone();
-    button.connect_clicked(move |_| commit(&shelf, &name, deed, &refusal));
+    button.connect_clicked(move |_| commit(&shelf, &name, &image_digest, deed, &refusal));
     let name = entry.name.clone();
+    let image_digest = entry.image_digest.clone();
     let semantic_button = button.clone();
     semantics.register(
         &format!("extensions/installed/{}/{label}", entry.name),
@@ -275,7 +277,9 @@ fn action(
             super::super::semantic::ActionKind::Focus,
         ],
         Rc::new(move |action, _| match action {
-            super::super::semantic::ActionKind::Invoke => commit(&semantic_shelf, &name, deed, &semantic_refusal),
+            super::super::semantic::ActionKind::Invoke => {
+                commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal)
+            }
             super::super::semantic::ActionKind::Focus => {
                 semantic_button.grab_focus();
             }
@@ -289,8 +293,8 @@ fn action(
 ///
 /// A refusal is shown on the page rather than logged, because the person is
 /// standing in front of the thing they just asked for.
-fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, deed: Deed, refusal: &gtk::Label) {
-    let done = apply(shelf, name, deed);
+fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label) {
+    let done = apply(shelf, name, image_digest, deed);
     if let Err(fault) = done {
         refusal.set_text(&fault.to_string());
         refusal.set_visible(true);
@@ -301,12 +305,12 @@ fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, deed: Deed, refusal: &gtk::La
 
 /// The roster call one deed stands for, with the borrow released before the
 /// shelf redraws from the same roster.
-fn apply(shelf: &Rc<Shelf>, name: &ExtensionName, deed: Deed) -> Result<(), Refusal> {
+fn apply(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed) -> Result<(), Refusal> {
     let mut roster = shelf.roster().borrow_mut();
     match deed {
-        Deed::Enable => roster.enable(name),
-        Deed::Disable => roster.disable(name),
-        Deed::Retry => roster.retry(name),
+        Deed::Enable => roster.enable_if_digest(name, image_digest),
+        Deed::Disable => roster.disable_if_digest(name, image_digest),
+        Deed::Retry => roster.retry_if_digest(name, image_digest),
     }
 }
 
@@ -415,6 +419,7 @@ fn removal(
     {
         let shelf = Rc::clone(shelf);
         let name = entry.name.clone();
+        let image_digest = entry.image_digest.clone();
         let confirm = confirm.clone();
         let cancel = cancel.clone();
         let refusal = refusal.clone();
@@ -427,6 +432,18 @@ fn removal(
         confirm.clone().connect_clicked(move |_| {
             semantics.set_disabled(&confirm_path, true);
             semantics.set_disabled(&cancel_path, true);
+            let unchanged = shelf
+                .roster()
+                .borrow()
+                .entries()
+                .into_iter()
+                .any(|entry| entry.name == name && entry.image_digest == image_digest);
+            if !unchanged {
+                refusal.set_text("The extension changed; inspect and confirm removal again.");
+                refusal.set_visible(true);
+                semantics.set_disabled(&cancel_path, false);
+                return;
+            }
             let entry = match shelf.quiesce(&name) {
                 Ok(entry) => entry,
                 Err(fault) => {
@@ -474,9 +491,10 @@ fn removal(
             let cancel_path = cancel_path.clone();
             let status_path = status_path.clone();
             let notice_path = notice_path.clone();
+            let confirmed_digest = image_digest.clone();
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || match answer.try_recv() {
                 Ok(Ok(())) => {
-                    let forgotten = shelf.roster().borrow_mut().remove(&name);
+                    let forgotten = shelf.roster().borrow_mut().remove_if_digest(&name, &confirmed_digest);
                     if let Err(fault) = forgotten {
                         let failure = format!(
                             "The managed sidecar was removed, but the installation record could not be forgotten: {fault}"

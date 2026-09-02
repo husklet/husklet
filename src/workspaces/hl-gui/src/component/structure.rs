@@ -150,6 +150,12 @@ impl Element {
         Self::new(Tag::DataTable)
     }
 
+    /// Files and directories over a windowed data source.
+    #[must_use]
+    pub fn file_browser() -> Self {
+        Self::new(Tag::FileBrowser)
+    }
+
     /// Property names and values over a windowed data source.
     #[must_use]
     pub fn key_value_table() -> Self {

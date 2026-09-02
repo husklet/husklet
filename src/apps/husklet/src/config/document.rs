@@ -1,4 +1,4 @@
-use super::{Arch, ExecutionLifetime, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig, io};
+use super::{io, Arch, ExecutionLifetime, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig};
 
 #[derive(Default)]
 pub(super) struct WorkspaceDocument {
@@ -75,6 +75,7 @@ impl WorkspaceDocument {
 #[derive(Default)]
 struct WsBuilder {
     name: Option<String>,
+    generation: Option<String>,
     image: Option<String>,
     arch: Option<Arch>,
     storage: Option<PathBuf>,
@@ -106,6 +107,7 @@ impl WsBuilder {
         let v = v.trim();
         match k {
             "name" => self.name = Some(v.to_string()),
+            "generation" => self.generation = Some(v.to_string()),
             "image" => self.image = Some(v.to_string()),
             "arch" => self.arch = Some(Arch::parse(v).ok_or_else(|| Value::new("architecture", v).invalid())?),
             "storage" if !v.is_empty() => self.storage = Some(PathBuf::from(v)),
@@ -205,6 +207,15 @@ impl WsBuilder {
         let name = self.name.ok_or_else(|| Self::missing("name"))?;
         let image = self.image.ok_or_else(|| Self::missing("image"))?;
         let arch = self.arch.ok_or_else(|| Self::missing("arch"))?;
+        let generation = self.generation.unwrap_or_default();
+        if !generation.is_empty()
+            && (generation.len() != 32
+                || !generation
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+        {
+            return Err(Value::new("generation", &generation).invalid());
+        }
         Ok(WorkspaceConfig {
             ws: Workspace {
                 name,
@@ -217,6 +228,7 @@ impl WsBuilder {
                 env: self.env,
                 mounts: self.mounts,
             },
+            generation,
             docker_sock: self.docker_sock.unwrap_or(true),
             scrollback: match self.scrollback {
                 ScrollbackValue::Missing => Some(super::DEFAULT_SCROLLBACK_LINES),

@@ -466,6 +466,8 @@ pub struct WorkspaceState {
 /// Complete extension-facing workspace configuration.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct WorkspaceConfiguration {
+    #[serde(default)]
+    pub generation: String,
     pub name: String,
     pub image: String,
     pub architecture: String,
@@ -538,6 +540,8 @@ pub struct ExtensionCandidate {
     pub version: String,
     pub image_digest: String,
     pub requested: crate::Grant,
+    #[serde(default)]
+    pub installed_image_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -568,13 +572,13 @@ pub trait ExtensionStore {
     fn inspect(&self, _name: &str) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension inspection is unavailable".into()))
     }
-    fn enable(&self, _name: &str) -> Result<(), HostError> {
+    fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension enable is unavailable".into()))
     }
-    fn disable(&self, _name: &str) -> Result<(), HostError> {
+    fn disable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension disable is unavailable".into()))
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension removal is unavailable".into()))
     }
     fn acquisition_start(&self, _reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
@@ -583,7 +587,7 @@ pub trait ExtensionStore {
     fn acquisition_status(&self, _job: &str) -> Result<ExtensionAcquisitionStatus, HostError> {
         Err(HostError::Unsupported("extension acquisition is unavailable".into()))
     }
-    fn acquisition_cancel(&self, _job: &str) -> Result<(), HostError> {
+    fn acquisition_cancel(&self, _job: &str, _revision: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension acquisition is unavailable".into()))
     }
     fn install(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
@@ -948,14 +952,18 @@ pub trait WorkspaceControl {
     fn create(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }
+    fn adopt(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        Err(workspace_control_unavailable())
+    }
     fn update(
         &self,
         _name: &str,
+        _generation: &str,
         _configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }
-    fn delete(&self, _name: &str) -> Result<(), HostError> {
+    fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         Err(workspace_control_unavailable())
     }
     fn start(&self, _name: &str) -> Result<(), HostError> {

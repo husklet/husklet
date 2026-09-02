@@ -32,6 +32,7 @@ mod size;
 mod style;
 
 pub use builder::Surface;
+pub use component::{FlameFrame, HexSource, HexView, MemoryRegion};
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
     Version,
@@ -52,3 +53,15 @@ pub use style::{Align, Bounds, Density, Edges, Length, Rgb, Scale, Theme, Token,
 /// characters beyond this bound so a long-running operational surface cannot
 /// grow host memory without limit.
 pub const LOG_VIEW_CHARACTER_LIMIT: i32 = 4_096;
+
+/// Maximum number of source bytes a [`Tag::HexView`] renders.
+pub const HEX_VIEW_BYTE_LIMIT: usize = 4_096;
+
+/// Maximum finite samples retained by a [`Tag::Sparkline`].
+pub const SPARKLINE_SAMPLE_LIMIT: usize = 64;
+
+/// Maximum number of profile frames retained by a [`Tag::FlameGraph`].
+pub const FLAME_GRAPH_FRAME_LIMIT: usize = 64;
+
+/// Maximum number of address regions retained by a [`Tag::MemoryMap`].
+pub const MEMORY_MAP_REGION_LIMIT: usize = 128;

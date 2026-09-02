@@ -93,11 +93,95 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
         return;
     }
     markdown_is_safe_selectable_and_structured();
+    json_is_selectable_string_safe_and_depth_bounded();
+    hex_view_is_selectable_and_monospaced();
+    flame_graph_is_bounded_selectable_and_proportional();
+    memory_map_is_bounded_selectable_and_columnar();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn memory_map_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let map = session.producer.create(Tag::MemoryMap);
+    session.producer.append(NodeId::ROOT, map);
+    let value = (0..150)
+        .map(|index| {
+            format!(
+                "{index:016x}-{end:016x}\tr-xp\t4096\tsegment-{index}",
+                end = index + 4096
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(map, Prop::Value, PropValue::text(value));
+    session.flush().expect("memory map renders");
+    let widget = session.tagged(Tag::MemoryMap).expect("memory map widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels.len(), 128 * 4, "128 regions each retain four native columns");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert_eq!(labels[1].text(), "r-xp");
+    assert_eq!(labels[3].text(), "segment-0");
+}
+
+fn flame_graph_is_bounded_selectable_and_proportional() {
+    let mut session = Session::new();
+    let graph = session.producer.create(Tag::FlameGraph);
+    session.producer.append(NodeId::ROOT, graph);
+    let value = (1..=80)
+        .map(|index| format!("{index}\tframe-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(graph, Prop::Value, PropValue::text(value));
+    session.flush().expect("flame graph renders");
+    let widget = session.tagged(Tag::FlameGraph).expect("flame graph widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    let bars = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::ProgressBar>().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels.len(),
+        64,
+        "the adapter independently enforces the public ceiling"
+    );
+    assert_eq!(bars.len(), 64, "one native bar is rendered for every retained frame");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert!(bars[0].fraction() < bars[63].fraction());
+    assert_eq!(bars[63].fraction(), 1.0);
+}
+
+fn hex_view_is_selectable_and_monospaced() {
+    let mut session = Session::new();
+    let view = session.producer.create(Tag::HexView);
+    session.producer.append(NodeId::ROOT, view);
+    session
+        .producer
+        .set(view, Prop::Value, PropValue::text("00000000  7f 45 4c 46  |.ELF|"));
+    session.flush().expect("hex view renders");
+    let scroller = session.tagged(Tag::HexView).expect("hex widget");
+    let text = subtree(&scroller)
+        .into_iter()
+        .find_map(|child| child.downcast::<gtk::TextView>().ok())
+        .expect("hex view owns text");
+    assert!(!text.is_editable());
+    assert!(text.is_monospace());
+    assert_eq!(
+        text.buffer()
+            .text(&text.buffer().start_iter(), &text.buffer().end_iter(), false),
+        "00000000  7f 45 4c 46  |.ELF|"
+    );
 }
 
 /// A tag that no builder maps is the defect this catches: the surface would
@@ -788,7 +872,8 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::DataTable
         | Tag::KeyValueTable
         | Tag::TreeTable
-        | Tag::EventStream => Aspect::Grow,
+        | Tag::EventStream
+        | Tag::FileBrowser => Aspect::Grow,
         Tag::Tree | Tag::Drawer => Aspect::Grow,
         Tag::DrawerPanel => Aspect::Revealed,
         Tag::Rating => Aspect::Stars,
@@ -814,8 +899,13 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::PasswordEntry
         | Tag::TextField
         | Tag::CodeView
+        | Tag::HexView
         | Tag::MarkdownView
+        | Tag::JsonView
         | Tag::LogView => Aspect::Value,
+        Tag::Sparkline => Aspect::Value,
+        Tag::FlameGraph => Aspect::Value,
+        Tag::MemoryMap => Aspect::Value,
         _ => structural(tag),
     }
 }
@@ -837,7 +927,38 @@ fn markdown_is_safe_selectable_and_structured() {
         .expect("markdown owns a text label");
     assert!(label.is_selectable(), "document text must be copyable");
     assert_eq!(label.text(), "Release <unsafe>\n• bounded\nlet x = 1;");
-    assert!(!label.text().contains("```"), "fence syntax is presentation, not content");
+    assert!(
+        !label.text().contains("```"),
+        "fence syntax is presentation, not content"
+    );
+}
+
+fn json_is_selectable_string_safe_and_depth_bounded() {
+    let mut session = Session::new();
+    let document = session.producer.create(Tag::JsonView);
+    session.producer.append(NodeId::ROOT, document);
+    session.producer.set(
+        document,
+        Prop::Value,
+        PropValue::text(r#"{"message":"{literal},:[]","items":[1,2]}"#),
+    );
+    session.flush().expect("json renders");
+    let widget = session.tagged(Tag::JsonView).expect("json widget");
+    let view = subtree(&widget)
+        .into_iter()
+        .find_map(|child| child.downcast::<gtk::TextView>().ok())
+        .expect("json owns a text view");
+    assert!(!view.is_editable());
+    assert!(view.is_monospace());
+    let rendered = written_text(&view);
+    assert!(
+        rendered.contains("\"{literal},:[]\""),
+        "punctuation inside strings is untouched"
+    );
+    assert!(
+        rendered.contains("\n  \"items\": ["),
+        "objects and arrays are structured"
+    );
 }
 
 /// The families whose principal property is how they arrange what they hold.
@@ -868,6 +989,8 @@ fn structural(tag: Tag) -> Aspect {
         Tag::Dialog | Tag::DialogContent | Tag::DialogActions | Tag::Menu => Aspect::Gap,
         Tag::DiffViewer => Aspect::Gap,
         Tag::DiffLine => Aspect::Value,
+        Tag::StackTrace => Aspect::Gap,
+        Tag::StackFrame => Aspect::Value,
         // Everything else names itself: a caption is what it carries.
         _ => Aspect::Label,
     }
@@ -890,28 +1013,65 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_tag_input_keeps_retained_tags_before_its_editor();
     a_validation_summary_keeps_actions_below_its_message();
     diff_lines_are_selectable_and_keep_status_beside_content();
+    stack_frames_keep_selectable_function_and_location();
 }
 
 fn diff_lines_are_selectable_and_keep_status_beside_content() {
     let session = placed(Tag::DiffViewer, &[Tag::DiffLine]);
     let line = session.tagged(Tag::DiffLine).expect("a diff line renders");
     let parts = offspring(&line);
-    let status = parts.first().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("status");
-    let content = parts.last().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("content");
+    let status = parts
+        .first()
+        .and_then(|part| part.downcast_ref::<gtk::Label>())
+        .expect("status");
+    let content = parts
+        .last()
+        .and_then(|part| part.downcast_ref::<gtk::Label>())
+        .expect("content");
     assert!(!status.is_selectable());
     assert!(content.is_selectable(), "diff text cannot be selected and copied");
     assert!(content.has_css_class("monospace"));
 }
 
+fn stack_frames_keep_selectable_function_and_location() {
+    let mut session = Session::new();
+    let trace = session.producer.create(Tag::StackTrace);
+    session.producer.append(NodeId::ROOT, trace);
+    let id = session.producer.create(Tag::StackFrame);
+    session.producer.append(trace, id);
+    session.producer.set(id, Prop::Label, PropValue::text("host::dispatch"));
+    session.producer.set(id, Prop::Value, PropValue::text("src/host.rs:42"));
+    session.flush().expect("stack frame renders");
+    let frame = session.tagged(Tag::StackFrame).expect("stack frame");
+    let labels = subtree(&frame)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.text() == "host::dispatch" && label.is_selectable())
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.text() == "src/host.rs:42" && label.is_selectable())
+    );
+}
+
 fn a_validation_summary_keeps_actions_below_its_message() {
     let session = placed(Tag::ValidationSummary, &[Tag::Button]);
-    let summary = session.tagged(Tag::ValidationSummary).expect("a validation summary renders");
+    let summary = session
+        .tagged(Tag::ValidationSummary)
+        .expect("a validation summary renders");
     let body = offspring(&summary)
         .into_iter()
         .find(|part| part.has_css_class("hl-validation-body"))
         .expect("validation summary message body");
     assert!(
-        offspring(&body).last().is_some_and(|part| part.has_css_class("hl-button")),
+        offspring(&body)
+            .last()
+            .is_some_and(|part| part.has_css_class("hl-button")),
         "the corrective action is not grouped below the validation message"
     );
 }

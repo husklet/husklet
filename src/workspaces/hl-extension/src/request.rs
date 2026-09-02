@@ -32,12 +32,17 @@ pub enum Request {
     WorkspaceCreate {
         configuration: WorkspaceConfiguration,
     },
+    WorkspaceAdopt {
+        configuration: WorkspaceConfiguration,
+    },
     WorkspaceUpdate {
         name: String,
+        generation: String,
         configuration: WorkspaceConfiguration,
     },
     WorkspaceDelete {
         name: String,
+        generation: String,
     },
     WorkspaceStart {
         name: String,
@@ -54,12 +59,15 @@ pub enum Request {
     },
     ExtensionEnable {
         name: String,
+        image_digest: String,
     },
     ExtensionDisable {
         name: String,
+        image_digest: String,
     },
     ExtensionRemove {
         name: String,
+        image_digest: String,
     },
     ExtensionAcquisitionStart {
         reference: String,
@@ -69,6 +77,7 @@ pub enum Request {
     },
     ExtensionAcquisitionCancel {
         job: String,
+        revision: u64,
     },
     ExtensionInstall {
         job: String,
@@ -303,6 +312,7 @@ impl Request {
         match self {
             Self::WorkspaceInfo | Self::WorkspaceList | Self::WorkspaceInspect { .. } => Capability::WorkspaceRead,
             Self::WorkspaceCreate { .. }
+            | Self::WorkspaceAdopt { .. }
             | Self::WorkspaceUpdate { .. }
             | Self::WorkspaceDelete { .. }
             | Self::WorkspaceStart { .. }
@@ -666,7 +676,11 @@ mod tests {
         );
         assert_eq!(Request::WorkspaceList.capability(), Capability::WorkspaceRead);
         assert_eq!(
-            Request::WorkspaceDelete { name: "other".into() }.capability(),
+            Request::WorkspaceDelete {
+                name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
+            }
+            .capability(),
             Capability::WorkspaceControl
         );
     }

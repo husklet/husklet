@@ -141,24 +141,24 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     },
   };
   const operations = [
-    api.inspect('other'), api.create(configuration), api.update('other', configuration),
-    api.delete('other'), api.start('other'), api.stop('other'), api.restart('other'),
+    api.inspect('other'), api.create(configuration), api.adopt({ ...configuration, generation: '' }), api.update('other', '0123456789abcdef0123456789abcdef', configuration),
+    api.delete('other', '0123456789abcdef0123456789abcdef'), api.start('other'), api.stop('other'), api.restart('other'),
   ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls.map((call) => call.call), [
-    'workspace_inspect', 'workspace_create', 'workspace_update', 'workspace_delete',
+    'workspace_inspect', 'workspace_create', 'workspace_adopt', 'workspace_update', 'workspace_delete',
     'workspace_start', 'workspace_stop', 'workspace_restart',
   ]);
   for (let index = 0; index < operations.length; index += 1) {
-    const payload = index < 3
+    const payload = index < 4
       ? { reply: 'workspace_configuration', with: configuration }
       : { reply: 'done' };
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   }
   const results = await Promise.all(operations);
-  assert.deepEqual(results.slice(0, 3), [configuration, configuration, configuration]);
-  assert.deepEqual(results.slice(3), [undefined, undefined, undefined, undefined]);
+  assert.deepEqual(results.slice(0, 4), [configuration, configuration, configuration, configuration]);
+  assert.deepEqual(results.slice(4), [undefined, undefined, undefined, undefined]);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -295,14 +295,14 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1'), api.extensions.install('job-1', 7, ['interface', 'container-attach']),
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, ['interface', 'container-attach']),
     api.extensions.update('job-2', 8, ['container-read'])];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
-    { call: 'extension_acquisition_cancel', with: { job: 'job-1' } },
+    { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
     { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface', 'container-attach'] } },
     { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['container-read'] } },
   ]);
@@ -323,16 +323,16 @@ test('extension facade preserves exact read and control request shapes', async (
   await next();
   const api = workspace(stage.session);
   const operations = [api.extensions.list(), api.extensions.inspect('workspace-manager'),
-    api.extensions.enable('workspace-manager'), api.extensions.disable('workspace-manager'),
-    api.extensions.remove('workspace-manager')];
+    api.extensions.enable('workspace-manager', `sha256:${'a'.repeat(64)}`), api.extensions.disable('workspace-manager', `sha256:${'a'.repeat(64)}`),
+    api.extensions.remove('workspace-manager', `sha256:${'a'.repeat(64)}`)];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_list' },
     { call: 'extension_inspect', with: { name: 'workspace-manager' } },
-    { call: 'extension_enable', with: { name: 'workspace-manager' } },
-    { call: 'extension_disable', with: { name: 'workspace-manager' } },
-    { call: 'extension_remove', with: { name: 'workspace-manager' } },
+    { call: 'extension_enable', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
+    { call: 'extension_disable', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
+    { call: 'extension_remove', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
   ]);
   const summary = { name: 'workspace-manager', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }));

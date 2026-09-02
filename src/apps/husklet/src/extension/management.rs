@@ -69,18 +69,27 @@ impl ExtensionStore for ExtensionManagement {
             .ok_or_else(|| HostError::Absent(name.to_string()))
     }
 
-    fn enable(&self, name: &str) -> Result<(), HostError> {
-        let result = self.roster()?.enable(&Self::name(name)?).map_err(failure);
+    fn enable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .enable_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
         self.changed(result)
     }
 
-    fn disable(&self, name: &str) -> Result<(), HostError> {
-        let result = self.roster()?.disable(&Self::name(name)?).map_err(failure);
+    fn disable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .disable_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
         self.changed(result)
     }
 
-    fn remove(&self, name: &str) -> Result<(), HostError> {
-        let result = self.roster()?.remove(&Self::name(name)?).map_err(failure);
+    fn remove(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .remove_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
         self.changed(result)
     }
 
@@ -96,8 +105,8 @@ impl ExtensionStore for ExtensionManagement {
         Ok(acquisition_status(job.wire(), snapshot))
     }
 
-    fn acquisition_cancel(&self, job: &str) -> Result<(), HostError> {
-        self.acquisitions.cancel(AcquisitionJob::parse(job)?)
+    fn acquisition_cancel(&self, job: &str, revision: u64) -> Result<(), HostError> {
+        self.acquisitions.cancel(AcquisitionJob::parse(job)?, revision)
     }
 
     fn install(&self, job: &str, revision: u64, granted: &Grant) -> Result<ExtensionSummary, HostError> {
@@ -161,6 +170,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 version: candidate.version,
                 image_digest: candidate.digest,
                 requested: candidate.requested,
+                installed_image_digest: candidate.installed_digest,
             };
             ("ready", None, Some(candidate), None)
         }
@@ -235,15 +245,36 @@ mod tests {
     }
 
     #[test]
+    fn ready_status_exposes_the_installed_generation_that_consent_is_bound_to() {
+        let status = acquisition_status(
+            "9".into(),
+            AcquisitionSnapshot {
+                reference: "registry.example/team/tool:2".into(),
+                revision: 7,
+                state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                    reference: "registry.example/team/tool:2".into(),
+                    digest: "sha256:new".into(),
+                    name: "sample".into(),
+                    version: "2".into(),
+                    requested: Grant::new([hl_extension::Capability::Interface]),
+                    installed_digest: Some("sha256:old".into()),
+                }),
+            },
+        );
+        assert_eq!(
+            status.candidate.unwrap().installed_image_digest.as_deref(),
+            Some("sha256:old")
+        );
+    }
+
+    #[test]
     fn management_composes_initial_and_mutated_inventory_events() {
         let root = tempfile::tempdir().unwrap();
         let management = ExtensionManagement::new(&workspace(root.path()));
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        // Removing an absent name is an idempotent durable mutation and still
-        // republishes the latest full inventory for a subscribed peer.
-        management.remove("absent").unwrap();
-        assert!(events.drain().unwrap().inventory.unwrap().is_empty());
+        assert!(management.remove("absent", &format!("sha256:{}", "a".repeat(64))).is_err());
+        assert!(events.drain().is_none());
     }
 }

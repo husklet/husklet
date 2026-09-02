@@ -187,6 +187,8 @@ pub struct TerminalPreferences {
 pub struct WorkspaceConfig {
     /// The bare run primitive.
     pub ws: Workspace,
+    /// Immutable identity of this persisted workspace incarnation.
+    pub generation: String,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
     /// Terminal scrollback (lines of history each shell retains). `None` = explicitly unlimited. A
@@ -230,6 +232,7 @@ impl WorkspaceConfig {
     pub fn from_ws(ws: Workspace) -> WorkspaceConfig {
         WorkspaceConfig {
             ws,
+            generation: uuid::Uuid::new_v4().simple().to_string(),
             docker_sock: true,
             scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             vpn: None,
@@ -297,7 +300,38 @@ pub struct WorkspaceStore {
     items: Vec<WorkspaceConfig>,
 }
 
+#[cfg(feature = "runtime")]
+struct WorkspaceMutationLock {
+    _process: std::sync::MutexGuard<'static, ()>,
+    _file: std::fs::File,
+}
+
 impl WorkspaceStore {
+    #[cfg(feature = "runtime")]
+    fn lock_and_reload(&mut self) -> io::Result<WorkspaceMutationLock> {
+        use fs2::FileExt as _;
+        static PROCESS: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let process = PROCESS
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .map_err(|_| io::Error::other("workspace mutation lock poisoned"))?;
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let lock_path = self.path.with_extension("conf.lock");
+        let lock = std::fs::OpenOptions::new().create(true).read(true).write(true).open(lock_path)?;
+        lock.lock_exclusive()?;
+        self.items = match std::fs::read_to_string(&self.path) {
+            Ok(text) => WorkspaceDocument::parse(&text)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(WorkspaceMutationLock {
+            _process: process,
+            _file: lock,
+        })
+    }
+
     /// Opens the store at `path`. An absent file is an empty store.
     ///
     /// # Errors
@@ -331,6 +365,15 @@ impl WorkspaceStore {
     /// Add or replace a workspace by name, then persist.
     pub fn upsert(&mut self, ws: WorkspaceConfig) -> io::Result<()> {
         #[cfg(feature = "runtime")]
+        let _lock = self.lock_and_reload()?;
+        self.upsert_unlocked(ws)
+    }
+
+    fn upsert_unlocked(&mut self, mut ws: WorkspaceConfig) -> io::Result<()> {
+        if let Some(existing) = self.get(&ws.name) {
+            ws.generation.clone_from(&existing.generation);
+        }
+        #[cfg(feature = "runtime")]
         let existed = self.items.iter().any(|workspace| workspace.name == ws.name);
         #[cfg(feature = "runtime")]
         let name = ws.name.clone();
@@ -351,8 +394,56 @@ impl WorkspaceStore {
         Ok(())
     }
 
+    /// Replace a workspace only while it is still the generation the caller inspected.
+    pub fn upsert_if_generation(&mut self, expected: &str, mut ws: WorkspaceConfig) -> io::Result<()> {
+        #[cfg(feature = "runtime")]
+        let _lock = self.lock_and_reload()?;
+        let current = self.get(&ws.name).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Workspace {:?} no longer exists.", ws.name),
+            )
+        })?;
+        if expected.is_empty() || current.generation != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "workspace changed; inspect and consent again",
+            ));
+        }
+        ws.generation.clone_from(&current.generation);
+        self.upsert_unlocked(ws)
+    }
+
+    /// Assign identity to one exact legacy record without changing its configuration.
+    #[cfg(feature = "runtime")]
+    pub fn adopt_generation(&mut self, expected: &WorkspaceConfig) -> io::Result<WorkspaceConfig> {
+        let _lock = self.lock_and_reload()?;
+        let current = self.get(&expected.name).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "workspace no longer exists"))?;
+        if !expected.generation.is_empty() || current != expected {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "workspace changed; inspect again"));
+        }
+        let mut adopted = current.clone();
+        adopted.generation = uuid::Uuid::new_v4().simple().to_string();
+        let mut items = self.items.clone();
+        let position = items
+            .iter()
+            .position(|workspace| workspace.name == adopted.name)
+            .expect("the checked legacy workspace remains present while locked");
+        items[position] = adopted.clone();
+        self.save(&items)?;
+        self.items = items;
+        crate::workspace_lifecycle::changed(&adopted.name, hl_extension::WorkspaceLifecycleAction::Update);
+        Ok(adopted)
+    }
+
     /// Remove a workspace by name; returns whether one was removed, then persists.
     pub fn remove(&mut self, name: &str) -> io::Result<bool> {
+        #[cfg(feature = "runtime")]
+        let _lock = self.lock_and_reload()?;
+        self.remove_unlocked(name)
+    }
+
+    fn remove_unlocked(&mut self, name: &str) -> io::Result<bool> {
         let mut items = self.items.clone();
         let before = items.len();
         items.retain(|workspace| workspace.name != name);
@@ -366,6 +457,22 @@ impl WorkspaceStore {
         Ok(removed)
     }
 
+    /// Remove a workspace only while it is still the generation the caller inspected.
+    pub fn remove_if_generation(&mut self, name: &str, expected: &str) -> io::Result<bool> {
+        #[cfg(feature = "runtime")]
+        let _lock = self.lock_and_reload()?;
+        let current = self
+            .get(name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Workspace {name:?} no longer exists.")))?;
+        if expected.is_empty() || current.generation != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "workspace changed; inspect and consent again",
+            ));
+        }
+        self.remove_unlocked(name)
+    }
+
     fn save(&self, items: &[WorkspaceConfig]) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -374,6 +481,7 @@ impl WorkspaceStore {
         for w in items {
             out.section();
             out.field("name", &w.name);
+            out.field("generation", &w.generation);
             out.field("image", &w.image);
             out.field("arch", w.arch.as_str());
             if let Some(s) = &w.storage {

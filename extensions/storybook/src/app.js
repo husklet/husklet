@@ -38,20 +38,30 @@ import { KEY_VALUE_STORY, KeyValueInspectorStory } from './key-value-inspector.j
 import { MARKDOWN_STORY, MarkdownReviewStory } from './markdown-review.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 import { DIFF_STORY, DiffReviewStory } from './diff-review.js';
+import { JSON_STORY, JsonResponseStory } from './json-response.js';
+import { STACK_STORY, StackTraceStory } from './stack-trace.js';
+import { BINARY_STORY, BinaryInspectionStory } from './binary-inspection.js';
+import { METRICS_STORY, ResourceMetricsStory } from './resource-metrics.js';
+import { FILE_BROWSER_STORY, FileBrowserStory } from './file-browser.js';
+import { PROFILE_STORY, ProfileInspectionStory } from './profile-inspection.js';
+import { MEMORY_STORY, MemoryInspectionStory } from './memory-inspection.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
 const INTERACTION_HISTORY = 5;
 
 /** The whole playground. */
-export function Playground({ largeSource, timelineSource, keyValueSource, initialStory = OPENING } = {}) {
+export function Playground({ largeSource, timelineSource, keyValueSource, fileSource, initialStory = OPENING } = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
   const [edited, setEdited] = useState(() => new Map());
 
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
     || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
-    || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY;
+    || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY
+    || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
+    || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
+    || selected === MEMORY_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -66,7 +76,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, initia
     { gap: 0, grow: true, wrap: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
-    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, timelineSource, keyValueSource, triggers: contract?.triggers ?? [] }),
+    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, timelineSource, keyValueSource, fileSource, triggers: contract?.triggers ?? [] }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
     h(Inspector, {
       key: 'inspector',
@@ -88,6 +98,26 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, { key: MEMORY_STORY, label: MEMORY_STORY, selected: selected === MEMORY_STORY, onInvoke: () => onSelect(MEMORY_STORY) }),
+      h(ListItemButton, { key: PROFILE_STORY, label: PROFILE_STORY, selected: selected === PROFILE_STORY, onInvoke: () => onSelect(PROFILE_STORY) }),
+      h(ListItemButton, {
+        key: FILE_BROWSER_STORY,
+        label: FILE_BROWSER_STORY,
+        selected: selected === FILE_BROWSER_STORY,
+        onInvoke: () => onSelect(FILE_BROWSER_STORY),
+      }),
+      h(ListItemButton, {
+        key: METRICS_STORY,
+        label: METRICS_STORY,
+        selected: selected === METRICS_STORY,
+        onInvoke: () => onSelect(METRICS_STORY),
+      }),
+      h(ListItemButton, {
+        key: BINARY_STORY,
+        label: BINARY_STORY,
+        selected: selected === BINARY_STORY,
+        onInvoke: () => onSelect(BINARY_STORY),
+      }),
       h(ListItemButton, {
         key: ACQUISITION_STORY,
         label: ACQUISITION_STORY,
@@ -117,6 +147,18 @@ export function Sidebar({ families, selected, onSelect }) {
         label: KEY_VALUE_STORY,
         selected: selected === KEY_VALUE_STORY,
         onInvoke: () => onSelect(KEY_VALUE_STORY),
+      }),
+      h(ListItemButton, {
+        key: JSON_STORY,
+        label: JSON_STORY,
+        selected: selected === JSON_STORY,
+        onInvoke: () => onSelect(JSON_STORY),
+      }),
+      h(ListItemButton, {
+        key: STACK_STORY,
+        label: STACK_STORY,
+        selected: selected === STACK_STORY,
+        onInvoke: () => onSelect(STACK_STORY),
       }),
       h(ListItemButton, {
         key: MARKDOWN_STORY,
@@ -158,7 +200,7 @@ export function Sidebar({ families, selected, onSelect }) {
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened, largeSource, timelineSource, keyValueSource, triggers = [] }) {
+export function Preview({ name, opened, largeSource, timelineSource, keyValueSource, fileSource, triggers = [] }) {
   const [interactions, setInteractions] = useState([]);
   const sequence = useRef(0);
   const handlers = interactionProps(triggers, (trigger, event) => {
@@ -172,7 +214,17 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      name === ACQUISITION_STORY
+      name === MEMORY_STORY
+        ? h(MemoryInspectionStory)
+        : name === PROFILE_STORY
+        ? h(ProfileInspectionStory)
+        : name === FILE_BROWSER_STORY && fileSource
+        ? h(FileBrowserStory)
+        : name === METRICS_STORY
+        ? h(ResourceMetricsStory)
+        : name === BINARY_STORY
+        ? h(BinaryInspectionStory)
+        : name === ACQUISITION_STORY
         ? h(AcquisitionProgressStory)
         : name === DIFF_STORY
         ? h(DiffReviewStory)
@@ -188,6 +240,10 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
         ? h(KeyValueInspectorStory, { source: keyValueSource })
         : name === MARKDOWN_STORY
         ? h(MarkdownReviewStory)
+        : name === JSON_STORY
+        ? h(JsonResponseStory)
+        : name === STACK_STORY
+        ? h(StackTraceStory)
         : name === NAVIGATION_STORY
         ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource

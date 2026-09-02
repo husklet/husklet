@@ -284,6 +284,7 @@ catalogue! {
     KeyValueTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     TreeTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     EventStream: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
+    FileBrowser: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     TablePagination: children, props[Value, Label, Gap], triggers[],
 
     // Trees: a hierarchy described as nodes rather than windowed as rows.
@@ -327,12 +328,19 @@ catalogue! {
 
     // Content: long-form text and media.
     CodeView: leaf, props[Value, Monospace], triggers[],
+    HexView: leaf, props[Value, Monospace], triggers[],
     MarkdownView: leaf, props[Value], triggers[],
+    JsonView: leaf, props[Value], triggers[],
     LogView: leaf, props[Value, Monospace], triggers[],
     Video: leaf, props[Uri], triggers[],
     Chart: leaf, props[Label, Tone], triggers[],
+    Sparkline: leaf, props[Value, Tone], triggers[],
+    FlameGraph: leaf, props[Value, Tone], triggers[],
+    MemoryMap: leaf, props[Value, Tone], triggers[],
     DiffViewer: children, props[Gap, Orientation], triggers[],
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
+    StackTrace: children, props[Gap], triggers[],
+    StackFrame: leaf, props[Label, Value, Tone], triggers[],
 }
 
 #[cfg(test)]

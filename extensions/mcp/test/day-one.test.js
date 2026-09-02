@@ -22,7 +22,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const containerId = 'a'.repeat(64);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-day-one-'));
   const socketPath = path.join(scratch, 'host.sock');
-  const original = configuration('alpine:3.20');
+  const original = { ...configuration('alpine:3.20'), generation: '0123456789abcdef0123456789abcdef' };
   const updated = configuration('alpine:3.21');
   const calls = [];
   const credits = [];
@@ -58,7 +58,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
         });
         else if (call === 'workspace_inspect') answer(frame, 'workspace_configuration', original);
         else if (call === 'workspace_update') answer(frame, 'workspace_configuration', argument.configuration);
-        else if (call === 'container_create') answer(frame, 'identity', { id: containerId });
+        else if (call === 'container_create') answer(frame, 'identity', containerId);
         else if (call === 'container_start' || call === 'container_stop' || call === 'container_remove'
           || call === 'terminal_write_pane' || call === 'pane_semantic_action'
           || call === 'event_subscribe' || call === 'event_unsubscribe') {
@@ -70,7 +70,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
           })));
           if (call === 'terminal_write_pane') changed('terminal-1', 'terminal', 2);
           if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8);
-        } else if (call === 'container_exec') answer(frame, 'identity', { id: 'execution-day-one' });
+        } else if (call === 'container_exec') answer(frame, 'identity', 'execution-day-one');
         else if (call === 'container_processes') answer(frame, 'processes', [{ pid: 7, command: 'worker', user: 'app' }]);
         else if (call === 'pane_list') answer(frame, 'panes', { panes: [
           { slot: 'terminal-1', kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true },
@@ -113,6 +113,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   });
   assert.equal(result.container.imagePull.job, '7');
   assert.equal(result.container.imagePull.state, 'complete');
+  assert.deepEqual(result.container.created, { id: containerId });
   assert.equal(result.container.execution.id, 'execution-day-one');
   assert.equal(result.terminal.changed.changed, true);
   assert.equal(result.semantic.node, 5);
@@ -145,6 +146,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     slot: 'surface-1', action: { revision: 7, node: 5, action: 'invoke' },
   });
   assert.deepEqual(calls.filter(({ call }) => call === 'workspace_update').map(({ with: value }) => value), [
-    { name: 'target', configuration: updated }, { name: 'target', configuration: original },
+    { name: 'target', generation: original.generation, configuration: updated },
+    { name: 'target', generation: original.generation, configuration: configuration('alpine:3.20') },
   ]);
 });

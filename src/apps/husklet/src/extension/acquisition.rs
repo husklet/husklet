@@ -44,6 +44,7 @@ pub(crate) struct AcquisitionCandidate {
     pub name: String,
     pub version: String,
     pub requested: Grant,
+    pub installed_digest: Option<String>,
 }
 
 /// A revisioned snapshot suitable for polling across a socket boundary.
@@ -117,6 +118,7 @@ pub(crate) struct ExtensionAcquisitions {
     registry: Arc<Mutex<Registry>>,
     acquire: Arc<Acquire>,
     events: ExtensionEvents,
+    commits: Arc<Mutex<()>>,
 }
 
 impl ExtensionAcquisitions {
@@ -153,6 +155,7 @@ impl ExtensionAcquisitions {
             })),
             acquire: Arc::new(acquire),
             events,
+            commits: Arc::new(Mutex::new(())),
         }
     }
 
@@ -210,6 +213,7 @@ impl ExtensionAcquisitions {
         let (send, receive) = mpsc::channel();
         let acquire = Arc::clone(&self.acquire);
         let workspace = self.workspace.clone();
+        let observed_workspace = workspace.clone();
         let reference = reference.to_owned();
         let worker_cancel = cancellation.clone();
         std::thread::spawn(move || acquire(&workspace, &reference, &send, &worker_cancel));
@@ -224,7 +228,7 @@ impl ExtensionAcquisitions {
                 if matches!(current.snapshot.state, AcquisitionState::Cancelled) {
                     break;
                 }
-                let (state, candidate) = snapshot(event);
+                let (state, candidate) = snapshot(event, &observed_workspace);
                 current.candidate = candidate;
                 current.snapshot.revision = current.snapshot.revision.saturating_add(1);
                 current.snapshot.state = state;
@@ -246,17 +250,17 @@ impl ExtensionAcquisitions {
             .ok_or_else(|| HostError::Absent(format!("extension acquisition {}", job.0)))
     }
 
-    pub(crate) fn cancel(&self, job: AcquisitionJob) -> Result<(), HostError> {
+    pub(crate) fn cancel(&self, job: AcquisitionJob, revision: u64) -> Result<(), HostError> {
         let mut registry = self.lock();
         let current = registry
             .jobs
             .get_mut(&job)
             .ok_or_else(|| HostError::Absent(format!("extension acquisition {}", job.0)))?;
-        if matches!(
-            current.snapshot.state,
-            AcquisitionState::Committing | AcquisitionState::Installed | AcquisitionState::Updated
-        ) {
-            return Err(HostError::Conflict("the acquisition is already being committed".into()));
+        if current.snapshot.revision != revision {
+            return Err(HostError::Conflict("the acquisition revision has changed".into()));
+        }
+        if current.snapshot.state.terminal() || matches!(current.snapshot.state, AcquisitionState::Committing) {
+            return Err(HostError::Conflict("the acquisition can no longer be cancelled".into()));
         }
         current.cancellation.cancel();
         current.snapshot.revision = current.snapshot.revision.saturating_add(1);
@@ -267,7 +271,8 @@ impl ExtensionAcquisitions {
     }
 
     pub(crate) fn install(&self, job: AcquisitionJob, revision: u64, consented: &Grant) -> Result<(), HostError> {
-        let candidate = self.take_ready(job, revision)?;
+        let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
+        let (candidate, _) = self.take_ready(job, revision)?;
         let result = Roster::workspace(&self.workspace)
             .and_then(|mut roster| roster.register(&candidate.manifest, &candidate.digest, consented, moment()))
             .map_err(|error| HostError::Failed(error.to_string()));
@@ -275,11 +280,14 @@ impl ExtensionAcquisitions {
     }
 
     pub(crate) fn update(&self, job: AcquisitionJob, revision: u64, consented: &Grant) -> Result<(), HostError> {
-        let candidate = self.take_ready(job, revision)?;
+        let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
+        let (candidate, installed_digest) = self.take_ready(job, revision)?;
         let result = (|| {
+            let installed_digest = installed_digest
+                .ok_or_else(|| "the extension was not installed when consent was requested".to_owned())?;
             let mut roster = Roster::workspace(&self.workspace).map_err(|error| error.to_string())?;
             let update = roster
-                .prepare_update(&candidate.manifest, &candidate.digest)
+                .prepare_update_if_digest(&candidate.manifest, &candidate.digest, &installed_digest)
                 .map_err(|error| error.to_string())?;
             roster
                 .commit_update(update, consented, moment())
@@ -289,7 +297,7 @@ impl ExtensionAcquisitions {
         self.finish(job, result, AcquisitionState::Updated)
     }
 
-    fn take_ready(&self, job: AcquisitionJob, revision: u64) -> Result<Candidate, HostError> {
+    fn take_ready(&self, job: AcquisitionJob, revision: u64) -> Result<(Candidate, Option<String>), HostError> {
         let mut registry = self.lock();
         let current = registry
             .jobs
@@ -305,11 +313,15 @@ impl ExtensionAcquisitions {
             .candidate
             .take()
             .expect("ready snapshots retain their exact candidate");
+        let installed_digest = match &current.snapshot.state {
+            AcquisitionState::Ready(candidate) => candidate.installed_digest.clone(),
+            _ => unreachable!("ready state checked above"),
+        };
         current.snapshot.revision = current.snapshot.revision.saturating_add(1);
         current.snapshot.state = AcquisitionState::Committing;
         let snapshot = current.snapshot.clone();
         self.events.acquisition(job, snapshot);
-        Ok(candidate)
+        Ok((candidate, installed_digest))
     }
 
     fn finish(
@@ -343,7 +355,7 @@ impl ExtensionAcquisitions {
     }
 }
 
-fn snapshot(event: Acquisition) -> (AcquisitionState, Option<Candidate>) {
+fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionState, Option<Candidate>) {
     match event {
         Acquisition::Inspecting => (AcquisitionState::Inspecting, None),
         Acquisition::Pulling {
@@ -362,12 +374,22 @@ fn snapshot(event: Acquisition) -> (AcquisitionState, Option<Candidate>) {
         ),
         Acquisition::ReadingManifest => (AcquisitionState::ReadingManifest, None),
         Acquisition::Ready(candidate) => {
+            let roster = match Roster::workspace(workspace) {
+                Ok(roster) => roster,
+                Err(error) => return (AcquisitionState::Failed(error.to_string()), None),
+            };
+            let installed_digest = roster
+                .entries()
+                .into_iter()
+                .find(|entry| entry.name == candidate.manifest.name)
+                .map(|entry| entry.image_digest);
             let visible = AcquisitionCandidate {
                 reference: candidate.reference.clone(),
                 digest: candidate.digest.clone(),
                 name: candidate.manifest.name.to_string(),
                 version: candidate.manifest.version.clone(),
                 requested: candidate.manifest.capabilities.clone(),
+                installed_digest,
             };
             (AcquisitionState::Ready(visible), Some(candidate))
         }
@@ -440,10 +462,45 @@ mod tests {
         let started = Instant::now();
         let job = service.start("registry/sample:latest").unwrap();
         assert!(started.elapsed() < Duration::from_millis(100));
-        service.cancel(job).unwrap();
+        let revision = service.status(job).unwrap().revision;
+        service.cancel(job, revision).unwrap();
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(service.status(job).unwrap().state, AcquisitionState::Cancelled);
         assert!(service.install(job, 1, &Grant::default()).is_err());
+    }
+
+    #[test]
+    fn cancellation_is_bound_to_the_observed_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let worker_release = Arc::clone(&release);
+        let service = ExtensionAcquisitions::with_acquirer(
+            &workspace(root.path()),
+            move |_, reference, progress, _| {
+                worker_release.wait();
+                let _ = progress.send(Acquisition::Ready(Candidate {
+                    reference: reference.into(),
+                    digest: "sha256:ready".into(),
+                    manifest: manifest("1.0.0", &[]),
+                }));
+            },
+        );
+        let job = service.start("registry/sample:1").unwrap();
+        let observed = service.status(job).unwrap();
+        release.wait();
+        let ready = ready(&service, job);
+        assert!(ready.revision > observed.revision);
+
+        let refused = service
+            .cancel(job, observed.revision)
+            .expect_err("an old cancellation must not discard a newly ready candidate");
+        assert!(refused.to_string().contains("revision"));
+        assert_eq!(service.status(job).unwrap(), ready);
+        service.cancel(job, ready.revision).unwrap();
+        assert_eq!(service.status(job).unwrap().state, AcquisitionState::Cancelled);
+        let cancelled_revision = service.status(job).unwrap().revision;
+        assert!(service.cancel(job, cancelled_revision).is_err());
+        assert_eq!(service.status(job).unwrap().revision, cancelled_revision);
     }
 
     #[test]
@@ -504,6 +561,10 @@ mod tests {
         });
         let job = service.start("registry/sample:2").unwrap();
         let snapshot = ready(&service, job);
+        let AcquisitionState::Ready(candidate) = &snapshot.state else {
+            unreachable!()
+        };
+        assert_eq!(candidate.installed_digest.as_deref(), Some("sha256:old"));
         assert!(
             service.update(job, snapshot.revision - 1, &Grant::default()).is_err(),
             "stale consent is refused"
@@ -524,6 +585,64 @@ mod tests {
     }
 
     #[test]
+    fn independently_ready_updates_cannot_reuse_consent_after_the_installed_digest_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        Roster::workspace(&workspace)
+            .unwrap()
+            .register(
+                &manifest("1.0.0", &[Capability::ContainerRead]),
+                "sha256:old",
+                &Grant::new([Capability::ContainerRead]),
+                1,
+            )
+            .unwrap();
+        let service = Arc::new(ExtensionAcquisitions::with_acquirer(
+            &workspace,
+            |_, reference, progress, _| {
+                let digest = if reference.ends_with(":2") {
+                    "sha256:two"
+                } else {
+                    "sha256:three"
+                };
+                let version = if reference.ends_with(":2") { "2.0.0" } else { "3.0.0" };
+                let _ = progress.send(Acquisition::Ready(Candidate {
+                    reference: reference.into(),
+                    digest: digest.into(),
+                    manifest: manifest(version, &[Capability::ContainerRead]),
+                }));
+            },
+        ));
+        let first = service.start("registry/sample:2").unwrap();
+        let second = service.start("registry/sample:3").unwrap();
+        let first_ready = ready(&service, first);
+        let second_ready = ready(&service, second);
+
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let updates = [(first, first_ready.revision), (second, second_ready.revision)]
+            .into_iter()
+            .map(|(job, revision)| {
+                let service = Arc::clone(&service);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    service.update(job, revision, &Grant::new([Capability::ContainerRead]))
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let results = updates
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let refused = results.iter().find_map(|result| result.as_ref().err()).unwrap();
+        assert!(refused.to_string().contains("changed"), "{refused}");
+        let entry = Roster::workspace(&workspace).unwrap().entries().remove(0);
+        assert!(matches!(entry.image_digest.as_str(), "sha256:two" | "sha256:three"));
+    }
+
+    #[test]
     fn reference_and_active_job_bounds_are_enforced() {
         let root = tempfile::tempdir().unwrap();
         let service = ExtensionAcquisitions::with_acquirer(&workspace(root.path()), |_, _, _, cancellation| {
@@ -540,7 +659,8 @@ mod tests {
             .collect();
         assert!(service.start("sample:overflow").is_err());
         for job in jobs {
-            service.cancel(job).unwrap();
+            let revision = service.status(job).unwrap().revision;
+            service.cancel(job, revision).unwrap();
         }
     }
 }
