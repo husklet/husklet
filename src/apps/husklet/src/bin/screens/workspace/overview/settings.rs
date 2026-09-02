@@ -363,7 +363,11 @@ fn register_cursor(semantics: &screens::workspace::semantic::Registry, form: &Fo
                 }
             }
             ActionKind::Focus => {
-                buttons[0].grab_focus();
+                buttons
+                    .iter()
+                    .find(|button| button.is_active())
+                    .unwrap_or(&buttons[0])
+                    .grab_focus();
             }
             _ => {}
         }),
@@ -643,6 +647,53 @@ mod tests {
             let expected_font = workspace.terminal_config().font_family;
             let registry = Registry::new("workspace");
             let page = Overview::new(&workspace, None).settings(&registry);
+            let window = gtk::Window::builder()
+                .default_width(1000)
+                .default_height(760)
+                .child(&page)
+                .build();
+            window.present();
+            while gtk::glib::MainContext::default().iteration(false) {}
+            let initial_focus = focus_chain(&window);
+            let eligible: Vec<_> = descendants(page.upcast_ref())
+                .into_iter()
+                .filter(|widget| {
+                    (widget.is::<gtk::Entry>()
+                        || widget.is::<gtk::SpinButton>()
+                        || widget.is::<gtk::Switch>()
+                        || widget.is::<gtk::Button>()
+                        || widget.is::<gtk::ToggleButton>()
+                        || widget.is::<gtk::CheckButton>()
+                        || widget.is::<gtk::FontDialogButton>())
+                        && widget.is_focusable()
+                        && widget.is_sensitive()
+                        && widget.is_visible()
+                        && !has_focusable_ancestor(widget)
+                })
+                .collect();
+            let missed: Vec<_> = eligible
+                .iter()
+                .filter(|widget| !initial_focus.iter().any(|focused| focused == *widget))
+                .map(|widget| {
+                    widget.downcast_ref::<gtk::Button>().and_then(gtk::Button::label).map_or_else(
+                        || widget.type_().name().to_string(),
+                        |label| format!("{}:{label}", widget.type_().name()),
+                    )
+                })
+                .collect();
+            assert!(missed.is_empty(), "Tab traversal missed {missed:?}");
+            assert!(
+                initial_focus.iter().all(|widget| !widget.has_css_class("settings-card")),
+                "card containers never enter keyboard traversal"
+            );
+            assert!(
+                initial_focus.iter().all(|widget| {
+                    widget
+                        .downcast_ref::<gtk::Button>()
+                        .is_none_or(|button| button.label().as_deref() != Some("Save changes"))
+                }),
+                "disabled Apply is skipped"
+            );
             let snapshot = registry.snapshot();
             let labels: Vec<_> = snapshot
                 .root
@@ -732,6 +783,22 @@ mod tests {
                     .and_then(|candidate| candidate.value.as_deref()),
                 Some("beam")
             );
+            let cursor_focus_revision = registry.snapshot().revision;
+            registry
+                .act(&Action {
+                    revision: cursor_focus_revision,
+                    node: cursor.id,
+                    action: ActionKind::Focus,
+                    value: None,
+                })
+                .unwrap();
+            assert_eq!(
+                gtk::prelude::RootExt::focus(&window)
+                    .and_downcast::<gtk::ToggleButton>()
+                    .and_then(|button| button.label()),
+                Some("beam".into()),
+                "semantic Focus targets the selected visible cursor control"
+            );
             for (label, value) in [("Background color", "#101820"), ("Text color", "#f0f4f8")] {
                 let current = registry.snapshot();
                 let node = current
@@ -804,6 +871,12 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             assert!(save.is_sensitive(), "editing a setting exposes the pending save");
+            assert!(
+                focus_chain(&window)
+                    .iter()
+                    .any(|widget| widget == save.upcast_ref::<gtk::Widget>()),
+                "enabled Apply joins ordinary Tab traversal"
+            );
             let changed = registry.snapshot();
             assert!(changed.revision > snapshot.revision);
             assert_eq!(
@@ -825,6 +898,7 @@ mod tests {
                     .disabled,
                 "assistive actions see that saving is now available"
             );
+            window.close();
         }) {
             eprintln!("skipped: no display connection");
         }
@@ -838,5 +912,32 @@ mod tests {
             child = widget.next_sibling();
         }
         found
+    }
+
+    fn focus_chain(window: &gtk::Window) -> Vec<gtk::Widget> {
+        gtk::prelude::RootExt::set_focus(window, gtk::Widget::NONE);
+        let mut found = Vec::new();
+        for _ in 0..64 {
+            if !window.child_focus(gtk::DirectionType::TabForward) {
+                break;
+            }
+            let Some(focus) = gtk::prelude::RootExt::focus(window) else { break };
+            if found.iter().any(|seen| seen == &focus) {
+                break;
+            }
+            found.push(focus);
+        }
+        found
+    }
+
+    fn has_focusable_ancestor(widget: &gtk::Widget) -> bool {
+        let mut parent = widget.parent();
+        while let Some(widget) = parent {
+            if widget.is_focusable() {
+                return true;
+            }
+            parent = widget.parent();
+        }
+        false
     }
 }
