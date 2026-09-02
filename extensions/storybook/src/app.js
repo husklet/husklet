@@ -76,7 +76,7 @@ export function Playground({ largeSource } = {}) {
 export function Sidebar({ families, selected, onSelect }) {
   return h(
     Scroll,
-    { width: { chars: 26 }, height: 'fill' },
+    { width: 'fill', height: 'fill' },
     h(
       List,
       { pad: 1 },
@@ -131,7 +131,7 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
   return h(
     Column,
     { grow: true, gap: 2, pad: 4 },
-    h(Heading, { key: 'title', label: spaced(name), scale: 'title' }),
+    h(Heading, { key: 'title', label: spaced(name), scale: 'title', wrap: true }),
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
@@ -244,7 +244,7 @@ export function Inspector({ name, properties, triggers, props, onChange }) {
   }
   return h(
     Scroll,
-    { width: { chars: 40 }, height: 'fill' },
+    { width: 'fill', height: 'fill' },
     h(
       Column,
       { pad: 3, gap: 2 },

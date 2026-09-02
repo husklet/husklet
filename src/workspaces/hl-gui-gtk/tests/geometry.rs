@@ -109,6 +109,34 @@ fn geometry_is_what_the_description_asked_for() {
     padding_lands_on_the_side_it_names();
     alignment_follows_the_axis_of_its_container();
     a_size_range_becomes_a_floor_the_toolkit_honours();
+    a_scrolled_pane_shares_narrow_and_wide_host_width();
+}
+
+/// Storybook's catalogue and inspector are scrolling panes. They must share the
+/// host width instead of asking GTK for a fixed character width that scrolling
+/// viewports cannot express.
+fn a_scrolled_pane_shares_narrow_and_wide_host_width() {
+    let mut stage = Stage::new();
+    let scroll = stage.producer.create(Tag::Scroll);
+    stage.producer.set(scroll, Prop::Width, PropValue::Length(Length::Fill));
+    let label = stage.producer.create(Tag::Text);
+    stage.producer.set(
+        label,
+        Prop::Label,
+        PropValue::text("a deliberately very long inspector value that must not establish the pane width"),
+    );
+    stage.producer.append(scroll, label);
+    stage.producer.append(NodeId::ROOT, scroll);
+    stage.draw();
+
+    let widget = stage.tagged(Tag::Scroll);
+    let (minimum, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+    assert!(widget.hexpands(), "the pane does not share available width");
+    assert!(minimum <= 300, "scrolling pane minimum overflowed: {minimum}px");
+    assert!(
+        natural <= 300,
+        "scrolling pane natural width ignored its ceiling: {natural}px"
+    );
 }
 
 /// Four children in three columns: the fourth starts the second row. This is

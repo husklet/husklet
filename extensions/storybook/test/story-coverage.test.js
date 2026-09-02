@@ -3,7 +3,11 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 
 import { Playground } from '../src/app.js';
-import { NAVIGATION_STORY } from '../src/navigation-dialogs.js';
+import { AcquisitionProgressStory } from '../src/acquisition.js';
+import { ValidatedSettingsFormStory } from '../src/form.js';
+import { KeyboardAccessibilityStory } from '../src/keyboard-accessibility.js';
+import { LargeDataTableStory, LargeRecordSource } from '../src/large-table.js';
+import { NAVIGATION_STORY, NavigationDialogsStory } from '../src/navigation-dialogs.js';
 import { storyCoverage } from '../src/story-coverage.js';
 import { host } from './host.js';
 
@@ -30,6 +34,24 @@ test('every catalogue contract has a meaningful selectable state and family cove
     assert(story.state.children.length > 0 || Object.keys(story.state.props).length > 0,
       `${story.component} has no meaningful visible story state`);
     assert(story.propertyGroups.length > 0, `${story.component} demonstrates no property family`);
+  }
+});
+
+test('every composed story has a readable root and a bounded initial wire frame', () => {
+  const stories = [
+    ['acquisition', h(AcquisitionProgressStory)],
+    ['validated form', h(ValidatedSettingsFormStory)],
+    ['keyboard accessibility', h(KeyboardAccessibilityStory)],
+    ['large records', h(LargeDataTableStory, { source: new LargeRecordSource() })],
+    ['navigation', h(NavigationDialogsStory)],
+  ];
+  for (const [name, story] of stories) {
+    const frame = host().render(story);
+    const labels = frame.patches.filter((patch) => patch.SetProp?.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text);
+    assert(frame.patches.some((patch) => patch.Create?.tag === 'Heading'), `${name} has no semantic heading root`);
+    assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
+    assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
 });
 
