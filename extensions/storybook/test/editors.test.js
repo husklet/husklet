@@ -1,24 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { props } from '../src/catalogue.js';
+import { component, editable, props, tags } from '../src/catalogue.js';
 import { amountOf, control, lengthValue, memberOf, modeOf, rows } from '../src/editors.js';
 import { value } from './host.js';
 
 const byName = new Map(props.map((prop) => [prop.name, prop]));
 
-test('every property gets a control', () => {
-  const all = rows();
-  assert.equal(all.length, props.length);
-  for (const row of all) {
-    assert.ok(row.name && row.editor && row.group);
-    if (row.editor === 'enum') assert.ok(row.members.length > 0, `${row.name} has an empty Select`);
-    if (row.editor === 'length' || row.editor === 'edges') assert.ok(row.maximum > 0);
+test('every declared property gets a control, and no other property does', () => {
+  for (const tag of tags) {
+    const all = rows(tag.name);
+    assert.deepEqual(
+      all.map((row) => row.prop).sort(),
+      component(tag.name).props.slice().sort(),
+    );
+    for (const row of all) {
+      assert.ok(row.name && row.editor && row.group);
+      if (row.editor === 'enum') assert.ok(row.members.length > 0, `${row.name} has an empty Select`);
+      if (row.editor === 'length' || row.editor === 'edges') assert.ok(row.maximum > 0);
+    }
   }
 });
 
+test('components with different contracts get different property rows', () => {
+  assert.notDeepEqual(editable('Button'), editable('Separator'));
+  assert.ok(rows('Button').some((row) => row.prop === 'Label'));
+  assert.ok(!rows('Separator').some((row) => row.prop === 'Label'));
+});
+
 test('the editable properties come first', () => {
-  const editable = rows().map((row) => row.editable);
+  const editable = rows('Button').map((row) => row.editable);
   assert.deepEqual(editable, editable.slice().sort((left, right) => Number(right) - Number(left)));
 });
 
@@ -55,7 +66,7 @@ test('a length control shows the mode the value is already in', () => {
 });
 
 test('every control produces a value its property accepts', () => {
-  for (const row of rows().filter((entry) => entry.editable)) {
+  for (const row of props.map(control).filter((entry) => entry.editable)) {
     const prop = byName.get(row.prop);
     const sample = {
       text: 'text',

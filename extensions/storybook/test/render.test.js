@@ -91,6 +91,19 @@ test('selecting a component in the sidebar renders that component', () => {
   );
 });
 
+test('the inspector follows the selected component contract and shows its interactions', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const item = node(first.patches, 'ListItemButton', 'Switch');
+  assert.ok(item, 'the sidebar has no row for <Switch>');
+  const before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  const patches = stage.since(before);
+  assert.ok(node(patches, 'Text', 'checked'), '<Switch> does not expose its checked property');
+  assert.ok(node(patches, 'Text', 'onToggle'), '<Switch> does not expose its Toggle interaction');
+  assert.equal(node(patches, 'Text', 'label'), null, '<Switch> exposes Button-only label editing');
+});
+
 test('editing a property re-renders the preview with the new value', () => {
   const stage = host();
   const first = stage.render(h(Playground));

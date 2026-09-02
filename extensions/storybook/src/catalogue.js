@@ -57,17 +57,10 @@ export function style(vocabulary, wire) {
   return member === undefined ? wire : member.style;
 }
 
-/**
- * The properties an editor can offer, in catalogue order.
- *
- * The library holds no per-component property list — an adapter applies every
- * property to every widget and ignores what the widget cannot express — so the
- * playground offers all of them rather than inventing a mapping it cannot
- * justify. `notes.propsPerTag` says so in the library's own words, and the
- * editor prints it.
- */
-export function editable() {
-  return props;
+/** The properties one component declares, in catalogue order. */
+export function editable(name) {
+  const declared = new Set(component(name).props);
+  return props.filter((prop) => declared.has(prop.name));
 }
 
 /** The properties an inline control can actually edit, and the ones it cannot. */

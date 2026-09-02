@@ -10,9 +10,10 @@ A component playground, written as a Husklet extension in React. Three panes:
 
 ## Where it gets its knowledge
 
-Everything — the families, the 133 components, the 42 properties, the members
-of each closed vocabulary, and which control edits which property — is read
-from `src/catalogue.json`, which the library emits about itself:
+Everything — the families, the 133 components, each component's properties and
+interactions, the 42-property vocabulary, the members of each closed
+vocabulary, and which control edits which property — is read from
+`src/catalogue.json`, which the library emits about itself:
 
 ```sh
 npm run catalogue     # cargo run -p hl-gui --bin catalogue > src/catalogue.json
@@ -21,11 +22,10 @@ npm run catalogue     # cargo run -p hl-gui --bin catalogue > src/catalogue.json
 Nothing about the component library is written down twice, so the playground
 cannot describe last month's library.
 
-The library holds no per-component property list: an adapter applies every
-property to every widget and ignores what a widget cannot express. The
-inspector therefore offers every property for every component, says so in its
-own words at the top of the pane, and puts the properties an inline control can
-actually edit before the ones that must be written in code.
+The inspector offers exactly the properties the selected component declares,
+puts the properties an inline control can edit before the ones that must be
+written in code, and lists the React handlers for every interaction that
+component can report.
 
 ## Running it
 

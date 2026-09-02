@@ -6,17 +6,8 @@
 
 import { CONTROLLABLE, camel, editable, enums, maximumStep, style, vocabularyOf } from './catalogue.js';
 
-/**
- * Where the catalogue's hint and the JavaScript binding disagree.
- *
- * `@husklet/react` decides a property's wire shape in its own table, and for
- * two properties that decision is narrower than the shapes the library says it
- * reads: `grow` is sent as a flag and `rowHeight` as a length. The playground
- * follows the binding, because the binding is what a person writing an
- * extension actually has. `test/binding.test.js` recomputes this set from the
- * package itself, so it cannot quietly go stale.
- */
-export const BINDING = { Grow: 'switch', RowHeight: 'length' };
+/** Where the catalogue's hint and the JavaScript binding disagree. */
+export const BINDING = {};
 
 /** The control a property is edited with. */
 export function editorOf(prop) {
@@ -47,8 +38,8 @@ export function control(prop) {
 }
 
 /** Every property as a row, in catalogue order, editable ones first. */
-export function rows() {
-  const all = editable().map(control);
+export function rows(name) {
+  const all = editable(name).map(control);
   return [...all.filter((row) => row.editable), ...all.filter((row) => !row.editable)];
 }
 
