@@ -1,21 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Containers, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
-import { ContainerDetailsSource, ImageDetailsSource } from '../src/model.js';
+import { Containers, Executions, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
+import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource } from '../src/model.js';
 import { host } from './host.js';
 
 const api = {
-  containers: { list: async () => [], processes: async () => [] },
+  containers: { list: async () => [], processes: async () => [], executions: async () => ({ executions: [], truncated: false }) },
   images: { list: async () => [], pull: async () => ({}), inspect: async () => ({}), remove: async () => {}, prune: async () => ({ deleted: 0, space_reclaimed: 0 }) },
   volumes: { list: async () => [], inspect: async () => ({}), create: async () => ({}), remove: async () => {} },
   networks: { list: async () => [], inspect: async () => ({}), create: async () => '', remove: async () => {}, connect: async () => {}, disconnect: async () => {} },
 };
 
 test('the test host receives overview and every resource navigation choice', () => {
-  const frame = host().render(h(WorkspaceManager, { api, initial: { containers: [], images: [], volumes: [], networks: [] } }));
+  const frame = host().render(h(WorkspaceManager, { api, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
   const labels = frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
-  for (const label of ['Workspace overview', 'Containers', 'Processes', 'Images', 'Volumes', 'Networks']) assert.ok(labels.includes(label), label);
+  for (const label of ['Workspace overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks']) assert.ok(labels.includes(label), label);
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
 });
 
@@ -179,6 +179,66 @@ test('empty container inspection remains understandable and leaves quick actions
   await settled(); await settled();
   assert.ok(labelled(stage, 'No container details'));
   assert.ok(labelled(stage, 'Quick actions'), 'empty metadata does not withdraw operational controls');
+});
+
+test('execution details, separate bounded streams, wait and retry are operational', async () => {
+  const calls = [];
+  let inspectAttempts = 0;
+  const item = { id: 'e1', container_id: 'c1', running: true, exit_code: 0, pid: 77, command: ['sleep', '5'], user: 'root' };
+  const controlled = { containers: {
+    execution: async () => { inspectAttempts += 1; if (inspectAttempts === 1) throw new Error('execution moved'); return item; },
+    executionLogs: async () => ({ stdout: Array(5_000).fill(111), stderr: [98, 97, 100], truncated: true }),
+    waitExecution: async (...args) => { calls.push(['wait', ...args]); return { ...item, running: false, exit_code: 0 }; },
+    removeExecution: async () => {},
+  } };
+  const resource = { data: [item], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const details = new ExecutionDetailsSource();
+  const stage = host();
+  stage.render(h(Executions, { api: controlled, resource, executionDetails: details }));
+  invoke(stage, 'Details'); await settled(); await settled();
+  assert.ok(labelled(stage, 'execution moved'));
+  invoke(stage, 'Retry details'); await settled(); await settled();
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  invoke(stage, 'Load output'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Standard output')); assert.ok(labelled(stage, 'Standard error'));
+  assert.ok(labelled(stage, 'Host output was truncated to its configured bound.'));
+  const values = stage.frames.flatMap((frame) => frame.patches).filter((patch) => patch.SetProp?.prop === 'Value'
+    && typeof patch.SetProp.value?.Text === 'string').map((patch) => patch.SetProp.value.Text);
+  assert.ok(values.every((value) => [...value].length <= 4096), 'no LogView patch exceeds its retention bound');
+  invoke(stage, 'Wait up to 5s'); await settled(); await settled();
+  assert.deepEqual(calls, [['wait', 'e1', { timeoutMs: 5_000 }], ['reload']]);
+});
+
+test('finished execution cleanup requires explicit destructive confirmation', async () => {
+  const calls = [];
+  const item = { id: 'e2', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' };
+  const controlled = { containers: {
+    execution: async () => item, executionLogs: async () => ({ stdout: [], stderr: [], truncated: false }),
+    waitExecution: async () => item, removeExecution: async (...args) => calls.push(args),
+  } };
+  const resource = { data: [item], loading: false, error: null, reload: async () => {} };
+  const stage = host();
+  stage.render(h(Executions, { api: controlled, resource }));
+  invoke(stage, 'Remove record');
+  assert.deepEqual(calls, []);
+  assert.equal(isDestructive(stage, 'Confirm removal'), true);
+  invoke(stage, 'Confirm removal'); await settled(); await settled();
+  assert.deepEqual(calls, [['e2']]);
+});
+
+test('empty and host-truncated execution catalogues remain explicit', async () => {
+  const item = { id: 'empty', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: [], user: '' };
+  const controlled = { containers: {
+    execution: async () => ({}), executionLogs: async () => ({ stdout: [], stderr: [], truncated: false }),
+    waitExecution: async () => item, removeExecution: async () => {},
+  } };
+  const resource = { data: [item], loading: false, error: null, reload: async () => {} };
+  const stage = host();
+  stage.render(h(Executions, { api: controlled, resource, truncated: true }));
+  assert.ok(labelled(stage, 'The host execution catalogue was truncated at its safety limit.'));
+  invoke(stage, 'Details'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Reading execution details…'));
+  assert.ok(labelled(stage, 'No execution details'));
 });
 
 test('volume and network mutations expose danger only on final confirm and cancel safely', async () => {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CONTAINER_DETAIL_SOURCE, CONTAINER_DETAIL_WINDOW_LIMIT, ContainerDetailsSource,
+  EXECUTION_DETAIL_SOURCE, EXECUTION_DETAIL_WINDOW_LIMIT, ExecutionDetailsSource,
   IMAGE_DETAIL_SOURCE, IMAGE_DETAIL_WINDOW_LIMIT, ImageDetailsSource,
   bounded, bytes, logText, processRows, resourceReference, shortId,
 } from '../src/model.js';
@@ -10,6 +11,16 @@ test('records are bounded and omissions stay visible', () => {
   const view = bounded(Array.from({ length: 205 }, (_, index) => index));
   assert.equal(view.records.length, 200);
   assert.equal(view.omitted, 5);
+});
+
+test('execution metadata is revisioned and served through bounded windows', async () => {
+  const mutations = [];
+  const source = new ExecutionDetailsSource(async (mutation) => mutations.push(mutation));
+  assert.equal(await source.replace({ id: 'e1', container_id: 'c1', running: false, exit_code: 7, pid: 0, command: ['sh', '-c', 'false'], user: 'root' }), 6);
+  assert.deepEqual(mutations, [{ Length: { source: EXECUTION_DETAIL_SOURCE, version: 1, rows: 6 } }]);
+  const window = source.answer({ source: EXECUTION_DETAIL_SOURCE, version: 1, id: 6, range: { start: 0, count: 999 } });
+  assert.equal(window.rows.length, EXECUTION_DETAIL_WINDOW_LIMIT);
+  assert.deepEqual(window.rows[0].cells, [{ Text: 'Execution ID' }, { Code: 'e1' }]);
 });
 
 test('typed container inspection exposes only authoritative bounded fields', async () => {

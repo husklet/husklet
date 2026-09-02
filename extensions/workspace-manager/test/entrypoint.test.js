@@ -36,6 +36,12 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
           : name === 'container_inspect'
             ? { reply: 'container', with: { id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
+          : name === 'execution_list'
+            ? { reply: 'executions', with: { executions: [{ id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' }], truncated: false } }
+          : name === 'execution_inspect'
+            ? { reply: 'execution', with: { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' } }
+          : name === 'execution_logs'
+            ? { reply: 'logs', with: { stdout: [111, 107], stderr: [33], truncated: false } }
           : name === 'image_list'
             ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
             : name === 'image_inspect'
@@ -56,7 +62,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
-    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
+    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
     const openingRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invocation(requests, 'Images') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > openingRenders);
@@ -73,6 +79,19 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const containerResize = requests.findLast((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 202);
     assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
+    const beforeExecutions = requests.filter((request) => request.call === 'interface_render_at').length;
+    peer.write(encode({ channel: 13, kind: KIND.event, payload: invocation(requests, 'Executions') }));
+    await until(() => requests.filter((request) => request.call === 'interface_render_at').length > beforeExecutions);
+    peer.write(encode({ channel: 14, kind: KIND.event, payload: invocation(requests, 'Details') }));
+    await until(() => calls.includes('execution_inspect') && requests.some((request) =>
+      request.call === 'source_resize_at' && request.with.mutation.Length?.source === 203));
+    peer.write(encode({ channel: 15, kind: KIND.event, payload: invocation(requests, 'Load output') }));
+    await until(() => calls.includes('execution_logs'));
+    peer.write(encode({ channel: 16, kind: KIND.event, payload: invocation(requests, 'Remove record') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Confirm removal')));
+    peer.write(encode({ channel: 17, kind: KIND.event, payload: invocation(requests, 'Confirm removal') }));
+    await until(() => calls.includes('execution_remove'));
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;

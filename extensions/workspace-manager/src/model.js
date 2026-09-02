@@ -23,6 +23,8 @@ export const IMAGE_DETAIL_LIMIT = 64;
 export const IMAGE_DETAIL_WINDOW_LIMIT = 4;
 export const CONTAINER_DETAIL_SOURCE = 202;
 export const CONTAINER_DETAIL_WINDOW_LIMIT = 4;
+export const EXECUTION_DETAIL_SOURCE = 203;
+export const EXECUTION_DETAIL_WINDOW_LIMIT = 4;
 
 /** Windowed rows derived only from the public typed ImageDetails contract. */
 export class ImageDetailsSource {
@@ -93,6 +95,40 @@ export class ContainerDetailsSource {
     const count = Math.min(request.range.count, CONTAINER_DETAIL_WINDOW_LIMIT,
       Math.max(0, this.rows.length - request.range.start));
     return { source: CONTAINER_DETAIL_SOURCE, version: this.version, request: request.id,
+      range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
+  }
+}
+
+/** Windowed rows from the typed ExecutionSummary contract. */
+export class ExecutionDetailsSource {
+  constructor(send = async () => {}) {
+    this.send = send;
+    this.version = 0;
+    this.rows = [];
+  }
+
+  async replace(details) {
+    const values = [
+      ['Execution ID', details?.id],
+      ['Container ID', details?.container_id],
+      ['State', details ? details.running ? 'running' : 'exited' : null],
+      ['Exit code', details && !details.running ? String(details.exit_code) : null],
+      ['Process ID', details?.pid > 0 ? String(details.pid) : null],
+      ['Command', details?.command?.join(' ')],
+      ['User', details?.user || 'default user'],
+    ];
+    this.rows = values.filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
+      .map(([key, value], index) => ({ id: index + 1, cells: [{ Text: key }, { Code: String(value) }] }));
+    this.version += 1;
+    await this.send({ Length: { source: EXECUTION_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    return this.rows.length;
+  }
+
+  answer(request) {
+    if (request.source !== EXECUTION_DETAIL_SOURCE || request.version !== this.version) return null;
+    const count = Math.min(request.range.count, EXECUTION_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start));
+    return { source: EXECUTION_DETAIL_SOURCE, version: this.version, request: request.id,
       range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
   }
 }

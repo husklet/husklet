@@ -1,19 +1,27 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  EmptyState, Heading, KeyValueTable, List, ListItemButton, Row, Scroll, Separator, Spinner, Text,
+  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Row, Scroll, Separator, Spinner, Text,
+  LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
-const SECTIONS = ['overview', 'containers', 'processes', 'images', 'volumes', 'networks'];
+const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
 
-export function WorkspaceManager({ api, selections, containerDetails, imageDetails, initial = {} }) {
+export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
   const volumes = useResource(api.volumes.list, initial.volumes);
   const networks = useResource(api.networks.list, initial.networks);
+  const [executionsTruncated, setExecutionsTruncated] = useState(false);
+  const listExecutions = useCallback(async () => {
+    const listing = await api.containers.executions();
+    setExecutionsTruncated(listing.truncated);
+    return listing.executions;
+  }, [api]);
+  const executions = useResource(listExecutions, initial.executions);
   useEffect(() => selections?.subscribe((event) => {
     if (SECTIONS.includes(event?.pane_provider)) setSection(event.pane_provider);
     if (event?.snapshot === 'containers') void containers.reload();
@@ -42,6 +50,8 @@ export function WorkspaceManager({ api, selections, containerDetails, imageDetai
       ? h(Containers, { api, resource: containers, containerDetails })
       : section === 'processes'
         ? h(Processes, { api, resource: containers })
+        : section === 'executions'
+          ? h(Executions, { api, resource: executions, executionDetails, truncated: executionsTruncated })
         : section === 'images'
           ? h(Images, { api, resource: images, imageDetails })
           : section === 'volumes'
@@ -182,6 +192,62 @@ function Processes({ api, resource }) {
         h(CardContent, {}, h(Row, { gap: 2 }, h(Badge, { label: `PID ${pid}` }), h(Text, { label: detail, color: 'text-dim' }))));
     }),
     h(Omitted, { count: view.omitted }));
+}
+
+export function Executions({ api, resource, executionDetails, truncated = false }) {
+  const localDetails = useMemo(() => new ExecutionDetailsSource(), []);
+  const detailsSource = executionDetails ?? localDetails;
+  const [selected, setSelected] = useState('');
+  const [inspection, setInspection] = useState({ state: 'idle', count: 0, error: null });
+  const [output, setOutput] = useState(null);
+  const [busy, setBusy] = useState('');
+  const inspect = async (id) => {
+    setSelected(id); setInspection({ state: 'loading', count: 0, error: null }); setOutput(null);
+    try {
+      const detail = await api.containers.execution(id);
+      const count = await detailsSource.replace(detail);
+      setInspection({ state: 'ready', count, error: null });
+    } catch (error) { setInspection({ state: 'error', count: 0, error }); }
+  };
+  const logs = async (id) => {
+    setBusy(`logs:${id}`);
+    try {
+      const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
+      const text = (bytes) => logText(bytes).slice(-LOG_VIEW_CHARACTER_LIMIT);
+      setOutput((current) => ({ revision: (current?.revision ?? 0) + 1,
+        stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }), truncated: value.truncated }));
+    } finally { setBusy(''); }
+  };
+  const wait = async (id) => {
+    setBusy(`wait:${id}`);
+    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); await detailsSource.replace(detail); await resource.reload(); }
+    finally { setBusy(''); }
+  };
+  const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
+  const view = bounded(resource.data);
+  return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
+    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
+    ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+      h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
+      h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
+        selected !== item.id ? null : inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading execution details…' }))
+          : inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.count === 0
+              ? h(EmptyState, { label: 'No execution details', detail: 'The host returned no inspectable fields.' })
+              : h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } }),
+        selected === item.id && output ? h(Column, { gap: 1 },
+          h(Heading, { label: 'Standard output', scale: 'caption' }), h(LogView, { key: `stdout-${output.revision}`, value: output.stdout || 'No stdout captured.', monospace: true }),
+          h(Heading, { label: 'Standard error', scale: 'caption' }), h(LogView, { key: `stderr-${output.revision}`, value: output.stderr || 'No stderr captured.', monospace: true }),
+          output.truncated ? h(Text, { label: 'Host output was truncated to its configured bound.', color: 'warning' }) : null) : null),
+      h(CardActions, { gap: 1 },
+        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
+        h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),
+        h(Button, { label: busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s', enabled: !busy && item.running, onInvoke: () => void wait(item.id) }),
+        h(ConfirmAction, { label: 'Remove record', confirmLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
+    h(Omitted, { count: view.omitted }),
+    truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
 }
 
 const IMAGE_DETAIL_SCHEMA = Object.freeze([
