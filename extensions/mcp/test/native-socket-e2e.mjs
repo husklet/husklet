@@ -36,14 +36,20 @@ const snapshot = await client.callTool({
   arguments: { slot: 'workspace' },
 });
 const xml = snapshot.content[0].text;
-const settings = xml.match(/<node id="(\d+)"[^>]*><label>Settings<\/label>/);
-if (!settings) throw new Error(`Settings semantic node absent from ${xml}`);
+if (!xml.includes('<label>agent-extension</label>') || !xml.includes('<label>Granted capabilities</label>')) {
+  throw new Error(`native lifecycle card or consent context absent from ${xml}`);
+}
+if (!xml.includes('<value>container-read, interface</value>') && !xml.includes('<value>interface, container-read</value>')) {
+  throw new Error(`native lifecycle grants absent from ${xml}`);
+}
+const extensions = xml.match(/<node id="(\d+)"[^>]*><label>Extensions<\/label>/);
+if (!extensions) throw new Error(`Extensions semantic node absent from ${xml}`);
 const revision = Number(xml.match(/revision="(\d+)"/)?.[1]);
 if (!Number.isSafeInteger(revision)) throw new Error(`semantic revision absent from ${xml}`);
 
 const acted = await client.callTool({
   name: 'husklet_pane_action',
-  arguments: { slot: 'workspace', revision, node: Number(settings[1]), action: 'invoke' },
+  arguments: { slot: 'workspace', revision, node: Number(extensions[1]), action: 'invoke' },
 });
 if (acted.isError) throw new Error(`semantic action failed: ${acted.content?.[0]?.text}`);
 

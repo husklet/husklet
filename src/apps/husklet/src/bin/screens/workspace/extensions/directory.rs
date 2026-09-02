@@ -126,6 +126,14 @@ impl Catalogue {
         let entries = self.shelf.roster().borrow().entries();
         if entries.is_empty() {
             self.listing.append(&text("— none installed —", "dhint"));
+            self.semantics.register(
+                "extensions/installed/empty",
+                "status",
+                Some("Installed extensions"),
+                Some(super::super::semantic::Value::Public("None installed")),
+                &[],
+                Rc::new(|_, _| {}),
+            );
             return;
         }
         for entry in entries {

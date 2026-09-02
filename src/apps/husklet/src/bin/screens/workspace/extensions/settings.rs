@@ -63,6 +63,38 @@ impl Settings {
         main.append(&actions(shelf, entry, &refusal, &standing, semantics));
         main.append(&refusal);
         let prefix = format!("extensions/installed/{}/", entry.name);
+        let version = if entry.version.is_empty() {
+            "unknown"
+        } else {
+            &entry.version
+        };
+        let card = format!("version {version}; {}", standing.text());
+        semantics.register(
+            &format!("{prefix}card"),
+            "group",
+            Some(entry.name.as_str()),
+            Some(super::super::semantic::Value::Public(&card)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        let capabilities = if entry.granted.is_empty() {
+            "none".to_owned()
+        } else {
+            entry
+                .granted
+                .iter()
+                .map(hl_extension::Capability::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        semantics.register(
+            &format!("{prefix}capabilities"),
+            "list",
+            Some("Granted capabilities"),
+            Some(super::super::semantic::Value::Public(&capabilities)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         semantics.register(
             &format!("{prefix}status"),
             "status",

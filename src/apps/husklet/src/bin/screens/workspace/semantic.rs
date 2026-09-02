@@ -195,6 +195,9 @@ impl Registry {
         let selected = stable_id(path);
         let mut changed = false;
         for entry in self.entries.borrow_mut().values_mut() {
+            if entry.node.role != "tab" {
+                continue;
+            }
             let next = (entry.node.id == selected).to_string();
             if entry.node.value.as_deref() != Some(&next) {
                 entry.node.value = Some(next);
@@ -215,7 +218,11 @@ impl Registry {
                 truncated = true;
                 break;
             }
-            children.push(entry.node.clone());
+            let mut node = entry.node.clone();
+            if node.disabled {
+                node.actions.clear();
+            }
+            children.push(node);
         }
         Snapshot {
             slot: self.slot.clone(),

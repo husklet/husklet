@@ -87,6 +87,22 @@ fn native_extension_cards_are_semantic_and_actionable() {
     use super::super::semantic::{Action, ActionKind};
     let fixture = Fixture::new(&[("semantic", false)]);
     let snapshot = fixture.view.semantic_snapshot();
+    let card = snapshot
+        .root
+        .children
+        .iter()
+        .find(|node| node.role == "group" && node.label.as_deref() == Some("semantic"))
+        .expect("the visible lifecycle card is represented");
+    assert_eq!(card.value.as_deref(), Some("version 1.0.0; disabled"));
+    let grants = snapshot
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Granted capabilities"))
+        .expect("the consented authority is visible to agents");
+    assert!(grants.value.as_deref().is_some_and(|value| {
+        value.contains("interface") && value.contains("container-read")
+    }));
     let enable = snapshot
         .root
         .children
@@ -115,6 +131,11 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .children
         .iter()
         .any(|node| node.label.as_deref() == Some("Read manifest")));
+
+    let empty = Fixture::new(&[]).view.semantic_snapshot();
+    assert!(empty.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Installed extensions") && node.value.as_deref() == Some("None installed")
+    }));
 }
 
 /// One shell, one roster, and the shelf between them.
@@ -475,6 +496,7 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .find(|node| node.label.as_deref() == Some("Confirm removal"))
         .unwrap();
     assert!(confirm.disabled, "hidden confirmation is not focusable");
+    assert!(confirm.actions.is_empty(), "disabled native controls advertise no actions");
     assert!(matches!(
         fixture.view.semantic_action(&Action {
             revision: removal.revision,
@@ -1803,20 +1825,8 @@ mod panes {
             }
         }
 
-        let semantics = super::super::super::semantic::Registry::new("workspace");
-        let view = Rc::new(super::super::super::View::with_semantics(
-            [
-                (
-                    super::super::super::Page::Extensions,
-                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
-                ),
-                (
-                    super::super::super::Page::Settings,
-                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
-                ),
-            ],
-            semantics,
-        ));
+        let fixture = super::Fixture::new(&[("agent-extension", false)]);
+        let view = Rc::clone(&fixture.view);
         view.select_name("Extensions");
         let bench = Bench::new();
         let (_terminal, terminal_slot, slave) = bench.shell_with_pty();
@@ -1952,9 +1962,9 @@ mod panes {
             "MCP bridge failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Settings</label>"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Extensions</label>"));
         assert!(String::from_utf8_lossy(&output.stdout).contains("agent-received:agent-status"));
-        assert_eq!(view.shown().as_deref(), Some("Settings"));
+        assert_eq!(view.shown().as_deref(), Some("Extensions"));
         guest.join().expect("guest PTY responder");
         served.join().expect("conversation thread");
     }
