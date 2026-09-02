@@ -172,9 +172,9 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
-  assert.ok(protocolCoverage.unavailable.events.includes('extensions'));
+  assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
   assert.deepEqual(protocolCoverage.unavailable.extensions, []);
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
@@ -185,6 +185,27 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.equal(typeof api.networks.connect, 'function');
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(api.terminal.switchOccupant, undefined);
+});
+
+test('extension inventory and acquisition watchers use separate exact topics', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const inventory = []; const acquisitions = [];
+  const openingInventory = api.watchExtensions((value) => inventory.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'extensions' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stopInventory = await openingInventory;
+  const openingAcquisitions = api.watchExtensionAcquisitions((value) => acquisitions.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'extension-acquisitions' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stopAcquisitions = await openingAcquisitions;
+  stage.host.write(encode({ channel: 6, kind: KIND.event, payload: { snapshot: 'extensions', of: [{ name: 'manager', image_digest: 'sha256:a', status: 'duty' }] } }));
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 7, kind: KIND.event, payload: { snapshot: 'extension_acquisitions', of: { job: 'j', revision: 2, state: 'ready', coalesced: 4 } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.equal(inventory[0][0].name, 'manager'); assert.deepEqual(acquisitions[0], { job: 'j', revision: 2, state: 'ready', coalesced: 4 });
+  const stoppingInventory = stopInventory(); assert.deepEqual((await next()).payload.with, { topic: 'extensions' }); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stoppingInventory;
+  const stoppingAcquisitions = stopAcquisitions(); assert.deepEqual((await next()).payload.with, { topic: 'extension-acquisitions' }); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stoppingAcquisitions;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('extension acquisition preserves job revision and explicit grant identity', async () => {

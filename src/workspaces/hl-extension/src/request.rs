@@ -369,6 +369,7 @@ pub enum Topic {
     Terminal,
     PaneChanges,
     Extensions,
+    ExtensionAcquisitions,
     WorkspaceEvents,
 }
 
@@ -384,7 +385,8 @@ impl Topic {
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
             Self::PaneChanges => Capability::PaneObserve,
-            Self::Extensions => Capability::WorkspaceRead,
+            Self::Extensions => Capability::ExtensionRead,
+            Self::ExtensionAcquisitions => Capability::ExtensionInstall,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
         }
     }
@@ -397,6 +399,7 @@ impl Topic {
         Self::Terminal,
         Self::PaneChanges,
         Self::Extensions,
+        Self::ExtensionAcquisitions,
         Self::WorkspaceEvents,
     ];
 }
@@ -619,6 +622,8 @@ mod tests {
         }
         assert_eq!(Topic::Containers.capability(), Capability::ContainerRead);
         assert_eq!(Topic::Terminal.capability(), Capability::TerminalRead);
+        assert_eq!(Topic::Extensions.capability(), Capability::ExtensionRead);
+        assert_eq!(Topic::ExtensionAcquisitions.capability(), Capability::ExtensionInstall);
     }
 
     #[test]

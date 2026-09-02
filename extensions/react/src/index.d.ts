@@ -4089,7 +4089,7 @@ export const vocabulary: { props: string[]; handlers: string[] };
 export const SOCKET: string;
 export const PROTOCOL: number;
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'workspace-events';
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
@@ -4105,6 +4105,7 @@ export interface ExtensionCandidate { name: string; version: string; image_diges
 export interface ExtensionAcquisitionJob { job: string }
 export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }
 export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; progress: ExtensionAcquisitionProgress | null; candidate: ExtensionCandidate | null; error: string | null }
+export interface ExtensionAcquisitionChange { job: string; revision: number; state: string; coalesced: number }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
 export interface WorkspaceMount { host: string; container: string; read_only: boolean }
 export interface WorkspaceTerminal {
@@ -4173,6 +4174,8 @@ export type SnapshotEvent =
   | { snapshot: 'networks'; of: NetworkSummary[] }
   | { snapshot: 'terminal'; of: TabSummary[] }
   | { snapshot: 'pane_changes'; of: PaneChange }
+  | { snapshot: 'extensions'; of: ExtensionSummary[] }
+  | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 
 export class ExtensionError extends Error {
@@ -4282,6 +4285,8 @@ export interface WorkspaceApi {
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
+  watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
+  watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;

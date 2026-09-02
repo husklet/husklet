@@ -36,6 +36,10 @@ reveals the resolved digest, manifest identity, and requested grants, and only a
 second confirmed install or update echoes that observed revision and commits the
 caller-selected grant; a changed candidate therefore makes stale consent fail. Cancellation
 is also explicit and confirmed; no MCP call performs an unobservable blocking pull.
+`husklet_extension_wait` follows the host's credit-controlled extension topics,
+returning either the newest bounded inventory snapshot or acquisition job/revision
+metadata. Acquisition notifications never carry manifest contents; clients fetch
+status only after an invalidation, and coalescing is reported explicitly.
 
 Volume and network inventory/inspection use the host's separate `VolumeRead`
 and `NetworkRead` grants. Creation and attachment controls retain their

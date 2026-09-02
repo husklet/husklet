@@ -44,7 +44,8 @@ pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceM
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};
 pub use subscription::{
-    PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch,
+    ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
+    WorkspaceEventBatch,
 };
 
 /// The host's opening frame, carrying this domain's grant.
