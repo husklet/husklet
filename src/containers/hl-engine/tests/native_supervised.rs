@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 
 use hl_engine::{
     activation::GuestIsa,
@@ -18,6 +18,19 @@ use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use tempfile::TempDir;
+
+#[cfg(target_arch = "aarch64")]
+const HOST_ISA: GuestIsa = GuestIsa::Aarch64;
+#[cfg(target_arch = "aarch64")]
+const HOST_CC: &str = "cc";
+#[cfg(target_arch = "x86_64")]
+const HOST_ISA: GuestIsa = GuestIsa::X86_64;
+#[cfg(target_arch = "x86_64")]
+const HOST_CC: &str = "x86_64-linux-gnu-gcc";
+
+fn getpid_refusal() -> String {
+    format!("{}:38", libc::SYS_getpid)
+}
 
 fn native_overlay_directories() -> std::collections::BTreeSet<PathBuf> {
     std::fs::read_dir("/var/tmp")
@@ -99,7 +112,7 @@ impl TerminalPort for PaneTerminal {
 fn fixture(directory: &Path) -> PathBuf {
     let output = directory.join("native-supervised-fixture");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native_supervised.c");
-    let status = std::process::Command::new("x86_64-linux-gnu-gcc")
+    let status = std::process::Command::new(HOST_CC)
         .args(["-static-pie", "-O2", "-o"])
         .arg(&output)
         .arg(source)
@@ -151,7 +164,7 @@ fn run_configured(
         },
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -182,7 +195,7 @@ fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec
     if let Some(control) = control {
         options.set("HL_NATIVE_SUPERVISED", control, true).unwrap();
     }
-    options.set("HL_NATIVE_SUPERVISED_REFUSE", "39:38", true).unwrap();
+    options.set("HL_NATIVE_SUPERVISED_REFUSE", &getpid_refusal(), true).unwrap();
     let output = Arc::new(Output::default());
     let translated_off = control == Some("0");
     let plan = RuntimePlan {
@@ -199,7 +212,7 @@ fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec
         },
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -220,7 +233,7 @@ fn retained_native_session_restarts_only_after_complete_wait() {
     let mut plan = selected_plan(&executable);
     plan.arguments.push(b"output".to_vec());
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -257,7 +270,7 @@ fn run_policy(executable: &Path, arguments: &[&str], policy: RuntimeBoxPolicy) -
         box_policy: policy,
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -289,7 +302,7 @@ fn explicit_on_names_prelaunch_policy_refusal() {
     let mut plan = selected_plan(&executable);
     plan.box_policy = RuntimeBoxPolicy::default();
     assert!(matches!(
-        Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()),
+        Engine::with_streams(HOST_ISA, plan, StandardStreams::default()),
         Err(hl_engine::engine::EngineError::CompositionFailed(
             hl_engine::composition::CompositionError::NativeSupervisedRefused(
                 hl_engine::runtime::NativeSupervisedRefusal::Network,
@@ -307,7 +320,7 @@ fn post_selection_failure_never_retries_the_translated_backend() {
     plan.arguments.push(b"output".to_vec());
     plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", "998:38", true).unwrap();
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -408,7 +421,7 @@ fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
     plan.arguments.push(b"checkpoint-idle".to_vec());
     let store = Arc::new(Checkpoints::default());
     assert!(matches!(
-        Engine::with_checkpoint(GuestIsa::X86_64, plan, StandardStreams::default(), store.clone(), store),
+        Engine::with_checkpoint(HOST_ISA, plan, StandardStreams::default(), store.clone(), store),
         Err(hl_engine::engine::EngineError::CompositionFailed(
             hl_engine::composition::CompositionError::NativeSupervisedRefused(
                 hl_engine::runtime::NativeSupervisedRefusal::Checkpoint,
@@ -445,7 +458,7 @@ fn supervised_generation_policy_keeps_daemon_writes_kernel_coherent() {
         },
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -492,7 +505,7 @@ fn supervised_overlay_preserves_lower_upper_and_declared_ownership() {
         },
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -588,7 +601,7 @@ fn supervised_overlay_projects_case_distinct_bookworm_names_before_ownership() {
         },
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -648,7 +661,7 @@ fn supervised_overlay_owner_failure_leaves_no_projection_directory() {
             ..isolated_policy()
         },
     };
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default()).unwrap();
     if engine.start().is_ok() {
         assert!(engine.wait().is_err());
     }
@@ -660,7 +673,7 @@ fn supervised_overlay_owner_failure_leaves_no_projection_directory() {
 fn refusal_reaches_a_fork_descendant_without_fallback() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    let (status, output, _) = run_with_refusal(&executable, &["descendant"], true, Some("39:38"));
+    let (status, output, _) = run_with_refusal(&executable, &["descendant"], true, Some(&getpid_refusal()));
     assert_eq!(status, 0);
     assert_eq!(output, b"descendant-supervised");
 }
@@ -685,7 +698,7 @@ fn selective_filter_skips_continued_open_but_refusal_still_traps_it() {
             plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
         }
         let engine = Engine::with_streams(
-            GuestIsa::X86_64,
+            HOST_ISA,
             plan,
             StandardStreams::default().with_output(output.clone()),
         )
@@ -702,7 +715,7 @@ fn selective_filter_skips_continued_open_but_refusal_still_traps_it() {
 fn supervisor_drains_an_orphaned_descendant() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    let (status, output, _) = run_with_refusal(&executable, &["orphan"], true, Some("39:38"));
+    let (status, output, _) = run_with_refusal(&executable, &["orphan"], true, Some(&getpid_refusal()));
     assert_eq!(status, 0);
     assert_eq!(output, b"orphan-supervised");
 }
@@ -750,7 +763,7 @@ fn supervised_tracee_signal_keeps_public_signal_kind() {
         options,
         box_policy: isolated_policy(),
     };
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default()).unwrap();
     engine.start().unwrap();
     let exit = engine.wait().unwrap();
     assert_eq!(exit.kind, ExitKind::Signal);
@@ -812,7 +825,7 @@ fn supervised_host_network_reuses_host_netns_and_reaches_host_loopback() {
         },
     };
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -865,7 +878,7 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     plan.box_policy.hostname = Some(b"husklet-native".to_vec());
     plan.box_policy.flags |= 1;
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -917,7 +930,7 @@ fn supervised_overlay_projector_confines_root_cwd_and_replaces_hostile_proc() {
     plan.box_policy.hostname = Some(b"husklet-native".to_vec());
     plan.box_policy.flags |= 1;
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -978,7 +991,7 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
         Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
     let streams = StandardStreams::default()
         .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, streams).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
@@ -997,7 +1010,7 @@ fn supervised_terminal_has_a_controlling_session_before_guest_exec() {
     plan.arguments.push(b"pty-session".to_vec());
     let streams = StandardStreams::default()
         .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, streams).unwrap();
     if let Err(error) = engine.start() {
         std::thread::sleep(std::time::Duration::from_millis(50));
         let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
@@ -1036,7 +1049,7 @@ fn supervised_terminal_refuses_an_image_supplied_non_tty_character_device() {
     plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
     plan.arguments.push(b"pty-session".to_vec());
     let streams = StandardStreams::default().with_terminal(Terminal::new(terminal, 37, 111).unwrap());
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, streams).unwrap();
     engine.start().unwrap();
     assert!(engine.wait().is_err());
     engine.destroy().unwrap();
@@ -1049,7 +1062,7 @@ fn supervised_projector_refuses_hostname_hosts_token_injection() {
     for hostname in [b"husklet\n127.0.0.1 injected".as_slice(), b"bad_host".as_slice()] {
         let mut plan = selected_plan(&executable);
         plan.box_policy.hostname = Some(hostname.to_vec());
-        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default()).unwrap();
         if engine.start().is_ok() {
             assert!(engine.wait().is_err());
         }
@@ -1093,7 +1106,7 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     plan.box_policy.volumes =
         Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -1145,7 +1158,7 @@ fn supervised_projector_mounts_pinned_regular_files_with_exact_access() {
         .into_bytes(),
     );
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -1183,7 +1196,7 @@ fn supervised_projector_refuses_missing_symlinked_and_wrong_type_file_volumes() 
         let mut plan = selected_plan(&executable);
         plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
         plan.box_policy.volumes = Some(specification.into_bytes());
-        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default()).unwrap();
         if engine.start().is_ok() {
             assert!(engine.wait().is_err());
         }
@@ -1213,7 +1226,7 @@ fn supervised_projector_refuses_target_swap_after_pinning_without_mounting_repla
     plan.options
         .set("HL_NATIVE_SUPERVISED_REFUSE", "file-volume-target-swap", true)
         .unwrap();
-    let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default()).unwrap();
     if engine.start().is_ok() {
         assert!(engine.wait().is_err());
     }
@@ -1241,7 +1254,7 @@ fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
     for specification in specifications {
         let mut plan = selected_plan(&executable);
         plan.box_policy.volumes = Some(specification.into_bytes());
-        match Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()) {
+        match Engine::with_streams(HOST_ISA, plan, StandardStreams::default()) {
             Err(hl_engine::engine::EngineError::CompositionFailed(
                 hl_engine::composition::CompositionError::NativeSupervisedRefused(
                     hl_engine::runtime::NativeSupervisedRefusal::Volumes,
@@ -1267,7 +1280,7 @@ fn supervised_projector_applies_identity_empty_groups_and_typed_limits() {
     plan.box_policy.gid = 2345;
     plan.box_policy.limits = Some(b"nofile=32:32,core=0:0".to_vec());
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -1364,7 +1377,7 @@ fn supervised_checkpoint_lifecycle_refuses_before_launch_or_storage_access() {
         }
         let store = Arc::new(Checkpoints::default());
         let result = Engine::with_checkpoint(
-            GuestIsa::X86_64,
+            HOST_ISA,
             plan,
             StandardStreams::default(),
             store.clone(),
@@ -1444,7 +1457,7 @@ fn supervised_mode_explicitly_refuses_every_unsupported_policy_class() {
         plan.box_policy = policy;
         assert!(
             matches!(
-                Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()),
+                Engine::with_streams(HOST_ISA, plan, StandardStreams::default()),
                 Err(hl_engine::engine::EngineError::CompositionFailed(
                     hl_engine::composition::CompositionError::NativeSupervisedRefused(_),
                 )),
@@ -1461,7 +1474,7 @@ fn supervised_clone_mapping_and_listener_fail_before_readiness() {
     for (stage, refusal) in [("clone", "998:38"), ("mapping", "997:38"), ("listener", "996:38")] {
         let mut plan = selected_plan(&executable);
         plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
-        let engine = Engine::with_streams(GuestIsa::X86_64, plan, StandardStreams::default()).unwrap();
+        let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default()).unwrap();
         if engine.start().is_ok() {
             match engine.wait() {
                 Ok(exit) => assert_ne!(exit.guest_status, 0, "{stage} fault executed the guest"),
@@ -1495,10 +1508,10 @@ fn supervised_mode_refuses_checkpoint_roles_and_restore_before_launch() {
     let store = Arc::new(Checkpoints::default());
     let mut restore = selected_plan(&executable);
     restore.options.set("HL_RESTORE", "1", true).unwrap();
-    assert!(Engine::with_streams(GuestIsa::X86_64, restore, StandardStreams::default()).is_err());
+    assert!(Engine::with_streams(HOST_ISA, restore, StandardStreams::default()).is_err());
 
     let coordinator = Engine::with_checkpoint(
-        GuestIsa::X86_64,
+        HOST_ISA,
         RuntimePlan {
             options: Options::default(),
             ..selected_plan(&executable)
@@ -1511,7 +1524,7 @@ fn supervised_mode_refuses_checkpoint_roles_and_restore_before_launch() {
     let channel = coordinator.checkpoint_channel().unwrap();
     assert!(matches!(
         Engine::with_checkpoint_channel(
-            GuestIsa::X86_64,
+            HOST_ISA,
             selected_plan(&executable),
             StandardStreams::default(),
             channel,

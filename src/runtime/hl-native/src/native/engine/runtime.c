@@ -1204,7 +1204,7 @@ static hl_status hl_engine_install_native_fd_bindings(hl_engine *engine, const h
 }
 
 static int hl_engine_native_supervised_selected(const hl_options *options) {
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     const char *value = hl_options_get(options, "HL_NATIVE_SUPERVISED");
     return value != NULL && value[0] != 0 && value[0] != '0';
 #else

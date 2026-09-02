@@ -3,7 +3,7 @@ static int hl_native_supervised_selected(const hl_options *options) {
     return value != NULL && value[0] != 0 && value[0] != '0';
 }
 
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/futex.h>
@@ -32,6 +32,12 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <net/if.h>
 
 #define HL_NATIVE_TCGETS2 0x802c542aU
+
+#if defined(__aarch64__)
+#define HL_NATIVE_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#else
+#define HL_NATIVE_AUDIT_ARCH AUDIT_ARCH_X86_64
+#endif
 
 static int hl_native_supervised_available(void) { return 1; }
 
@@ -912,28 +918,71 @@ static int hl_native_supervised_create_listener(const hl_options *options) {
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF)
     struct sock_filter instructions[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, HL_NATIVE_AUDIT_ARCH, 1, 0),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
-        HL_NATIVE_NOTIFY(SYS_open), HL_NATIVE_NOTIFY(SYS_openat), HL_NATIVE_NOTIFY(SYS_creat),
+#ifdef SYS_open
+        HL_NATIVE_NOTIFY(SYS_open),
+#endif
+        HL_NATIVE_NOTIFY(SYS_openat),
+#ifdef SYS_creat
+        HL_NATIVE_NOTIFY(SYS_creat),
+#endif
 #ifdef SYS_openat2
         HL_NATIVE_NOTIFY(SYS_openat2),
 #endif
-        HL_NATIVE_NOTIFY(SYS_execve), HL_NATIVE_NOTIFY(SYS_clone), HL_NATIVE_NOTIFY(SYS_fork),
+        HL_NATIVE_NOTIFY(SYS_execve), HL_NATIVE_NOTIFY(SYS_clone),
+#ifdef SYS_fork
+        HL_NATIVE_NOTIFY(SYS_fork),
+#endif
 #ifdef SYS_execveat
         HL_NATIVE_NOTIFY(SYS_execveat),
 #endif
 #ifdef SYS_clone3
         HL_NATIVE_NOTIFY(SYS_clone3),
 #endif
-        HL_NATIVE_NOTIFY(SYS_vfork), HL_NATIVE_NOTIFY(SYS_unlink), HL_NATIVE_NOTIFY(SYS_unlinkat),
-        HL_NATIVE_NOTIFY(SYS_rename), HL_NATIVE_NOTIFY(SYS_renameat), HL_NATIVE_NOTIFY(SYS_renameat2),
-        HL_NATIVE_NOTIFY(SYS_mkdir), HL_NATIVE_NOTIFY(SYS_mkdirat), HL_NATIVE_NOTIFY(SYS_rmdir),
-        HL_NATIVE_NOTIFY(SYS_link), HL_NATIVE_NOTIFY(SYS_linkat), HL_NATIVE_NOTIFY(SYS_symlink),
-        HL_NATIVE_NOTIFY(SYS_symlinkat), HL_NATIVE_NOTIFY(SYS_chmod), HL_NATIVE_NOTIFY(SYS_fchmod),
-        HL_NATIVE_NOTIFY(SYS_fchmodat), HL_NATIVE_NOTIFY(SYS_chown), HL_NATIVE_NOTIFY(SYS_fchown),
-        HL_NATIVE_NOTIFY(SYS_lchown), HL_NATIVE_NOTIFY(SYS_fchownat), HL_NATIVE_NOTIFY(SYS_truncate),
-        HL_NATIVE_NOTIFY(SYS_ftruncate), HL_NATIVE_NOTIFY(SYS_mknod), HL_NATIVE_NOTIFY(SYS_mknodat),
+#ifdef SYS_vfork
+        HL_NATIVE_NOTIFY(SYS_vfork),
+#endif
+#ifdef SYS_unlink
+        HL_NATIVE_NOTIFY(SYS_unlink),
+#endif
+        HL_NATIVE_NOTIFY(SYS_unlinkat),
+#ifdef SYS_rename
+        HL_NATIVE_NOTIFY(SYS_rename),
+#endif
+        HL_NATIVE_NOTIFY(SYS_renameat), HL_NATIVE_NOTIFY(SYS_renameat2),
+#ifdef SYS_mkdir
+        HL_NATIVE_NOTIFY(SYS_mkdir),
+#endif
+        HL_NATIVE_NOTIFY(SYS_mkdirat),
+#ifdef SYS_rmdir
+        HL_NATIVE_NOTIFY(SYS_rmdir),
+#endif
+#ifdef SYS_link
+        HL_NATIVE_NOTIFY(SYS_link),
+#endif
+        HL_NATIVE_NOTIFY(SYS_linkat),
+#ifdef SYS_symlink
+        HL_NATIVE_NOTIFY(SYS_symlink),
+#endif
+        HL_NATIVE_NOTIFY(SYS_symlinkat),
+#ifdef SYS_chmod
+        HL_NATIVE_NOTIFY(SYS_chmod),
+#endif
+        HL_NATIVE_NOTIFY(SYS_fchmod), HL_NATIVE_NOTIFY(SYS_fchmodat),
+#ifdef SYS_chown
+        HL_NATIVE_NOTIFY(SYS_chown),
+#endif
+        HL_NATIVE_NOTIFY(SYS_fchown),
+#ifdef SYS_lchown
+        HL_NATIVE_NOTIFY(SYS_lchown),
+#endif
+        HL_NATIVE_NOTIFY(SYS_fchownat), HL_NATIVE_NOTIFY(SYS_truncate), HL_NATIVE_NOTIFY(SYS_ftruncate),
+#ifdef SYS_mknod
+        HL_NATIVE_NOTIFY(SYS_mknod),
+#endif
+        HL_NATIVE_NOTIFY(SYS_mknodat),
         HL_NATIVE_NOTIFY(SYS_mount), HL_NATIVE_NOTIFY(SYS_umount2), HL_NATIVE_NOTIFY(SYS_pivot_root),
         HL_NATIVE_NOTIFY(SYS_chroot), HL_NATIVE_NOTIFY(SYS_setns), HL_NATIVE_NOTIFY(SYS_unshare),
         HL_NATIVE_NOTIFY(SYS_socket), HL_NATIVE_NOTIFY(SYS_socketpair), HL_NATIVE_NOTIFY(SYS_connect),
@@ -946,7 +995,7 @@ static int hl_native_supervised_create_listener(const hl_options *options) {
     };
     struct sock_filter selective[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, HL_NATIVE_AUDIT_ARCH, 1, 0),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
         HL_NATIVE_NOTIFY(SYS_clone),
@@ -1224,7 +1273,9 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         int number = (int)request->data.nr;
         if (count_notifications) {
             ++notifications;
+#ifdef SYS_open
             if (number == SYS_open) ++open_notifications;
+#endif
         }
         if (number == refused_number) {
             response->error = -refused_error;

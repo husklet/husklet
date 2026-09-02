@@ -9,20 +9,20 @@ pub(super) fn test_api() -> &'static crate::loader::TestApi {
     crate::loader::tests().unwrap_or_else(|error| panic!("native test bridge unavailable: {error}"))
 }
 
-#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub(crate) fn x86_64_translit_displaced_test(scenario: u32) -> i32 {
     // SAFETY: the feature-gated hook accepts one bounded scalar selector, owns its fixture,
     // and returns a scalar status without unwinding across the native boundary.
     unsafe { (test_api().x86_64_translit_displaced)(scenario) }
 }
 
-#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub(crate) fn native_supervised_hostname_projection_test(scenario: u32) -> i32 {
     // SAFETY: the hook owns and removes its temporary root before returning.
     unsafe { (test_api().native_supervised_hostname_projection)(scenario) }
 }
 
-#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub(crate) fn native_supervised_name_projection_test(scenario: u32) -> i32 {
     // SAFETY: the hook owns and removes its temporary root before returning.
     unsafe { (test_api().native_supervised_name_projection)(scenario) }

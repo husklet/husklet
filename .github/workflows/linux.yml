@@ -722,13 +722,13 @@ jobs:
         run: >-
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test --locked --offline -p hl-engine --lib
-          runtime::execution::native_eligibility_tests::arm_and_non_linux_hosts_refuse_native_checkpoint_composition
+          runtime::execution::native_eligibility_tests::arm_native_execution_is_admitted_but_every_checkpoint_role_stays_refused
           -- --exact
 
       # The hook suite above validates checkpoint record machinery, but it never launches a guest
       # through hl-engine's capture/restore lifecycle. Run the Linux end-to-end suite on this real
-      # AArch64 host as the other half of the translated matrix: checkpoint-capable launches refuse the
-      # native-supervised path, so its AArch64 fixture takes same-ISA translation and its x86_64 fixture
+      # AArch64 host as the other half of the translated matrix: checkpoint-capable launches still refuse
+      # the native-supervised path, so its AArch64 fixture takes same-ISA translation and its x86_64 fixture
       # takes cross-ISA translation. The AMD64 job covers AArch64 cross-ISA translation and also forces
       # same-ISA x86 translation explicitly. This is runtime evidence for translation only; native
       # checkpoint execution remains unsupported rather than being inferred from the host ISA.

@@ -8,21 +8,21 @@
 use crate::bindings;
 
 /// Runs one x86-64 same-ISA transliterator fixture in this integration-test process.
-#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[doc(hidden)]
 #[must_use]
 pub fn x86_64_translit_displaced_test(scenario: u32) -> i32 {
     bindings::x86_64_translit_displaced_test(scenario)
 }
 
-#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[doc(hidden)]
 #[must_use]
 pub fn native_supervised_hostname_projection_test(scenario: u32) -> i32 {
     bindings::native_supervised_hostname_projection_test(scenario)
 }
 
-#[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(feature = "native-test-hooks", target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[doc(hidden)]
 #[must_use]
 pub fn native_supervised_name_projection_test(scenario: u32) -> i32 {

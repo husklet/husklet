@@ -283,12 +283,13 @@ fn native_checkpoint_intent(
 
 #[derive(Clone, Copy, Debug)]
 struct NativeHostCapabilities {
-    linux_x86_64: bool,
+    linux_native_supervised: bool,
+    host_isa: Option<crate::activation::GuestIsa>,
     root: bool,
     clone3: bool,
     pidfd_getfd: bool,
     seccomp_notify: bool,
-    executable_x86_64: bool,
+    executable_same_isa: bool,
     rootfs_directory: bool,
     isolated_hostname_projection: bool,
 }
@@ -300,16 +301,17 @@ fn syscall_has_errno(number: libc::c_long, arguments: [libc::c_long; 3], accepte
     result >= 0 || std::io::Error::last_os_error().raw_os_error().is_some_and(|error| accepted.contains(&error))
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn x86_64_executable_header(regular: bool, header: Option<[u8; 20]>) -> bool {
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn same_isa_executable_header(regular: bool, header: Option<[u8; 20]>) -> bool {
     let Some(header) = header else { return false };
+    let machine = if cfg!(target_arch = "aarch64") { 183 } else { 62 };
     regular
         && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
-        && u16::from_le_bytes([header[18], header[19]]) == 62
+        && u16::from_le_bytes([header[18], header[19]]) == machine
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn executable_is_same_isa(path: Option<&[u8]>) -> bool {
     use std::os::unix::fs::{FileExt, OpenOptionsExt};
     use std::os::unix::ffi::OsStrExt;
     let Some(path) = path else { return false };
@@ -321,7 +323,7 @@ fn executable_is_x86_64(path: Option<&[u8]>) -> bool {
     let Ok(file) = file else { return false };
     let regular = file.metadata().is_ok_and(|metadata| metadata.is_file());
     let header = file.read_exact_at(&mut header, 0).is_ok().then_some(header);
-    x86_64_executable_header(regular, header)
+    same_isa_executable_header(regular, header)
 }
 
 fn hostname_valid(hostname: &[u8]) -> bool {
@@ -408,11 +410,11 @@ fn rootfs_is_directory(_path: &[u8]) -> bool { false }
 #[cfg(not(unix))]
 fn isolated_hostname_projection_ready(_plan: &crate::launcher::plan::RuntimePlan) -> bool { false }
 
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn executable_is_x86_64(_path: Option<&[u8]>) -> bool { false }
+#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+fn executable_is_same_isa(_path: Option<&[u8]>) -> bool { false }
 
 fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> NativeHostCapabilities {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         // GET_NOTIF_SIZES is observational; invalid clone3/pidfd_getfd arguments prove syscall presence.
         let mut sizes = [0_u16; 3];
@@ -421,27 +423,33 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
             libc::syscall(libc::SYS_seccomp, 3, 0, sizes.as_mut_ptr()) == 0
         };
         NativeHostCapabilities {
-            linux_x86_64: true,
+            linux_native_supervised: true,
+            host_isa: Some(if cfg!(target_arch = "aarch64") {
+                crate::activation::GuestIsa::Aarch64
+            } else {
+                crate::activation::GuestIsa::X86_64
+            }),
             // SAFETY: identity queries have no side effects.
             root: unsafe { libc::geteuid() == 0 && libc::getegid() == 0 },
             clone3: syscall_has_errno(libc::SYS_clone3, [0, 0, 0], &[libc::EFAULT, libc::EINVAL]),
             pidfd_getfd: syscall_has_errno(libc::SYS_pidfd_getfd, [-1, -1, 0], &[libc::EBADF]),
             seccomp_notify,
-            executable_x86_64: executable_is_x86_64(plan.executable_host.as_deref()),
+            executable_same_isa: executable_is_same_isa(plan.executable_host.as_deref()),
             rootfs_directory: plan.rootfs.as_deref().is_some_and(rootfs_is_directory),
             isolated_hostname_projection: isolated_hostname_projection_ready(plan),
         }
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
     {
         let _ = plan;
         NativeHostCapabilities {
-            linux_x86_64: false,
+            linux_native_supervised: false,
+            host_isa: None,
             root: false,
             clone3: false,
             pidfd_getfd: false,
             seccomp_notify: false,
-            executable_x86_64: false,
+            executable_same_isa: false,
             rootfs_directory: false,
             isolated_hostname_projection: false,
         }
@@ -541,10 +549,10 @@ fn native_eligibility_with_sentry(
     allow_sentry_only: bool,
 ) -> Result<(), NativeSupervisedRefusal> {
     use NativeSupervisedRefusal as R;
-    if !host.linux_x86_64 || !host.root { return Err(R::Host); }
+    if !host.linux_native_supervised || !host.root { return Err(R::Host); }
     if !host.clone3 || !host.pidfd_getfd || !host.seccomp_notify { return Err(R::Kernel); }
-    if isa != crate::activation::GuestIsa::X86_64 { return Err(R::GuestIsa); }
-    if !host.executable_x86_64 { return Err(R::Executable); }
+    if host.host_isa != Some(isa) { return Err(R::GuestIsa); }
+    if !host.executable_same_isa { return Err(R::Executable); }
     if plan.rootfs.is_none() || plan.executable_host.is_none() || !host.rootfs_directory { return Err(R::Root); }
     let box_policy = &plan.box_policy;
     if box_policy.uid < -1 || box_policy.gid < -1 { return Err(R::Identity); }
@@ -636,12 +644,13 @@ mod native_eligibility_tests {
 
     fn host() -> NativeHostCapabilities {
         NativeHostCapabilities {
-            linux_x86_64: true,
+            linux_native_supervised: true,
+            host_isa: Some(crate::activation::GuestIsa::X86_64),
             root: true,
             clone3: true,
             pidfd_getfd: true,
             seccomp_notify: true,
-            executable_x86_64: true,
+            executable_same_isa: true,
             rootfs_directory: true,
             isolated_hostname_projection: true,
         }
@@ -674,7 +683,7 @@ mod native_eligibility_tests {
         let mut changed = host(); changed.clone3 = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Kernel));
         assert_eq!(native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), NativeCheckpointIntent::None, host()), Err(NativeSupervisedRefusal::GuestIsa));
-        let mut changed = host(); changed.executable_x86_64 = false;
+        let mut changed = host(); changed.executable_same_isa = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Executable));
 
         let mut changed = plan(); changed.rootfs = None;
@@ -911,7 +920,7 @@ mod native_eligibility_tests {
         );
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
     #[test]
     fn executable_probe_refuses_nonregular_and_symlink_inputs_without_blocking() {
         use std::os::unix::fs::symlink;
@@ -919,19 +928,19 @@ mod native_eligibility_tests {
         let executable = std::env::current_exe().unwrap();
         let link = directory.path().join("executable-link");
         symlink(&executable, &link).unwrap();
-        assert!(!executable_is_x86_64(Some(link.as_os_str().as_encoded_bytes())));
+        assert!(!executable_is_same_isa(Some(link.as_os_str().as_encoded_bytes())));
         let fifo = directory.path().join("executable-fifo");
         let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
         let started = std::time::Instant::now();
-        assert!(!executable_is_x86_64(Some(fifo.as_os_str().as_encoded_bytes())));
+        assert!(!executable_is_same_isa(Some(fifo.as_os_str().as_encoded_bytes())));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
-        assert!(!executable_is_x86_64(Some(b"/dev/null")));
+        assert!(!executable_is_same_isa(Some(b"/dev/null")));
         let mut valid = [0_u8; 20];
         valid[..6].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1]);
-        valid[18..20].copy_from_slice(&62_u16.to_le_bytes());
-        assert!(!x86_64_executable_header(false, Some(valid)), "valid bytes over nonregular authority admitted");
-        assert!(x86_64_executable_header(true, Some(valid)));
+        valid[18..20].copy_from_slice(&(if cfg!(target_arch = "aarch64") { 183_u16 } else { 62 }).to_le_bytes());
+        assert!(!same_isa_executable_header(false, Some(valid)), "valid bytes over nonregular authority admitted");
+        assert!(same_isa_executable_header(true, Some(valid)));
 
         let real_root = tempfile::tempdir().unwrap();
         let root_link = directory.path().join("root-link");
@@ -994,7 +1003,18 @@ mod native_eligibility_tests {
     }
 
     #[test]
-    fn arm_and_non_linux_hosts_refuse_native_checkpoint_composition() {
+    fn arm_native_execution_is_admitted_but_every_checkpoint_role_stays_refused() {
+        let mut arm_host = host();
+        arm_host.host_isa = Some(crate::activation::GuestIsa::Aarch64);
+        assert_eq!(
+            native_eligibility(
+                crate::activation::GuestIsa::Aarch64,
+                &plan(),
+                NativeCheckpointIntent::None,
+                arm_host,
+            ),
+            Ok(()),
+        );
         for intent in [
             NativeCheckpointIntent::FreshCoordinator,
             NativeCheckpointIntent::DomainMember,
@@ -1005,14 +1025,14 @@ mod native_eligibility_tests {
                 crate::activation::GuestIsa::Aarch64,
                 &plan(),
                 intent,
-                host(),
+                arm_host,
             );
-            assert_eq!(arm, Err(NativeSupervisedRefusal::GuestIsa), "{intent:?}");
+            assert_eq!(arm, Err(NativeSupervisedRefusal::Checkpoint), "{intent:?}");
             assert_eq!(native_selection(NativeSupervisedRequest::Auto, arm), Ok(false));
             assert_eq!(
                 native_selection(NativeSupervisedRequest::On, arm),
                 Err(CompositionError::NativeSupervisedRefused(
-                    NativeSupervisedRefusal::GuestIsa,
+                    NativeSupervisedRefusal::Checkpoint,
                 )),
             );
         }
@@ -1020,7 +1040,7 @@ mod native_eligibility_tests {
         // This arm executes on the native ARM64 Linux and macOS CI hosts. Those hosts have no
         // native-supervised implementation: their real capability probe must remain closed before
         // checkpoint policy can accidentally select an x86-only backend.
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(target_os = "linux"))]
         {
             let actual = native_eligibility_for_request(
                 NativeSupervisedRequest::On,
@@ -1032,7 +1052,7 @@ mod native_eligibility_tests {
             assert_eq!(
                 actual,
                 Err(NativeSupervisedRefusal::Host),
-                "unsupported host admitted native ARM checkpoint composition",
+                "non-Linux host admitted native ARM checkpoint composition",
             );
         }
     }
