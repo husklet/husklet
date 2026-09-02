@@ -24,6 +24,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const original = configuration('alpine:3.20');
   const updated = configuration('alpine:3.21');
   const calls = [];
+  const credits = [];
   const sockets = new Set();
   let eventChannel = 40;
   const host = net.createServer((socket) => {
@@ -43,10 +44,17 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.credit) { credits.push(frame); continue; }
         if (frame.channel === CONTROL || frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
         const { call, with: argument } = frame.payload;
         if (call === 'workspace_info') answer(frame, 'workspace', { name: 'observer' });
+        else if (call === 'image_pull_start') answer(frame, 'image_pull_job', { job: '7' });
+        else if (call === 'image_pull_status') answer(frame, 'image_pull', {
+          job: argument.job, revision: calls.filter(({ call: name }) => name === 'image_pull_status').length,
+          reference: 'alpine:3.21', state: calls.filter(({ call: name }) => name === 'image_pull_status').length > 1 ? 'complete' : 'pulling',
+          layers: [], current: 1, total: 1, error: null,
+        });
         else if (call === 'workspace_inspect') answer(frame, 'workspace_configuration', original);
         else if (call === 'workspace_update') answer(frame, 'workspace_configuration', argument.configuration);
         else if (call === 'container_create') answer(frame, 'identity', { id: 'container-day-one' });
@@ -54,6 +62,11 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
           || call === 'terminal_write_pane' || call === 'pane_semantic_action'
           || call === 'event_subscribe' || call === 'event_unsubscribe') {
           answer(frame, 'done');
+          if (call === 'event_subscribe' && argument.topic === 'image-pulls') setImmediate(() => socket.write(encode({
+            channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'image_pulls', of: {
+              job: '7', revision: 2, state: 'complete', coalesced: 0,
+            } },
+          })));
           if (call === 'terminal_write_pane') changed('terminal-1', 'terminal', 2);
           if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8);
         } else if (call === 'container_exec') answer(frame, 'identity', { id: 'execution-day-one' });
@@ -95,8 +108,10 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const result = await runAgentDayOne(client, {
     workspaceName: 'target', updatedConfiguration: updated,
     container: { image: 'alpine:3.21', name: 'day-one', command: ['/usr/bin/worker', '--once'] },
-    terminalInput: 'status\n', actionLabel: 'Refresh', waitMs: 1_000,
+    terminalInput: 'status\n', actionLabel: 'Refresh', waitMs: 1_000, pullImage: true,
   });
+  assert.equal(result.container.imagePull.job, '7');
+  assert.equal(result.container.imagePull.state, 'complete');
   assert.equal(result.container.execution.id, 'execution-day-one');
   assert.equal(result.terminal.changed.changed, true);
   assert.equal(result.semantic.node, 5);
@@ -104,12 +119,15 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'workspace_inspect', 'workspace_update', 'container_create', 'container_start',
+    'workspace_info', 'workspace_inspect', 'image_pull_start', 'image_pull_status',
+    'event_subscribe', 'image_pull_status', 'event_unsubscribe',
+    'workspace_update', 'container_create', 'container_start',
     'container_exec', 'container_processes', 'pane_list', 'terminal_topology', 'terminal_read_pane',
     'event_subscribe', 'terminal_write_pane', 'event_unsubscribe', 'pane_semantic_read',
     'event_subscribe', 'pane_semantic_read', 'pane_semantic_action', 'event_unsubscribe',
     'pane_semantic_read', 'container_stop', 'container_remove', 'workspace_update',
   ]);
+  assert.equal(credits.some(({ payload }) => payload === 1), true);
   assert.deepEqual(calls.find(({ call }) => call === 'container_exec').with, {
     id: 'container-day-one', command: ['/usr/bin/worker', '--once'], user: null, working_directory: null,
   });

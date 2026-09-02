@@ -19,6 +19,19 @@ const nodeForLabel = (xml, label) => {
   return Number(match[1]);
 };
 
+/** Acquire one image through bounded event waits; never poll the status endpoint. */
+export async function pullImageForAgent(client, reference, waitMs = 30_000) {
+  const { job } = await json(client, 'husklet_image_pull_start', { reference });
+  let status = await json(client, 'husklet_image_pull_status', { job });
+  for (let delivered = 0; delivered < 128 && !['complete', 'failed', 'cancelled'].includes(status.state); delivered += 1) {
+    const update = await json(client, 'husklet_image_pull_wait', { job, after_revision: status.revision, timeout_ms: waitMs });
+    if (!update.changed) throw new Error(`image pull ${job} made no progress before its bounded wait expired`);
+    status = update.status;
+  }
+  if (status.state !== 'complete') throw new Error(`image pull ${job} ended as ${status.state}: ${status.error ?? 'no detail'}`);
+  return status;
+}
+
 /**
  * A bounded first-day workflow using only strict Husklet MCP tools.
  *
@@ -33,6 +46,7 @@ export async function runAgentDayOne(client, {
   terminalInput = 'help\n',
   actionLabel = 'Refresh',
   waitMs = 5_000,
+  pullImage = false,
 }) {
   if (!Array.isArray(command) || command.length === 0) throw new TypeError('container.command must be a non-empty argv array');
   if (typeof terminalInput !== 'string') throw new TypeError('terminalInput must be literal text');
@@ -41,6 +55,7 @@ export async function runAgentDayOne(client, {
   let container;
   const cleanupErrors = [];
   try {
+    const imagePull = pullImage ? await pullImageForAgent(client, image, waitMs) : null;
     await call(client, 'husklet_workspace_update', {
       name: workspaceName, configuration: updatedConfiguration, confirm: true,
     });
@@ -73,7 +88,7 @@ export async function runAgentDayOne(client, {
       ? await call(client, 'husklet_pane_snapshot', { slot: semantic.slot }) : null;
     return {
       workspace: { before: original, applied: updatedConfiguration },
-      container: { created: container, execution, processes },
+      container: { imagePull, created: container, execution, processes },
       terminal: { slot: terminal.slot, before: terminalBefore, changed: terminalChanged },
       semantic: { slot: semantic.slot, revision, node, before: semanticBefore, changed: semanticChanged, after: semanticAfter },
     };

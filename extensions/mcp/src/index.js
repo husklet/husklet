@@ -15,6 +15,7 @@ const acquisitionRevision = z.number().int().nonnegative().safe();
 const path = z.string().min(1).max(4096);
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
+const imagePullJob = z.string().min(1).max(20).regex(/^[1-9][0-9]*$/, 'image pull job must be a positive decimal identity');
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
   if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
@@ -149,6 +150,13 @@ export function tools(api) {
     define('husklet_image_list', 'List bounded local image summaries.', empty, () => api.images.list()),
     define('husklet_image_inspect', 'Inspect one local image.', z.object({ reference: id }).strict(), ({ reference }) => api.images.inspect(reference)),
     define('husklet_image_pull', 'Pull one explicit image reference.', z.object({ reference: id }).strict(), ({ reference }) => api.images.pull(reference)),
+    define('husklet_image_pull_start', 'Start a bounded asynchronous image pull. Prefer this observable workflow over the synchronous compatibility tool.', z.object({ reference: imageReference }).strict(), ({ reference }) => api.images.startPull(reference)),
+    define('husklet_image_pull_status', 'Read the latest bounded status for one exact image-pull job.', z.object({ job: imagePullJob }).strict(), async ({ job }) => {
+      const status = await api.images.pullStatus(job);
+      if (status.job !== job) throw new Error(`host returned image pull job ${status.job}, expected ${job}`);
+      return status;
+    }),
+    define('husklet_image_pull_cancel', 'Cancel one active image-pull job; cancellation is safe and does not require destructive confirmation.', z.object({ job: imagePullJob }).strict(), async ({ job }) => { await api.images.cancelPull(job); return { done: true, job }; }),
     define('husklet_image_remove', 'Remove one image after explicit confirmation.', z.object({ reference: id, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
     define('husklet_image_prune', 'Prune unused images after explicit confirmation.', z.object({ confirm: z.literal(true) }).strict(), () => api.images.prune()),
     define('husklet_terminal_tabs', 'List terminal tabs.', empty, () => api.terminal.tabs()),
@@ -232,6 +240,27 @@ export function tools(api) {
         if ((absent && !container) || (!absent && container && (state == null || container.state === state))) {
           finish({ changed: true, container: container ?? null });
         }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
+  if (typeof api.watchImagePulls === 'function') definitions.push(define(
+    'husklet_image_pull_wait',
+    'Wait once for a revision of one exact image-pull job, then return its bounded full status without polling.',
+    z.object({ job: imagePullJob, after_revision: z.number().int().nonnegative().safe().default(0), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ job, after_revision: after, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false, job, after_revision: after }), timeout);
+      api.watchImagePulls(async (change) => {
+        if (change.job !== job || change.revision <= after || settled) return;
+        try {
+          const status = await api.images.pullStatus(job);
+          if (status.job !== job) throw new Error(`host returned image pull job ${status.job}, expected ${job}`);
+          finish({ changed: true, change, status });
+        } catch (error) { finish(undefined, error); }
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));

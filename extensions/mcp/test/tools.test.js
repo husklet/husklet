@@ -12,12 +12,12 @@ function fake() {
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), removeExecution: record('containers.removeExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
-    images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
+    images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
-    watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {},
+    watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
 }
 
@@ -322,6 +322,35 @@ test('image tools use typed reads and require confirmation for destructive contr
     ['images.remove', 'old:tag'],
     ['images.prune'],
   ]);
+});
+
+test('image pull jobs have strict identities and cancellation is not mislabeled destructive', async () => {
+  const { api, calls } = fake(); const listed = tools(api); const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_image_pull_start').inputSchema.safeParse({ reference: 'alpine latest' }).success, false);
+  assert.equal(byName('husklet_image_pull_status').inputSchema.safeParse({ job: '0' }).success, false);
+  assert.equal(byName('husklet_image_pull_cancel').inputSchema.safeParse({ job: '7', confirm: true }).success, false);
+  const value = async (name, input) => JSON.parse((await byName(name).run(input)).content[0].text);
+  assert.deepEqual(await value('husklet_image_pull_start', { reference: 'alpine:3.20' }), { job: '7' });
+  assert.deepEqual(await value('husklet_image_pull_status', { job: '7' }), { job: '7', revision: 1, state: 'starting' });
+  assert.deepEqual(await value('husklet_image_pull_cancel', { job: '7' }), { done: true, job: '7' });
+  assert.deepEqual(calls.filter(([name]) => name.startsWith('images.')), [
+    ['images.startPull', 'alpine:3.20'], ['images.pullStatus', '7'], ['images.cancelPull', '7'],
+  ]);
+});
+
+test('image pull wait filters exact job and revision and always disposes', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchImagePulls = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  api.images.pullStatus = async (job) => ({ job, revision: 4, state: 'pulling', current: 5, total: 10 });
+  const wait = tools(api).find(({ name }) => name === 'husklet_image_pull_wait');
+  const pending = wait.run({ job: '7', after_revision: 2, timeout_ms: 1_000 }); await Promise.resolve();
+  listener({ job: '8', revision: 9, state: 'complete', coalesced: 0 });
+  listener({ job: '7', revision: 2, state: 'pulling', coalesced: 0 });
+  listener({ job: '7', revision: 4, state: 'pulling', coalesced: 1 });
+  const answer = JSON.parse((await pending).content[0].text);
+  assert.equal(answer.changed, true); assert.equal(answer.change.job, '7'); assert.equal(answer.status.job, '7'); assert.equal(answer.status.revision, 4); assert.equal(disposed, 1);
+  const timeout = JSON.parse((await wait.run({ job: '7', after_revision: 4, timeout_ms: 1 })).content[0].text);
+  assert.deepEqual(timeout, { changed: false, job: '7', after_revision: 4 }); assert.equal(disposed, 2);
 });
 
 test('volume and network tools preserve typed read/control operations and confirmations', async () => {

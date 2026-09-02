@@ -84,9 +84,14 @@ and `NetworkRead` grants. Creation and attachment controls retain their
 `VolumeWrite` or `NetworkWrite` grants. Volume/network removal and network
 disconnect additionally require an explicit `confirm: true` MCP argument.
 
-Image tools list and inspect local images under `ImageRead`, and pull under
-`ImageWrite`. Removing an image or pruning unused images additionally requires
-an explicit `confirm: true` MCP argument; the host still enforces `ImageWrite`.
+Image tools list and inspect local images under `ImageRead`. Prefer the bounded
+`husklet_image_pull_start` → `husklet_image_pull_wait` →
+`husklet_image_pull_status` workflow under `ImageWrite`: it exposes exact job
+identity and registry-provided layer/byte progress without polling. Wait is a
+filtered one-shot subscription and always releases it; cancel is safe and does
+not require destructive confirmation. `husklet_image_pull` remains as a
+synchronous compatibility tool. Removing an image or pruning unused images
+requires explicit `confirm: true`; the host still enforces `ImageWrite`.
 
 `husklet_pane_list` returns bounded discovery metadata for every inspectable
 terminal, extension surface, and native pane, including stable slot and provider
