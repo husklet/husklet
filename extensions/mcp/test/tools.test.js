@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer, tools } from '../src/index.js';
+import { createServer, semanticXml, tools } from '../src/index.js';
 
 function fake() {
   const calls = [];
@@ -41,12 +41,16 @@ test('results redact secrets and remain bounded', async () => {
 test('pane tools are capability-shaped and only appear for the real typed methods', async () => {
   const { api, calls } = fake();
   assert(!tools(api).some(({ name }) => name.startsWith('husklet_pane_')));
-  api.terminal.semantics = async (slot) => { calls.push(['terminal.semantics', slot]); return { slot, revision: 7, root: {}, truncated: false }; };
+  api.terminal.semantics = async (slot) => { calls.push(['terminal.semantics', slot]); return {
+    slot, revision: 7, truncated: false,
+    root: { id: 0, role: 'column', label: 'A & <B>', value: null, disabled: false, actions: ['invoke'], children: [] },
+  }; };
   api.terminal.act = async (slot, action) => { calls.push(['terminal.act', slot, action]); };
   const listed = tools(api);
   const snapshot = listed.find(({ name }) => name === 'husklet_pane_snapshot');
   const action = listed.find(({ name }) => name === 'husklet_pane_action');
-  await snapshot.run({ slot: 'pane-1' });
+  const shown = await snapshot.run({ slot: 'pane-1' });
+  assert.equal(shown.content[0].text, '<pane slot="pane-1" revision="7" truncated="false"><node id="0" role="column" disabled="false" actions="invoke"><label>A &amp; &lt;B&gt;</label></node></pane>');
   await action.run({ slot: 'pane-1', revision: 7, node: 3, action: 'invoke' });
   assert.deepEqual(calls, [
     ['terminal.semantics', 'pane-1'],
@@ -55,12 +59,46 @@ test('pane tools are capability-shaped and only appear for the real typed method
   assert.equal(action.inputSchema.safeParse({ slot: 'pane-1', revision: 7, node: 3, action: 'run' }).success, false);
 });
 
+test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
+  const hostile = `&<>"'`;
+  assert.equal(semanticXml({ slot: hostile, revision: 3, truncated: false, root: {
+    id: hostile, role: hostile, label: hostile, value: '[redacted]', disabled: true,
+    actions: [hostile], children: [],
+  }}), '<pane slot="&amp;&lt;&gt;&quot;&apos;" revision="3" truncated="false"><node id="&amp;&lt;&gt;&quot;&apos;" role="&amp;&lt;&gt;&quot;&apos;" disabled="true" actions="&amp;&lt;&gt;&quot;&apos;"><label>&amp;&lt;&gt;&quot;&apos;</label><value>[redacted]</value></node></pane>');
+  const secret = semanticXml({ slot: 's', revision: 1, truncated: false, root: {
+    id: 1, role: 'password_entry', label: 'Password', value: 'must-not-leak', disabled: false, actions: [], children: [],
+  }});
+  assert(!secret.includes('must-not-leak'));
+  assert.match(secret, /<value>\[redacted\]<\/value>/);
+  const controls = semanticXml({ slot: '\u0000\uD800', revision: 1, truncated: false, root: {
+    id: 1, role: 'text', label: '\u0001', value: null, disabled: false, actions: [], children: [],
+  }});
+  assert(!/[\u0000-\u0008\uD800-\uDFFF]/.test(controls));
+  assert.match(controls, /�/);
+
+  const children = Array.from({ length: 400 }, (_, id) => ({
+    id, role: 'text', label: 'x'.repeat(1000), value: null, disabled: false, actions: [], children: [],
+  }));
+  const bounded = semanticXml({ slot: 'large', revision: 4, truncated: true, root: {
+    id: 0, role: 'column', label: null, value: null, disabled: false, actions: [], children,
+  }});
+  assert(new TextEncoder().encode(bounded).byteLength <= 64 * 1024);
+  assert.match(bounded, /<truncated\/>/);
+  assert.match(bounded, /^<pane .*<\/pane>$/);
+  assert.equal((bounded.match(/<node /g) ?? []).length, (bounded.match(/<\/node>/g) ?? []).length);
+});
+
 test('a real MCP client lists strict tools and calls through the React session contract', async () => {
   const calls = [];
   const session = {
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
+      if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
+        slot: argument.slot, revision: 11, truncated: false,
+        root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
+      } };
+      if (name === 'pane_semantic_action') return { reply: 'done' };
       throw new Error(`unexpected call ${name}`);
     },
   };
@@ -70,10 +108,18 @@ test('a real MCP client lists strict tools and calls through the React session c
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
-  assert(!listed.tools.some(({ name }) => name.startsWith('husklet_pane_')));
+  assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
-  assert.deepEqual(calls, [['workspace_info', undefined]]);
+  const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
+  assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
+  await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
+  assert.deepEqual(calls, [
+    ['workspace_info', undefined],
+    ['pane_semantic_read', { slot: 'pane-live' }],
+    ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],
+  ]);
   await client.close();
   await server.close();
 });

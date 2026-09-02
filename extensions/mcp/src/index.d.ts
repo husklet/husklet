@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Session } from '@husklet/react';
+import type { PaneSemanticTree, Session } from '@husklet/react';
 import type { ZodType } from 'zod';
 
 export interface ToolResult { content: Array<{ type: 'text'; text: string }> }
@@ -12,3 +12,4 @@ export interface ToolDefinition {
 
 export function tools(api: ReturnType<typeof import('@husklet/react').workspace>): ToolDefinition[];
 export function createServer(session: Session): McpServer;
+export function semanticXml(tree: PaneSemanticTree): string;
