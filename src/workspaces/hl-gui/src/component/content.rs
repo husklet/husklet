@@ -147,6 +147,18 @@ impl Element {
         Self::new(Tag::LogView)
     }
 
+    /// A bounded collection of unified lines or side-by-side diff regions.
+    #[must_use]
+    pub fn diff_viewer() -> Self {
+        Self::new(Tag::DiffViewer)
+    }
+
+    /// One independently readable diff line: status in `label`, content in `value`.
+    #[must_use]
+    pub fn diff_line(status: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::new(Tag::DiffLine).label(status).value(content)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {

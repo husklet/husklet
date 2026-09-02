@@ -330,6 +330,8 @@ catalogue! {
     LogView: leaf, props[Value, Monospace], triggers[],
     Video: leaf, props[Uri], triggers[],
     Chart: leaf, props[Label, Tone], triggers[],
+    DiffViewer: children, props[Gap, Orientation], triggers[],
+    DiffLine: leaf, props[Label, Value, Tone], triggers[],
 }
 
 #[cfg(test)]

@@ -398,7 +398,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::MenuItem
         | Tag::Drawer
         | Tag::DrawerPanel => "dialogs",
-        Tag::CodeView | Tag::LogView | Tag::Video | Tag::Chart => "content",
+        Tag::CodeView | Tag::LogView | Tag::Video | Tag::Chart | Tag::DiffViewer | Tag::DiffLine => "content",
     }
 }
 

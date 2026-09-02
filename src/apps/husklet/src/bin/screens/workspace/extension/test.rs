@@ -128,12 +128,30 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         command_palette_exposes_typed_semantic_actions();
         tag_input_exposes_value_actions_and_authored_tags();
         validation_summary_is_readable_and_keeps_corrective_actions();
+        diff_lines_project_status_and_bounded_text();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn diff_lines_project_status_and_bounded_text() {
+    let mut fixture = Fixture::new();
+    let described = Element::diff_viewer()
+        .child(Element::diff_line("-", "image: app:v1"))
+        .child(Element::diff_line("+", "image: app:v2"));
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let diff = &tree.root.children[0];
+    assert_eq!(diff.role, "DiffViewer");
+    assert_eq!(diff.children.len(), 2);
+    assert_eq!(diff.children[0].label.as_deref(), Some("-"));
+    assert_eq!(diff.children[0].value.as_deref(), Some("image: app:v1"));
+    assert_eq!(diff.children[1].label.as_deref(), Some("+"));
+    assert_eq!(diff.children[1].value.as_deref(), Some("image: app:v2"));
 }
 
 fn validation_summary_is_readable_and_keeps_corrective_actions() {

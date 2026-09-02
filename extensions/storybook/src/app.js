@@ -36,6 +36,7 @@ import { STREAMING_LOG_STORY, StreamingLogStory } from './streaming-log.js';
 import { EVENT_STREAM_STORY, EventStreamStory } from './event-stream.js';
 import { KEY_VALUE_STORY, KeyValueInspectorStory } from './key-value-inspector.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
+import { DIFF_STORY, DiffReviewStory } from './diff-review.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -49,7 +50,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, initia
 
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
     || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
-    || selected === KEY_VALUE_STORY;
+    || selected === KEY_VALUE_STORY || selected === DIFF_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -123,6 +124,12 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(FORM_STORY),
       }),
       h(ListItemButton, {
+        key: DIFF_STORY,
+        label: DIFF_STORY,
+        selected: selected === DIFF_STORY,
+        onInvoke: () => onSelect(DIFF_STORY),
+      }),
+      h(ListItemButton, {
         key: NAVIGATION_STORY,
         label: NAVIGATION_STORY,
         selected: selected === NAVIGATION_STORY,
@@ -160,6 +167,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
       { key: 'stage', pad: 4, grow: true },
       name === ACQUISITION_STORY
         ? h(AcquisitionProgressStory)
+        : name === DIFF_STORY
+        ? h(DiffReviewStory)
         : name === FORM_STORY
         ? h(ValidatedSettingsFormStory)
         : name === KEYBOARD_STORY

@@ -158,4 +158,6 @@ export const {
   LogView,
   Video,
   Chart,
+  DiffViewer,
+  DiffLine,
 } = components;

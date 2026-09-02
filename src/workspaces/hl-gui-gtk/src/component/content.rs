@@ -11,9 +11,35 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::CodeView => source().upcast(),
         Tag::LogView => log().upcast(),
         Tag::Video => gtk::Video::new().upcast(),
-        // Chart is the last content tag routed here.
+        Tag::Chart => chart().upcast(),
+        Tag::DiffViewer => diff().upcast(),
+        Tag::DiffLine => diff_line().upcast(),
         _ => chart().upcast(),
     }
+}
+
+fn diff() -> gtk::Box {
+    let widget = super::axis::column(2);
+    widget.add_css_class("view");
+    widget.set_hexpand(true);
+    widget
+}
+
+fn diff_line() -> gtk::Box {
+    let widget = super::axis::row(8);
+    let status = super::slot::caption_label();
+    status.add_css_class("dim-label");
+    status.set_width_chars(3);
+    let content = super::axis::label();
+    content.set_selectable(true);
+    content.set_wrap(false);
+    content.set_xalign(0.0);
+    content.set_hexpand(true);
+    content.add_css_class("monospace");
+    super::slot::field(&content);
+    widget.append(&status);
+    widget.append(&content);
+    widget
 }
 
 /// A read-only monospaced view of source text.

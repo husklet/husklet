@@ -4387,6 +4387,67 @@ export interface ChartProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface DiffViewerProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** axis of a container, a splitter or a divider */
+  orientation?: "horizontal" | "Horizontal" | "vertical" | "Vertical";
+}
+
+export interface DiffLineProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 
 import type { ComponentType } from 'react';
 
@@ -4528,6 +4589,8 @@ export const CodeView: ComponentType<CodeViewProps>;
 export const LogView: ComponentType<LogViewProps>;
 export const Video: ComponentType<VideoProps>;
 export const Chart: ComponentType<ChartProps>;
+export const DiffViewer: ComponentType<DiffViewerProps>;
+export const DiffLine: ComponentType<DiffLineProps>;
 
 /** Every tag name, in catalogue order. */
 export const tags: string[];

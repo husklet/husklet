@@ -12,6 +12,7 @@ import { StreamingLogStory } from '../src/streaming-log.js';
 import { EventStreamStory, TimelineSource } from '../src/event-stream.js';
 import { KeyValueInspectorStory, KeyValueSource } from '../src/key-value-inspector.js';
 import { storyCoverage } from '../src/story-coverage.js';
+import { DIFF_STORY, DiffReviewStory } from '../src/diff-review.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -50,6 +51,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['streaming log', h(StreamingLogStory)],
     ['event timeline', h(EventStreamStory, { source: new TimelineSource() })],
     ['key/value inspector', h(KeyValueInspectorStory, { source: new KeyValueSource() })],
+    ['diff review', h(DiffReviewStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -59,6 +61,21 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('the diff review is bounded, selectable, and switches presentation', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const story = node(first.patches, 'ListItemButton', DIFF_STORY);
+  assert.ok(story);
+  stage.surface.dispatch({ trigger: 'Invoke', node: story, id: `${story}:Invoke` });
+  const opened = stage.frames.at(-1).patches;
+  assert.equal(opened.filter((patch) => patch.Create?.tag === 'DiffLine').length, 4);
+  const toggle = node(opened, 'Button', 'Show side by side');
+  assert.ok(toggle);
+  const before = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: toggle, id: `${toggle}:Invoke` });
+  assert.ok(stage.since(before).some((patch) => patch.SetProp?.prop === 'Orientation'));
 });
 
 test('navigation and transient UI is selectable and demonstrates expand, invoke, and close', () => {

@@ -835,6 +835,8 @@ fn structural(tag: Tag) -> Aspect {
         | Tag::AccordionDetails
         | Tag::AccordionActions => Aspect::Gap,
         Tag::Dialog | Tag::DialogContent | Tag::DialogActions | Tag::Menu => Aspect::Gap,
+        Tag::DiffViewer => Aspect::Gap,
+        Tag::DiffLine => Aspect::Value,
         // Everything else names itself: a caption is what it carries.
         _ => Aspect::Label,
     }
@@ -856,6 +858,18 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_drawer_panel_covers_the_content_instead_of_joining_it();
     a_tag_input_keeps_retained_tags_before_its_editor();
     a_validation_summary_keeps_actions_below_its_message();
+    diff_lines_are_selectable_and_keep_status_beside_content();
+}
+
+fn diff_lines_are_selectable_and_keep_status_beside_content() {
+    let session = placed(Tag::DiffViewer, &[Tag::DiffLine]);
+    let line = session.tagged(Tag::DiffLine).expect("a diff line renders");
+    let parts = offspring(&line);
+    let status = parts.first().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("status");
+    let content = parts.last().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("content");
+    assert!(!status.is_selectable());
+    assert!(content.is_selectable(), "diff text cannot be selected and copied");
+    assert!(content.has_css_class("monospace"));
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {

@@ -153,7 +153,9 @@
     {"name": "CodeView", "family": "content", "acceptsChildren": false, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Value", "Monospace"], "triggers": []},
     {"name": "LogView", "family": "content", "acceptsChildren": false, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Value", "Monospace"], "triggers": []},
     {"name": "Video", "family": "content", "acceptsChildren": false, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Uri"], "triggers": []},
-    {"name": "Chart", "family": "content", "acceptsChildren": false, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Label", "Tone"], "triggers": []}
+    {"name": "Chart", "family": "content", "acceptsChildren": false, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Label", "Tone"], "triggers": []},
+    {"name": "DiffViewer", "family": "content", "acceptsChildren": true, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Gap", "Orientation"], "triggers": []},
+    {"name": "DiffLine", "family": "content", "acceptsChildren": false, "detached": false, "props": ["Destructive", "Visible", "Tooltip", "Width", "Height", "Pad", "Align", "Justify", "Grow", "Span", "RowSpan", "Label", "Value", "Tone"], "triggers": []}
   ],
   "props": [
     {"name": "Label", "group": "content", "editor": "text", "values": ["Text"], "note": "the node's caption"},
