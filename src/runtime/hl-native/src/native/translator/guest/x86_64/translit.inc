@@ -664,6 +664,7 @@ static int interp_step(struct cpu *, struct insn *, uint64_t, uint64_t);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
+static int translit_movsd_memory_fixture_test(void);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
 static int translit_fallthrough_ibtc_fixture_test(unsigned scenario);
@@ -1323,6 +1324,13 @@ static int translit_classify_two(const struct insn *insn) {
             return TL_SSE2;
         if (!insn->rep && op == 0x12 && insn->mod == 3) return TL_SSE2; // MOVHLPS xmm,xmm
     }
+    // Legacy MOVSD loads overwrite the complete architectural XMM destination (the upper qword
+    // becomes zero); stores read only the low qword. The shared SSE2 emitter provides those
+    // semantics by omitting the destination preload on loads and preloading the source on stores.
+    if (!insn->p66 && insn->repne && !insn->rep && !insn->lock && !insn->addr32 && !insn->seg &&
+        !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm && insn->is_mem &&
+        (op == 0x10 || op == 0x11))
+        return TL_SSE2;
     if (insn->p66 && !insn->rep && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg &&
         !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm) {
         if (op == 0x6F ||
@@ -3246,6 +3254,7 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    if (scenario == 219) return translit_movsd_memory_fixture_test();
     if (scenario == 217) return translit_jitdump_lifecycle_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
@@ -3934,7 +3943,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return rejected && unchanged ? 0 : 52;
     }
     if (scenario == 39) {
-        static const uint8_t admitted[][6] = {{0x66, 0x0F, 0xDB, 0xC1}, {0x66, 0x0F, 0xDF, 0xC1},
+        static const uint8_t admitted[][8] = {{0x66, 0x0F, 0xDB, 0xC1}, {0x66, 0x0F, 0xDF, 0xC1},
                                                {0x66, 0x0F, 0x6C, 0xC1}, {0x66, 0x45, 0x0F, 0x6C, 0xC1},
                                                {0x66, 0x0F, 0x6E, 0xC1}, {0x66, 0x4D, 0x0F, 0x6E, 0xD9},
                                                {0x66, 0x0F, 0xEF, 0xC1}, {0x66, 0x45, 0x0F, 0xEF, 0xC1},
@@ -3945,8 +3954,11 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                                {0x66, 0x0F, 0x7E, 0xC0}, {0xF3, 0x0F, 0x7F, 0x00},
                                                {0x0F, 0x11, 0x00}, {0x0F, 0x29, 0x00},
                                                {0x44, 0x0F, 0x11, 0x4F, 1}, {0x44, 0x0F, 0x29, 0x0C, 0x24},
-                                               {0xF3, 0x44, 0x0F, 0x7F, 0x4F, 0x13}};
-        static const uint8_t refused[][6] = {{0xF0, 0x66, 0x0F, 0xDB, 0xC1}, // LOCK
+                                               {0xF3, 0x44, 0x0F, 0x7F, 0x4F, 0x13},
+                                               {0xF2, 0x0F, 0x10, 0x43, 0x10},
+                                               {0xF2, 0x0F, 0x11, 0x4C, 0x24, 0x20},
+                                               {0xF2, 0x0F, 0x10, 0x05, 0, 0, 0, 0}};
+        static const uint8_t refused[][8] = {{0xF0, 0x66, 0x0F, 0xDB, 0xC1}, // LOCK
                                               {0xF0, 0x66, 0x0F, 0x6C, 0xC1},
                                               {0xF0, 0x66, 0x0F, 0x6E, 0xC1},
                                               {0xF2, 0x0F, 0xDB, 0xC1},       // wrong mandatory prefix
@@ -3967,7 +3979,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                               {0x66, 0x0F, 0xDF, 0x00},       // PANDN memory source deferred
                                               {0xF3, 0x0F, 0x7F, 0xC0},       // MOVDQU store requires memory
                                               {0x0F, 0x11, 0xC0},             // MOVUPS store requires memory
-                                              {0x0F, 0x29, 0xC0}};            // MOVAPS store requires memory
+                                              {0x0F, 0x29, 0xC0},             // MOVAPS store requires memory
+                                              {0xF2, 0x0F, 0x10, 0xC1},       // register MOVSD remains deferred
+                                              {0xF2, 0x0F, 0x11, 0xC1},
+                                              {0xF3, 0x0F, 0x10, 0x00},       // MOVSS is a distinct operation
+                                              {0x67, 0xF2, 0x0F, 0x10, 0x00}, // address-size override
+                                              {0xF0, 0xF2, 0x0F, 0x11, 0x00}};// LOCK
         struct insn decoded;
         for (size_t i = 0; i < sizeof admitted / sizeof admitted[0]; i++)
             if (hl_x86_decode((uint64_t)(uintptr_t)admitted[i], &decoded) <= 0 ||
@@ -6588,6 +6605,76 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_cache_gen = saved_generation;
     munmap(arena, arena_size);
     return built && cap_exact && executed ? 0 : 100 + (int)(scenario - 71);
+}
+
+static int translit_movsd_memory_fixture_test(void) {
+    const size_t arena_size = 8192;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 133;
+    static const uint8_t bytes[] = {
+        0xF2, 0x0F, 0x10, 0x43, 0x10,             // movsd xmm0,[rbx+16]
+        0xF2, 0x0F, 0x11, 0x4B, 0x20,             // movsd [rbx+32],xmm1
+        0xF2, 0x0F, 0x10, 0x15, 0x06, 0, 0, 0,    // movsd xmm2,[rip+6]
+        0x0F, 0x0B,                               // deterministic unsupported tail
+        0, 0, 0, 0,
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    };
+    uint64_t storage[8] = {0};
+    storage[2] = UINT64_C(0x0123456789abcdef);
+    storage[4] = UINT64_C(0xaaaaaaaaaaaaaaaa);
+    storage[5] = UINT64_C(0xbbbbbbbbbbbbbbbb);
+
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - 219;
+    map_clear();
+    struct interp_block *block = (struct interp_block *)arena;
+    translit_fall_fixture_bytes = bytes;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
+    translit_fall_fixture_length = sizeof bytes;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    int result = 134;
+    if (context == NULL || jit_body_owner_set_for(g_cache_gen, 1) == NULL) goto done;
+
+    void *body = translit_build(context, block, translit_fall_fixture_guest, NULL);
+    struct cpu cpu = {0};
+    cpu.rip = translit_fall_fixture_guest;
+    cpu.r[RBX] = (uint64_t)(uintptr_t)storage;
+    cpu.v[0] = UINT64_MAX;
+    cpu.v[1] = UINT64_C(0xeeeeeeeeeeeeeeee);
+    cpu.v[2] = UINT64_C(0xfedcba9876543210);
+    cpu.v[3] = UINT64_C(0xdddddddddddddddd);
+    cpu.v[4] = UINT64_MAX;
+    cpu.v[5] = UINT64_C(0xcccccccccccccccc);
+    block->magic = INTERP_BLOCK_MAGIC;
+    block->gpc = translit_fall_fixture_guest;
+    if (body != NULL) run_block(context, &cpu, block);
+    result = body != NULL && block->profile_insns == 3 && cpu.reason == R_BRANCH &&
+                     cpu.rip == translit_fall_fixture_guest + 18 &&
+                     cpu.v[0] == storage[2] && cpu.v[1] == 0 &&
+                     storage[4] == UINT64_C(0xfedcba9876543210) &&
+                     storage[5] == UINT64_C(0xbbbbbbbbbbbbbbbb) &&
+                     cpu.v[4] == UINT64_C(0x1122334455667788) && cpu.v[5] == 0
+                 ? 0
+                 : 134;
+
+done:
+    map_clear();
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    munmap(arena, arena_size);
+    return result;
 }
 
 static int translit_mixed_fixture_test(unsigned scenario) {
