@@ -321,6 +321,22 @@ jobs:
           xvfb-run -a -s '-screen 0 1600x1000x24'
           cargo test -p husklet --bins --features gui --locked --offline
 
+      - name: Configure Node for the MCP socket integration proof
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extensions/package-lock.json
+
+      - name: Test MCP through the real extension socket and GTK owner
+        run: |
+          set -euo pipefail
+          npm ci --prefix extensions
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            xvfb-run -a -s '-screen 0 1600x1000x24' \
+            cargo test -p husklet --bin husklet --features gui,mcp-e2e --locked --offline \
+              a_real_mcp_client_changes_native_ui_through_the_extension_socket
+
       # The test suites above exercise widgets, but they do not start the product binary or cross its
       # scheduled screenshot hook. Preplanting a non-PNG makes this fail if the hook never runs: mere
       # file existence, a stale artifact, or a toolkit test cannot satisfy the receipt.

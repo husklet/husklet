@@ -87,6 +87,9 @@ gui = [
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
 ]
+# Explicit cross-language integration proof. CI installs the locked MCP package
+# graph before enabling it; ordinary Rust gates never acquire npm dependencies.
+mcp-e2e = []
 
 [lints]
 workspace = true

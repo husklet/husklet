@@ -71,6 +71,13 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     }
 }
 
+#[cfg(feature = "mcp-e2e")]
+#[test]
+fn a_real_mcp_client_changes_native_ui_through_the_extension_socket() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| panes::mcp_socket_changes_native_ui());
+    assert!(ran, "the explicit MCP integration target requires an X display");
+}
+
 fn native_extension_cards_are_semantic_and_actionable() {
     use super::super::semantic::{Action, ActionKind};
     let fixture = Fixture::new(&[("semantic", false)]);
@@ -1256,6 +1263,156 @@ mod panes {
             std::thread::sleep(Duration::from_millis(5));
         }
         condition()
+    }
+
+    #[cfg(feature = "mcp-e2e")]
+    pub(super) fn mcp_socket_changes_native_ui() {
+        use hl_extension::port::{
+            ContainerControl, ContainerInventory, Entry, ImageStore, NetworkStore, VolumeStore, WorkspaceControl,
+            WorkspaceFiles, WorkspaceInventory,
+        };
+        use hl_extension::{Authority, Capability, Grant, RelativePath, Services, WorkspaceInfo};
+        use std::process::Command;
+
+        struct Unused;
+        impl ContainerInventory for Unused {
+            fn list(&self) -> Result<Vec<hl_extension::port::ContainerSummary>, HostError> {
+                unreachable!()
+            }
+            fn inspect(&self, _: &str) -> Result<hl_extension::port::ContainerSummary, HostError> {
+                unreachable!()
+            }
+        }
+        impl ContainerControl for Unused {
+            fn create(&self, _: &str, _: &str) -> Result<String, HostError> {
+                unreachable!()
+            }
+            fn start(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+            fn stop(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+            fn remove(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+        }
+        impl ImageStore for Unused {
+            fn list(&self) -> Result<Vec<hl_extension::port::ImageSummary>, HostError> {
+                unreachable!()
+            }
+            fn pull(&self, _: &str) -> Result<hl_extension::port::ImageSummary, HostError> {
+                unreachable!()
+            }
+        }
+        impl VolumeStore for Unused {}
+        impl NetworkStore for Unused {}
+        impl WorkspaceInventory for Unused {
+            fn workspaces(&self) -> Result<Vec<hl_extension::port::WorkspaceState>, HostError> {
+                unreachable!()
+            }
+        }
+        impl WorkspaceControl for Unused {}
+        impl WorkspaceFiles for Unused {
+            fn list(&self, _: &RelativePath) -> Result<Vec<Entry>, HostError> {
+                unreachable!()
+            }
+            fn read(&self, _: &RelativePath) -> Result<Vec<u8>, HostError> {
+                unreachable!()
+            }
+            fn write(&self, _: &RelativePath, _: &[u8]) -> Result<(), HostError> {
+                unreachable!()
+            }
+        }
+
+        let semantics = super::super::super::semantic::Registry::new("workspace");
+        let view = Rc::new(super::super::super::View::with_semantics(
+            [
+                (
+                    super::super::super::Page::Extensions,
+                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+                ),
+                (
+                    super::super::super::Page::Settings,
+                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+                ),
+            ],
+            semantics,
+        ));
+        view.select_name("Extensions");
+        let bench = Bench::new();
+        let gallery = Gallery::new();
+        gallery.enrol_native(view.semantic_registry());
+        Window::exhibit(&bench.window, gallery);
+        let (relay, errands) = hl::extension::Relay::open();
+        let console = Console::new(&bench.window, errands);
+
+        let temporary = tempfile::tempdir().expect("socket directory");
+        let socket = temporary.path().join("extension.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind real extension socket");
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("MCP session connects");
+            let authority = Authority::new(
+                ExtensionName::new("mcp-e2e").unwrap(),
+                Grant::new([Capability::PaneSemanticRead, Capability::PaneSemanticControl]),
+                Vec::new(),
+            );
+            let unused = Unused;
+            let services = Services {
+                workspace: WorkspaceInfo {
+                    name: "dev".into(),
+                    architecture: "arm64".into(),
+                    image: "alpine:3.20".into(),
+                },
+                workspaces: &unused,
+                workspace_control: &unused,
+                containers: &unused,
+                control: &unused,
+                images: &unused,
+                volumes: &unused,
+                networks: &unused,
+                terminal: &relay,
+                files: &unused,
+            };
+            let mut conversation =
+                hl::extension::Conversation::new(stream, authority, "dev", hl::extension::Queue::new())
+                    .expect("conversation");
+            conversation.greet().expect("real handshake");
+            conversation.serve(&services).expect("real session");
+        });
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("repository root");
+        let script = root.join("extensions/mcp/test/native-socket-e2e.mjs");
+        assert!(
+            root.join("extensions/node_modules/@modelcontextprotocol/sdk").exists(),
+            "run `npm ci` in extensions before the explicit mcp-e2e target"
+        );
+        let mut child = Command::new("node")
+            .arg(script)
+            .arg(&socket)
+            .current_dir(root.join("extensions"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn real MCP client/server");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && child.try_wait().expect("poll MCP child").is_none() {
+            console.drain();
+            gtk::glib::MainContext::default().iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().expect("MCP child output");
+        assert!(
+            output.status.success(),
+            "MCP bridge failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Settings</label>"));
+        assert_eq!(view.shown().as_deref(), Some("Settings"));
+        served.join().expect("conversation thread");
     }
 
     pub(super) fn native_workspace_semantics_cross_the_terminal_request_bridge() {

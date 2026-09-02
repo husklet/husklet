@@ -243,7 +243,10 @@ pub const fn stable_id(path: &str) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         index += 1;
     }
-    hash
+    // The extension SDK and MCP transport carry semantic IDs as JavaScript
+    // numbers. Keep product-owned hashes exactly representable across that
+    // boundary rather than letting a round trip silently address a neighbour.
+    hash & 0x001f_ffff_ffff_ffff
 }
 
 #[cfg(test)]
@@ -304,6 +307,7 @@ mod tests {
     fn stable_ids_are_allocation_and_order_independent() {
         assert_eq!(stable_id("workspace/settings"), stable_id("workspace/settings"));
         assert_ne!(stable_id("workspace/settings"), stable_id("workspace/extensions"));
+        assert!(stable_id("workspace/settings") <= 9_007_199_254_740_991);
     }
 
     #[test]
