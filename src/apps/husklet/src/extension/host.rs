@@ -937,6 +937,8 @@ mod tests {
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
                 lines: Vec::new(),
+                cursor_column: 0,
+                cursor_row: 0,
                 truncated: false,
             })
         }

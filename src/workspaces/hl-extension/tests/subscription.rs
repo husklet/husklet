@@ -78,6 +78,8 @@ impl TerminalSurface for Host {
         Ok(PaneText {
             slot: slot.into(),
             lines: vec![format!("at most {lines}")],
+            cursor_column: 12,
+            cursor_row: 3,
             truncated: true,
         })
     }

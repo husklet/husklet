@@ -776,7 +776,8 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
       ],
     } };
     if (name === 'terminal_read_pane') return { reply: 'text', with: {
-      slot: argument.slot, lines: [`visible <${argument.slot}>`], truncated: argument.slot === 'upper',
+      slot: argument.slot, lines: [`visible <${argument.slot}>`], cursor_column: 6, cursor_row: 7,
+      truncated: argument.slot === 'upper',
     } };
     // A stale host cache must never make a removed split leaf look native.
     if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
@@ -800,7 +801,7 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
     const answer = await client.callTool({ name: 'husklet_pane_read', arguments: { slot, lines: 10 } });
     const xml = answer.content[0].text;
     assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal">`));
-    assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}"[^>]*truncated="${truncated}">`));
+    assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}" cursor-column="6" cursor-row="7"[^>]*truncated="${truncated}">`));
     assert.match(xml, new RegExp(`visible &lt;${slot}&gt;`));
   }
 

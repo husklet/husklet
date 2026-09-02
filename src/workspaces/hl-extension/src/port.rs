@@ -238,6 +238,12 @@ pub enum Occupant {
 pub struct PaneText {
     pub slot: String,
     pub lines: Vec<String>,
+    /// Zero-based cursor column in the terminal's visible grid.
+    #[serde(default)]
+    pub cursor_column: u32,
+    /// Zero-based cursor row in the terminal's visible grid.
+    #[serde(default)]
+    pub cursor_row: u32,
     /// Whether older lines exist that this answer does not carry.
     pub truncated: bool,
 }
@@ -972,11 +978,14 @@ mod tests {
         let text = PaneText {
             slot: "pane".into(),
             lines: vec!["old".repeat(PANE_TEXT_BYTES / 3), "middle".repeat(PANE_TEXT_BYTES / 6), "new".into()],
+            cursor_column: 4,
+            cursor_row: 2,
             truncated: false,
         };
         let bounded = bounded_pane_text(text);
         assert!(bounded.truncated);
         assert_eq!(bounded.lines.last().map(String::as_str), Some("new"));
+        assert_eq!((bounded.cursor_column, bounded.cursor_row), (4, 2));
         assert!(bounded.lines.iter().map(|line| line.len() + 1).sum::<usize>() <= PANE_TEXT_BYTES);
     }
 

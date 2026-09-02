@@ -515,6 +515,22 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('terminal screen read preserves bounded text, truncation and cursor over framing', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const reading = workspace(stage.session).terminal.read('s1', 25);
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_read_pane', with: { slot: 's1', lines: 25 },
+  });
+  const screen = {
+    slot: 's1', lines: ['ready'], cursor_column: 5, cursor_row: 2, truncated: true,
+  };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen } }));
+  assert.deepEqual(await reading, screen);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pane discovery uses its distinct bounded inventory reply', async () => {
   const stage = await pair();
   const next = frames(stage.host);

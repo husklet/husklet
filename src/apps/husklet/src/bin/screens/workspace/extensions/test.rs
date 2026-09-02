@@ -80,6 +80,16 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     }
 }
 
+#[test]
+fn a_terminal_projection_carries_rendered_text_and_cursor() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| {
+        panes::reading_a_pane_hands_back_what_was_written_to_it();
+    });
+    if !ran {
+        eprintln!("skipped: no display connection, so a terminal pane cannot be rendered");
+    }
+}
+
 #[cfg(feature = "mcp-e2e")]
 #[test]
 fn a_real_mcp_client_discovers_native_terminal_and_rust_extension_surfaces() {
@@ -2070,6 +2080,8 @@ mod ports {
             Ok(PaneText {
                 slot: slot.to_owned(),
                 lines: Vec::new(),
+                cursor_column: 0,
+                cursor_row: 0,
                 truncated: false,
             })
         }
@@ -2640,7 +2652,7 @@ mod panes {
     pub(super) fn reading_a_pane_hands_back_what_was_written_to_it() {
         let bench = Bench::new();
         let (terminal, slot) = bench.shell();
-        terminal.feed(b"the quick brown fox\r\n");
+        terminal.feed(b"the quick brown fox\r\n\x1b[4;13H");
 
         assert!(
             until(|| lines(&bench, &slot, 100)
@@ -2648,6 +2660,13 @@ mod panes {
                 .any(|line| line.contains("quick brown"))),
             "the pane hands back what was written to it, got {:?}",
             lines(&bench, &slot, 100)
+        );
+        assert!(
+            until(|| matches!(
+                Panes::read(&bench.window, &slot, 100),
+                Reading::Text(text) if (text.cursor_column, text.cursor_row) == (12, 3)
+            )),
+            "the typed pane projection carries the terminal's zero-based cursor"
         );
         assert_eq!(
             Panes::read(&bench.window, "no-such-pane", 100),

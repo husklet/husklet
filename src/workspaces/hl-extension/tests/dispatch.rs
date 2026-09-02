@@ -351,12 +351,16 @@ impl TerminalSurface for Host {
             return Ok(PaneText {
                 slot: slot.into(),
                 lines: vec!["old".repeat(hl_extension::port::PANE_TEXT_BYTES / 3), "new".into()],
+                cursor_column: 0,
+                cursor_row: 0,
                 truncated: false,
             });
         }
         Ok(PaneText {
             slot: slot.into(),
             lines: vec![format!("at most {lines}")],
+            cursor_column: 12,
+            cursor_row: 3,
             truncated: true,
         })
     }
@@ -436,6 +440,7 @@ fn terminal_screen_bytes_are_bounded_before_the_reply_is_encoded() {
     let Reply::Text(text) = reply else { panic!("wrong reply") };
     assert!(text.truncated);
     assert_eq!(text.lines, vec!["new"]);
+    assert_eq!((text.cursor_column, text.cursor_row), (0, 0));
 }
 
 #[test]

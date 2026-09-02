@@ -98,7 +98,7 @@ export async function paneXml(terminal, slot, lines = 200) {
     output += fragment; used += size; return true;
   };
   const active = topology?.active_tab === leaf.tab?.id;
-  append(`<terminal tab="${escape(leaf.tab?.id ?? '')}" title="${escape(String(leaf.tab?.title ?? '').slice(0, TEXT_LIMIT))}" active="${active}" focused="${leaf.focused === true}" columns="${escape(leaf.grid?.columns ?? '')}" rows="${escape(leaf.grid?.rows ?? '')}" cwd="${metadata(leaf.pane.working_directory)}" command="${metadata(leaf.pane.command)}" truncated="${screen?.truncated === true}">`, bytes('</terminal>') + bytes(close));
+  append(`<terminal tab="${escape(leaf.tab?.id ?? '')}" title="${escape(String(leaf.tab?.title ?? '').slice(0, TEXT_LIMIT))}" active="${active}" focused="${leaf.focused === true}" columns="${escape(leaf.grid?.columns ?? '')}" rows="${escape(leaf.grid?.rows ?? '')}" cursor-column="${escape(screen?.cursor_column ?? '')}" cursor-row="${escape(screen?.cursor_row ?? '')}" cwd="${metadata(leaf.pane.working_directory)}" command="${metadata(leaf.pane.command)}" truncated="${screen?.truncated === true}">`, bytes('</terminal>') + bytes(close));
   let index = 0;
   for (const line of Array.isArray(screen?.lines) ? screen.lines.slice(0, 500) : []) {
     if (!append(`<line index="${index}">${escape(String(line).slice(0, 4096))}</line>`, bytes('</terminal>') + bytes(close) + 14)) break;

@@ -839,6 +839,8 @@ mod tests {
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
                 lines: vec![format!("at most {lines}")],
+                cursor_column: 12,
+                cursor_row: 3,
                 truncated: false,
             })
         }

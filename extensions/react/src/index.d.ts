@@ -4509,7 +4509,7 @@ export interface PaneSummary {
   provider: { extension: string; provider: string } | null;
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface PaneText { slot: string; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
 export interface InspectablePane { slot: string; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
 export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }

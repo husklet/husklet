@@ -104,7 +104,7 @@ requires explicit `confirm: true`; the host still enforces `ImageWrite`.
 terminal, extension surface, and native pane, including stable slot and provider
 identity without reading contents. It requires the host's `PaneObserve` grant.
 Use the returned slot with `husklet_pane_read`, which inspects the split topology and returns one bounded XML
-document: terminal panes include screen lines, focus, grid and tab metadata;
+document: terminal panes include screen lines, cursor column/row, focus, grid and tab metadata;
 extension surfaces and every inventoried native pane include their semantic tree.
 It uses stable slots and semantic IDs, never screenshots, coordinates, or GTK
 widget scraping. An inventoried kind without a typed projection, a surface

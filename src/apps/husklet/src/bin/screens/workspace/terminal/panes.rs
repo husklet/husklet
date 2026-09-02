@@ -75,9 +75,12 @@ impl Panes {
             return Reading::Drawn;
         };
         let (lines, truncated) = Terminal::new(&terminal).tail(lines);
+        let (cursor_column, cursor_row) = terminal.cursor_position();
         Reading::Text(PaneText {
             slot: slot.to_owned(),
             lines,
+            cursor_column: u32::try_from(cursor_column).unwrap_or_default(),
+            cursor_row: u32::try_from(cursor_row).unwrap_or_default(),
             truncated,
         })
     }
