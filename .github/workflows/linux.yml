@@ -333,6 +333,8 @@ jobs:
           set -euo pipefail
           npm ci --prefix extensions
           nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            bash .github/scripts/check-extension-contracts.sh
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
             xvfb-run -a -s '-screen 0 1600x1000x24' \
             cargo test -p husklet --bin husklet --features gui,mcp-e2e --locked --offline \
               a_real_mcp_client_changes_native_ui_through_the_extension_socket
