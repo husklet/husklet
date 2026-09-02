@@ -203,8 +203,10 @@ test('container create and exec accept only bounded structured authority', async
     mounts: [{ volume: 'cache', target: '/cache', read_only: false }], network: 'private',
     ports: [{ container: 8080, host: 18080, protocol: 'tcp' }], memory_mb: 512, cpus: 2, pids_limit: 128,
   });
-  await create.run(spec);
-  await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' });
+  api.containers.create = async (...args) => { calls.push(['containers.create', ...args]); return 'c-created'; };
+  api.containers.exec = async (...args) => { calls.push(['containers.exec', ...args]); return 'e-created'; };
+  assert.deepEqual(JSON.parse((await create.run(spec)).content[0].text), { id: 'c-created' });
+  assert.deepEqual(JSON.parse((await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' })).content[0].text), { id: 'e-created' });
   assert.deepEqual(calls, [
     ['containers.create', spec],
     ['containers.exec', 'c1', { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
