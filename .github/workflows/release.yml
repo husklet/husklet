@@ -62,7 +62,7 @@ jobs:
           --ignored --exact native_shared_library_is_reproducible_across_out_directories
 
   react-package:
-    name: Publish @husklet/react
+    name: Publish @husklet/react and @husklet/mcp
     needs: [smoke, native-linux-reproducibility]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -72,7 +72,7 @@ jobs:
       id-token: write
     defaults:
       run:
-        working-directory: extensions/react
+        working-directory: extensions
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -100,7 +100,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
-          cache-dependency-path: extensions/react/package-lock.json
+          cache-dependency-path: extensions/package-lock.json
 
       - name: Install the locked package graph
         run: npm ci
@@ -108,19 +108,49 @@ jobs:
       - name: Install an OIDC-capable npm CLI
         run: npm install --global npm@11.6.2
 
-      - name: Test source and packed-package consumer
-        run: npm test
+      - name: Test React source and packed-package consumer
+        run: npm test --workspace @husklet/react
 
-      - name: Bind the package to the release version
+      - name: Test MCP source and packed strict consumer
+        run: npm test --workspace @husklet/mcp
+
+      - name: Bind both packages independently to the release version
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+        run: |
+          set -euo pipefail
+          npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
+          npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/mcp
+          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --workspace @husklet/mcp
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
-      - name: Re-test the exact package that will publish
-        run: npm run pack:check
+      - name: Verify and pack-test the exact package pair
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import react from './react/package.json' with { type: 'json' };
+          import mcp from './mcp/package.json' with { type: 'json' };
+          const expected = process.env.RELEASE_VERSION;
+          for (const [name, actual] of [
+            ['@husklet/react', react.version],
+            ['@husklet/mcp', mcp.version],
+            ['@husklet/mcp dependency on @husklet/react', mcp.dependencies['@husklet/react']],
+          ]) {
+            if (actual !== expected) throw new Error(`${name} is ${actual}, expected ${expected}`);
+          }
+          NODE
+          npm run pack:check --workspace @husklet/react
+          npm test --workspace @husklet/mcp
+          npm pack --dry-run --ignore-scripts --workspace @husklet/react
+          npm pack --dry-run --ignore-scripts --workspace @husklet/mcp
 
-      - name: Publish with npm trusted publishing
-        run: npm publish --access public --provenance
+      - name: Publish React with npm trusted publishing
+        run: npm publish --workspace @husklet/react --access public --provenance
+
+      - name: Publish MCP with npm trusted publishing
+        run: npm publish --workspace @husklet/mcp --access public --provenance
 
   react-extension-base:
     name: Publish React extension base / multi-architecture
