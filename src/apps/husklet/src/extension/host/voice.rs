@@ -21,7 +21,15 @@ use super::EVENTS;
 /// protocol already agree on; every other interaction travels in an envelope
 /// naming it, since the protocol models no interaction message of its own yet.
 pub(super) fn speak(voice: &Voice, event: &hl_gui::Event) {
-    let Some(payload) = carriage(event) else {
+    let Some(payload) = carriage(event, None) else {
+        return;
+    };
+    voice.say(&Frame::new(EVENTS, Kind::Event, payload));
+}
+
+/// Tells the extension what happened and which owned surface produced it.
+pub(super) fn speak_at(voice: &Voice, event: &hl_extension::SurfaceEvent) {
+    let Some(payload) = carriage(&event.event, Some(&event.slot)) else {
         return;
     };
     voice.say(&Frame::new(EVENTS, Kind::Event, payload));
@@ -37,28 +45,58 @@ pub(super) fn speak_provider(voice: &Voice, selection: &hl_extension::PaneSelect
 
 /// Encodes one interaction. `None` when it cannot be encoded, which is not
 /// worth ending a conversation over.
-fn carriage(event: &hl_gui::Event) -> Option<Vec<u8>> {
-    let value = match event {
+fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
+    let mut value = match event {
         hl_gui::Event::Rows(request) => serde_json::to_value(request).ok()?,
         hl_gui::Event::Invoke { node, id } => envelope("invoke", *node, id),
         hl_gui::Event::Submit { node, id } => envelope("submit", *node, id),
         hl_gui::Event::Change { node, id, value } => change(*node, id, value),
         hl_gui::Event::Select { node, id, rows } => selection(*node, id, rows),
-        hl_gui::Event::Scroll { node, id, dx, dy } => details("scroll", *node, id, serde_json::json!({ "dx": dx, "dy": dy })),
+        hl_gui::Event::Scroll { node, id, dx, dy } => {
+            details("scroll", *node, id, serde_json::json!({ "dx": dx, "dy": dy }))
+        }
         hl_gui::Event::Close { node, id } => envelope("close", *node, id),
-        hl_gui::Event::Context { node, id, x, y } => details("context", *node, id, serde_json::json!({ "x": x, "y": y })),
-        hl_gui::Event::Key { node, id, key, keycode, modifiers, pressed } => details(
-            "key", *node, id, serde_json::json!({ "key": key, "keycode": keycode, "modifiers": modifiers, "pressed": pressed }),
+        hl_gui::Event::Context { node, id, x, y } => {
+            details("context", *node, id, serde_json::json!({ "x": x, "y": y }))
+        }
+        hl_gui::Event::Key {
+            node,
+            id,
+            key,
+            keycode,
+            modifiers,
+            pressed,
+        } => details(
+            "key",
+            *node,
+            id,
+            serde_json::json!({ "key": key, "keycode": keycode, "modifiers": modifiers, "pressed": pressed }),
         ),
-        hl_gui::Event::Focus { node, id, focused } => details("focus", *node, id, serde_json::json!({ "focused": focused })),
-        hl_gui::Event::Pointer { node, id, phase, x, y, button, modifiers } => details(
-            "pointer", *node, id, serde_json::json!({
+        hl_gui::Event::Focus { node, id, focused } => {
+            details("focus", *node, id, serde_json::json!({ "focused": focused }))
+        }
+        hl_gui::Event::Pointer {
+            node,
+            id,
+            phase,
+            x,
+            y,
+            button,
+            modifiers,
+        } => details(
+            "pointer",
+            *node,
+            id,
+            serde_json::json!({
                 "phase": format!("{phase:?}").to_ascii_lowercase(), "x": x, "y": y,
                 "button": button, "modifiers": modifiers,
             }),
         ),
         _ => return None,
     };
+    if let (Some(slot), Some(object)) = (slot, value.as_object_mut()) {
+        object.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
+    }
     serde_json::to_vec(&value).ok()
 }
 
@@ -71,7 +109,12 @@ fn envelope(interaction: &str, node: hl_gui::NodeId, id: &hl_gui::EventId) -> se
     serde_json::json!({ "interaction": interaction, "trigger": trigger, "node": node, "id": id })
 }
 
-fn details(interaction: &str, node: hl_gui::NodeId, id: &hl_gui::EventId, details: serde_json::Value) -> serde_json::Value {
+fn details(
+    interaction: &str,
+    node: hl_gui::NodeId,
+    id: &hl_gui::EventId,
+    details: serde_json::Value,
+) -> serde_json::Value {
     let mut carried = envelope(interaction, node, id);
     if let (Some(carried), Some(details)) = (carried.as_object_mut(), details.as_object()) {
         carried.extend(details.clone());
@@ -137,5 +180,40 @@ impl Voice {
 
     fn wire(&self) -> std::sync::MutexGuard<'_, Option<Wire<UnixStream>>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::carriage;
+
+    #[test]
+    fn an_addressed_interaction_carries_its_surface_slot() {
+        let payload = carriage(
+            &hl_gui::Event::Invoke {
+                node: hl_gui::NodeId::new(7),
+                id: hl_gui::EventId::new("save"),
+            },
+            Some("surface-2"),
+        )
+        .expect("encoded");
+        let value: serde_json::Value = serde_json::from_slice(&payload).expect("json");
+        assert_eq!(value["slot"], "surface-2");
+        assert_eq!(value["node"], 7);
+        assert_eq!(value["id"], "save");
+    }
+
+    #[test]
+    fn a_legacy_interaction_remains_unaddressed() {
+        let payload = carriage(
+            &hl_gui::Event::Invoke {
+                node: hl_gui::NodeId::ROOT,
+                id: hl_gui::EventId::new("save"),
+            },
+            None,
+        )
+        .expect("encoded");
+        let value: serde_json::Value = serde_json::from_slice(&payload).expect("json");
+        assert!(value.get("slot").is_none());
     }
 }

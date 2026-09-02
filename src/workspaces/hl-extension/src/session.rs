@@ -58,6 +58,13 @@ pub struct SurfaceMutation {
     pub mutation: hl_gui::SourceMutation,
 }
 
+/// One interaction and the independently addressed surface that produced it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceEvent {
+    pub slot: String,
+    pub event: hl_gui::Event,
+}
+
 impl std::ops::Deref for Session {
     type Target = hl_rpc::Session<Topic>;
 
@@ -203,6 +210,7 @@ impl Session {
             | Request::FilesystemRemove { .. } => self.files(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
+            Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
             Request::InterfaceRender { frame } => self.render_legacy(frame),
             Request::InterfaceRenderAt { slot, frame } => self.render(slot, frame),
             Request::SourceResize { mutation } => self.mutate_legacy(mutation.clone()),
@@ -563,6 +571,21 @@ impl Session {
         let id = port.surface(slot, division)?;
         self.surfaces.insert(id.clone());
         Ok(Reply::Identity(id))
+    }
+
+    /// Retires one surface owned by this session without disturbing siblings.
+    fn withdraw(&mut self, slot: &str, services: &Services<'_>) -> Result<Reply, Failure> {
+        if !self.surfaces.contains(slot) {
+            return Err(Failure::Conflict {
+                detail: format!("surface {slot} is not owned by this session"),
+            });
+        }
+        let port = self.peer.authority().port(Capability::Interface, services.terminal)?;
+        port.close(slot)?;
+        self.surfaces.remove(slot);
+        self.pending.retain(|frame| frame.slot != slot);
+        self.mutations.retain(|mutation| mutation.slot != slot);
+        Ok(Reply::Done)
     }
 }
 

@@ -208,6 +208,9 @@ pub enum Request {
         slot: String,
         division: Division,
     },
+    InterfaceWithdraw {
+        slot: String,
+    },
     InterfaceRender {
         frame: hl_gui::Frame,
     },
@@ -289,6 +292,7 @@ impl Request {
             | Self::FilesystemRemove { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
+            | Self::InterfaceWithdraw { .. }
             | Self::InterfaceRender { .. }
             | Self::InterfaceRenderAt { .. }
             | Self::SourceResize { .. }

@@ -358,6 +358,7 @@ impl TerminalSurface for Host {
     }
 
     fn close(&self, _slot: &str) -> Result<(), HostError> {
+        self.ledger.note("terminal.close");
         Ok(())
     }
 
@@ -1123,10 +1124,7 @@ fn a_session_records_each_surface_it_opens() {
         )
         .expect("opened");
     let second = session
-        .dispatch(
-            &Request::InterfaceOpenTab { title: "Logs".into() },
-            &services,
-        )
+        .dispatch(&Request::InterfaceOpenTab { title: "Logs".into() }, &services)
         .expect("opened again");
 
     assert_ne!(first, second);
@@ -1149,10 +1147,7 @@ fn addressed_frames_remain_separate_across_two_owned_surfaces() {
     let services = services(&host);
     for title in ["Containers", "Logs"] {
         session
-            .dispatch(
-                &Request::InterfaceOpenTab { title: title.into() },
-                &services,
-            )
+            .dispatch(&Request::InterfaceOpenTab { title: title.into() }, &services)
             .expect("surface opened");
     }
     let first = hl_gui::Frame::new(7);
@@ -1221,6 +1216,51 @@ fn addressed_frames_remain_separate_across_two_owned_surfaces() {
             )
             .is_err(),
         "addressing does not grant authority over arbitrary workspace panes"
+    );
+}
+
+#[test]
+fn withdrawing_one_owned_surface_preserves_its_sibling() {
+    let host = Host::new();
+    let mut session = session(&[Capability::Interface], &[]);
+    let services = services(&host);
+    for title in ["Containers", "Logs"] {
+        session
+            .dispatch(&Request::InterfaceOpenTab { title: title.into() }, &services)
+            .expect("surface opened");
+    }
+    session
+        .dispatch(
+            &Request::InterfaceWithdraw {
+                slot: "tab-Containers".into(),
+            },
+            &services,
+        )
+        .expect("owned surface withdrawn");
+    assert!(matches!(
+        session.dispatch(
+            &Request::InterfaceRenderAt {
+                slot: "tab-Containers".into(),
+                frame: hl_gui::Frame::new(1),
+            },
+            &services,
+        ),
+        Err(Failure::Conflict { .. })
+    ));
+    session
+        .dispatch(
+            &Request::InterfaceRenderAt {
+                slot: "tab-Logs".into(),
+                frame: hl_gui::Frame::new(2),
+            },
+            &services,
+        )
+        .expect("sibling remains owned");
+    assert_eq!(session.drain()[0].slot, "tab-Logs");
+    assert!(host.ledger.reached().contains(&"terminal.close"));
+    assert_eq!(
+        Request::InterfaceWithdraw { slot: "x".into() }.capability(),
+        Capability::Interface
     );
 }
 

@@ -79,6 +79,8 @@ pub enum Order {
     /// Interaction reported by the surface, including a table asking for a
     /// window of rows.
     Interaction(hl_gui::Event),
+    /// Interaction from one independently addressed extension surface.
+    InteractionAt(hl_extension::SurfaceEvent),
     /// A terminal pane selected one of this extension's named providers.
     PaneProvider(hl_extension::PaneSelection),
     /// Start the stopped extension again.
@@ -465,7 +467,8 @@ impl Hall {
         while !self.halted() {
             match self.inbox.recv_timeout(POLL) {
                 Ok(Order::Retry) => return Some(()),
-                Ok(Order::Interaction(_) | Order::PaneProvider(_)) | Err(RecvTimeoutError::Timeout) => (),
+                Ok(Order::Interaction(_) | Order::InteractionAt(_) | Order::PaneProvider(_))
+                | Err(RecvTimeoutError::Timeout) => (),
                 Err(RecvTimeoutError::Disconnected) => return None,
             }
         }
@@ -497,6 +500,7 @@ impl Hall {
             match order {
                 Order::Retry => return Some(Passage::Renewal),
                 Order::Interaction(event) => speak(voice, &event),
+                Order::InteractionAt(event) => voice::speak_at(voice, &event),
                 Order::PaneProvider(selection) => voice::speak_provider(voice, &selection),
             }
         }
