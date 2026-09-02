@@ -68,6 +68,7 @@ const BY_TAG = {
   RadioGroup: { choices: [{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }] },
   Code: { label: 'cargo test', monospace: true },
   CodeView: { label: 'fn main() {}', monospace: true },
+  HexView: { value: '00000000  7f 45 4c 46                                      |.ELF|', monospace: true },
   LogView: { label: 'starting…', monospace: true },
   Chart: { label: 'Load' },
   Badge: { label: '3' },

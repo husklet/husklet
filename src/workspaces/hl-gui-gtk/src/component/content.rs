@@ -9,6 +9,7 @@ use super::field;
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::CodeView => source().upcast(),
+        Tag::HexView => source().upcast(),
         Tag::MarkdownView => markdown_view().upcast(),
         Tag::JsonView => json_view().upcast(),
         Tag::LogView => log().upcast(),

@@ -399,6 +399,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Drawer
         | Tag::DrawerPanel => "dialogs",
         Tag::CodeView
+        | Tag::HexView
         | Tag::MarkdownView
         | Tag::JsonView
         | Tag::LogView
@@ -849,7 +850,7 @@ fn quoted(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FAMILIES, PROPS, catalogue, escaped, family, text};
+    use super::{catalogue, escaped, family, text, FAMILIES, PROPS};
     use hl_gui::Tag;
 
     /// The document is JSON at all: quotes pair up outside of escapes and no

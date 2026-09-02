@@ -4302,6 +4302,35 @@ export interface CodeViewProps extends NodeProps {
   monospace?: boolean;
 }
 
+export interface HexViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** for a text view; defaults to monospace when absent */
+  monospace?: boolean;
+}
+
 export interface MarkdownViewProps extends NodeProps {
   /** marks an action as irreversible so automation requires confirmation */
   destructive?: boolean;
@@ -4699,6 +4728,7 @@ export const MenuItem: ComponentType<MenuItemProps>;
 export const Drawer: ComponentType<DrawerProps>;
 export const DrawerPanel: ComponentType<DrawerPanelProps>;
 export const CodeView: ComponentType<CodeViewProps>;
+export const HexView: ComponentType<HexViewProps>;
 export const MarkdownView: ComponentType<MarkdownViewProps>;
 export const JsonView: ComponentType<JsonViewProps>;
 export const LogView: ComponentType<LogViewProps>;
@@ -4726,7 +4756,7 @@ export const PROTOCOL: number;
 /** Maximum Unicode characters retained by a LogView; Value patches append. */
 export const LOG_VIEW_CHARACTER_LIMIT: 4096;
 
-export type Topic = 'containers' | 'executions' | 'images' | 'image-pulls' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
@@ -4775,31 +4805,11 @@ export interface ContainerOutput {
   stdout: number[]; stderr: number[]; truncated: boolean;
   stdout_truncated: boolean; stderr_truncated: boolean; eof: boolean;
 }
-export interface ContainerCreateSpec {
-  image: string;
-  name: string;
-  entrypoint?: string[] | null;
-  command?: string[];
-  environment?: [string, string][];
-  working_directory?: string | null;
-  user?: string | null;
-  labels?: [string, string][];
-  mounts?: { volume: string; target: string; read_only: boolean }[];
-  network?: string | null;
-  ports?: { container: number; host?: number | null; protocol: 'tcp' | 'udp' }[];
-  memory_mb?: number | null;
-  cpus?: number | null;
-  pids_limit?: number | null;
-}
 export interface ExecutionSummary {
   id: string; container_id: string; running: boolean; exit_code: number; pid: number;
   command: string[]; user: string;
 }
-export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
-export interface ImagePullJob { job: string }
-export interface ImagePullStatus { job: string; reference: string; revision: number; state: string; status: string | null; layer: string | null; current: number | null; total: number | null; image: ImageSummary | null; error: string | null }
-export interface ImagePullChange { job: string; revision: number; state: string; coalesced: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
 export interface VolumeSummary { name: string; driver: string; generation: string }
@@ -4832,10 +4842,9 @@ export type WorkspaceEvent =
   | { event: 'focus'; active: boolean }
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
-export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }
 export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {
-  interaction: I; trigger: T; node: number; id: string; slot?: string; dropped?: number;
+  interaction: I; trigger: T; node: number; id: string; slot?: string;
 }
 export type InterfaceEvent =
   | InterfaceEventBase<'invoke', 'Invoke'>
@@ -4857,16 +4866,13 @@ export type LegacyInterfaceEvent =
   | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
-  | { snapshot: 'executions'; of: ExecutionList }
   | { snapshot: 'images'; of: ImageSummary[] }
-  | { snapshot: 'image_pulls'; of: ImagePullChange }
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
   | { snapshot: 'terminal'; of: TabSummary[] }
   | { snapshot: 'pane_changes'; of: PaneChange }
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
-  | { snapshot: 'workspace_lifecycle'; of: WorkspaceLifecycleChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
 
@@ -4918,7 +4924,7 @@ export interface WorkspaceApi {
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string): Promise<void>;
     disable(name: string): Promise<void>;
-    remove(name: string): Promise<void>;
+    remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     cancelAcquisition(job: string): Promise<void>;
@@ -4931,12 +4937,7 @@ export interface WorkspaceApi {
     processes(id: string): Promise<ProcessList>;
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
-    executions(): Promise<ExecutionList>;
-    executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
-    waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
-    removeExecution(id: string): Promise<void>;
-    create(spec: ContainerCreateSpec): Promise<string>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;
@@ -4946,15 +4947,13 @@ export interface WorkspaceApi {
     restart(id: string): Promise<void>;
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
-    /** Open an ephemeral GUI terminal running an exact argv in this immutable container identity. */
-    attachTerminal(id: string, command: string[]): Promise<string>;
   };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
-    remove(name: string, generation: string): Promise<void>;
+    remove(name: string): Promise<void>;
   };
   networks: {
     list(): Promise<NetworkSummary[]>;
@@ -4982,7 +4981,6 @@ export interface WorkspaceApi {
   };
   files: {
     list(path: string): Promise<FileEntry[]>;
-    stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
     write(path: string, contents: Iterable<number>): Promise<void>;
     mkdir(path: string): Promise<void>;
@@ -4992,13 +4990,8 @@ export interface WorkspaceApi {
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
-  watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
-  watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
-  watchImagePulls(listener: (change: ImagePullChange) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
-  watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
-  watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;

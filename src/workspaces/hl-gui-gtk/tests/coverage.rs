@@ -94,11 +94,34 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     }
     markdown_is_safe_selectable_and_structured();
     json_is_selectable_string_safe_and_depth_bounded();
+    hex_view_is_selectable_and_monospaced();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn hex_view_is_selectable_and_monospaced() {
+    let mut session = Session::new();
+    let view = session.producer.create(Tag::HexView);
+    session.producer.append(NodeId::ROOT, view);
+    session
+        .producer
+        .set(view, Prop::Value, PropValue::text("00000000  7f 45 4c 46  |.ELF|"));
+    session.flush().expect("hex view renders");
+    let scroller = session.tagged(Tag::HexView).expect("hex widget");
+    let text = subtree(&scroller)
+        .into_iter()
+        .find_map(|child| child.downcast::<gtk::TextView>().ok())
+        .expect("hex view owns text");
+    assert!(!text.is_editable());
+    assert!(text.is_monospace());
+    assert_eq!(
+        text.buffer()
+            .text(&text.buffer().start_iter(), &text.buffer().end_iter(), false),
+        "00000000  7f 45 4c 46  |.ELF|"
+    );
 }
 
 /// A tag that no builder maps is the defect this catches: the surface would
@@ -815,6 +838,7 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::PasswordEntry
         | Tag::TextField
         | Tag::CodeView
+        | Tag::HexView
         | Tag::MarkdownView
         | Tag::JsonView
         | Tag::LogView => Aspect::Value,
@@ -839,7 +863,10 @@ fn markdown_is_safe_selectable_and_structured() {
         .expect("markdown owns a text label");
     assert!(label.is_selectable(), "document text must be copyable");
     assert_eq!(label.text(), "Release <unsafe>\n• bounded\nlet x = 1;");
-    assert!(!label.text().contains("```"), "fence syntax is presentation, not content");
+    assert!(
+        !label.text().contains("```"),
+        "fence syntax is presentation, not content"
+    );
 }
 
 fn json_is_selectable_string_safe_and_depth_bounded() {
@@ -923,8 +950,14 @@ fn diff_lines_are_selectable_and_keep_status_beside_content() {
     let session = placed(Tag::DiffViewer, &[Tag::DiffLine]);
     let line = session.tagged(Tag::DiffLine).expect("a diff line renders");
     let parts = offspring(&line);
-    let status = parts.first().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("status");
-    let content = parts.last().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("content");
+    let status = parts
+        .first()
+        .and_then(|part| part.downcast_ref::<gtk::Label>())
+        .expect("status");
+    let content = parts
+        .last()
+        .and_then(|part| part.downcast_ref::<gtk::Label>())
+        .expect("content");
     assert!(!status.is_selectable());
     assert!(content.is_selectable(), "diff text cannot be selected and copied");
     assert!(content.has_css_class("monospace"));
@@ -947,13 +980,17 @@ fn stack_frames_keep_selectable_function_and_location() {
 
 fn a_validation_summary_keeps_actions_below_its_message() {
     let session = placed(Tag::ValidationSummary, &[Tag::Button]);
-    let summary = session.tagged(Tag::ValidationSummary).expect("a validation summary renders");
+    let summary = session
+        .tagged(Tag::ValidationSummary)
+        .expect("a validation summary renders");
     let body = offspring(&summary)
         .into_iter()
         .find(|part| part.has_css_class("hl-validation-body"))
         .expect("validation summary message body");
     assert!(
-        offspring(&body).last().is_some_and(|part| part.has_css_class("hl-button")),
+        offspring(&body)
+            .last()
+            .is_some_and(|part| part.has_css_class("hl-button")),
         "the corrective action is not grouped below the validation message"
     );
 }

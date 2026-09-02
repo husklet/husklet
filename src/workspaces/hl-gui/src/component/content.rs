@@ -1,8 +1,69 @@
 //! Constructors for the components that show something: marks, imagery,
 //! feedback and long-form content.
 
+use std::fmt::Write as _;
+
 use crate::element::Element;
 use crate::node::{Prop, PropValue, Tag};
+
+/// The provenance of bytes presented by a [`HexView`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HexSource<'a> {
+    /// The slice is the complete value.
+    Exact(&'a [u8]),
+    /// The slice is a prefix of a value whose complete byte length is known.
+    Bounded { prefix: &'a [u8], total_bytes: usize },
+}
+
+/// A bounded, deterministic binary projection for [`Element::hex_view`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HexView(String);
+
+impl HexView {
+    /// Formats 16-byte rows without ever inspecting more than the public limit.
+    #[must_use]
+    pub fn new(source: HexSource<'_>) -> Self {
+        let (bytes, total) = match source {
+            HexSource::Exact(bytes) => (bytes, bytes.len()),
+            HexSource::Bounded { prefix, total_bytes } => (prefix, total_bytes.max(prefix.len())),
+        };
+        let shown = bytes.len().min(crate::HEX_VIEW_BYTE_LIMIT);
+        let mut output = String::new();
+        for (row, chunk) in bytes[..shown].chunks(16).enumerate() {
+            let _ = write!(output, "{:08x}  ", row * 16);
+            for column in 0..16 {
+                if let Some(byte) = chunk.get(column) {
+                    let _ = write!(output, "{byte:02x} ");
+                } else {
+                    output.push_str("   ");
+                }
+                if column == 7 {
+                    output.push(' ');
+                }
+            }
+            output.push_str(" |");
+            for byte in chunk {
+                output.push(if byte.is_ascii_graphic() || *byte == b' ' {
+                    char::from(*byte)
+                } else {
+                    '.'
+                });
+            }
+            output.push('|');
+            output.push('\n');
+        }
+        if total > shown {
+            let _ = writeln!(output, "… truncated: showing {shown} of {total} bytes …");
+        }
+        Self(output)
+    }
+
+    /// The ready-to-render selectable text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Marks and imagery.
 impl Element {
@@ -147,7 +208,9 @@ impl Element {
     /// A bounded group of validation problems and their corrective actions.
     #[must_use]
     pub fn validation_summary(label: impl Into<String>) -> Self {
-        Self::new(Tag::ValidationSummary).label(label).icon("dialog-warning-symbolic")
+        Self::new(Tag::ValidationSummary)
+            .label(label)
+            .icon("dialog-warning-symbolic")
     }
 }
 
@@ -157,6 +220,12 @@ impl Element {
     #[must_use]
     pub fn code_view(value: impl Into<String>) -> Self {
         Self::new(Tag::CodeView).value(value)
+    }
+
+    /// A bounded binary view with offset, octet and printable columns.
+    #[must_use]
+    pub fn hex_view(source: HexSource<'_>) -> Self {
+        Self::new(Tag::HexView).value(HexView::new(source).0)
     }
 
     /// An append-only view that follows its tail.
@@ -184,5 +253,42 @@ impl Element {
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
         Self::new(Tag::Video).uri(uri)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HexSource, HexView};
+    use crate::HEX_VIEW_BYTE_LIMIT;
+
+    #[test]
+    fn hex_rows_are_fixed_width_and_printable() {
+        let view = HexView::new(HexSource::Exact(b"A\0z0123456789abcdef"));
+        let lines: Vec<_> = view.as_str().lines().collect();
+        assert_eq!(
+            lines[0],
+            "00000000  41 00 7a 30 31 32 33 34  35 36 37 38 39 61 62 63  |A.z0123456789abc|"
+        );
+        assert_eq!(
+            lines[1],
+            "00000010  64 65 66                                          |def|"
+        );
+    }
+
+    #[test]
+    fn bounded_source_discloses_omitted_bytes() {
+        let bytes = vec![0xff; HEX_VIEW_BYTE_LIMIT + 8];
+        let view = HexView::new(HexSource::Bounded {
+            prefix: &bytes,
+            total_bytes: 9_000,
+        });
+        assert!(view.as_str().ends_with("… truncated: showing 4096 of 9000 bytes …\n"));
+        assert_eq!(
+            view.as_str()
+                .lines()
+                .filter(|line| line.starts_with(|c: char| c.is_ascii_digit()))
+                .count(),
+            256
+        );
     }
 }

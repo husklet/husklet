@@ -40,6 +40,7 @@ import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.j
 import { DIFF_STORY, DiffReviewStory } from './diff-review.js';
 import { JSON_STORY, JsonResponseStory } from './json-response.js';
 import { STACK_STORY, StackTraceStory } from './stack-trace.js';
+import { BINARY_STORY, BinaryInspectionStory } from './binary-inspection.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -54,7 +55,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, initia
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
     || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
     || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY
-    || selected === JSON_STORY || selected === STACK_STORY;
+    || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -91,6 +92,12 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, {
+        key: BINARY_STORY,
+        label: BINARY_STORY,
+        selected: selected === BINARY_STORY,
+        onInvoke: () => onSelect(BINARY_STORY),
+      }),
       h(ListItemButton, {
         key: ACQUISITION_STORY,
         label: ACQUISITION_STORY,
@@ -187,7 +194,9 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      name === ACQUISITION_STORY
+      name === BINARY_STORY
+        ? h(BinaryInspectionStory)
+        : name === ACQUISITION_STORY
         ? h(AcquisitionProgressStory)
         : name === DIFF_STORY
         ? h(DiffReviewStory)

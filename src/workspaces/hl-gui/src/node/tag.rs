@@ -327,6 +327,7 @@ catalogue! {
 
     // Content: long-form text and media.
     CodeView: leaf, props[Value, Monospace], triggers[],
+    HexView: leaf, props[Value, Monospace], triggers[],
     MarkdownView: leaf, props[Value], triggers[],
     JsonView: leaf, props[Value], triggers[],
     LogView: leaf, props[Value, Monospace], triggers[],
@@ -340,7 +341,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{EVERY, Prop, Tag, Trigger};
+    use super::{Prop, Tag, Trigger, EVERY};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

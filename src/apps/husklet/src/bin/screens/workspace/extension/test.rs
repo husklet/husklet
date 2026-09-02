@@ -132,6 +132,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         markdown_preserves_bounded_source_in_semantics();
         json_preserves_source_in_semantics();
         stack_frames_project_function_and_location();
+        hex_view_projects_binary_text_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
@@ -160,6 +161,17 @@ fn stack_frames_project_function_and_location() {
     assert_eq!(frame.role, "StackFrame");
     assert_eq!(frame.label.as_deref(), Some("host::dispatch"));
     assert_eq!(frame.value.as_deref(), Some("src/host.rs:42"));
+}
+
+fn hex_view_projects_binary_text_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::hex_view(hl_gui::HexSource::Exact(b"\x7fELF")));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let binary = &tree.root.children[0];
+    assert_eq!(binary.role, "HexView");
+    assert_eq!(binary.value.as_deref(), Some("00000000  7f 45 4c 46                                       |.ELF|\n"));
+    assert!(binary.actions.is_empty());
 }
 
 fn diff_lines_project_status_and_bounded_text() {

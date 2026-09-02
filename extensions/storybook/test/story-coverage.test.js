@@ -16,6 +16,7 @@ import { storyCoverage } from '../src/story-coverage.js';
 import { DIFF_STORY, DiffReviewStory } from '../src/diff-review.js';
 import { JsonResponseStory } from '../src/json-response.js';
 import { StackTraceStory } from '../src/stack-trace.js';
+import { BinaryInspectionStory } from '../src/binary-inspection.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -58,6 +59,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['JSON response', h(JsonResponseStory)],
     ['stack trace', h(StackTraceStory)],
     ['markdown review', h(MarkdownReviewStory)],
+    ['binary inspection', h(BinaryInspectionStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
