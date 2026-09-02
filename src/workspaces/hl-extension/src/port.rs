@@ -355,6 +355,42 @@ pub struct ExtensionSummary {
     pub status: String,
 }
 
+pub const EXTENSION_REFERENCE_BYTES: usize = 512;
+pub const EXTENSION_JOB_BYTES: usize = 128;
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionAcquisitionJob {
+    pub job: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionCandidate {
+    pub name: crate::ExtensionName,
+    pub version: String,
+    pub image_digest: String,
+    pub requested: crate::Grant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionAcquisitionProgress {
+    pub status: String,
+    pub id: Option<String>,
+    pub current: Option<u64>,
+    pub total: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionAcquisitionStatus {
+    pub job: String,
+    pub reference: String,
+    pub revision: u64,
+    pub state: String,
+    #[serde(default)]
+    pub progress: Option<ExtensionAcquisitionProgress>,
+    pub candidate: Option<ExtensionCandidate>,
+    pub error: Option<String>,
+}
+
 /// Installed-extension inventory and persisted lifecycle controls.
 pub trait ExtensionStore {
     fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
@@ -371,6 +407,21 @@ pub trait ExtensionStore {
     }
     fn remove(&self, _name: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension removal is unavailable".into()))
+    }
+    fn acquisition_start(&self, _reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
+        Err(HostError::Unsupported("extension acquisition is unavailable".into()))
+    }
+    fn acquisition_status(&self, _job: &str) -> Result<ExtensionAcquisitionStatus, HostError> {
+        Err(HostError::Unsupported("extension acquisition is unavailable".into()))
+    }
+    fn acquisition_cancel(&self, _job: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension acquisition is unavailable".into()))
+    }
+    fn install(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
+        Err(HostError::Unsupported("extension installation is unavailable".into()))
+    }
+    fn update(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
+        Err(HostError::Unsupported("extension update is unavailable".into()))
     }
 }
 
@@ -700,7 +751,7 @@ pub trait WorkspaceFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{pane_lines, Division, LayoutNode, Occupant, PaneSummary, PANE_LINES};
+    use super::{Division, LayoutNode, Occupant, PANE_LINES, PaneSummary, pane_lines};
 
     #[test]
     fn a_pane_read_is_bounded_however_it_is_asked_for() {

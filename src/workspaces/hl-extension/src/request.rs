@@ -61,6 +61,25 @@ pub enum Request {
     ExtensionRemove {
         name: String,
     },
+    ExtensionAcquisitionStart {
+        reference: String,
+    },
+    ExtensionAcquisitionStatus {
+        job: String,
+    },
+    ExtensionAcquisitionCancel {
+        job: String,
+    },
+    ExtensionInstall {
+        job: String,
+        revision: u64,
+        granted: crate::Grant,
+    },
+    ExtensionUpdate {
+        job: String,
+        revision: u64,
+        granted: crate::Grant,
+    },
     ContainerList,
     ContainerInspect {
         id: String,
@@ -263,6 +282,11 @@ impl Request {
             Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRemove { .. } => {
                 Capability::ExtensionControl
             }
+            Self::ExtensionAcquisitionStart { .. }
+            | Self::ExtensionAcquisitionStatus { .. }
+            | Self::ExtensionAcquisitionCancel { .. }
+            | Self::ExtensionInstall { .. }
+            | Self::ExtensionUpdate { .. } => Capability::ExtensionInstall,
             Self::ContainerList
             | Self::ContainerInspect { .. }
             | Self::ContainerProcesses { .. }
@@ -403,6 +427,8 @@ pub enum Reply {
     Workspaces(Vec<WorkspaceState>),
     Extensions(Vec<crate::port::ExtensionSummary>),
     Extension(crate::port::ExtensionSummary),
+    ExtensionAcquisitionJob(crate::port::ExtensionAcquisitionJob),
+    ExtensionAcquisition(crate::port::ExtensionAcquisitionStatus),
     Containers(Vec<ContainerSummary>),
     Container(ContainerSummary),
     Processes(ProcessList),

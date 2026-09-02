@@ -14,6 +14,7 @@
 //! The terminal port is not implemented here. It belongs to the GUI thread
 //! that owns the surface.
 
+pub(crate) mod acquisition;
 mod control;
 mod conversation;
 mod files;
