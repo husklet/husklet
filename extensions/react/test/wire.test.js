@@ -12,7 +12,7 @@ test('a frame survives the codec unchanged', () => {
       { SetProp: { id: 1, prop: 'Label', value: { Text: 'Go' } } },
     ],
   };
-  const payload = { call: 'interface_render', with: { frame } };
+  const payload = { call: 'interface_render_at', with: { slot: 'pane-2', frame } };
   const [read] = new Reader().take(encode({ channel: 1, kind: KIND.request, payload }));
   assert.deepEqual(read.payload, payload);
   assert.equal(read.channel, 1);

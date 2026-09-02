@@ -4265,10 +4265,25 @@ export const protocolCoverage: Readonly<{
   unavailable: Readonly<Record<string, readonly string[]>>;
 }>;
 
+export type InterfaceSourceMutation =
+  | { Open: { source: number; columns: readonly unknown[] } }
+  | { Length: { source: number; version: number; rows: number } }
+  | { Window: { source: number; version: number; request: number; range: { start: number; count: number }; rows: readonly unknown[] } }
+  | { Invalidate: { source: number; version: number; range: { start: number; count: number } | null } }
+  | { Close: { source: number } };
+
+export interface RenderHandle {
+  readonly ready: Promise<string>;
+  readonly slot: string | null;
+  update(next: ReactNode): void;
+  source(mutation: InterfaceSourceMutation): Promise<void>;
+  close(): void;
+}
+
 export function render(
   element: ReactNode,
   session: Session,
-  options?: { title?: string },
-): { update(next: ReactNode): void; close(): void };
+  options?: { title?: string; split?: { slot: string; division: 'beside' | 'below' } },
+): RenderHandle;
 
 export function deliver(session: Session, payload: unknown): boolean;

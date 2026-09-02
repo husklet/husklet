@@ -40,7 +40,7 @@ try {
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { workspace, type Session, type ProcessList } from '@husklet/react';
+    import { render, workspace, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
@@ -48,6 +48,10 @@ try {
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
     void api.subscribe('terminal');
     void api.subscribe('volumes');
+    const surface = render(null, session, { split: { slot: 'pane-1', division: 'beside' } });
+    const mutation: InterfaceSourceMutation = { Length: { source: 1, version: 2, rows: 100_000 } };
+    void surface.ready;
+    void surface.source(mutation);
     // @ts-expect-error unavailable topics are intentionally not advertised
     void api.subscribe('extensions');
   `);

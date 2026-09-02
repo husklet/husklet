@@ -7,8 +7,10 @@ import { PROPS, TRIGGERS } from './protocol.js';
 export { ExtensionError, Session, SOCKET, PROTOCOL };
 export * from './components.js';
 
-/** Surfaces awaiting events, per session. */
+/** Surface handles awaiting a slot or registered by their owned slot. */
 const attached = new WeakMap();
+const SURFACE_LIMIT = 32;
+const FRAME_BUFFER_LIMIT = 64;
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
@@ -34,7 +36,7 @@ export async function connect({ path, onRows, onReply, onEvent, onEventError, pe
       if (!deliver(session, payload) && onReply) onReply(payload);
     },
   });
-  attached.set(session, new Set());
+  attached.set(session, { handles: new Set(), slots: new Map() });
   subscriptions.set(session, new Map());
   return session;
 }
@@ -201,24 +203,85 @@ export function workspace(session) {
  * The tab is opened first because the host refuses a render before one exists.
  * Returns a handle whose `update` re-renders and whose `close` tears down.
  */
-export function render(element, session, { title = 'Extension' } = {}) {
-  const surface = new Surface((frame) => void session.call('interface_render', { frame }).catch(() => {}));
-  void session.call('interface_open_tab', { title }).catch(() => {});
-  const surfaces = attached.get(session);
-  if (surfaces) surfaces.add(surface);
+export function render(element, session, { title = 'Extension', split = null } = {}) {
+  const registry = attached.get(session);
+  if (!registry) throw new Error('render requires a session returned by connect');
+  if (split !== null && (
+    typeof split !== 'object'
+    || typeof split.slot !== 'string'
+    || !['beside', 'below'].includes(split.division)
+  )) {
+    throw new TypeError('split requires a slot and a beside or below division');
+  }
+  if (registry.handles.size >= SURFACE_LIMIT) {
+    throw new RangeError(`extension surface limit of ${SURFACE_LIMIT} is exhausted`);
+  }
+  const queued = [];
+  let slot = null;
+  let closed = false;
+  let failed = null;
+  const transmit = (frame) => {
+    if (closed || failed) return;
+    if (slot === null) {
+      if (queued.length >= FRAME_BUFFER_LIMIT) {
+        failed = new Error(`surface frame buffer limit of ${FRAME_BUFFER_LIMIT} is exhausted`);
+        return;
+      }
+      queued.push(frame);
+      return;
+    }
+    void session.call('interface_render_at', { slot, frame }).catch(() => {});
+  };
+  const surface = new Surface(transmit);
+  const handle = { surface };
+  registry.handles.add(handle);
+
+  const opening = split === null
+    ? session.call('interface_open_tab', { title })
+    : session.call('interface_split', { slot: split.slot, division: split.division });
+  const ready = opening.then((reply) => {
+    if (reply?.reply !== 'identity' || typeof reply.with !== 'string' || reply.with.length === 0) {
+      throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected identity`);
+    }
+    if (closed) return reply.with;
+    if (registry.slots.has(reply.with)) throw new Error(`host reused live surface slot ${reply.with}`);
+    slot = reply.with;
+    registry.slots.set(slot, handle);
+    for (const frame of queued.splice(0)) transmit(frame);
+    if (failed) throw failed;
+    return slot;
+  }).catch((error) => {
+    failed = error;
+    registry.handles.delete(handle);
+    if (slot !== null) registry.slots.delete(slot);
+    throw error;
+  });
+  // Existing fire-and-forget callers still get bounded cleanup on a refused
+  // open; callers that need diagnostics await the same promise on the handle.
+  void ready.catch(() => {});
 
   const container = reconciler.createContainer(surface, 0, null, false, null, '', () => {}, null);
   reconciler.updateContainer(element, container, null, null);
-  return {
-    surface,
+  Object.assign(handle, {
+    ready,
+    get slot() { return slot; },
     update(next) {
       reconciler.updateContainer(next, container, null, null);
     },
-    close() {
-      reconciler.updateContainer(null, container, null, null);
-      if (surfaces) surfaces.delete(surface);
+    async source(mutation) {
+      const owned = await ready;
+      const reply = await session.call('source_resize_at', { slot: owned, mutation });
+      if (reply?.reply !== 'done') throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
     },
-  };
+    close() {
+      if (closed) return;
+      closed = true;
+      reconciler.updateContainer(null, container, null, null);
+      registry.handles.delete(handle);
+      if (slot !== null) registry.slots.delete(slot);
+    },
+  });
+  return handle;
 }
 
 /**
@@ -230,9 +293,16 @@ export function render(element, session, { title = 'Extension' } = {}) {
 export function deliver(session, payload) {
   const event = interpret(payload);
   if (event === null) return false;
+  const registry = attached.get(session);
+  if (!registry) return false;
+  const slot = typeof payload?.slot === 'string' ? payload.slot : null;
+  if (slot !== null) {
+    return registry.slots.get(slot)?.surface.dispatch(event) ?? false;
+  }
+  if (registry.handles.size !== 1) return false;
   let delivered = false;
-  for (const surface of attached.get(session) ?? []) {
-    delivered = surface.dispatch(event) || delivered;
+  for (const handle of registry.handles) {
+    delivered = handle.surface.dispatch(event) || delivered;
   }
   return delivered;
 }

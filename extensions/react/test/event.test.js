@@ -21,12 +21,19 @@ async function host() {
     connected = resolve;
   });
   let accepted = null;
+  let slot = 0;
   const server = net.createServer((stream) => {
     accepted = stream;
     const reader = new Reader();
     stream.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
-        if (frame.kind === KIND.request && frame.channel !== 0) calls.push(frame.payload);
+        if (frame.kind === KIND.request && frame.channel !== 0) {
+          calls.push(frame.payload);
+          const payload = ['interface_open_tab', 'interface_split'].includes(frame.payload.call)
+            ? { reply: 'identity', with: `surface-${slot += 1}` }
+            : { reply: 'done' };
+          stream.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+        }
       }
     });
     stream.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'demo', granted: ['interface'] } }));
@@ -57,14 +64,62 @@ async function until(condition) {
   throw new Error('the host never got there');
 }
 
-test('a tab is opened before the first frame is rendered', async () => {
+test('a tab identity addresses every frame rendered into it', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });
   render(h(Column, null, h(Button, { label: 'Go', onInvoke: () => {} })), session, { title: 'Demo' });
   await until(() => stage.calls.length >= 2);
   assert.deepEqual(stage.calls[0], { call: 'interface_open_tab', with: { title: 'Demo' } });
-  assert.equal(stage.calls[1].call, 'interface_render');
+  assert.equal(stage.calls[1].call, 'interface_render_at');
+  assert.equal(stage.calls[1].with.slot, 'surface-1');
   assert.equal(stage.calls[1].with.frame.sequence, 1);
+  session.close();
+  stage.close();
+});
+
+test('two roots keep independent slots, sequences, sources, and events over one socket', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let firstInvoked = 0;
+  let secondInvoked = 0;
+  const first = render(h(Button, { label: 'First', onInvoke: () => (firstInvoked += 1) }), session, { title: 'First' });
+  const second = render(h(Button, { label: 'Second', onInvoke: () => (secondInvoked += 1) }), session, {
+    split: { slot: 'surface-1', division: 'beside' },
+  });
+  assert.deepEqual(await Promise.all([first.ready, second.ready]), ['surface-1', 'surface-2']);
+  assert.deepEqual(stage.calls[1], {
+    call: 'interface_split',
+    with: { slot: 'surface-1', division: 'beside' },
+  });
+  await until(() => stage.calls.filter((call) => call.call === 'interface_render_at').length === 2);
+  const renders = stage.calls.filter((call) => call.call === 'interface_render_at');
+  assert.deepEqual(renders.map((call) => [call.with.slot, call.with.frame.sequence]), [
+    ['surface-1', 1],
+    ['surface-2', 1],
+  ]);
+
+  await second.source({ Length: { source: 7, version: 2, rows: 100_000 } });
+  assert.deepEqual(stage.calls.at(-1), {
+    call: 'source_resize_at',
+    with: { slot: 'surface-2', mutation: { Length: { source: 7, version: 2, rows: 100_000 } } },
+  });
+  await stage.push({ slot: 'surface-2', event: 'Invoke', id: '1:Invoke', node: 1 });
+  await until(() => secondInvoked === 1);
+  assert.equal(firstInvoked, 0, 'an addressed event never fans out to the other root');
+  first.close();
+  second.close();
+  session.close();
+  stage.close();
+});
+
+test('the client refuses a thirty-third live root before opening it', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const roots = Array.from({ length: 32 }, (_, index) => render(h(Button, { label: `${index}` }), session));
+  assert.throws(() => render(h(Button, { label: 'overflow' }), session), /surface limit of 32/);
+  await Promise.all(roots.map((root) => root.ready));
+  assert.equal(stage.calls.filter((call) => call.call === 'interface_open_tab').length, 32);
+  for (const root of roots) root.close();
   session.close();
   stage.close();
 });
