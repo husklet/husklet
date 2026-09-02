@@ -14,7 +14,10 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
-use hl_extension::port::{Division, GridSize, HostError, PaneText, TabSummary, TerminalSurface, TerminalTopology};
+use hl_extension::port::{
+    Division, GridSize, HostError, PaneSemanticAction, PaneSemanticTree, PaneText, TabSummary, TerminalSurface,
+    TerminalTopology,
+};
 
 /// How long a relayed call waits for the window to answer.
 ///
@@ -63,10 +66,27 @@ pub enum Request {
         /// How many lines at most, already bounded by the protocol layer.
         lines: usize,
     },
+    Semantics {
+        slot: String,
+    },
+    SemanticRequirement {
+        slot: String,
+        node: u64,
+    },
+    SemanticAction {
+        slot: String,
+        action: PaneSemanticAction,
+    },
     /// Raw bytes written to the named pane.
-    Write { slot: String, contents: Vec<u8> },
+    Write {
+        slot: String,
+        contents: Vec<u8>,
+    },
     /// Exact PTY grid requested for the named pane.
-    ResizeGrid { slot: String, grid: GridSize },
+    ResizeGrid {
+        slot: String,
+        grid: GridSize,
+    },
     /// The named pane, closed.
     Close {
         /// The pane being closed.
@@ -107,6 +127,8 @@ pub enum Answer {
     Slot(String),
     /// The text one pane is showing, for [`Request::Read`].
     Text(PaneText),
+    Semantics(PaneSemanticTree),
+    Capability(hl_extension::Capability),
     /// The work was done and names nothing.
     Done,
 }
@@ -259,6 +281,30 @@ impl TerminalSurface for Relay {
             lines,
         })? {
             Answer::Text(text) => Ok(text),
+            other => Err(other.mismatch()),
+        }
+    }
+
+    fn semantics(&self, slot: &str) -> Result<PaneSemanticTree, HostError> {
+        match self.ask(Request::Semantics { slot: slot.to_owned() })? {
+            Answer::Semantics(tree) => Ok(tree),
+            other => Err(other.mismatch()),
+        }
+    }
+
+    fn semantic_action(&self, slot: &str, action: &PaneSemanticAction) -> Result<(), HostError> {
+        self.done(Request::SemanticAction {
+            slot: slot.to_owned(),
+            action: action.clone(),
+        })
+    }
+
+    fn semantic_requirement(&self, slot: &str, node: u64) -> Result<hl_extension::Capability, HostError> {
+        match self.ask(Request::SemanticRequirement {
+            slot: slot.to_owned(),
+            node,
+        })? {
+            Answer::Capability(capability) => Ok(capability),
             other => Err(other.mismatch()),
         }
     }

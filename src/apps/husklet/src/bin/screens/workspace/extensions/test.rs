@@ -3,7 +3,7 @@
 //! recorded after somebody agreed to what it asks for, and a click on a
 //! rendered widget reaches the extension that drew it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
@@ -17,7 +17,7 @@ use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wi
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{directory, settings, Catalogue, Cleanup, Inspection, Shared, Shelf, Surfaces};
+use super::{directory, settings, Catalogue, Cleanup, Inspection, PendingInspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -39,6 +39,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
         the_settings_actions_drive_the_installation();
+        native_extension_cards_are_semantic_and_actionable();
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
@@ -46,18 +47,20 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
         remote_image_progress_precedes_the_consent_prompt();
+        cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
-        panes::disabling_an_extension_restores_its_nonfocused_surface_pane();
-        panes::removing_an_extension_restores_its_nonfocused_surface_pane();
+        panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
+        panes::removing_an_extension_tombstones_without_displacing_its_shell();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::splitting_an_interface_again_moves_its_one_surface();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
@@ -66,6 +69,47 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     if !ran {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
     }
+}
+
+#[cfg(feature = "mcp-e2e")]
+#[test]
+fn a_real_mcp_client_changes_native_ui_through_the_extension_socket() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| panes::mcp_socket_changes_native_ui());
+    assert!(ran, "the explicit MCP integration target requires an X display");
+}
+
+fn native_extension_cards_are_semantic_and_actionable() {
+    use super::super::semantic::{Action, ActionKind};
+    let fixture = Fixture::new(&[("semantic", false)]);
+    let snapshot = fixture.view.semantic_snapshot();
+    let enable = snapshot
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Enable"))
+        .expect("the disabled extension's owner registered Enable");
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: snapshot.revision,
+            node: enable.id,
+            action: ActionKind::Invoke,
+            value: None,
+        })
+        .unwrap();
+    assert_eq!(fixture.stage("semantic"), Stage::Duty);
+    let refreshed = fixture.view.semantic_snapshot();
+    assert!(refreshed.revision > snapshot.revision);
+    assert!(refreshed
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Disable")));
+    assert!(refreshed
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Read manifest")));
 }
 
 /// One shell, one roster, and the shelf between them.
@@ -107,7 +151,7 @@ impl Fixture {
         });
         let shelf = Shelf::with_cleanup(&view, &roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}), cleanup);
         shelf.install();
-        let inspection: Inspection = Rc::new(|_| std::sync::mpsc::channel().1);
+        let inspection: Inspection = Rc::new(|_| PendingInspection::detached(std::sync::mpsc::channel().1));
         let catalogue = Catalogue::new(&shelf, inspection);
         view.page(Page::Extensions.title())
             .and_downcast::<gtk::Box>()
@@ -423,22 +467,100 @@ fn management_extension_reconciles_native_fallback_pages() {
         }
     });
     let surfaces: Surfaces = Rc::new(|_| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
-    let shelf = Shelf::with_reconciliation(&view, &roster, surfaces, reconcile);
+    let withdrawals = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&withdrawals);
+    let withdraw = Rc::new(move |name: &ExtensionName| {
+        if name.as_str() == super::MANAGEMENT_EXTENSION {
+            counted.set(counted.get() + 1);
+        }
+    });
+    let shelf = Shelf::with_lifecycle(&view, &roster, surfaces, reconcile, withdraw);
     shelf.install();
 
-    assert_eq!(
-        view.entries(),
-        ["Settings", "Extensions", super::MANAGEMENT_EXTENSION],
-        "the management extension has no duplicate native operational pages"
+    let assert_pages = |managed: bool| {
+        let entries = view.entries();
+        for title in [Page::Overview.title(), Page::Containers.title()] {
+            assert_eq!(
+                entries.iter().filter(|entry| entry.as_str() == title).count(),
+                usize::from(!managed),
+                "{title} ownership must follow Duty without duplicates: {entries:?}"
+            );
+        }
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.as_str() == super::MANAGEMENT_EXTENSION)
+                .count(),
+            1,
+            "the extension surface itself is never duplicated: {entries:?}"
+        );
+    };
+    assert_pages(true);
+
+    let before = withdrawals.get();
+    roster
+        .borrow_mut()
+        .disable(&named(super::MANAGEMENT_EXTENSION))
+        .expect("disabled");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(false);
+    assert!(
+        withdrawals.get() > before,
+        "disable withdraws any provider panes before fallback returns"
     );
 
+    roster
+        .borrow_mut()
+        .enable(&named(super::MANAGEMENT_EXTENSION))
+        .expect("enabled");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(true);
+
+    let before = withdrawals.get();
+    roster
+        .borrow_mut()
+        .fault(&named(super::MANAGEMENT_EXTENSION), 3)
+        .expect("fault recorded");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(false);
+    assert!(
+        withdrawals.get() > before,
+        "fault withdraws provider panes before fallback returns"
+    );
+
+    let before = withdrawals.get();
+    roster
+        .borrow_mut()
+        .retry(&named(super::MANAGEMENT_EXTENSION))
+        .expect("retry returns to duty");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(true);
+    assert!(
+        withdrawals.get() > before,
+        "retry replaces the faulted surface before taking ownership"
+    );
+
+    let before = withdrawals.get();
     roster
         .borrow_mut()
         .remove(&named(super::MANAGEMENT_EXTENSION))
         .expect("removed management extension");
     shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_eq!(
+        roster.borrow().stage(&named(super::MANAGEMENT_EXTENSION)),
+        Stage::Vacancy
+    );
     assert!(view.holds(Page::Overview.title()));
     assert!(view.holds(Page::Containers.title()));
+    assert_eq!(
+        view.entries()
+            .iter()
+            .filter(|entry| entry.as_str() == Page::Overview.title())
+            .count(),
+        1,
+        "removal restores one fallback page"
+    );
+    assert!(withdrawals.get() > before, "removal withdraws provider panes");
 
     record(&roster, "containers", true);
     let legacy = roster
@@ -468,7 +590,7 @@ fn catalogue(fixture: &Fixture, answer: Result<Candidate, String>) -> Rc<Catalog
             };
             let _ = answered.send(event);
         }
-        answer
+        PendingInspection::detached(answer)
     });
     Catalogue::new(&fixture.shelf, inspection)
 }
@@ -697,7 +819,7 @@ fn remote_image_progress_precedes_the_consent_prompt() {
                 sent.send(event).expect("catalogue is listening");
             }
         }
-        received
+        PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
     typed(&page, "team/tool:latest");
@@ -718,6 +840,56 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     );
 }
 
+fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
+    let fixture = Fixture::new(&[]);
+    let sender = Arc::new(Mutex::new(None));
+    let held_sender = Arc::clone(&sender);
+    let cancellation = Arc::new(Mutex::new(None));
+    let held_cancellation = Arc::clone(&cancellation);
+    let inspection: Inspection = Rc::new(move |_| {
+        let (sent, events) = std::sync::mpsc::channel();
+        held_sender.lock().expect("sender").replace(sent);
+        let token = hl::extension::Cancellation::default();
+        held_cancellation.lock().expect("cancellation").replace(token.clone());
+        PendingInspection {
+            events,
+            cancellation: token,
+        }
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    typed(&page, "team/tool:latest");
+    page.inspect();
+    page.cancel();
+
+    assert!(
+        cancellation
+            .lock()
+            .expect("cancellation")
+            .as_ref()
+            .is_some_and(hl::extension::Cancellation::is_cancelled),
+        "the UI reaches the worker's cancellation authority"
+    );
+    sender
+        .lock()
+        .expect("sender")
+        .as_ref()
+        .expect("pending sender")
+        .send(Acquisition::Ready(candidate()))
+        .expect("late worker result");
+    assert!(page.poll());
+    assert!(fixture.roster.borrow().entries().is_empty());
+    assert!(page.notice().contains("nothing was installed"));
+    page.consent();
+    assert!(
+        fixture.roster.borrow().entries().is_empty(),
+        "late readiness cannot install"
+    );
+    assert!(
+        inspect_action(&page).is_sensitive(),
+        "retry is offered after acknowledgement"
+    );
+}
+
 fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     let fixture = Fixture::new(&[]);
     let attempts = Arc::new(Mutex::new(Vec::new()));
@@ -732,7 +904,7 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
         if let Some(answer) = answers.lock().expect("answers").pop() {
             sent.send(answer).expect("catalogue is listening");
         }
-        received
+        PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
     typed(&page, "team/tool:latest");
@@ -1094,7 +1266,7 @@ mod panes {
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
-    use hl_extension::port::{Division, HostError, LayoutNode, Occupant};
+    use hl_extension::port::{Division, HostError, LayoutNode, Occupant, TerminalSurface};
     use hl_extension::ExtensionName;
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
@@ -1169,6 +1341,215 @@ mod panes {
             std::thread::sleep(Duration::from_millis(5));
         }
         condition()
+    }
+
+    #[cfg(feature = "mcp-e2e")]
+    pub(super) fn mcp_socket_changes_native_ui() {
+        use hl_extension::port::{
+            ContainerControl, ContainerInventory, Entry, ImageStore, NetworkStore, VolumeStore, WorkspaceControl,
+            WorkspaceFiles, WorkspaceInventory,
+        };
+        use hl_extension::{Authority, Capability, Grant, RelativePath, Services, WorkspaceInfo};
+        use std::process::Command;
+
+        struct Unused;
+        impl ContainerInventory for Unused {
+            fn list(&self) -> Result<Vec<hl_extension::port::ContainerSummary>, HostError> {
+                unreachable!()
+            }
+            fn inspect(&self, _: &str) -> Result<hl_extension::port::ContainerSummary, HostError> {
+                unreachable!()
+            }
+        }
+        impl ContainerControl for Unused {
+            fn create(&self, _: &str, _: &str) -> Result<String, HostError> {
+                unreachable!()
+            }
+            fn start(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+            fn stop(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+            fn remove(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+        }
+        impl ImageStore for Unused {
+            fn list(&self) -> Result<Vec<hl_extension::port::ImageSummary>, HostError> {
+                unreachable!()
+            }
+            fn pull(&self, _: &str) -> Result<hl_extension::port::ImageSummary, HostError> {
+                unreachable!()
+            }
+        }
+        impl VolumeStore for Unused {}
+        impl NetworkStore for Unused {}
+        impl WorkspaceInventory for Unused {
+            fn workspaces(&self) -> Result<Vec<hl_extension::port::WorkspaceState>, HostError> {
+                unreachable!()
+            }
+        }
+        impl WorkspaceControl for Unused {}
+        impl WorkspaceFiles for Unused {
+            fn list(&self, _: &RelativePath) -> Result<Vec<Entry>, HostError> {
+                unreachable!()
+            }
+            fn read(&self, _: &RelativePath) -> Result<Vec<u8>, HostError> {
+                unreachable!()
+            }
+            fn write(&self, _: &RelativePath, _: &[u8]) -> Result<(), HostError> {
+                unreachable!()
+            }
+        }
+
+        let semantics = super::super::super::semantic::Registry::new("workspace");
+        let view = Rc::new(super::super::super::View::with_semantics(
+            [
+                (
+                    super::super::super::Page::Extensions,
+                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+                ),
+                (
+                    super::super::super::Page::Settings,
+                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+                ),
+            ],
+            semantics,
+        ));
+        view.select_name("Extensions");
+        let bench = Bench::new();
+        let gallery = Gallery::new();
+        gallery.enrol_native(view.semantic_registry());
+        Window::exhibit(&bench.window, gallery);
+        let (relay, errands) = hl::extension::Relay::open();
+        let console = Console::new(&bench.window, errands);
+
+        let temporary = tempfile::tempdir().expect("socket directory");
+        let socket = temporary.path().join("extension.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind real extension socket");
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("MCP session connects");
+            let authority = Authority::new(
+                ExtensionName::new("mcp-e2e").unwrap(),
+                Grant::new([Capability::PaneSemanticRead, Capability::PaneSemanticControl]),
+                Vec::new(),
+            );
+            let unused = Unused;
+            let services = Services {
+                workspace: WorkspaceInfo {
+                    name: "dev".into(),
+                    architecture: "arm64".into(),
+                    image: "alpine:3.20".into(),
+                },
+                workspaces: &unused,
+                workspace_control: &unused,
+                containers: &unused,
+                control: &unused,
+                images: &unused,
+                volumes: &unused,
+                networks: &unused,
+                terminal: &relay,
+                files: &unused,
+            };
+            let mut conversation =
+                hl::extension::Conversation::new(stream, authority, "dev", hl::extension::Queue::new())
+                    .expect("conversation");
+            conversation.greet().expect("real handshake");
+            conversation.serve(&services).expect("real session");
+        });
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("repository root");
+        let script = root.join("extensions/mcp/test/native-socket-e2e.mjs");
+        assert!(
+            root.join("extensions/node_modules/@modelcontextprotocol/sdk").exists(),
+            "run `npm ci` in extensions before the explicit mcp-e2e target"
+        );
+        let mut child = Command::new("node")
+            .arg(script)
+            .arg(&socket)
+            .current_dir(root.join("extensions"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn real MCP client/server");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && child.try_wait().expect("poll MCP child").is_none() {
+            console.drain();
+            gtk::glib::MainContext::default().iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().expect("MCP child output");
+        assert!(
+            output.status.success(),
+            "MCP bridge failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Settings</label>"));
+        assert_eq!(view.shown().as_deref(), Some("Settings"));
+        served.join().expect("conversation thread");
+    }
+
+    pub(super) fn native_workspace_semantics_cross_the_terminal_request_bridge() {
+        use super::super::super::semantic::{ActionKind, Registry, Value};
+        let bench = Bench::new();
+        let invoked = Rc::new(std::cell::Cell::new(false));
+        let marked = Rc::clone(&invoked);
+        let registry = Registry::new("workspace");
+        registry.register(
+            "workspace/page/Settings",
+            "tab",
+            Some("Settings"),
+            Some(Value::Public("false")),
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| marked.set(true)),
+        );
+        let gallery = Gallery::new();
+        gallery.enrol_native(registry);
+        Window::exhibit(&bench.window, gallery);
+        let (relay, errands) = hl::extension::Relay::open();
+        let relay = std::sync::Arc::new(relay);
+        let console = Console::new(&bench.window, errands);
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        std::thread::spawn(move || sent.send(request.semantics("workspace")).unwrap());
+        let tree = loop {
+            console.drain();
+            if let Ok(tree) = received.try_recv() {
+                break tree.expect("native semantic read crossed the request bridge");
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        };
+        assert_eq!(tree.slot, "workspace");
+        let settings = tree
+            .root
+            .children
+            .iter()
+            .find(|node| node.label.as_deref() == Some("Settings"))
+            .unwrap();
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let action = hl_extension::PaneSemanticAction {
+            revision: tree.revision,
+            node: settings.id,
+            action: hl_extension::SemanticActionKind::Invoke,
+            value: None,
+        };
+        std::thread::spawn(move || sent.send(request.semantic_action("workspace", &action)).unwrap());
+        loop {
+            console.drain();
+            if let Ok(result) = received.try_recv() {
+                result.expect("native semantic action crossed the request bridge");
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+        assert!(invoked.get(), "the socket-facing action reached its GTK owner");
     }
 
     /// What a bounded read of one pane answered with.
@@ -1448,9 +1829,14 @@ mod panes {
         }
         shelf.refresh(&name);
 
-        let restored = Panes::at(&bench.window, &first_slot).expect("restored pane identity");
-        assert_eq!(restored.occupant, Occupant::Terminal);
-        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
+        let frozen = Panes::at(&bench.window, &first_slot).expect("tombstoned pane identity");
+        assert_eq!(frozen.occupant, Occupant::Surface);
+        assert!(
+            super::descendants(&frozen.content)
+                .iter()
+                .any(|widget| widget.has_css_class(ABSENCE)),
+            "withdrawal leaves an explicit recovery placeholder"
+        );
         assert_eq!(
             Panes::at(&bench.window, &second_slot).expect("unrelated pane").slot,
             second_slot,
@@ -1461,17 +1847,45 @@ mod panes {
             "withdrawal disappears from every chooser immediately"
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
-        assert!(
-            Slots::new(&bench.window).surface(&restored.content).is_none(),
-            "the removed provider identity is no longer a live surface registration"
+        assert_eq!(
+            Slots::new(&bench.window).surface(&frozen.content),
+            Some((first_slot.clone(), "postgres".to_owned(), Some("database".to_owned()))),
+            "the persisted provider identity survives lifecycle withdrawal"
         );
+
+        if !remove {
+            gallery.enrol(
+                "postgres",
+                &interface,
+                &home,
+                &[hl_extension::PaneProvider {
+                    id: ExtensionName::new("database").expect("provider id"),
+                    title: "Postgres".to_owned(),
+                    icon: None,
+                }],
+                Rc::new(|_| {}),
+            );
+            PaneChooser::recover(&bench.window, "postgres");
+            assert_eq!(
+                interface.parent().as_ref(),
+                Some(frozen.content.upcast_ref::<gtk::Widget>())
+            );
+            PaneChooser::withdraw(&bench.window, "postgres");
+            gallery.withdraw("postgres");
+        }
+
+        assert!(Panes::focus(&bench.window, &first_slot));
+        PaneChooser::terminal(&bench.window);
+        let restored = Panes::at(&bench.window, &first_slot).expect("explicitly restored shell");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
     }
 
-    pub(super) fn disabling_an_extension_restores_its_nonfocused_surface_pane() {
+    pub(super) fn disabling_an_extension_tombstones_and_recovers_its_surface_pane() {
         lifecycle_withdrawal(false);
     }
 
-    pub(super) fn removing_an_extension_restores_its_nonfocused_surface_pane() {
+    pub(super) fn removing_an_extension_tombstones_without_displacing_its_shell() {
         lifecycle_withdrawal(true);
     }
 
@@ -1589,7 +2003,8 @@ mod panes {
 
     pub(super) fn a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell() {
         let bench = Bench::new();
-        Window::exhibit(&bench.window, Gallery::new());
+        let gallery = Gallery::new();
+        Window::exhibit(&bench.window, gallery.clone());
         let storage = tempfile::tempdir().expect("temporary directory");
         let node = PaneNode::Surface(SurfacePane {
             extension: "departed".to_owned(),
@@ -1615,5 +2030,16 @@ mod panes {
         );
         let held = Panes::at(&bench.window, "7").expect("the restored pane keeps its slot");
         assert_eq!(held.occupant, Occupant::Surface);
+
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol("departed", &interface, &home, &[], Rc::new(|_| {}));
+        PaneChooser::recover(&bench.window, "departed");
+        assert_eq!(
+            interface.parent().as_ref(),
+            Some(held.content.upcast_ref::<gtk::Widget>()),
+            "re-enabling after restart rehydrates the preserved pane"
+        );
     }
 }

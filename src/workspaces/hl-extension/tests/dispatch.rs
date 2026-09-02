@@ -9,7 +9,8 @@ use std::cell::RefCell;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    GridSize, HostError, ImageStore, ImageSummary, Occupant, PaneSummary, PaneText, ProcessList, TabSummary,
+    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
+    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
     TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
@@ -40,31 +41,65 @@ struct Host {
 impl hl_extension::port::VolumeStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
         self.ledger.note("volumes.list");
-        Ok(vec![hl_extension::port::VolumeSummary { name: "cache".into(), driver: "local".into() }])
+        Ok(vec![hl_extension::port::VolumeSummary {
+            name: "cache".into(),
+            driver: "local".into(),
+        }])
     }
     fn inspect(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
         self.ledger.note("volumes.inspect");
-        Ok(hl_extension::port::VolumeSummary { name: name.into(), driver: "local".into() })
+        Ok(hl_extension::port::VolumeSummary {
+            name: name.into(),
+            driver: "local".into(),
+        })
     }
     fn create(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
         self.ledger.note("volumes.create");
-        Ok(hl_extension::port::VolumeSummary { name: name.into(), driver: "local".into() })
+        Ok(hl_extension::port::VolumeSummary {
+            name: name.into(),
+            driver: "local".into(),
+        })
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> { self.ledger.note("volumes.remove"); Ok(()) }
+    fn remove(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("volumes.remove");
+        Ok(())
+    }
 }
 impl hl_extension::port::NetworkStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
         self.ledger.note("networks.list");
-        Ok(vec![hl_extension::port::NetworkSummary { id: "n1".into(), name: "private".into(), driver: "bridge".into(), scope: "local".into() }])
+        Ok(vec![hl_extension::port::NetworkSummary {
+            id: "n1".into(),
+            name: "private".into(),
+            driver: "bridge".into(),
+            scope: "local".into(),
+        }])
     }
     fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
         self.ledger.note("networks.inspect");
-        Ok(hl_extension::port::NetworkSummary { id: "n1".into(), name: reference.into(), driver: "bridge".into(), scope: "local".into() })
+        Ok(hl_extension::port::NetworkSummary {
+            id: "n1".into(),
+            name: reference.into(),
+            driver: "bridge".into(),
+            scope: "local".into(),
+        })
     }
-    fn create(&self, _name: &str) -> Result<String, HostError> { self.ledger.note("networks.create"); Ok("n1".into()) }
-    fn remove(&self, _reference: &str) -> Result<(), HostError> { self.ledger.note("networks.remove"); Ok(()) }
-    fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { self.ledger.note("networks.connect"); Ok(()) }
-    fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { self.ledger.note("networks.disconnect"); Ok(()) }
+    fn create(&self, _name: &str) -> Result<String, HostError> {
+        self.ledger.note("networks.create");
+        Ok("n1".into())
+    }
+    fn remove(&self, _reference: &str) -> Result<(), HostError> {
+        self.ledger.note("networks.remove");
+        Ok(())
+    }
+    fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
+        self.ledger.note("networks.connect");
+        Ok(())
+    }
+    fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
+        self.ledger.note("networks.disconnect");
+        Ok(())
+    }
 }
 
 impl Host {
@@ -198,6 +233,35 @@ impl ImageStore for Host {
             created: 0,
         })
     }
+
+    fn inspect(&self, reference: &str) -> Result<ImageDetails, HostError> {
+        self.ledger.note("images.inspect");
+        Ok(ImageDetails {
+            id: reference.into(),
+            references: vec![reference.into()],
+            created: String::new(),
+            size: 1,
+            os: "linux".into(),
+            architecture: "amd64".into(),
+            entrypoint: Vec::new(),
+            command: Vec::new(),
+            working_directory: String::new(),
+            user: String::new(),
+        })
+    }
+
+    fn remove(&self, _reference: &str) -> Result<(), HostError> {
+        self.ledger.note("images.remove");
+        Ok(())
+    }
+
+    fn prune(&self) -> Result<ImagePruneResult, HostError> {
+        self.ledger.note("images.prune");
+        Ok(ImagePruneResult {
+            deleted: 2,
+            space_reclaimed: 7,
+        })
+    }
 }
 
 impl TerminalSurface for Host {
@@ -246,6 +310,38 @@ impl TerminalSurface for Host {
         })
     }
 
+    fn semantics(&self, slot: &str) -> Result<PaneSemanticTree, HostError> {
+        self.ledger.note("terminal.semantics");
+        Ok(PaneSemanticTree {
+            slot: slot.into(),
+            revision: 4,
+            truncated: false,
+            root: SemanticNode {
+                id: 0,
+                role: "column".into(),
+                label: None,
+                value: None,
+                disabled: false,
+                destructive: false,
+                actions: vec![],
+                children: vec![],
+            },
+        })
+    }
+
+    fn semantic_action(&self, _slot: &str, _action: &PaneSemanticAction) -> Result<(), HostError> {
+        self.ledger.note("terminal.semantic_action");
+        Ok(())
+    }
+
+    fn semantic_requirement(&self, slot: &str, node: u64) -> Result<Capability, HostError> {
+        match (slot, node) {
+            ("workspace", 98) => Ok(Capability::WorkspaceControl),
+            ("workspace", 99) => Ok(Capability::ExtensionControl),
+            _ => Ok(Capability::PaneSemanticControl),
+        }
+    }
+
     fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
         self.ledger.note("terminal.write");
         Ok(())
@@ -271,6 +367,64 @@ impl TerminalSurface for Host {
     fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
         Ok("s3".into())
     }
+}
+
+#[test]
+fn pane_semantic_read_and_control_are_separately_granted() {
+    let host = Host::new();
+    let read = Request::PaneSemanticRead { slot: "s1".into() };
+    let action = Request::PaneSemanticAction {
+        slot: "s1".into(),
+        action: PaneSemanticAction {
+            revision: 4,
+            node: 2,
+            action: SemanticActionKind::Invoke,
+            value: None,
+        },
+    };
+    assert!(matches!(
+        session(&[Capability::PaneSemanticRead], &[]).dispatch(&read, &services(&host)),
+        Ok(Reply::Semantics(_))
+    ));
+    assert!(session(&[Capability::PaneSemanticRead], &[])
+        .dispatch(&action, &services(&host))
+        .is_err());
+    session(&[Capability::PaneSemanticControl], &[])
+        .dispatch(&action, &services(&host))
+        .expect("controlled");
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["terminal.semantics", "terminal.semantic_action"]
+    );
+}
+
+#[test]
+fn native_semantic_actions_require_the_underlying_domain_grant() {
+    let host = Host::new();
+    let action = |node| Request::PaneSemanticAction {
+        slot: "workspace".into(),
+        action: PaneSemanticAction {
+            revision: 1,
+            node,
+            action: SemanticActionKind::Invoke,
+            value: None,
+        },
+    };
+    for node in [98, 99] {
+        let denied = session(&[Capability::PaneSemanticControl], &[]).dispatch(&action(node), &services(&host));
+        assert!(matches!(denied, Err(Failure::Denied { .. })));
+    }
+    assert!(host.ledger.reached().is_empty(), "denial must precede the callback");
+    session(&[Capability::PaneSemanticControl, Capability::ExtensionControl], &[])
+        .dispatch(&action(99), &services(&host))
+        .expect("explicit lifecycle grant");
+    session(&[Capability::PaneSemanticControl, Capability::WorkspaceControl], &[])
+        .dispatch(&action(98), &services(&host))
+        .expect("explicit workspace grant");
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["terminal.semantic_action", "terminal.semantic_action"]
+    );
 }
 
 impl WorkspaceInventory for Host {
@@ -494,6 +648,19 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ImageWrite,
         ),
+        (
+            Request::ImageInspect {
+                reference: "alpine".into(),
+            },
+            Capability::ImageRead,
+        ),
+        (
+            Request::ImageRemove {
+                reference: "alpine".into(),
+            },
+            Capability::ImageWrite,
+        ),
+        (Request::ImagePrune, Capability::ImageWrite),
         (Request::TerminalTabs, Capability::TerminalRead),
         (Request::TerminalTopology, Capability::TerminalRead),
         (
@@ -739,16 +906,49 @@ fn container_exec_returns_the_real_execution_identity() {
 fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     let host = Host::new();
     let mut read = session(&[Capability::VolumeRead, Capability::NetworkRead], &[]);
-    assert!(matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values[0].name == "cache"));
-    assert!(matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "n1"));
-    assert!(matches!(read.dispatch(&Request::VolumeCreate { name: "unsafe".into() }, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(
+        matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values[0].name == "cache")
+    );
+    assert!(
+        matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "n1")
+    );
+    assert!(matches!(
+        read.dispatch(&Request::VolumeCreate { name: "unsafe".into() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
 
     let mut write = session(&[Capability::VolumeWrite, Capability::NetworkWrite], &[]);
-    assert!(matches!(write.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)), Ok(Reply::Volume(value)) if value.name == "cache"));
-    assert_eq!(write.dispatch(&Request::NetworkCreate { name: "private".into() }, &services(&host)), Ok(Reply::Identity("n1".into())));
-    assert_eq!(write.dispatch(&Request::NetworkConnect { reference: "private".into(), container: "c1".into() }, &services(&host)), Ok(Reply::Done));
-    assert_eq!(write.dispatch(&Request::NetworkDisconnect { reference: "private".into(), container: "c1".into() }, &services(&host)), Ok(Reply::Done));
-    assert!(matches!(write.dispatch(&Request::NetworkList, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(
+        matches!(write.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)), Ok(Reply::Volume(value)) if value.name == "cache")
+    );
+    assert_eq!(
+        write.dispatch(&Request::NetworkCreate { name: "private".into() }, &services(&host)),
+        Ok(Reply::Identity("n1".into()))
+    );
+    assert_eq!(
+        write.dispatch(
+            &Request::NetworkConnect {
+                reference: "private".into(),
+                container: "c1".into()
+            },
+            &services(&host)
+        ),
+        Ok(Reply::Done)
+    );
+    assert_eq!(
+        write.dispatch(
+            &Request::NetworkDisconnect {
+                reference: "private".into(),
+                container: "c1".into()
+            },
+            &services(&host)
+        ),
+        Ok(Reply::Done)
+    );
+    assert!(matches!(
+        write.dispatch(&Request::NetworkList, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
 }
 
 #[test]

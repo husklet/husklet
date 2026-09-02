@@ -8,8 +8,9 @@ use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageSummary, PaneText,
-    NetworkSummary, ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
+    ImageSummary, NetworkSummary, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
+    WorkspaceConfiguration, WorkspaceState,
 };
 
 /// A call from an extension.
@@ -98,16 +99,41 @@ pub enum Request {
     ImagePull {
         reference: String,
     },
+    ImageInspect {
+        reference: String,
+    },
+    ImageRemove {
+        reference: String,
+    },
+    ImagePrune,
     VolumeList,
-    VolumeInspect { name: String },
-    VolumeCreate { name: String },
-    VolumeRemove { name: String },
+    VolumeInspect {
+        name: String,
+    },
+    VolumeCreate {
+        name: String,
+    },
+    VolumeRemove {
+        name: String,
+    },
     NetworkList,
-    NetworkInspect { reference: String },
-    NetworkCreate { name: String },
-    NetworkRemove { reference: String },
-    NetworkConnect { reference: String, container: String },
-    NetworkDisconnect { reference: String, container: String },
+    NetworkInspect {
+        reference: String,
+    },
+    NetworkCreate {
+        name: String,
+    },
+    NetworkRemove {
+        reference: String,
+    },
+    NetworkConnect {
+        reference: String,
+        container: String,
+    },
+    NetworkDisconnect {
+        reference: String,
+        container: String,
+    },
     TerminalTabs,
     TerminalTopology,
     TerminalOpenTab {
@@ -124,6 +150,13 @@ pub enum Request {
     TerminalReadPane {
         slot: String,
         lines: Option<usize>,
+    },
+    PaneSemanticRead {
+        slot: String,
+    },
+    PaneSemanticAction {
+        slot: String,
+        action: crate::port::PaneSemanticAction,
     },
     TerminalWritePane {
         slot: String,
@@ -202,8 +235,8 @@ impl Request {
             | Self::ContainerRestart { .. }
             | Self::ContainerKill { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
-            Self::ImageList => Capability::ImageRead,
-            Self::ImagePull { .. } => Capability::ImageWrite,
+            Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
+            Self::ImagePull { .. } | Self::ImageRemove { .. } | Self::ImagePrune => Capability::ImageWrite,
             Self::VolumeList | Self::VolumeInspect { .. } => Capability::VolumeRead,
             Self::VolumeCreate { .. } | Self::VolumeRemove { .. } => Capability::VolumeWrite,
             Self::NetworkList | Self::NetworkInspect { .. } => Capability::NetworkRead,
@@ -224,6 +257,8 @@ impl Request {
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
+            Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
+            Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
@@ -256,6 +291,7 @@ pub enum Topic {
     Volumes,
     Networks,
     Terminal,
+    PaneChanges,
     Extensions,
     WorkspaceEvents,
 }
@@ -271,6 +307,7 @@ impl Topic {
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
+            Self::PaneChanges => Capability::PaneObserve,
             Self::Extensions => Capability::WorkspaceRead,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
         }
@@ -282,6 +319,7 @@ impl Topic {
         Self::Volumes,
         Self::Networks,
         Self::Terminal,
+        Self::PaneChanges,
         Self::Extensions,
         Self::WorkspaceEvents,
     ];
@@ -318,6 +356,8 @@ pub enum Reply {
     Execution(ExecutionSummary),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
+    ImageDetails(ImageDetails),
+    ImagePrune(ImagePruneResult),
     Volumes(Vec<VolumeSummary>),
     Volume(VolumeSummary),
     Networks(Vec<NetworkSummary>),
@@ -325,6 +365,7 @@ pub enum Reply {
     Tabs(Vec<TabSummary>),
     Topology(TerminalTopology),
     Text(PaneText),
+    Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
     Contents(Vec<u8>),
     Identity(String),
@@ -375,7 +416,27 @@ mod tests {
     #[test]
     fn reading_and_writing_calls_require_different_capabilities() {
         assert_eq!(
-            Request::EventSubscribe { topic: Topic::WorkspaceEvents }.capability(),
+            Request::PaneSemanticRead { slot: "7".into() }.capability(),
+            Capability::PaneSemanticRead
+        );
+        assert_eq!(
+            Request::PaneSemanticAction {
+                slot: "7".into(),
+                action: crate::port::PaneSemanticAction {
+                    revision: 1,
+                    node: 2,
+                    action: crate::port::SemanticActionKind::Invoke,
+                    value: None,
+                },
+            }
+            .capability(),
+            Capability::PaneSemanticControl
+        );
+        assert_eq!(
+            Request::EventSubscribe {
+                topic: Topic::WorkspaceEvents
+            }
+            .capability(),
             Capability::WorkspaceEvents
         );
         assert_eq!(Request::ContainerList.capability(), Capability::ContainerRead);

@@ -4089,7 +4089,7 @@ export const vocabulary: { props: string[]; handlers: string[] };
 export const SOCKET: string;
 export const PROTOCOL: number;
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'workspace-events';
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
@@ -4123,6 +4123,8 @@ export interface ExecutionSummary {
   command: string[]; user: string;
 }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
+export interface ImagePruneResult { deleted: number; space_reclaimed: number }
 export interface VolumeSummary { name: string; driver: string }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
 export interface PaneSummary {
@@ -4134,6 +4136,11 @@ export interface PaneSummary {
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
 export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
+export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
+export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
+export interface PaneSemanticTree { slot: string; revision: number; root: SemanticNode; truncated: boolean }
+export interface PaneSemanticAction { revision: number; node: number; action: SemanticActionKind; value?: string | null }
 export interface GridSize { columns: number; rows: number }
 export type LayoutNode =
   | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
@@ -4152,6 +4159,7 @@ export type SnapshotEvent =
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
   | { snapshot: 'terminal'; of: TabSummary[] }
+  | { snapshot: 'pane_changes'; of: PaneChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 
 export class ExtensionError extends Error {
@@ -4166,6 +4174,7 @@ export interface ConnectOptions {
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: SnapshotEvent, channel: number) => void;
+  onEventError?: (error: unknown) => void;
 }
 
 export class Session {
@@ -4206,7 +4215,7 @@ export interface WorkspaceApi {
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
   };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
@@ -4228,6 +4237,8 @@ export interface WorkspaceApi {
     split(slot: string, division: Division): Promise<string>;
     spawn(slot: string, command: string[]): Promise<void>;
     read(slot: string, lines?: number): Promise<PaneText>;
+    semantics(slot: string): Promise<PaneSemanticTree>;
+    act(slot: string, action: PaneSemanticAction): Promise<void>;
     writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
@@ -4241,6 +4252,7 @@ export interface WorkspaceApi {
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
+  watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;

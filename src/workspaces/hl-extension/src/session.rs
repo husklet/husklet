@@ -9,8 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface, VolumeStore,
-    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface,
+    VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -113,10 +113,21 @@ impl Session {
             | Request::ContainerRestart { .. }
             | Request::ContainerKill { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
-            Request::ImageList | Request::ImagePull { .. } => self.images(request, services),
-            Request::VolumeList | Request::VolumeInspect { .. } | Request::VolumeCreate { .. } | Request::VolumeRemove { .. } => self.volumes(request, services),
-            Request::NetworkList | Request::NetworkInspect { .. } | Request::NetworkCreate { .. }
-            | Request::NetworkRemove { .. } | Request::NetworkConnect { .. } | Request::NetworkDisconnect { .. } => self.networks(request, services),
+            Request::ImageList
+            | Request::ImagePull { .. }
+            | Request::ImageInspect { .. }
+            | Request::ImageRemove { .. }
+            | Request::ImagePrune => self.images(request, services),
+            Request::VolumeList
+            | Request::VolumeInspect { .. }
+            | Request::VolumeCreate { .. }
+            | Request::VolumeRemove { .. } => self.volumes(request, services),
+            Request::NetworkList
+            | Request::NetworkInspect { .. }
+            | Request::NetworkCreate { .. }
+            | Request::NetworkRemove { .. }
+            | Request::NetworkConnect { .. }
+            | Request::NetworkDisconnect { .. } => self.networks(request, services),
             Request::TerminalTabs
             | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
@@ -128,6 +139,33 @@ impl Session {
             | Request::TerminalClosePane { .. }
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRatio { .. } => self.terminal(request, services),
+            Request::PaneSemanticRead { slot } => {
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::PaneSemanticRead, services.terminal)?;
+                Ok(Reply::Semantics(port.semantics(slot)?))
+            }
+            Request::PaneSemanticAction { slot, action } => {
+                if action
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| value.len() > crate::port::SEMANTIC_ACTION_VALUE_LIMIT)
+                {
+                    return Err(Failure::Conflict {
+                        detail: "pane semantic action value exceeds 4096 bytes".into(),
+                    });
+                }
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::PaneSemanticControl, services.terminal)?;
+                let requirement = port.semantic_requirement(slot, action.node).map_err(Failure::from)?;
+                self.peer.authority().port(requirement, services.terminal)?;
+                port.semantic_action(slot, action)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             Request::FilesystemList { .. } | Request::FilesystemRead { .. } | Request::FilesystemWrite { .. } => {
                 self.files(request, services)
             }
@@ -195,12 +233,17 @@ impl Session {
     }
 
     fn images(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
-        if let Request::ImagePull { reference } = request {
-            let port = self.peer.authority().port(Capability::ImageWrite, services.images)?;
-            return Ok(Reply::Image(port.pull(reference)?));
+        let port = self.peer.authority().port(request.capability(), services.images)?;
+        match request {
+            Request::ImageList => Ok(Reply::Images(port.list()?)),
+            Request::ImagePull { reference } => Ok(Reply::Image(port.pull(reference)?)),
+            Request::ImageInspect { reference } => Ok(Reply::ImageDetails(port.inspect(reference)?)),
+            Request::ImageRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ImagePrune => Ok(Reply::ImagePrune(port.prune()?)),
+            _ => Err(Failure::Unsupported {
+                call: "image operation".into(),
+            }),
         }
-        let port = self.peer.authority().port(Capability::ImageRead, services.images)?;
-        Ok(Reply::Images(port.list()?))
     }
 
     fn volumes(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
@@ -223,8 +266,14 @@ impl Session {
             Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
             Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
             Request::NetworkRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
-            Request::NetworkConnect { reference, container } => port.connect(reference, container).map(|()| Reply::Done).map_err(Failure::from),
-            Request::NetworkDisconnect { reference, container } => port.disconnect(reference, container).map(|()| Reply::Done).map_err(Failure::from),
+            Request::NetworkConnect { reference, container } => port
+                .connect(reference, container)
+                .map(|()| Reply::Done)
+                .map_err(Failure::from),
+            Request::NetworkDisconnect { reference, container } => port
+                .disconnect(reference, container)
+                .map(|()| Reply::Done)
+                .map_err(Failure::from),
             _ => unreachable!(),
         }
     }

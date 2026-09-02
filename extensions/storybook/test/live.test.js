@@ -71,8 +71,13 @@ test('the shipped entrypoint connects and renders the complete playground over a
     () => calls.find((call) => call.call === 'interface_render'),
     `storybook never rendered; stderr=${stderr}`,
   );
+  const length = await until(
+    () => calls.find((call) => call.call === 'source_resize'),
+    `storybook never published its large source; stderr=${stderr}`,
+  );
   assert.deepEqual(calls[0], { call: 'interface_open_tab', with: { title: 'Storybook' } });
   assert.equal(rendered.with.frame.sequence, 1);
+  assert.deepEqual(length.with.mutation.Length, { source: 100, version: 1, rows: 100_000 });
   assert.ok(rendered.with.frame.patches.length > 250, 'the live frame does not contain the full component browser');
   assert.equal(
     rendered.with.frame.patches.filter((patch) => patch.Create?.tag === 'ListItemButton').length,

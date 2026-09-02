@@ -84,6 +84,28 @@ pub struct ImageSummary {
     pub created: i64,
 }
 
+/// Bounded, useful image inspection data. Environment values and arbitrary
+/// labels are intentionally not exposed through this inventory API.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImageDetails {
+    pub id: String,
+    pub references: Vec<String>,
+    pub created: String,
+    pub size: u64,
+    pub os: String,
+    pub architecture: String,
+    pub entrypoint: Vec<String>,
+    pub command: Vec<String>,
+    pub working_directory: String,
+    pub user: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePruneResult {
+    pub deleted: u64,
+    pub space_reclaimed: u64,
+}
+
 /// A local volume as an extension sees it. The daemon does not calculate
 /// recursive disk usage during inventory, so this deliberately carries no
 /// synthetic size.
@@ -149,6 +171,51 @@ pub struct PaneText {
     pub lines: Vec<String>,
     /// Whether older lines exist that this answer does not carry.
     pub truncated: bool,
+}
+
+pub const SEMANTIC_NODE_LIMIT: usize = 256;
+pub const SEMANTIC_DEPTH_LIMIT: usize = 32;
+pub const SEMANTIC_TEXT_LIMIT: usize = 256;
+pub const SEMANTIC_ACTION_VALUE_LIMIT: usize = 4096;
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PaneSemanticTree {
+    pub slot: String,
+    pub revision: u64,
+    pub root: SemanticNode,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct SemanticNode {
+    pub id: u64,
+    pub role: String,
+    pub label: Option<String>,
+    pub value: Option<String>,
+    pub disabled: bool,
+    /// Whether invoking this node performs an irreversible operation.
+    pub destructive: bool,
+    pub actions: Vec<SemanticActionKind>,
+    pub children: Vec<SemanticNode>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticActionKind {
+    Invoke,
+    Change,
+    Submit,
+    Toggle,
+    Expand,
+    Focus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PaneSemanticAction {
+    pub revision: u64,
+    pub node: u64,
+    pub action: SemanticActionKind,
+    pub value: Option<String>,
 }
 
 /// The maximum bytes one terminal-input call may inject.
@@ -393,24 +460,56 @@ pub trait ImageStore {
     /// # Errors
     /// Returns a host failure.
     fn pull(&self, reference: &str) -> Result<ImageSummary, HostError>;
+
+    fn inspect(&self, _reference: &str) -> Result<ImageDetails, HostError> {
+        Err(HostError::Unsupported("image inspection is unavailable".into()))
+    }
+
+    fn remove(&self, _reference: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("image removal is unavailable".into()))
+    }
+
+    fn prune(&self) -> Result<ImagePruneResult, HostError> {
+        Err(HostError::Unsupported("image pruning is unavailable".into()))
+    }
 }
 
 /// Reading and safely changing local volumes.
 pub trait VolumeStore {
-    fn list(&self) -> Result<Vec<VolumeSummary>, HostError> { Err(HostError::Unsupported("volume inventory is unavailable".into())) }
-    fn inspect(&self, _name: &str) -> Result<VolumeSummary, HostError> { Err(HostError::Unsupported("volume inspection is unavailable".into())) }
-    fn create(&self, _name: &str) -> Result<VolumeSummary, HostError> { Err(HostError::Unsupported("volume creation is unavailable".into())) }
-    fn remove(&self, _name: &str) -> Result<(), HostError> { Err(HostError::Unsupported("volume removal is unavailable".into())) }
+    fn list(&self) -> Result<Vec<VolumeSummary>, HostError> {
+        Err(HostError::Unsupported("volume inventory is unavailable".into()))
+    }
+    fn inspect(&self, _name: &str) -> Result<VolumeSummary, HostError> {
+        Err(HostError::Unsupported("volume inspection is unavailable".into()))
+    }
+    fn create(&self, _name: &str) -> Result<VolumeSummary, HostError> {
+        Err(HostError::Unsupported("volume creation is unavailable".into()))
+    }
+    fn remove(&self, _name: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("volume removal is unavailable".into()))
+    }
 }
 
 /// Reading and safely changing workspace-local networks.
 pub trait NetworkStore {
-    fn list(&self) -> Result<Vec<NetworkSummary>, HostError> { Err(HostError::Unsupported("network inventory is unavailable".into())) }
-    fn inspect(&self, _reference: &str) -> Result<NetworkSummary, HostError> { Err(HostError::Unsupported("network inspection is unavailable".into())) }
-    fn create(&self, _name: &str) -> Result<String, HostError> { Err(HostError::Unsupported("network creation is unavailable".into())) }
-    fn remove(&self, _reference: &str) -> Result<(), HostError> { Err(HostError::Unsupported("network removal is unavailable".into())) }
-    fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { Err(HostError::Unsupported("network connection is unavailable".into())) }
-    fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { Err(HostError::Unsupported("network disconnection is unavailable".into())) }
+    fn list(&self) -> Result<Vec<NetworkSummary>, HostError> {
+        Err(HostError::Unsupported("network inventory is unavailable".into()))
+    }
+    fn inspect(&self, _reference: &str) -> Result<NetworkSummary, HostError> {
+        Err(HostError::Unsupported("network inspection is unavailable".into()))
+    }
+    fn create(&self, _name: &str) -> Result<String, HostError> {
+        Err(HostError::Unsupported("network creation is unavailable".into()))
+    }
+    fn remove(&self, _reference: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("network removal is unavailable".into()))
+    }
+    fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("network connection is unavailable".into()))
+    }
+    fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("network disconnection is unavailable".into()))
+    }
 }
 
 /// The workspace's terminal surface.
@@ -442,6 +541,21 @@ pub trait TerminalSurface {
     /// # Errors
     /// Returns `HostError::Absent` when no pane is open under the slot.
     fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError>;
+
+    fn semantics(&self, _slot: &str) -> Result<PaneSemanticTree, HostError> {
+        Err(HostError::Unsupported("pane semantics are unavailable".into()))
+    }
+
+    fn semantic_action(&self, _slot: &str, _action: &PaneSemanticAction) -> Result<(), HostError> {
+        Err(HostError::Unsupported("pane semantic actions are unavailable".into()))
+    }
+
+    /// Additional domain authority required by a semantic action. Extension
+    /// surfaces default to their explicit semantic-control grant; native panes
+    /// override this from their product-owned registry.
+    fn semantic_requirement(&self, _slot: &str, _node: u64) -> Result<crate::Capability, HostError> {
+        Ok(crate::Capability::PaneSemanticControl)
+    }
 
     /// Writes raw bytes into a terminal pane, without appending a newline.
     fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {

@@ -79,6 +79,13 @@ impl Console {
             Request::Split { slot, division } => Self::split(window, slot, *division).map(Answer::Slot),
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
             Request::Read { slot, lines } => Self::read(window, slot, *lines).map(Answer::Text),
+            Request::Semantics { slot } => Self::semantics(window, slot).map(Answer::Semantics),
+            Request::SemanticRequirement { slot, node } => {
+                Self::semantic_requirement(window, slot, *node).map(Answer::Capability)
+            }
+            Request::SemanticAction { slot, action } => {
+                Self::semantic_action(window, slot, action).map(|()| Answer::Done)
+            }
             Request::Write { slot, contents } => Self::write(window, slot, contents).map(|()| Answer::Done),
             Request::ResizeGrid { slot, grid } => Self::resize_grid(window, slot, *grid).map(|()| Answer::Done),
             Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
@@ -183,6 +190,56 @@ impl Console {
             ))),
             Reading::Absent => Err(absent(slot)),
         }
+    }
+
+    fn surface_owner(window: &Rc<TermWin>, slot: &str) -> Result<String, HostError> {
+        let pane = Panes::at(window, slot).ok_or_else(|| absent(slot))?;
+        Slots::new(window)
+            .surface(&pane.content)
+            .map(|(_, extension, _)| extension)
+            .ok_or_else(|| HostError::Conflict(format!("{slot} is a terminal pane")))
+    }
+
+    fn semantics(window: &Rc<TermWin>, slot: &str) -> Result<hl_extension::PaneSemanticTree, HostError> {
+        if slot == "workspace" {
+            return Window::gallery(window)
+                .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+                .native_semantics(slot);
+        }
+        let extension = Self::surface_owner(window, slot)?;
+        Window::gallery(window)
+            .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+            .semantics(&extension, slot)
+    }
+
+    fn semantic_action(
+        window: &Rc<TermWin>,
+        slot: &str,
+        action: &hl_extension::PaneSemanticAction,
+    ) -> Result<(), HostError> {
+        if slot == "workspace" {
+            return Window::gallery(window)
+                .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+                .native_action(action);
+        }
+        let extension = Self::surface_owner(window, slot)?;
+        Window::gallery(window)
+            .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+            .semantic_action(&extension, action)
+    }
+
+    fn semantic_requirement(
+        window: &Rc<TermWin>,
+        slot: &str,
+        node: u64,
+    ) -> Result<hl_extension::Capability, HostError> {
+        if slot != "workspace" {
+            Self::surface_owner(window, slot)?;
+            return Ok(hl_extension::Capability::PaneSemanticControl);
+        }
+        Window::gallery(window)
+            .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+            .native_requirement(node)
     }
 
     fn write(window: &Rc<TermWin>, slot: &str, contents: &[u8]) -> Result<(), HostError> {

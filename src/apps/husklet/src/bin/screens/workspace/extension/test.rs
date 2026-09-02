@@ -95,10 +95,49 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_stopped_extension_keeps_its_widgets_and_says_so();
         a_structured_fault_reaches_lifecycle_on_the_toolkit_tick();
         a_rendered_button_reaches_the_sink();
+        semantics_are_redacted_and_actions_reject_stale_revisions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn semantics_are_redacted_and_actions_reject_stale_revisions() {
+    let mut fixture = Fixture::new();
+    let described = Element::column().child(
+        Element::password_entry(EventId::new("secret"))
+            .prop(hl_gui::Prop::Label, hl_gui::PropValue::text("Password"))
+            .prop(hl_gui::Prop::Value, hl_gui::PropValue::text("hunter2"))
+            .prop(hl_gui::Prop::Secret, hl_gui::PropValue::Flag(true)),
+    );
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let field = &tree.root.children[0].children[0];
+    assert_eq!(field.label.as_deref(), Some("Password"));
+    assert_eq!(field.value.as_deref(), Some("[redacted]"));
+    assert_eq!(field.actions, vec![hl_extension::SemanticActionKind::Change]);
+
+    fixture
+        .page
+        .semantic_action(&hl_extension::PaneSemanticAction {
+            revision: tree.revision,
+            node: field.id,
+            action: hl_extension::SemanticActionKind::Change,
+            value: Some("replacement".into()),
+        })
+        .expect("declared action");
+    assert!(matches!(
+        fixture.recorded.borrow().last(),
+        Some(Signal::Interaction(Event::Change { .. }))
+    ));
+    let stale = fixture.page.semantic_action(&hl_extension::PaneSemanticAction {
+        revision: tree.revision.saturating_sub(1),
+        node: field.id,
+        action: hl_extension::SemanticActionKind::Change,
+        value: None,
+    });
+    assert!(matches!(stale, Err(hl_extension::HostError::Conflict(_))));
 }
 
 fn a_structured_fault_reaches_lifecycle_on_the_toolkit_tick() {

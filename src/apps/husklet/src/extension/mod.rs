@@ -43,7 +43,7 @@ pub use host::{Audience, Events, Host, Order, Overrun, Plan, Report, Standing, S
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
-pub use registration::{Acquisition, Candidate};
+pub use registration::{Acquisition, Cancellation, Candidate};
 pub use resource::Resources;
 pub use roster::{described, Entry, Refusal, Roster, UpdateRefusal};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};

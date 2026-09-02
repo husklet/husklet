@@ -3,17 +3,28 @@
 # Everything needed to reach the host — the runtime, @husklet/react, React —
 # comes from the base; this image adds source and its own manifest.
 
-FROM husklet/react:latest
+ARG HUSKLET_REACT_IMAGE
+FROM ${HUSKLET_REACT_IMAGE}
+ARG HUSKLET_EXTENSION_VERSION
+ARG HUSKLET_REACT_VERSION
 
 WORKDIR /app
 COPY src ./src
 COPY README.md ./
+
+USER root
+COPY --chown=node:node extension.toml /etc/husklet/extension.toml
+RUN test -n "${HUSKLET_EXTENSION_VERSION}" \
+    && test -n "${HUSKLET_REACT_VERSION}" \
+    && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
+    && sed -i "s/^version = .*/version = \"${HUSKLET_EXTENSION_VERSION}\"/" /etc/husklet/extension.toml
+USER node
 
 CMD ["node", "/app/src/main.js"]
 
 # The manifest the host reads off the image. The fields are those of
 # hl_extension::manifest::Manifest; unknown fields are refused, not ignored.
 LABEL husklet.extension.protocol="1"
-COPY extension.toml /etc/husklet/extension.toml
+LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"
 # The label names where the manifest lives; the host reads the file.
 LABEL husklet.extension.manifest="/etc/husklet/extension.toml"

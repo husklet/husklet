@@ -35,10 +35,13 @@ pub use installation::{Disposition, Installation, Objection, Record, Stage, Summ
 pub use manifest::{
     Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
 };
+pub use port::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActionKind, SemanticNode};
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
-pub use subscription::{PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch};
+pub use subscription::{
+    PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch,
+};
 
 /// The host's opening frame, carrying this domain's grant.
 pub type Welcome = hl_rpc::Welcome<Capability>;

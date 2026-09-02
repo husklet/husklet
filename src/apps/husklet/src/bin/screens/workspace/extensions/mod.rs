@@ -21,8 +21,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
-use hl::extension::{Acquisition, Entry, Roster};
-use hl_extension::ExtensionName;
+use hl::extension::{Acquisition, Cancellation, Entry, Roster};
+use hl_extension::{ExtensionName, Stage};
 use hl_ws::storage::Directory;
 
 pub(crate) use console::Console;
@@ -44,7 +44,21 @@ pub type Surfaces = Rc<dyn Fn(&Entry) -> gtk::Widget>;
 ///
 /// The answer arrives on a channel because reading a manifest means reaching a
 /// container daemon, and the main loop must keep drawing while that happens.
-pub type Inspection = Rc<dyn Fn(&str) -> Receiver<Acquisition>>;
+pub struct PendingInspection {
+    pub events: Receiver<Acquisition>,
+    pub cancellation: Cancellation,
+}
+
+impl PendingInspection {
+    pub fn detached(events: Receiver<Acquisition>) -> Self {
+        Self {
+            events,
+            cancellation: Cancellation::default(),
+        }
+    }
+}
+
+pub type Inspection = Rc<dyn Fn(&str) -> PendingInspection>;
 
 /// The bundled extension replacing Husklet's legacy operational pages.
 ///
@@ -246,7 +260,7 @@ impl Shelf {
             .borrow()
             .entries()
             .iter()
-            .any(|entry| entry.name.as_str() == MANAGEMENT_EXTENSION);
+            .any(|entry| entry.name.as_str() == MANAGEMENT_EXTENSION && entry.stage == Stage::Duty);
         (self.reconcile)(managed);
     }
 

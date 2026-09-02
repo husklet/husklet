@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use hl_extension::port::{HostError, ImageStore, ImageSummary};
+use hl_extension::port::{HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary};
 
-use super::{failure, Bridge};
+use super::{Bridge, failure};
 
 /// The image port over the workspace's container daemon.
 pub struct ImageLibrary {
@@ -47,6 +47,51 @@ impl ImageStore for ImageLibrary {
             .into_iter()
             .find(|image| image.reference == wanted)
             .ok_or_else(|| HostError::Absent(format!("{reference} is not present after its pull")))
+    }
+
+    fn inspect(&self, reference: &str) -> Result<ImageDetails, HostError> {
+        let client = self.bridge.client();
+        let image = self
+            .bridge
+            .wait(client.images().inspect(reference))
+            .map_err(|error| failure(&error))?;
+        Ok(ImageDetails {
+            id: image.id,
+            references: image
+                .repo_tags
+                .into_iter()
+                .chain(image.repo_digests)
+                .take(128)
+                .collect(),
+            created: image.created,
+            size: u64::try_from(image.size).unwrap_or_default(),
+            os: image.os,
+            architecture: image.architecture,
+            entrypoint: image.config.entrypoint.into_iter().take(128).collect(),
+            command: image.config.cmd.into_iter().take(128).collect(),
+            working_directory: image.config.working_dir,
+            user: image.config.user,
+        })
+    }
+
+    fn remove(&self, reference: &str) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        self.bridge
+            .wait(client.images().remove(reference))
+            .map(|_| ())
+            .map_err(|error| failure(&error))
+    }
+
+    fn prune(&self) -> Result<ImagePruneResult, HostError> {
+        let client = self.bridge.client();
+        let result = self
+            .bridge
+            .wait(client.images().prune())
+            .map_err(|error| failure(&error))?;
+        Ok(ImagePruneResult {
+            deleted: u64::try_from(result.images_deleted.len()).unwrap_or(u64::MAX),
+            space_reclaimed: u64::try_from(result.space_reclaimed).unwrap_or_default(),
+        })
     }
 }
 

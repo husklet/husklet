@@ -32,6 +32,13 @@ pub enum Capability {
     /// `TerminalRead`: listing panes and reading what was typed into a shell
     /// are different kinds of access.
     TerminalOutput,
+    /// Observing bounded pane-change metadata. This reveals activity and stable
+    /// pane identities, but never terminal bytes or semantic values.
+    PaneObserve,
+    PaneSemanticRead,
+    PaneSemanticControl,
+    /// Installing, updating, enabling, disabling, or removing extensions.
+    ExtensionControl,
     FilesystemRead,
     FilesystemWrite,
     Interface,
@@ -56,6 +63,10 @@ impl Capability {
             Self::TerminalRead => "terminal-read",
             Self::TerminalControl => "terminal-control",
             Self::TerminalOutput => "terminal-output",
+            Self::PaneObserve => "pane-observe",
+            Self::PaneSemanticRead => "pane-semantic-read",
+            Self::PaneSemanticControl => "pane-semantic-control",
+            Self::ExtensionControl => "extension-control",
             Self::FilesystemRead => "filesystem-read",
             Self::FilesystemWrite => "filesystem-write",
             Self::Interface => "interface",
@@ -74,6 +85,8 @@ impl Capability {
                 | Self::VolumeWrite
                 | Self::NetworkWrite
                 | Self::TerminalControl
+                | Self::PaneSemanticControl
+                | Self::ExtensionControl
                 | Self::FilesystemWrite
         )
     }
@@ -104,6 +117,10 @@ impl Capability {
         Self::TerminalRead,
         Self::TerminalControl,
         Self::TerminalOutput,
+        Self::PaneObserve,
+        Self::PaneSemanticRead,
+        Self::PaneSemanticControl,
+        Self::ExtensionControl,
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::Interface,

@@ -11,7 +11,7 @@ pub(crate) use process::*;
 pub(crate) use resources::*;
 
 use poll::{spawn_overview_poller, Data, OverviewPoller};
-use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, Shelf, Surfaces};
+use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, PendingInspection, Shelf, Surfaces};
 use table::Table;
 
 /// Native operational pages retained only until the management extension is
@@ -121,12 +121,27 @@ impl<'a> Overview<'a> {
             Signal::Retry => host.accept(Order::Retry),
         });
         let (widget, page) = screens::workspace::extension::Interface::with_faults(deliveries, sink, faulted);
-        page.install();
+        let page = page.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_hexpand(true);
         holder.set_vexpand(true);
         holder.append(&widget);
         gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
+        let weak = Rc::downgrade(&page);
+        let semantics = Rc::new(move |slot: &str| {
+            weak.upgrade()
+                .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
+                .borrow()
+                .semantics(slot)
+        });
+        let weak = Rc::downgrade(&page);
+        let action = Rc::new(move |request: &hl_extension::PaneSemanticAction| {
+            weak.upgrade()
+                .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
+                .borrow()
+                .semantic_action(request)
+        });
+        gallery.enrol_semantics(name.as_str(), semantics, action);
         holder.upcast()
     }
 
@@ -180,7 +195,11 @@ impl<'a> Overview<'a> {
                 .as_ref()
                 .and_then(std::rc::Weak::upgrade)
                 .map_or_else(hl::extension::Events::default, |window| window.observer());
-            Self::surface(&held, &entry.name, providers, &port, events, &shown, faulted)
+            let surface = Self::surface(&held, &entry.name, providers, &port, events, &shown, faulted);
+            if let Some(window) = observed.as_ref().and_then(std::rc::Weak::upgrade) {
+                screens::workspace::terminal::PaneChooser::recover(&window, entry.name.as_str());
+            }
+            surface
         });
         let gallery_for_withdrawal = gallery.clone();
         let window = window.map(Rc::downgrade);
@@ -215,12 +234,17 @@ impl<'a> Overview<'a> {
         let held = workspace.clone();
         Rc::new(move |reference: &str| {
             let (answered, answer) = std::sync::mpsc::channel();
+            let cancellation = hl::extension::Cancellation::default();
+            let worker_cancellation = cancellation.clone();
             let workspace = held.clone();
             let reference = reference.to_owned();
             std::thread::spawn(move || {
-                hl::extension::Candidate::acquire(&workspace, &reference, &answered);
+                hl::extension::Candidate::acquire_cancellable(&workspace, &reference, &answered, &worker_cancellation);
             });
-            answer
+            PendingInspection {
+                events: answer,
+                cancellation,
+            }
         })
     }
 
@@ -246,10 +270,11 @@ impl<'a> Overview<'a> {
             (WorkspacePage::Networks, networks.widget.clone().upcast()),
             (WorkspacePage::Processes, ppane.upcast()),
         ];
-        let view = Rc::new(screens::workspace::View::new([
-            (WorkspacePage::Settings, self.settings().upcast()),
+        let semantics = screens::workspace::semantic::Registry::new("workspace");
+        let view = Rc::new(screens::workspace::View::with_semantics([
+            (WorkspacePage::Settings, self.settings(&semantics).upcast()),
             (WorkspacePage::Extensions, shelf.clone().upcast()),
-        ]));
+        ], semantics));
         let fallback = Rc::new(Fallback {
             view: Rc::downgrade(&view),
             pages: fallback_pages,
@@ -261,6 +286,7 @@ impl<'a> Overview<'a> {
         let (relay, errands) = hl::extension::Relay::open();
         let relay = Rc::new(relay);
         let gallery = Gallery::new();
+        gallery.enrol_native(view.semantic_registry());
         // The window looks its panes' interfaces up here, so it must be told
         // where they are before a saved layout is restored into it.
         if let Some(window) = self.window {

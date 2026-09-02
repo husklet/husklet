@@ -7,13 +7,13 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate};
 use hl_extension::{Grant, Summary, Update};
 
-use super::{moment, Inspection, Shelf};
+use super::{moment, Inspection, PendingInspection, Shelf};
 
 /// Style class on the field an image reference is typed into.
 pub const REFERENCE: &str = "hl-extension-reference";
@@ -27,6 +27,7 @@ pub const DECLINE: &str = "hl-extension-decline";
 pub const NOTICE: &str = "hl-extension-notice";
 /// Style class on the image acquisition progress view.
 pub const PROGRESS: &str = "hl-extension-progress";
+pub const CANCEL_ACQUISITION: &str = "hl-extension-cancel-acquisition";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
 pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
@@ -54,11 +55,13 @@ pub struct Catalogue {
     proposal: gtk::Box,
     notice: gtk::Label,
     progress: gtk::ProgressBar,
+    cancel: gtk::Button,
     /// The inspection in flight, if any. One at a time, because the field it
     /// was started from is the same field a second one would read.
-    pending: RefCell<Option<Receiver<Acquisition>>>,
+    pending: RefCell<Option<PendingInspection>>,
     /// What the last inspection found, waiting for an answer.
     candidate: RefCell<Option<Proposal>>,
+    semantics: super::super::semantic::Registry,
 }
 
 impl Catalogue {
@@ -75,6 +78,13 @@ impl Catalogue {
         progress.add_css_class(PROGRESS);
         progress.set_show_text(true);
         progress.set_visible(false);
+        let cancel = gtk::Button::with_label("Cancel download");
+        cancel.add_css_class(CANCEL_ACQUISITION);
+        cancel.set_visible(false);
+        let semantics = shelf.view().map_or_else(
+            || super::super::semantic::Registry::new("workspace"),
+            |view| view.semantic_registry(),
+        );
         let page = Rc::new(Self {
             widget,
             shelf: Rc::clone(shelf),
@@ -85,8 +95,10 @@ impl Catalogue {
             proposal,
             notice,
             progress,
+            cancel,
             pending: RefCell::new(None),
             candidate: RefCell::new(None),
+            semantics,
         });
         page.assemble();
         let weak = Rc::downgrade(&page);
@@ -107,6 +119,7 @@ impl Catalogue {
 
     /// Redraws the listing from what the roster now says.
     pub fn refresh(&self) {
+        self.semantics.remove_prefix("extensions/installed/");
         while let Some(child) = self.listing.first_child() {
             self.listing.remove(&child);
         }
@@ -117,7 +130,7 @@ impl Catalogue {
         }
         for entry in entries {
             self.listing
-                .append(&super::settings::Settings::page(&self.shelf, &entry));
+                .append(&super::settings::Settings::page(&self.shelf, &entry, &self.semantics));
         }
     }
 
@@ -135,7 +148,19 @@ impl Catalogue {
         self.reference.set_sensitive(false);
         self.inspect.set_sensitive(false);
         self.inspect.set_label("Reading…");
+        self.cancel.set_label("Cancel download");
+        self.cancel.set_sensitive(true);
+        self.cancel.set_visible(true);
         *self.pending.borrow_mut() = Some((self.inspection)(&reference));
+    }
+
+    pub fn cancel(&self) {
+        let pending = self.pending.borrow();
+        let Some(pending) = pending.as_ref() else { return };
+        pending.cancellation.cancel();
+        self.cancel.set_label("Cancelling…");
+        self.cancel.set_sensitive(false);
+        self.say("cancelling image acquisition");
     }
 
     /// Looks once for an inspection that has come back.
@@ -146,6 +171,16 @@ impl Catalogue {
         let Some(event) = self.received() else {
             return false;
         };
+        if self
+            .pending
+            .borrow()
+            .as_ref()
+            .is_some_and(|pending| pending.cancellation.is_cancelled())
+            && !matches!(event, Acquisition::Cancelled)
+        {
+            self.cancelled();
+            return true;
+        }
         match event {
             Acquisition::Inspecting => self.stage("checking local images"),
             Acquisition::Pulling {
@@ -158,6 +193,7 @@ impl Catalogue {
             Acquisition::Ready(candidate) => {
                 *self.pending.borrow_mut() = None;
                 self.progress.set_visible(false);
+                self.cancel.set_visible(false);
                 self.reference.set_sensitive(true);
                 self.inspect.set_sensitive(true);
                 self.inspect.set_label("Read another image");
@@ -185,13 +221,27 @@ impl Catalogue {
             Acquisition::Failed(reason) => {
                 *self.pending.borrow_mut() = None;
                 self.progress.set_visible(false);
+                self.cancel.set_visible(false);
                 self.reference.set_sensitive(true);
                 self.inspect.set_sensitive(true);
                 self.inspect.set_label("Retry");
                 self.say(&reason);
             }
+            Acquisition::Cancelled => {
+                self.cancelled();
+            }
         }
         true
+    }
+
+    fn cancelled(&self) {
+        *self.pending.borrow_mut() = None;
+        self.progress.set_visible(false);
+        self.cancel.set_visible(false);
+        self.reference.set_sensitive(true);
+        self.inspect.set_sensitive(true);
+        self.inspect.set_label("Retry");
+        self.say("image acquisition cancelled; nothing was installed");
     }
 
     /// Records the grant for the candidate on screen.
@@ -278,6 +328,15 @@ impl Catalogue {
         }
         self.proposal.append(&self.answer("Install"));
         self.proposal.set_visible(true);
+        let summary = format!("{} {} at {}", manifest.name, manifest.version, candidate.digest);
+        self.semantics.register(
+            "extensions/proposal/summary",
+            "dialog",
+            Some("Install extension"),
+            Some(super::super::semantic::Value::Public(&summary)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         *self.candidate.borrow_mut() = Some(Proposal::Install(candidate));
         self.say("this image asks for the capabilities above");
     }
@@ -320,12 +379,31 @@ impl Catalogue {
         }
         self.proposal.append(&self.answer("Accept update"));
         self.proposal.set_visible(true);
+        let summary = format!(
+            "{} {} {} to {} {}; added {}; removed {}",
+            update.name,
+            update.current_version,
+            update.current_digest,
+            update.candidate_version,
+            update.candidate_digest,
+            update.additional.len(),
+            update.removed.len()
+        );
+        self.semantics.register(
+            "extensions/proposal/summary",
+            "dialog",
+            Some("Update extension"),
+            Some(super::super::semantic::Value::Public(&summary)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         *self.candidate.borrow_mut() = Some(Proposal::Update { candidate, update });
         self.say("review the installed and candidate image changes before accepting");
     }
 
     /// The two buttons a candidate is answered with.
     fn answer(self: &Rc<Self>, accept: &str) -> gtk::Box {
+        use super::super::semantic::ActionKind;
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let install = gtk::Button::with_label(accept);
         install.add_css_class(CONSENT);
@@ -335,6 +413,24 @@ impl Catalogue {
         cancel.add_css_class(DECLINE);
         let page = Rc::clone(self);
         cancel.connect_clicked(move |_| page.decline());
+        let page = Rc::clone(self);
+        self.semantics.register(
+            "extensions/proposal/consent",
+            "button",
+            Some(accept),
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| page.consent()),
+        );
+        let page = Rc::clone(self);
+        self.semantics.register(
+            "extensions/proposal/cancel",
+            "button",
+            Some("Cancel"),
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| page.decline()),
+        );
         row.append(&install);
         row.append(&cancel);
         row
@@ -342,6 +438,7 @@ impl Catalogue {
 
     /// Drops the candidate and everything drawn about it.
     fn forget(&self) {
+        self.semantics.remove_prefix("extensions/proposal/");
         *self.candidate.borrow_mut() = None;
         while let Some(child) = self.proposal.first_child() {
             self.proposal.remove(&child);
@@ -354,7 +451,7 @@ impl Catalogue {
     fn received(&self) -> Option<Acquisition> {
         let pending = self.pending.borrow();
         let waiting = pending.as_ref()?;
-        match waiting.try_recv() {
+        match waiting.events.try_recv() {
             Ok(answer) => Some(answer),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(Acquisition::Failed("the image was never read".to_owned())),
@@ -386,6 +483,8 @@ impl Catalogue {
     fn say(&self, said: &str) {
         self.notice.set_text(said);
         self.notice.set_visible(true);
+        self.semantics
+            .update("extensions/notice", super::super::semantic::Value::Public(said), false);
     }
 
     /// The line a test reads to see what the page said.
@@ -396,17 +495,66 @@ impl Catalogue {
 
     /// Lays the page out and puts its polling on the main loop.
     fn assemble(self: &Rc<Self>) {
+        use super::super::semantic::{ActionKind, Value};
         self.widget.append(&text("Installed", "dhead"));
         self.widget.append(&self.listing);
         self.widget.append(&text("Register an image", "dhead"));
         self.reference.add_css_class(REFERENCE);
         self.reference.set_placeholder_text(Some("image reference"));
+        self.semantics.register(
+            "extensions/reference",
+            "textbox",
+            Some("Extension image"),
+            Some(Value::Public("")),
+            &[ActionKind::Change, ActionKind::Focus],
+            {
+                let input = self.reference.clone();
+                Rc::new(move |action, value| match action {
+                    ActionKind::Change => input.set_text(value.unwrap_or_default()),
+                    ActionKind::Focus => {
+                        input.grab_focus();
+                    }
+                    _ => {}
+                })
+            },
+        );
+        {
+            let registry = self.semantics.clone();
+            self.reference.connect_changed(move |input| {
+                let value = input.text();
+                registry.update(
+                    "extensions/reference",
+                    Value::Public(value.as_str()),
+                    !input.is_sensitive(),
+                );
+            });
+        }
         self.widget.append(&self.reference);
         self.inspect.add_css_class(INSPECT);
         let page = Rc::clone(self);
         self.inspect.connect_clicked(move |_| page.inspect());
+        let inspect = Rc::clone(self);
+        self.semantics.register(
+            "extensions/inspect",
+            "button",
+            Some("Read manifest"),
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| inspect.inspect()),
+        );
+        self.semantics.register(
+            "extensions/notice",
+            "status",
+            Some("Extension status"),
+            Some(Value::Public("")),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         self.widget.append(&self.inspect);
         self.widget.append(&self.progress);
+        let page = Rc::clone(self);
+        self.cancel.connect_clicked(move |_| page.cancel());
+        self.widget.append(&self.cancel);
         self.widget.append(&self.proposal);
         self.widget.append(&self.notice);
         self.tick();

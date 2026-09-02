@@ -33,8 +33,18 @@ component can report.
 npm install
 npm test          # node --test, no framework
 
-docker build -t husklet/storybook .    # FROM husklet/react:latest
+docker build \
+  --build-arg HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:0.1.0 \
+  --build-arg HUSKLET_REACT_VERSION=0.1.0 \
+  --build-arg HUSKLET_EXTENSION_VERSION=0.1.0 \
+  -t husklet/storybook .
 ```
 
 The host starts the image, mounts a socket at `HUSKLET_EXTENSION_SOCKET`, and
 reads the manifest off the image label; `src/main.js` connects and renders.
+## Large DataTable story
+
+The DataTable preview is backed by 100,000 logical records through Husklet's
+bounded Source window protocol. Its controls change producer-side sorting,
+filtering, and ready/loading/empty/error states. Scrolling or resizing requests
+another window; no story creates one React node per record.

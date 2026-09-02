@@ -44,7 +44,7 @@ fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
         eprintln!("skipped: no display connection");
         return;
     }
-    let scenarios: [(&str, fn()); 6] = [
+    let scenarios: [(&str, fn()); 7] = [
         (
             "a_model_describes_the_whole_source_while_holding_a_viewport",
             a_model_describes_the_whole_source_while_holding_a_viewport,
@@ -69,6 +69,10 @@ fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
             "a_window_arriving_before_a_length_is_still_reachable",
             a_window_arriving_before_a_length_is_still_reachable,
         ),
+        (
+            "a_real_column_view_resizes_without_materializing_the_logical_source",
+            a_real_column_view_resizes_without_materializing_the_logical_source,
+        ),
     ];
     let mut ran = 0;
     for (name, scenario) in scenarios {
@@ -77,6 +81,67 @@ fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
         ran += 1;
     }
     assert_eq!(ran, scenarios.len(), "every scenario must actually execute");
+}
+
+fn a_real_column_view_resizes_without_materializing_the_logical_source() {
+    const STORY_ROWS: u64 = 100_000;
+    let rows = Rows::new(SOURCE);
+    rows.resize(Version::new(1), STORY_ROWS);
+    let selection = gtk::NoSelection::new(Some(rows.clone()));
+    let view = gtk::ColumnView::new(Some(selection));
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, object| {
+        let item = object.downcast_ref::<gtk::ListItem>().expect("list item");
+        item.set_child(Some(&gtk::Label::new(None)));
+    });
+    factory.connect_bind(|_, object| {
+        let item = object.downcast_ref::<gtk::ListItem>().expect("list item");
+        let label = item.child().and_downcast::<gtk::Label>().expect("label");
+        let value = item.item().and_downcast::<gtk::StringObject>().expect("row");
+        label.set_text(&value.string());
+    });
+    view.append_column(&gtk::ColumnViewColumn::new(Some("Record"), Some(factory)));
+    let scroll = gtk::ScrolledWindow::builder().child(&view).build();
+    let window = gtk::Window::builder()
+        .child(&scroll)
+        .default_width(640)
+        .default_height(320)
+        .build();
+    window.present();
+    settle();
+    let compact = descendants(window.clone().upcast_ref()).len();
+    window.set_default_size(1200, 720);
+    settle();
+    let expanded = descendants(window.clone().upcast_ref()).len();
+
+    assert_eq!(u64::from(rows.n_items()), STORY_ROWS);
+    assert!(compact < 1_000, "a 100k-row view materialized {compact} GTK widgets");
+    assert!(expanded < 2_000, "resizing materialized {expanded} GTK widgets");
+    assert!(rows.held() <= hl_gui::RowCache::CAPACITY);
+    window.close();
+}
+
+fn settle() {
+    let context = gtk::glib::MainContext::default();
+    for _ in 0..20 {
+        while context.pending() {
+            context.iteration(false);
+        }
+    }
+}
+
+fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(widget) = pending.pop() {
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            pending.push(current.clone());
+            found.push(current);
+        }
+    }
+    found
 }
 
 fn a_model_describes_the_whole_source_while_holding_a_viewport() {

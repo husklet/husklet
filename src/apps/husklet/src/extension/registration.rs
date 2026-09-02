@@ -15,6 +15,10 @@
 use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::sync::mpsc::Sender;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use hl_client::model::{CreateContainer, InspectImage};
 use hl_extension::port::HostError;
@@ -30,6 +34,29 @@ use crate::config::WorkspaceConfig;
 /// Four times the manifest limit leaves room for the archive framing around a
 /// document at the limit and refuses anything that is not a manifest at all.
 pub const ARCHIVE_LIMIT: usize = 4 * Manifest::LIMIT;
+const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+const CLEANUP_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Cooperative authority to stop one image acquisition.
+#[derive(Clone, Debug, Default)]
+pub struct Cancellation(Arc<AtomicBool>);
+
+impl Cancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+    fn check(&self) -> Result<(), String> {
+        if self.is_cancelled() {
+            Err("cancelled".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// An image inspected far enough to ask a person about it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,6 +87,7 @@ pub enum Acquisition {
     ReadingManifest,
     Ready(Candidate),
     Failed(String),
+    Cancelled,
 }
 
 impl Candidate {
@@ -69,9 +97,19 @@ impl Candidate {
     /// closing the window stops displaying an acquisition but must not panic a
     /// worker that is already inside the daemon.
     pub fn acquire(workspace: &WorkspaceConfig, reference: &str, progress: &Sender<Acquisition>) {
-        let result = Self::acquire_inner(workspace, reference, progress);
+        Self::acquire_cancellable(workspace, reference, progress, &Cancellation::default());
+    }
+
+    pub fn acquire_cancellable(
+        workspace: &WorkspaceConfig,
+        reference: &str,
+        progress: &Sender<Acquisition>,
+        cancellation: &Cancellation,
+    ) {
+        let result = Self::acquire_inner(workspace, reference, progress, cancellation);
         let event = match result {
             Ok(candidate) => Acquisition::Ready(candidate),
+            Err(_) if cancellation.is_cancelled() => Acquisition::Cancelled,
             Err(reason) => Acquisition::Failed(reason),
         };
         let _ = progress.send(event);
@@ -90,33 +128,37 @@ impl Candidate {
     /// document is not a manifest this host speaks.
     pub fn read(workspace: &WorkspaceConfig, reference: &str) -> Result<Self, String> {
         let (sent, _ignored) = std::sync::mpsc::channel();
-        Self::acquire_inner(workspace, reference, &sent)
+        Self::acquire_inner(workspace, reference, &sent, &Cancellation::default())
     }
 
     fn acquire_inner(
         workspace: &WorkspaceConfig,
         reference: &str,
         progress: &Sender<Acquisition>,
+        cancellation: &Cancellation,
     ) -> Result<Self, String> {
+        cancellation.check()?;
         let socket = crate::runtime::domain::Domain::new(workspace)
             .ensure(workspace)
             .map_err(|error| error.to_string())?;
         let bridge = Bridge::new(socket).map_err(|error| error.to_string())?;
         let client = bridge.client();
         let _ = progress.send(Acquisition::Inspecting);
-        let inspection: InspectImage = match bridge.wait(client.images().inspect(reference)) {
+        cancellation.check()?;
+        let inspection: InspectImage = match cancellable(&bridge, cancellation, client.images().inspect(reference))? {
             Ok(inspection) => inspection,
             Err(error) if matches!(super::failure(&error), HostError::Absent(_)) => {
-                pull(&bridge, reference, progress)?;
-                bridge
-                    .wait(client.images().inspect(reference))
+                pull(&bridge, reference, progress, cancellation)?;
+                cancellable(&bridge, cancellation, client.images().inspect(reference))?
                     .map_err(|error| error.to_string())?
             }
             Err(error) => return Err(error.to_string()),
         };
+        cancellation.check()?;
         let _ = progress.send(Acquisition::ReadingManifest);
         let path = manifest_path(&inspection.config.labels);
-        let archive = extract(&bridge, reference, &path)?;
+        let archive = extract(&bridge, reference, &path, cancellation)?;
+        cancellation.check()?;
         let manifest = Manifest::parse(&document(&archive)?, PROTOCOL).map_err(|invalid| invalid.to_string())?;
         Ok(Self {
             reference: reference.to_owned(),
@@ -129,14 +171,18 @@ impl Candidate {
 /// Pulls one registry reference, forwarding only progress the daemon actually
 /// supplied. The daemon embeds registry failures in an otherwise successful
 /// HTTP stream, so every record must be inspected.
-fn pull(bridge: &Bridge, reference: &str, progress: &Sender<Acquisition>) -> Result<(), String> {
+fn pull(
+    bridge: &Bridge,
+    reference: &str,
+    progress: &Sender<Acquisition>,
+    cancellation: &Cancellation,
+) -> Result<(), String> {
     let (name, tag) = split(reference);
     let client = bridge.client();
-    let mut stream = bridge
-        .wait(client.images().pull(name, tag, None))
-        .map_err(|error| error.to_string())?;
+    let mut stream =
+        cancellable(bridge, cancellation, client.images().pull(name, tag, None))?.map_err(|error| error.to_string())?;
     loop {
-        let record = bridge.wait(stream.next()).map_err(|error| error.to_string())?;
+        let record = cancellable(bridge, cancellation, stream.next())?.map_err(|error| error.to_string())?;
         let Some(record) = record else { return Ok(()) };
         if let Some(reason) = record.error {
             return Err(reason);
@@ -165,21 +211,39 @@ fn split(reference: &str) -> (&str, Option<&str>) {
 }
 
 /// Copies one path out of a container made from `reference`, and removes it again.
-fn extract(bridge: &Bridge, reference: &str, path: &str) -> Result<Vec<u8>, String> {
+fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancellation) -> Result<Vec<u8>, String> {
     let client = bridge.client();
     let request = CreateContainer {
         image: reference.to_owned(),
         ..CreateContainer::default()
     };
-    let created = bridge
-        .wait(client.containers().create(&request, None))
+    let created = cancellable(bridge, cancellation, client.containers().create(&request, None))?
         .map_err(|error| error.to_string())?;
-    let archive = bridge.wait(read(bridge, &created.id, path));
+    let archive = cancellable(bridge, cancellation, read(bridge, &created.id, path))?;
     // The container is removed whatever the read did: one left behind for every
     // image a person looked at and did not install is a leak nobody would
     // connect to this screen.
-    let _ = bridge.wait(client.containers().remove(&created.id, true, true));
+    let _ = bridge.wait(tokio::time::timeout(
+        CLEANUP_BOUND,
+        client.containers().remove(&created.id, true, true),
+    ));
     archive
+}
+
+fn cancellable<F: std::future::Future>(
+    bridge: &Bridge,
+    cancellation: &Cancellation,
+    work: F,
+) -> Result<F::Output, String> {
+    bridge.wait(async {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                answer = &mut work => return Ok(answer),
+                () = tokio::time::sleep(CANCEL_POLL) => cancellation.check()?,
+            }
+        }
+    })
 }
 
 /// Streams the archive the daemon returns, bounded by [`ARCHIVE_LIMIT`].

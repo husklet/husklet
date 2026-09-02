@@ -9,7 +9,9 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'workspace-events']);
+/** Reference-counted host subscriptions, keyed by session and snapshot topic. */
+const subscriptions = new WeakMap();
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -17,12 +19,13 @@ const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'netwo
  * The socket path comes from `HUSKLET_EXTENSION_SOCKET`, which the host mounts
  * into the container; an extension is never asked to know where it is.
  */
-export async function connect({ path, onRows, onReply, onEvent, pendingLimit, timeout } = {}) {
+export async function connect({ path, onRows, onReply, onEvent, onEventError, pendingLimit, timeout } = {}) {
   let session;
   session = await Session.connect(path, {
     onRows,
     pendingLimit,
     timeout,
+    onEventError,
     onEvent: (payload, channel) => {
       deliver(session, payload);
       if (onEvent) onEvent(payload, channel);
@@ -32,6 +35,7 @@ export async function connect({ path, onRows, onReply, onEvent, pendingLimit, ti
     },
   });
   attached.set(session, new Set());
+  subscriptions.set(session, new Map());
   return session;
 }
 
@@ -46,7 +50,47 @@ export function workspace(session) {
     if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     return done(call, { topic });
   };
-  return {
+  const states = subscriptions.get(session) ?? new Map();
+  subscriptions.set(session, states);
+  const subscribe = async (topic) => {
+    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    let state = states.get(topic);
+    if (!state) {
+      state = { references: 0, active: false, operation: Promise.resolve() };
+      states.set(topic, state);
+    }
+    state.references += 1;
+    const operation = state.operation.then(async () => {
+      if (!state.active) {
+        await subscription('event_subscribe', topic);
+        state.active = true;
+      }
+    });
+    state.operation = operation.catch(() => {});
+    try {
+      await operation;
+    } catch (error) {
+      state.references -= 1;
+      if (state.references === 0 && !state.active) states.delete(topic);
+      throw error;
+    }
+  };
+  const unsubscribe = async (topic) => {
+    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    const state = states.get(topic);
+    if (!state || state.references === 0) return;
+    state.references -= 1;
+    const operation = state.operation.then(async () => {
+      if (state.references === 0 && state.active) {
+        await subscription('event_unsubscribe', topic);
+        state.active = false;
+      }
+      if (state.references === 0 && !state.active) states.delete(topic);
+    });
+    state.operation = operation.catch(() => {});
+    await operation;
+  };
+  const api = {
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
     inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
@@ -81,6 +125,9 @@ export function workspace(session) {
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+      inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
+      remove: (reference) => done('image_remove', { reference }),
+      prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
       list: async () => expect(await session.call('volume_list'), 'volumes'),
@@ -103,6 +150,13 @@ export function workspace(session) {
       split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
       spawn: (slot, command) => done('terminal_spawn', { slot, command }),
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+      semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+      act: (slot, action) => {
+        if (action?.value != null && new TextEncoder().encode(action.value).byteLength > 4096) {
+          throw new RangeError('pane semantic action value exceeds 4096 bytes');
+        }
+        return done('pane_semantic_action', { slot, action });
+      },
       writeInput: (slot, input) => {
         const contents = typeof input === 'string' ? new TextEncoder().encode(input) : Uint8Array.from(input);
         if (contents.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
@@ -123,9 +177,18 @@ export function workspace(session) {
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
     },
-    subscribe: (topic) => subscription('event_subscribe', topic),
-    unsubscribe: (topic) => subscription('event_unsubscribe', topic),
+    subscribe,
+    unsubscribe,
   };
+  api.watchPaneChanges = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('pane change listener must be a function');
+    const off = session.onEvent((event) => {
+      if (event?.snapshot === 'pane_changes') listener(event.of);
+    });
+    try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('pane-changes'); };
+  };
+  return api;
 }
 
 /**
@@ -209,7 +272,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
+    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     workspaceEvents: ['key', 'focus', 'pointer'],

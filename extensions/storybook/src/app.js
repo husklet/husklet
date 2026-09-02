@@ -26,11 +26,12 @@ import {
 import { component, grouped, notes } from './catalogue.js';
 import { OPENING, defaults, spaced } from './defaults.js';
 import { amountOf, lengthValue, modeOf, rows } from './editors.js';
+import { LargeDataTableStory } from './large-table.js';
 
 const { createElement: h, useMemo, useState } = React;
 
 /** The whole playground. */
-export function Playground() {
+export function Playground({ largeSource } = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
@@ -49,7 +50,7 @@ export function Playground() {
     { gap: 0, grow: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
-    h(Preview, { key: 'preview', name: selected, opened }),
+    h(Preview, { key: 'preview', name: selected, opened, largeSource }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
     h(Inspector, {
       key: 'inspector',
@@ -86,7 +87,7 @@ export function Sidebar({ families, selected, onSelect }) {
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened }) {
+export function Preview({ name, opened, largeSource }) {
   return h(
     Column,
     { grow: true, gap: 2, pad: 4 },
@@ -94,7 +95,9 @@ export function Preview({ name, opened }) {
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      h(components[name], present(opened.props), ...opened.children.map(child)),
+      name === 'DataTable' && largeSource
+        ? h(LargeDataTableStory, { source: largeSource })
+        : h(components[name], present(opened.props), ...opened.children.map(child)),
     ),
   );
 }

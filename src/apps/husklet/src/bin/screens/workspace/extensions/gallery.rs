@@ -24,6 +24,8 @@ struct Exhibit {
     home: glib::WeakRef<gtk::Box>,
     providers: Vec<hl_extension::PaneProvider>,
     selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
+    semantics: Option<Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>>,
+    action: Option<Rc<dyn Fn(&hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
 }
 
 /// One choice shown by a terminal pane, tied to the extension that owns it.
@@ -41,13 +43,66 @@ pub struct Provider {
 /// gallery is a place to look something up, not a reason for a widget to
 /// outlive the window it was drawn in.
 #[derive(Clone, Default)]
-pub struct Gallery(Rc<RefCell<HashMap<String, Exhibit>>>);
+pub struct Gallery(
+    Rc<RefCell<HashMap<String, Exhibit>>>,
+    Rc<RefCell<Option<super::super::semantic::Registry>>>,
+);
 
 impl Gallery {
     /// An empty gallery.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn enrol_native(&self, registry: super::super::semantic::Registry) {
+        self.1.replace(Some(registry));
+    }
+
+    pub fn native_semantics(&self, slot: &str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError> {
+        if slot != "workspace" {
+            return Err(hl_extension::HostError::Absent(slot.to_owned()));
+        }
+        let registry = self
+            .1
+            .borrow()
+            .clone()
+            .ok_or_else(|| hl_extension::HostError::Absent("workspace has no native semantic pane".into()))?;
+        let snapshot = registry.snapshot();
+        Ok(hl_extension::PaneSemanticTree {
+            slot: snapshot.slot,
+            revision: snapshot.revision,
+            root: native_node(snapshot.root),
+            truncated: snapshot.truncated,
+        })
+    }
+
+    pub fn native_action(&self, action: &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError> {
+        let registry = self
+            .1
+            .borrow()
+            .clone()
+            .ok_or_else(|| hl_extension::HostError::Absent("workspace has no native semantic pane".into()))?;
+        registry
+            .act(&super::super::semantic::Action {
+                revision: action.revision,
+                node: action.node,
+                action: native_action(action.action),
+                value: action.value.clone(),
+            })
+            .map_err(|refusal| match refusal {
+                super::super::semantic::Refusal::Absent(node) => hl_extension::HostError::Absent(node.to_string()),
+                other => hl_extension::HostError::Conflict(format!("native semantic action refused: {other:?}")),
+            })
+    }
+
+    pub fn native_requirement(&self, node: u64) -> Result<hl_extension::Capability, hl_extension::HostError> {
+        self.1
+            .borrow()
+            .as_ref()
+            .ok_or_else(|| hl_extension::HostError::Absent("workspace has no native semantic pane".into()))?
+            .requirement(node)
+            .map_err(|refusal| hl_extension::HostError::Absent(format!("native semantic node refused: {refusal:?}")))
     }
 
     /// Records where one extension's interface is, replacing whatever was
@@ -65,8 +120,50 @@ impl Gallery {
             home: home.downgrade(),
             providers: providers.to_vec(),
             selected,
+            semantics: None,
+            action: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
+    }
+
+    pub fn enrol_semantics(
+        &self,
+        extension: &str,
+        semantics: Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>,
+        action: Rc<dyn Fn(&hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>,
+    ) {
+        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+            exhibit.semantics = Some(semantics);
+            exhibit.action = Some(action);
+        }
+    }
+
+    pub fn semantics(
+        &self,
+        extension: &str,
+        slot: &str,
+    ) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError> {
+        let held = self.0.borrow();
+        let endpoint = held
+            .get(extension)
+            .and_then(|entry| entry.semantics.clone())
+            .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
+        drop(held);
+        endpoint(slot)
+    }
+
+    pub fn semantic_action(
+        &self,
+        extension: &str,
+        action: &hl_extension::PaneSemanticAction,
+    ) -> Result<(), hl_extension::HostError> {
+        let held = self.0.borrow();
+        let endpoint = held
+            .get(extension)
+            .and_then(|entry| entry.action.clone())
+            .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
+        drop(held);
+        endpoint(action)
     }
 
     /// Stops advertising an extension whose lifecycle page is being removed.
@@ -157,6 +254,43 @@ impl Gallery {
             .borrow()
             .get(extension)
             .is_some_and(|exhibit| exhibit.interface.upgrade().is_some())
+    }
+}
+
+fn native_node(node: super::super::semantic::Node) -> hl_extension::SemanticNode {
+    hl_extension::SemanticNode {
+        id: node.id,
+        role: node.role,
+        label: node.label,
+        value: node.value,
+        disabled: node.disabled,
+        destructive: node.destructive,
+        actions: node.actions.into_iter().map(wire_action).collect(),
+        children: node.children.into_iter().map(native_node).collect(),
+    }
+}
+
+fn wire_action(action: super::super::semantic::ActionKind) -> hl_extension::SemanticActionKind {
+    use super::super::semantic::ActionKind;
+    match action {
+        ActionKind::Invoke => hl_extension::SemanticActionKind::Invoke,
+        ActionKind::Change => hl_extension::SemanticActionKind::Change,
+        ActionKind::Submit => hl_extension::SemanticActionKind::Submit,
+        ActionKind::Toggle => hl_extension::SemanticActionKind::Toggle,
+        ActionKind::Expand => hl_extension::SemanticActionKind::Expand,
+        ActionKind::Focus => hl_extension::SemanticActionKind::Focus,
+    }
+}
+
+fn native_action(action: hl_extension::SemanticActionKind) -> super::super::semantic::ActionKind {
+    use super::super::semantic::ActionKind;
+    match action {
+        hl_extension::SemanticActionKind::Invoke => ActionKind::Invoke,
+        hl_extension::SemanticActionKind::Change => ActionKind::Change,
+        hl_extension::SemanticActionKind::Submit => ActionKind::Submit,
+        hl_extension::SemanticActionKind::Toggle => ActionKind::Toggle,
+        hl_extension::SemanticActionKind::Expand => ActionKind::Expand,
+        hl_extension::SemanticActionKind::Focus => ActionKind::Focus,
     }
 }
 
