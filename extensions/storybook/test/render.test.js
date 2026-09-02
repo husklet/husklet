@@ -128,7 +128,7 @@ test('the preview demonstrates declared interactions with a live bounded console
     patches.some(
       (patch) => 'SetProp' in patch
         && patch.SetProp.prop === 'Label'
-        && patch.SetProp.value.Text === 'Invoke received · value=null',
+        && patch.SetProp.value.Text === '#1 Invoke received · value=null',
     ),
     'a real preview event never reaches the visible console',
   );
@@ -141,7 +141,36 @@ test('interaction handlers follow the catalogue and payload descriptions stay bo
   handlers.onFocus({ focused: true });
   assert.deepEqual(seen, [['Focus', { focused: true }]]);
   assert.equal(interactionDetail({ key: 'a', pressed: true, private: 'not shown' }), 'key="a" pressed=true');
-  assert.equal(interactionDetail({ value: 'x'.repeat(500) }).length, 240);
+  const long = interactionDetail({ value: 'x'.repeat(500) });
+  assert.ok(long.length <= 240);
+  assert.ok(long.endsWith('…"'), 'a long value is not visibly marked as truncated');
+  assert.equal(
+    interactionDetail({ rows: Array.from({ length: 100_000 }, (_, index) => ({ index, private: 'not shown' })) }),
+    'rows=[{"index":0,"private":"not shown"},{"index":1,"private":"not shown"},{"index":2,"private":"not shown"},"… 99997 more"]',
+  );
+});
+
+test('the interaction console preserves a bounded sequence and can be cleared', () => {
+  const stage = host();
+  const opened = defaults('Button');
+  const first = stage.render(h(Preview, { name: 'Button', opened, triggers: ['Invoke'] }));
+  const preview = node(first.patches, 'Button', 'Button');
+  for (let index = 0; index < 7; index += 1) {
+    assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: preview, id: `${preview}:Invoke`, value: index }));
+  }
+  const labels = stage.frames.flatMap((frame) => frame.patches)
+    .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
+    .map((patch) => patch.SetProp.value.Text);
+  assert.ok(labels.includes('#7 Invoke received · value=6'), 'the newest interaction is absent');
+
+  const latest = stage.frames.at(-1).patches;
+  const removed = latest.filter((patch) => 'Remove' in patch).length;
+  assert.ok(removed > 0, 'the oldest interaction was not evicted from the bounded timeline');
+  const clear = node(stage.frames.flatMap((frame) => frame.patches), 'Button', 'Clear');
+  assert.ok(clear, 'the populated console has no clear action');
+  const before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: clear, id: `${clear}:Invoke`, value: null }));
+  assert.ok(node(stage.since(before), 'InlineMessage', 'Interact with the preview to inspect onInvoke.'));
 });
 
 test('selecting a component in the sidebar renders that component', () => {

@@ -6,6 +6,7 @@
 
 import React from 'react';
 import {
+  Button,
   Column,
   Entry,
   Heading,
@@ -30,7 +31,9 @@ import { amountOf, lengthValue, modeOf, rows } from './editors.js';
 import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 
-const { createElement: h, useMemo, useState } = React;
+const { createElement: h, useMemo, useRef, useState } = React;
+
+const INTERACTION_HISTORY = 5;
 
 /** The whole playground. */
 export function Playground({ largeSource } = {}) {
@@ -53,7 +56,7 @@ export function Playground({ largeSource } = {}) {
     { gap: 0, grow: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
-    h(Preview, { key: 'preview', name: selected, opened, largeSource, triggers: contract?.triggers ?? [] }),
+    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, triggers: contract?.triggers ?? [] }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
     h(Inspector, {
       key: 'inspector',
@@ -98,11 +101,12 @@ export function Sidebar({ families, selected, onSelect }) {
 
 /** The selected component, alive, with the properties currently set on it. */
 export function Preview({ name, opened, largeSource, triggers = [] }) {
-  const [interaction, setInteraction] = useState(null);
+  const [interactions, setInteractions] = useState([]);
+  const sequence = useRef(0);
   const handlers = interactionProps(triggers, (trigger, event) => {
-    setInteraction({ name, trigger, detail: interactionDetail(event) });
+    const interaction = { sequence: ++sequence.current, trigger, detail: interactionDetail(event) };
+    setInteractions((current) => [...current, interaction].slice(-INTERACTION_HISTORY));
   });
-  const currentInteraction = interaction?.name === name ? interaction : null;
   return h(
     Column,
     { grow: true, gap: 2, pad: 4 },
@@ -119,13 +123,33 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
     ...(triggers.length === 0
       ? []
       : [
-          h(InlineMessage, {
-            key: 'interaction-console',
-            label: currentInteraction === null
-              ? `Interact with the preview to inspect ${triggers.map((trigger) => `on${trigger}`).join(', ')}.`
-              : `${currentInteraction.trigger} received${currentInteraction.detail ? ` · ${currentInteraction.detail}` : ''}`,
-            tone: currentInteraction === null ? 'neutral' : 'positive',
-          }),
+          h(
+            Column,
+            { key: 'interaction-console', gap: 1 },
+            h(
+              Row,
+              { key: 'heading', align: 'center', gap: 1 },
+              h(Text, { key: 'title', label: 'Recent interactions', color: 'text-dim', grow: true }),
+              ...(interactions.length === 0
+                ? []
+                : [h(Button, { key: 'clear', label: 'Clear', variant: 'ghost', onInvoke: () => setInteractions([]) })]),
+            ),
+            ...(interactions.length === 0
+              ? [
+                  h(InlineMessage, {
+                    key: 'empty',
+                    label: `Interact with the preview to inspect ${triggers.map((trigger) => `on${trigger}`).join(', ')}.`,
+                    tone: 'neutral',
+                  }),
+                ]
+              : interactions.map((interaction) =>
+                  h(InlineMessage, {
+                    key: interaction.sequence,
+                    label: `#${interaction.sequence} ${interaction.trigger} received${interaction.detail ? ` · ${interaction.detail}` : ''}`,
+                    tone: 'positive',
+                  }),
+                )),
+          ),
         ]),
   );
 }
@@ -141,9 +165,32 @@ export function interactionDetail(event) {
   const fields = ['value', 'rows', 'key', 'pressed', 'focused', 'phase', 'x', 'y', 'button'];
   const detail = fields
     .filter((field) => event[field] !== undefined)
-    .map((field) => `${field}=${JSON.stringify(event[field])}`)
+    .map((field) => `${field}=${JSON.stringify(boundedValue(event[field]))}`)
     .join(' ');
   return detail.slice(0, 240);
+}
+
+/** Bound payload work as well as its visible result: events are extension-controlled input. */
+function boundedValue(value, depth = 0) {
+  if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 79)}…` : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= 2) return '…';
+  if (Array.isArray(value)) {
+    const shown = value.slice(0, 3).map((entry) => boundedValue(entry, depth + 1));
+    return value.length > shown.length ? [...shown, `… ${value.length - shown.length} more`] : shown;
+  }
+  const shown = {};
+  let count = 0;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    count += 1;
+    if (count <= 4) shown[key] = boundedValue(value[key], depth + 1);
+    if (count === 5) {
+      shown['…'] = 'more';
+      break;
+    }
+  }
+  return shown;
 }
 
 /** One default child, as an element. */
