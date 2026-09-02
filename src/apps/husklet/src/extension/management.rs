@@ -69,13 +69,19 @@ impl ExtensionStore for ExtensionManagement {
             .ok_or_else(|| HostError::Absent(name.to_string()))
     }
 
-    fn enable(&self, name: &str) -> Result<(), HostError> {
-        let result = self.roster()?.enable(&Self::name(name)?).map_err(failure);
+    fn enable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .enable_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
         self.changed(result)
     }
 
-    fn disable(&self, name: &str) -> Result<(), HostError> {
-        let result = self.roster()?.disable(&Self::name(name)?).map_err(failure);
+    fn disable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .disable_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
         self.changed(result)
     }
 

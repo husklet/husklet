@@ -570,10 +570,10 @@ pub trait ExtensionStore {
     fn inspect(&self, _name: &str) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension inspection is unavailable".into()))
     }
-    fn enable(&self, _name: &str) -> Result<(), HostError> {
+    fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension enable is unavailable".into()))
     }
-    fn disable(&self, _name: &str) -> Result<(), HostError> {
+    fn disable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension disable is unavailable".into()))
     }
     fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {

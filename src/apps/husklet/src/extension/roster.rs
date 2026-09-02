@@ -213,6 +213,11 @@ impl<S: Storage> Roster<S> {
         Ok(())
     }
 
+    pub fn enable_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        self.require_digest(name, image_digest)?;
+        self.enable(name)
+    }
+
     /// Marks an extension as one whose sidecar should stay down. The grant
     /// survives, so enabling it again asks nobody anything.
     ///
@@ -227,6 +232,25 @@ impl<S: Storage> Roster<S> {
             return Err(fault.into());
         }
         Ok(())
+    }
+
+    pub fn disable_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        self.require_digest(name, image_digest)?;
+        self.disable(name)
+    }
+
+    fn require_digest(&self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        let current = self.entries().into_iter().find(|entry| entry.name == *name);
+        if current.as_ref().map(|entry| entry.image_digest.as_str()) == Some(image_digest) {
+            Ok(())
+        } else {
+            Err(Objection::Changed(name.clone()).into())
+        }
+    }
+
+    pub fn retry_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        self.require_digest(name, image_digest)?;
+        self.retry(name)
     }
 
     /// Clears a fault and puts the extension back on duty.
@@ -438,10 +462,46 @@ mod tests {
         let asked = manifest("sample", &[Capability::Interface]);
         let mut roster = opened(temporary.path());
         roster.register(&asked, "sha256:new", &asked.capabilities, 7).expect("registered");
-
         assert!(roster.remove_if_digest(&asked.name, "sha256:old").is_err());
         assert_eq!(roster.entries()[0].image_digest, "sha256:new");
         assert_eq!(opened(temporary.path()).entries()[0].image_digest, "sha256:new");
+    }
+
+    #[test]
+    fn stale_state_change_cannot_control_a_reinstalled_digest() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut roster = opened(temporary.path());
+        roster.register(&asked, "sha256:new", &asked.capabilities, 7).expect("registered");
+        assert!(roster.enable_if_digest(&asked.name, "sha256:old").is_err());
+        assert!(roster.disable_if_digest(&asked.name, "sha256:old").is_err());
+        assert_eq!(roster.stage(&asked.name), Stage::Standby);
+    }
+
+    #[test]
+    fn delayed_enable_loses_to_a_concurrent_reinstallation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut initial = opened(temporary.path());
+        initial.register(&asked, "sha256:old", &asked.capabilities, 7).expect("registered");
+        let roster = std::sync::Arc::new(std::sync::Mutex::new(initial));
+        let replaced = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker_roster = roster.clone();
+        let worker_barrier = replaced.clone();
+        let worker_name = asked.name.clone();
+        let worker_manifest = asked.clone();
+        let worker = std::thread::spawn(move || {
+            let mut roster = worker_roster.lock().unwrap();
+            roster.remove(&worker_name).unwrap();
+            roster
+                .register(&worker_manifest, "sha256:new", &worker_manifest.capabilities, 8)
+                .unwrap();
+            worker_barrier.wait();
+        });
+        replaced.wait();
+        assert!(roster.lock().unwrap().enable_if_digest(&asked.name, "sha256:old").is_err());
+        worker.join().unwrap();
+        assert_eq!(opened(temporary.path()).stage(&asked.name), Stage::Standby);
     }
 
     #[test]

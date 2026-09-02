@@ -151,15 +151,13 @@ test('extension inventory is bounded and every lifecycle mutation requires confi
   assert.equal(byName('husklet_extension_inspect').inputSchema.safeParse({ name: '../escape' }).success, false);
   for (const action of ['enable', 'disable', 'remove']) {
     assert.equal(byName(`husklet_extension_${action}`).inputSchema.safeParse({ name: 'workspace-manager' }).success, false);
-    const input = action === 'remove'
-      ? { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}`, confirm: true }
-      : { name: 'workspace-manager', confirm: true };
+    const input = { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}`, confirm: true };
     await byName(`husklet_extension_${action}`).run(input);
   }
   await byName('husklet_extension_list').run({});
   await byName('husklet_extension_inspect').run({ name: 'workspace-manager' });
   assert.deepEqual(calls, [
-    ['extensions.enable', 'workspace-manager'], ['extensions.disable', 'workspace-manager'],
+    ['extensions.enable', 'workspace-manager', `sha256:${'a'.repeat(64)}`], ['extensions.disable', 'workspace-manager', `sha256:${'a'.repeat(64)}`],
     ['extensions.remove', 'workspace-manager', `sha256:${'a'.repeat(64)}`], ['extensions.list'], ['extensions.inspect', 'workspace-manager'],
   ]);
 });
@@ -674,7 +672,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
-      if (name === 'extension_list') return { reply: 'extensions', with: [{ name: 'manager', image_digest: 'sha256:abc', status: 'standby' }] };
+      if (name === 'extension_list') return { reply: 'extensions', with: [{ name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' }] };
       if (name === 'extension_disable') return { reply: 'done' };
       if (name === 'extension_acquisition_start') return { reply: 'extension_acquisition_job', with: { job: 'job-live' } };
       if (name === 'extension_acquisition_status') return { reply: 'extension_acquisition', with: { job: 'job-live', reference: 'example:1', revision: 3, state: 'ready', candidate: { name: 'example', version: '1', image_digest: 'sha256:def', requested: ['interface'] }, error: null } };
@@ -726,8 +724,8 @@ test('a real MCP client lists strict tools and calls through the React session c
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
   const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
-  assert.deepEqual(JSON.parse(extensions.content[0].text), [{ name: 'manager', image_digest: 'sha256:abc', status: 'standby' }]);
-  await client.callTool({ name: 'husklet_extension_disable', arguments: { name: 'manager', confirm: true } });
+  assert.deepEqual(JSON.parse(extensions.content[0].text), [{ name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' }]);
+  await client.callTool({ name: 'husklet_extension_disable', arguments: { name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, confirm: true } });
   const acquired = await client.callTool({ name: 'husklet_extension_acquire', arguments: { reference: 'example:1', confirm: true } });
   assert.equal(JSON.parse(acquired.content[0].text).job, 'job-live');
   const candidate = await client.callTool({ name: 'husklet_extension_acquisition', arguments: { job: 'job-live' } });
@@ -767,7 +765,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(calls, [
     ['workspace_info', undefined],
     ['extension_list', undefined],
-    ['extension_disable', { name: 'manager' }],
+    ['extension_disable', { name: 'manager', image_digest: `sha256:${'a'.repeat(64)}` }],
     ['extension_acquisition_start', { reference: 'example:1' }],
     ['extension_acquisition_status', { job: 'job-live' }],
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],

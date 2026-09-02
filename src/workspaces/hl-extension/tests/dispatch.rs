@@ -660,11 +660,11 @@ impl ExtensionStore for Host {
             status: "duty".into(),
         })
     }
-    fn enable(&self, _name: &str) -> Result<(), HostError> {
+    fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.enable");
         Ok(())
     }
-    fn disable(&self, _name: &str) -> Result<(), HostError> {
+    fn disable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.disable");
         Ok(())
     }
@@ -814,11 +814,17 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionRead,
         ),
         (
-            Request::ExtensionEnable { name: "sample".into() },
+            Request::ExtensionEnable {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             Capability::ExtensionControl,
         ),
         (
-            Request::ExtensionDisable { name: "sample".into() },
+            Request::ExtensionDisable {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             Capability::ExtensionControl,
         ),
         (
@@ -1145,18 +1151,16 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
 }
 
 #[test]
-fn extension_removal_refuses_a_partial_digest_before_host_authority() {
+fn extension_controls_refuse_partial_digests_before_host_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionControl], &[]);
-    assert!(session
-        .dispatch(
-            &Request::ExtensionRemove {
-                name: "sample".into(),
-                image_digest: "sha256:abc".into(),
-            },
-            &services(&host),
-        )
-        .is_err());
+    for request in [
+        Request::ExtensionEnable { name: "sample".into(), image_digest: "sha256:abc".into() },
+        Request::ExtensionDisable { name: "sample".into(), image_digest: String::new() },
+        Request::ExtensionRemove { name: "sample".into(), image_digest: "sha256:abc".into() },
+    ] {
+        assert!(session.dispatch(&request, &services(&host)).is_err());
+    }
     assert!(host.ledger.reached().is_empty());
 }
 

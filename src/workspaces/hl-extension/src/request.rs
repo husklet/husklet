@@ -59,9 +59,11 @@ pub enum Request {
     },
     ExtensionEnable {
         name: String,
+        image_digest: String,
     },
     ExtensionDisable {
         name: String,
+        image_digest: String,
     },
     ExtensionRemove {
         name: String,

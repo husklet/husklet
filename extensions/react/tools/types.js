@@ -324,8 +324,8 @@ export interface WorkspaceApi {
   extensions: {
     list(): Promise<ExtensionSummary[]>;
     inspect(name: string): Promise<ExtensionSummary>;
-    enable(name: string): Promise<void>;
-    disable(name: string): Promise<void>;
+    enable(name: string, imageDigest: string): Promise<void>;
+    disable(name: string, imageDigest: string): Promise<void>;
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;

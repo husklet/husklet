@@ -475,8 +475,14 @@ impl Session {
         match request {
             Request::ExtensionList => Ok(Reply::Extensions(port.list()?)),
             Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
-            Request::ExtensionEnable { name } => port.enable(name).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ExtensionDisable { name } => port.disable(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionEnable { name, image_digest } => {
+                immutable_digest(image_digest, "extension image")?;
+                port.enable(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ExtensionDisable { name, image_digest } => {
+                immutable_digest(image_digest, "extension image")?;
+                port.disable(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ExtensionRemove { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;
                 port.remove(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
