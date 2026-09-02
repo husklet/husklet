@@ -2421,7 +2421,6 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_jmp_ibtc(hl_x64_asm *a
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    hl_x64_store_gs_imm32(a, TL_DIRECT_JMP_IBTC_MISS, OFF_JCC_IBTC_MISS);
 
     /* A direct JMP has a translation-time constant target just like the taken JCC guard above. Keep the
        generation-owned global pair -- SMC, fork and cache rotation already invalidate it atomically -- but
@@ -2446,6 +2445,15 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_jmp_ibtc(hl_x64_asm *a
     hl_x64_pand(a, 0, 4);                     // hit only while irq == 0
 
     hl_x64_movdqa_xmm(a, 3, 0);
+    /* Publish the typed miss only on the helper arm. Leaving it set on a hit makes a later dispatcher
+       crossing consume a stale direct-JMP miss against an unrelated RIP. Derive 0-on-hit/2-on-miss from
+       the existing all-ones/zero mask without touching guest flags. */
+    hl_x64_mov_imm64(a, HL_X64_RAX, TL_DIRECT_JMP_IBTC_MISS);
+    hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX);
+    hl_x64_pandn(a, 0, 1);
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 0);
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_JCC_IBTC_MISS);
+    hl_x64_movdqa_xmm(a, 0, 3);
     translit_helper_lea(a, HL_X64_RAX, translit_direct_jmp_ibtc_stub_entry, 1);
     hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX);
     hl_x64_pandn(a, 0, 1);                    // miss/IRQ helper
@@ -7394,6 +7402,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     run_block(context, &cpu, source_block);
     if (scenario == 109) {
         result = cpu.r[0] == 42 && cpu.rip == target + 5 && cpu.reason == R_BRANCH &&
+                         cpu.jcc_ibtc_miss == 0 &&
                          translit_flags_in(&cpu) == expected_flags &&
                          __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before
                      ? 0
@@ -7405,7 +7414,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
             if (cpu.r[reg] != expected) result = 180 + (int)reg;
         }
     } else {
-        result = cpu.r[0] == 42 && cpu.rip == target + 5 &&
+        result = cpu.r[0] == 42 && cpu.rip == target + 5 && cpu.jcc_ibtc_miss == 0 &&
                          __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before
                      ? 0
                      : 159;
