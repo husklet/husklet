@@ -241,9 +241,8 @@ fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancella
     // The container is removed whatever the read did: one left behind for every
     // image a person looked at and did not install is a leak nobody would
     // connect to this screen.
-    let _ = bridge.wait(async {
-        tokio::time::timeout(CLEANUP_BOUND, client.containers().remove(&created.id, true, true)).await
-    });
+    let _ = bridge
+        .wait(async { tokio::time::timeout(CLEANUP_BOUND, client.containers().remove(&created.id, true, true)).await });
     archive
 }
 
@@ -350,7 +349,9 @@ mod tests {
         let config = serde_json::to_vec(&serde_json::json!({
             "architecture": "arm64", "os": "linux",
             "config": {
-                "Cmd": ["/never-run"],
+                "Entrypoint": ["/opt/husklet/extension"],
+                "Cmd": ["--serve"],
+                "User": "65532:65532",
                 "Labels": {
                     "husklet.extension.manifest": "/etc/husklet/extension.toml",
                     "husklet.extension.protocol": "1"
@@ -433,6 +434,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_real_daemon_candidate_is_inspected_copied_and_removed_without_starting() {
+        use super::super::sidecar::{Image, SidecarSpec, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
         use hl_client::model::EventQuery;
         use hl_container::{Config, Containers, Persistence};
         use hl_daemon::Daemon;
@@ -488,6 +490,42 @@ mod tests {
         assert_eq!(candidate.manifest.name.to_string(), "daemon-candidate");
         assert_eq!(candidate.manifest.version, "1.2.3");
         assert!(!candidate.digest.is_empty());
+
+        let inspection = client.images().inspect(&candidate.digest).await.unwrap();
+        assert_eq!(inspection.os, "linux");
+        assert_eq!(inspection.architecture, "arm64");
+        assert_eq!(inspection.config.entrypoint, ["/opt/husklet/extension"]);
+        assert_eq!(inspection.config.user, "65532:65532");
+        let image = Image::from_inspection(candidate.digest.clone(), &inspection);
+        let credential = root.path().join("credentials/daemon-candidate.sock");
+        let spec = SidecarSpec::new(
+            &candidate.manifest,
+            &candidate.manifest.capabilities,
+            &image,
+            &credential,
+        );
+        let request = spec.request();
+        let host = request.host_config.expect("sidecar host policy");
+        assert_eq!(request.image, candidate.digest);
+        assert_eq!(request.entrypoint, Some(vec!["/opt/husklet/extension".to_owned()]));
+        assert_eq!(request.user.as_deref(), Some("65532:65532"));
+        assert_eq!(request.env, Some(vec![format!("{SOCKET_VARIABLE}={SOCKET_TARGET}")]));
+        assert_eq!(host.network_mode, "none");
+        assert_eq!(host.mounts.len(), 1);
+        assert_eq!(host.mounts[0].source, credential.to_string_lossy());
+        assert_eq!(host.mounts[0].target, SOCKET_TARGET);
+        assert_eq!(request.labels.get(SIGNATURE_LABEL), Some(&spec.signature()));
+        let ungranted = SidecarSpec::new(
+            &candidate.manifest,
+            &hl_extension::Grant::default(),
+            &image,
+            &credential,
+        );
+        assert_ne!(
+            spec.signature(),
+            ungranted.signature(),
+            "consent is part of sidecar identity"
+        );
         assert!(
             client.containers().list(true).await.unwrap().is_empty(),
             "inspection container leaked"
