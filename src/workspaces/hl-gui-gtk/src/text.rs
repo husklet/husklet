@@ -104,6 +104,9 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::FlameGraph {
         return content::flames(widget, content);
     }
+    if tag == Tag::MemoryMap {
+        return content::regions(widget, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }

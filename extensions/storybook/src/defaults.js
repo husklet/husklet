@@ -73,6 +73,7 @@ const BY_TAG = {
   Chart: { label: 'Load' },
   Sparkline: { value: '18,22,19,31,28,35,42,39' },
   FlameGraph: { value: '120\tcompiler::parse\n74\tcompiler::check\n31\tcompiler::emit' },
+  MemoryMap: { value: '0000000000400000-0000000000410000\tr-xp\t65536\t/bin/app' },
   Badge: { label: '3' },
   Chip: { label: 'tag', variant: 'outline' },
   Toast: { label: 'Saved', tone: 'positive' },

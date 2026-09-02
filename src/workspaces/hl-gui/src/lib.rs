@@ -32,7 +32,7 @@ mod size;
 mod style;
 
 pub use builder::Surface;
-pub use component::{FlameFrame, HexSource, HexView};
+pub use component::{FlameFrame, HexSource, HexView, MemoryRegion};
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
     Version,
@@ -62,3 +62,6 @@ pub const SPARKLINE_SAMPLE_LIMIT: usize = 64;
 
 /// Maximum number of profile frames retained by a [`Tag::FlameGraph`].
 pub const FLAME_GRAPH_FRAME_LIMIT: usize = 64;
+
+/// Maximum number of address regions retained by a [`Tag::MemoryMap`].
+pub const MEMORY_MAP_REGION_LIMIT: usize = 128;

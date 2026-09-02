@@ -136,12 +136,32 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         sparkline_projects_bounded_samples_into_semantics();
         file_browser_keeps_its_semantic_role();
         flame_graph_projects_profile_frames_into_semantics();
+        memory_map_projects_exact_regions_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn memory_map_projects_exact_regions_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::memory_map([
+        hl_gui::MemoryRegion::new(0x1000, 0x2000, "r-xp", "/bin/demo").expect("region"),
+        hl_gui::MemoryRegion::new(0x3000, 0x5000, "rw-p", "[heap]").expect("region"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let map = &tree.root.children[0];
+    assert_eq!(map.role, "MemoryMap");
+    assert_eq!(
+        map.value.as_deref(),
+        Some(
+            "0000000000001000-0000000000002000\tr-xp\t4096\t/bin/demo\n0000000000003000-0000000000005000\trw-p\t8192\t[heap]"
+        )
+    );
+    assert!(map.actions.is_empty());
 }
 
 fn file_browser_keeps_its_semantic_role() {

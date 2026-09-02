@@ -164,6 +164,7 @@ export const {
   Chart,
   Sparkline,
   FlameGraph,
+  MemoryMap,
   DiffViewer,
   DiffLine,
   StackTrace,

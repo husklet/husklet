@@ -35,6 +35,34 @@ impl FlameFrame {
     }
 }
 
+/// One non-empty virtual address region in a process map.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryRegion {
+    start: u64,
+    end: u64,
+    permissions: String,
+    mapping: String,
+}
+
+impl MemoryRegion {
+    /// Makes a region. Reversed/empty ranges and malformed permissions are omitted.
+    #[must_use]
+    pub fn new(start: u64, end: u64, permissions: impl Into<String>, mapping: impl Into<String>) -> Option<Self> {
+        let permissions = permissions.into();
+        let valid_permissions = !permissions.is_empty()
+            && permissions.len() <= 4
+            && permissions
+                .bytes()
+                .all(|byte| matches!(byte, b'r' | b'w' | b'x' | b'p' | b's' | b'-'));
+        (start < end && valid_permissions).then_some(Self {
+            start,
+            end,
+            permissions,
+            mapping: mapping.into().replace(['\t', '\n', '\r'], " "),
+        })
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -292,6 +320,27 @@ impl Element {
         Self::new(Tag::FlameGraph).value(value)
     }
 
+    /// A bounded process address map with exact ranges and permissions.
+    #[must_use]
+    pub fn memory_map(regions: impl IntoIterator<Item = MemoryRegion>) -> Self {
+        let value = regions
+            .into_iter()
+            .take(crate::MEMORY_MAP_REGION_LIMIT)
+            .map(|region| {
+                format!(
+                    "{:016x}-{:016x}\t{}\t{}\t{}",
+                    region.start,
+                    region.end,
+                    region.permissions,
+                    region.end - region.start,
+                    region.mapping
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::MemoryMap).value(value)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -301,7 +350,7 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlameFrame, HexSource, HexView};
+    use super::{FlameFrame, HexSource, HexView, MemoryRegion};
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -383,5 +432,36 @@ mod tests {
         );
         assert!(!value.contains('\t') || value.lines().all(|line| line.matches('\t').count() == 1));
         assert!(value.contains("worker 0"));
+    }
+
+    #[test]
+    fn memory_map_rejects_invalid_regions_and_has_an_independent_ceiling() {
+        assert!(MemoryRegion::new(9, 9, "rw-p", "heap").is_none());
+        assert!(MemoryRegion::new(1, 2, "danger", "bad").is_none());
+        let regions = (0..200).filter_map(|index| {
+            let start = index * 4096;
+            MemoryRegion::new(start, start + 4096, "r-xp", format!("segment\t{index}"))
+        });
+        let element = Element::memory_map(regions);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("memory map value");
+        assert_eq!(
+            value.lines().count(),
+            128,
+            "the public region ceiling is a fixed contract"
+        );
+        assert!(value.starts_with("0000000000000000-0000000000001000\tr-xp\t4096\tsegment 0"));
     }
 }

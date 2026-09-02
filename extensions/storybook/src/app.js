@@ -44,6 +44,7 @@ import { BINARY_STORY, BinaryInspectionStory } from './binary-inspection.js';
 import { METRICS_STORY, ResourceMetricsStory } from './resource-metrics.js';
 import { FILE_BROWSER_STORY, FileBrowserStory } from './file-browser.js';
 import { PROFILE_STORY, ProfileInspectionStory } from './profile-inspection.js';
+import { MEMORY_STORY, MemoryInspectionStory } from './memory-inspection.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -59,7 +60,8 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
     || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
     || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY
     || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
-    || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY;
+    || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
+    || selected === MEMORY_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -96,6 +98,7 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, { key: MEMORY_STORY, label: MEMORY_STORY, selected: selected === MEMORY_STORY, onInvoke: () => onSelect(MEMORY_STORY) }),
       h(ListItemButton, { key: PROFILE_STORY, label: PROFILE_STORY, selected: selected === PROFILE_STORY, onInvoke: () => onSelect(PROFILE_STORY) }),
       h(ListItemButton, {
         key: FILE_BROWSER_STORY,
@@ -211,7 +214,9 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      name === PROFILE_STORY
+      name === MEMORY_STORY
+        ? h(MemoryInspectionStory)
+        : name === PROFILE_STORY
         ? h(ProfileInspectionStory)
         : name === FILE_BROWSER_STORY && fileSource
         ? h(FileBrowserStory)

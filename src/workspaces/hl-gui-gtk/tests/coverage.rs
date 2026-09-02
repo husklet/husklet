@@ -96,11 +96,39 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     json_is_selectable_string_safe_and_depth_bounded();
     hex_view_is_selectable_and_monospaced();
     flame_graph_is_bounded_selectable_and_proportional();
+    memory_map_is_bounded_selectable_and_columnar();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn memory_map_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let map = session.producer.create(Tag::MemoryMap);
+    session.producer.append(NodeId::ROOT, map);
+    let value = (0..150)
+        .map(|index| {
+            format!(
+                "{index:016x}-{end:016x}\tr-xp\t4096\tsegment-{index}",
+                end = index + 4096
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(map, Prop::Value, PropValue::text(value));
+    session.flush().expect("memory map renders");
+    let widget = session.tagged(Tag::MemoryMap).expect("memory map widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels.len(), 128 * 4, "128 regions each retain four native columns");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert_eq!(labels[1].text(), "r-xp");
+    assert_eq!(labels[3].text(), "segment-0");
 }
 
 fn flame_graph_is_bounded_selectable_and_proportional() {
@@ -877,6 +905,7 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::LogView => Aspect::Value,
         Tag::Sparkline => Aspect::Value,
         Tag::FlameGraph => Aspect::Value,
+        Tag::MemoryMap => Aspect::Value,
         _ => structural(tag),
     }
 }

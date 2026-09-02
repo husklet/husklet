@@ -4563,6 +4563,35 @@ export interface FlameGraphProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface MemoryMapProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 export interface DiffViewerProps extends NodeProps {
   children?: ReactNode;
   /** marks an action as irreversible so automation requires confirmation */
@@ -4830,6 +4859,7 @@ export const Video: ComponentType<VideoProps>;
 export const Chart: ComponentType<ChartProps>;
 export const Sparkline: ComponentType<SparklineProps>;
 export const FlameGraph: ComponentType<FlameGraphProps>;
+export const MemoryMap: ComponentType<MemoryMapProps>;
 export const DiffViewer: ComponentType<DiffViewerProps>;
 export const DiffLine: ComponentType<DiffLineProps>;
 export const StackTrace: ComponentType<StackTraceProps>;
@@ -5021,8 +5051,8 @@ export interface WorkspaceApi {
   extensions: {
     list(): Promise<ExtensionSummary[]>;
     inspect(name: string): Promise<ExtensionSummary>;
-    enable(name: string): Promise<void>;
-    disable(name: string): Promise<void>;
+    enable(name: string, imageDigest: string): Promise<void>;
+    disable(name: string, imageDigest: string): Promise<void>;
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
