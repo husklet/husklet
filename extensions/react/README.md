@@ -86,7 +86,7 @@ version really supports. Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
 delete the workspace hosting it. The `unavailable` section names remaining
-areas such as extension snapshots and drag/drop events;
+areas such as drag/drop events;
 those names deliberately are not callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send. Interface handlers
 receive bounded key, focus, and pointer details, while the credit-controlled
