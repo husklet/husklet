@@ -12,6 +12,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const socketPath = join(directory, 'host.sock');
   const calls = [];
   const requests = [];
+  const received = [];
   let peer;
   let tearingDown = false;
   const server = net.createServer((socket) => {
@@ -26,6 +27,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
+        received.push(frame);
         const name = frame.payload?.call;
         if (!name) continue;
         calls.push(name);
@@ -81,7 +83,25 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
     const beforeExecutions = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 13, kind: KIND.event, payload: invocation(requests, 'Executions') }));
-    await until(() => requests.filter((request) => request.call === 'interface_render_at').length > beforeExecutions);
+    await until(() => requests.some((request) => request.call === 'event_subscribe' && request.with.topic === 'executions'));
+    const eventStart = received.length;
+    peer.write(encode({ channel: 77, kind: KIND.event, payload: { snapshot: 'executions', of: {
+      executions: [
+        { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
+        { id: 'e2', container_id: 'c1', running: true, exit_code: 0, pid: 42, command: ['live-command'], user: 'root' },
+      ], truncated: true,
+    } } }));
+    await until(() => received.some((frame) => frame.channel === 77 && frame.kind === KIND.credit)
+      && requests.some((request) => request.call === 'interface_render_at'
+        && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'live-command')));
+    const delivered = received.slice(eventStart);
+    const renderIndex = delivered.findIndex((frame) => frame.payload?.call === 'interface_render_at'
+      && frame.payload.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'live-command'));
+    const creditIndex = delivered.findIndex((frame) => frame.channel === 77 && frame.kind === KIND.credit);
+    assert.ok(renderIndex >= 0 && creditIndex > renderIndex, 'credit follows delivery of the observed state');
+    assert.ok(requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'The host execution catalogue was truncated at its safety limit.')));
+    assert.ok(requests.filter((request) => request.call === 'interface_render_at').length > beforeExecutions);
     peer.write(encode({ channel: 14, kind: KIND.event, payload: invocation(requests, 'Details') }));
     await until(() => calls.includes('execution_inspect') && requests.some((request) =>
       request.call === 'source_resize_at' && request.with.mutation.Length?.source === 203));
@@ -92,6 +112,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Confirm removal')));
     peer.write(encode({ channel: 17, kind: KIND.event, payload: invocation(requests, 'Confirm removal') }));
     await until(() => calls.includes('execution_remove'));
+    peer.write(encode({ channel: 18, kind: KIND.event, payload: invocation(requests, 'Images') }));
+    await until(() => requests.some((request) => request.call === 'event_unsubscribe' && request.with.topic === 'executions'));
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;

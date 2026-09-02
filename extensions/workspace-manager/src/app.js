@@ -22,6 +22,23 @@ export function WorkspaceManager({ api, selections, containerDetails, executionD
     return listing.executions;
   }, [api]);
   const executions = useResource(listExecutions, initial.executions);
+  useEffect(() => {
+    if (section !== 'executions' || typeof api.watchExecutions !== 'function') return undefined;
+    let disposed = false;
+    let stop = null;
+    void api.watchExecutions((listing) => {
+      if (disposed) return;
+      setExecutionsTruncated(listing.truncated);
+      executions.replace(listing.executions);
+    }).then((dispose) => {
+      if (disposed) void dispose();
+      else stop = dispose;
+    }).catch(() => { /* Explicit Refresh remains available when observation is unsupported. */ });
+    return () => {
+      disposed = true;
+      if (stop) void stop();
+    };
+  }, [api, section, executions.replace]);
   useEffect(() => selections?.subscribe((event) => {
     if (SECTIONS.includes(event?.pane_provider)) setSection(event.pane_provider);
     if (event?.snapshot === 'containers') void containers.reload();
@@ -401,6 +418,7 @@ function useResource(loader, initial) {
     setLoading(true);
     try { setData(await loader()); setError(null); } catch (cause) { setError(cause); } finally { setLoading(false); }
   }, [loader]);
+  const replace = useCallback((value) => { setData(value); setError(null); setLoading(false); }, []);
   useEffect(() => { if (initial === undefined) void reload(); }, [initial, reload]);
-  return { data, loading, error, reload };
+  return { data, loading, error, reload, replace };
 }

@@ -19,6 +19,33 @@ test('the test host receives overview and every resource navigation choice', () 
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
 });
 
+test('execution observation is scoped to its page and replaces inventory without polling', async () => {
+  const calls = [];
+  let publish;
+  const observed = {
+    ...api,
+    watchExecutions: async (listener) => {
+      calls.push('subscribe');
+      publish = listener;
+      return async () => calls.push('unsubscribe');
+    },
+  };
+  const stage = host();
+  stage.render(h(WorkspaceManager, { api: observed, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
+  assert.deepEqual(calls, []);
+  invoke(stage, 'Executions'); await settled();
+  assert.deepEqual(calls, ['subscribe']);
+  publish({ executions: [{ id: 'live', container_id: 'c1', running: true, exit_code: 0, pid: 9, command: ['live-command'], user: '' }], truncated: true });
+  await settled();
+  assert.ok(labelled(stage, 'live-command'));
+  assert.ok(labelled(stage, 'The host execution catalogue was truncated at its safety limit.'));
+  invoke(stage, 'Images'); await settled();
+  assert.deepEqual(calls, ['subscribe', 'unsubscribe']);
+  publish({ executions: [{ id: 'late', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['late-command'], user: '' }], truncated: false });
+  await settled();
+  assert.equal(labelled(stage, 'late-command'), undefined, 'disposed observation ignores late delivery');
+});
+
 test('image removal and prune require an explicit confirmation step', async () => {
   const calls = [];
   const controlled = { images: {
@@ -309,9 +336,11 @@ function labelled(stage, label) {
 }
 
 function invoke(stage, label) {
-  const node = labelled(stage, label)?.SetProp.id;
-  assert.notEqual(node, undefined, `${label} is visible`);
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }), `${label} invokes`);
+  const nodes = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .map((patch) => patch.SetProp.id).reverse();
+  assert.ok(nodes.length, `${label} is visible`);
+  assert.ok(nodes.some((node) => stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null })), `${label} invokes`);
 }
 
 function change(stage, placeholder, value) {
