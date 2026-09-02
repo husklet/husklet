@@ -215,6 +215,10 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: '../host', read_only: false }] }).success, false);
+  const exactTarget = `/${'é'.repeat(2047)}a`;
+  const oversizedTarget = `/${'😀'.repeat(1024)}a`;
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: exactTarget }] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: oversizedTarget }] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', ports: [{ container: 80, host: 0, protocol: 'tcp' }] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);

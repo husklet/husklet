@@ -56,6 +56,10 @@ const containerLabelName = z.string().min(1).max(256).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 256,
   'container label name exceeds 256 UTF-8 bytes',
 );
+const containerAbsolutePath = z.string().min(1).max(4096).startsWith('/').refine(
+  (value) => utf8Bytes(value) <= 4096,
+  'container path exceeds 4096 UTF-8 bytes',
+);
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
   if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
@@ -70,10 +74,10 @@ const containerCreate = z.object({
   entrypoint: command.nullable().default(null),
   command: optionalCommand.default([]),
   environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), environmentValue])).max(256).default([]),
-  working_directory: z.string().min(1).max(4096).startsWith('/').nullable().default(null),
+  working_directory: containerAbsolutePath.nullable().default(null),
   user: containerUser.nullable().default(null),
   labels: z.array(z.tuple([containerLabelName, containerLabelValue])).max(128).default([]),
-  mounts: z.array(z.object({ volume: containerName, target: z.string().min(1).max(4096).startsWith('/'), read_only: z.boolean().default(false) }).strict()).max(64).default([]),
+  mounts: z.array(z.object({ volume: containerName, target: containerAbsolutePath, read_only: z.boolean().default(false) }).strict()).max(64).default([]),
   network: containerName.nullable().default(null),
   ports: z.array(z.object({ container: z.number().int().min(1).max(65535), host: z.number().int().min(1).max(65535).nullable().default(null), protocol: z.enum(['tcp', 'udp']) }).strict()).max(64).default([]),
   memory_mb: z.number().int().min(1).max(1_048_576).nullable().default(null),
@@ -181,7 +185,7 @@ export function tools(api) {
     define('husklet_execution_remove', 'Remove one stopped execution record and its captured output after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.removeExecution(value); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
     define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, async (spec) => ({ id: await api.containers.create(spec) })),
-    define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: containerUser.optional(), working_directory: z.string().min(1).max(4096).startsWith('/').optional() }).strict(), async ({ id: value, command: argv, user, working_directory: workingDirectory }) => ({ id: await api.containers.exec(value, { command: argv, user, workingDirectory }) })),
+    define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: containerUser.optional(), working_directory: containerAbsolutePath.optional() }).strict(), async ({ id: value, command: argv, user, working_directory: workingDirectory }) => ({ id: await api.containers.exec(value, { command: argv, user, workingDirectory }) })),
     define('husklet_container_attach_terminal', 'Open an ephemeral GUI terminal running an exact bounded argv in a complete immutable container ID; the process is killed when the pane disconnects.', z.object({ id: containerIdentity, command }).strict(), ({ id: value, command: argv }) => api.containers.attachTerminal(value, argv)),
     ...['start', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_stop', 'Stop one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),

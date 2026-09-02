@@ -233,6 +233,24 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.equal(labelNameOversized.isError, true);
   assert.equal(calls.length, labelNameOversizedStart);
 
+  const exactMountTarget = `/${'é'.repeat(2047)}a`;
+  const mountStart = calls.length;
+  const mountExact = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'mount-boundary', mounts: [{ volume: 'cache', target: exactMountTarget }] },
+  });
+  assert.notEqual(mountExact.isError, true);
+  assert.equal(calls.length, mountStart + 1);
+  assert.deepEqual(calls[mountStart].with.spec.mounts, [{ volume: 'cache', target: exactMountTarget, read_only: false }]);
+
+  const mountOversizedStart = calls.length;
+  const mountOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'mount-overflow', mounts: [{ volume: 'cache', target: `/${'😀'.repeat(1024)}a` }] },
+  });
+  assert.equal(mountOversized.isError, true);
+  assert.equal(calls.length, mountOversizedStart);
+
   const exactCommand = ['printf', '%s', '$(touch /tmp/not-run)', 'two words', "single'quote", ''];
   const spawnStart = calls.length;
   const spawned = await client.callTool({
