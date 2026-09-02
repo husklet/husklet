@@ -45,6 +45,14 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes'
           build -L .#checks.aarch64-darwin.host-darwin-aarch64-native
 
+      - name: Bind the Darwin ABI verdict to the checkpoint backend matrix
+        run: >-
+          HL_DARWIN_HOST_ABI_EVIDENCE="$PWD/result/evidence"
+          .github/scripts/checkpoint-backend-matrix.sh
+          tests/checkpoint/backend-matrix.tsv
+          "$RUNNER_TEMP/checkpoint-backend-matrix"
+          macos-arm-darwin-host-abi
+
       - name: Exercise the dylib ABI boundary explicitly
         run: >-
           nix --extra-experimental-features 'nix-command flakes' develop . --command

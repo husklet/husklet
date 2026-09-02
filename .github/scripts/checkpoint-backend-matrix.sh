@@ -15,9 +15,25 @@ shift 2
 [[ -f "$manifest" && ! -L "$manifest" ]] || { echo "matrix manifest is not a regular file: $manifest" >&2; exit 66; }
 [[ ! -e "$receipt_dir" ]] || { echo "receipt directory already exists: $receipt_dir" >&2; exit 73; }
 
-case $(uname -m) in
-  x86_64) host=x86_64 ;;
-  aarch64|arm64) host=aarch64 ;;
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+canonical_file() {
+  local directory base
+  directory=$(dirname "$1")
+  base=$(basename "$1")
+  printf '%s/%s\n' "$(cd -P "$directory" && pwd)" "$base"
+}
+
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64) host=linux-x86_64 ;;
+  Linux:aarch64|Linux:arm64) host=linux-aarch64 ;;
+  Darwin:arm64|Darwin:aarch64) host=macos-aarch64 ;;
   *) echo "unsupported checkpoint matrix host: $(uname -m)" >&2; exit 69 ;;
 esac
 
@@ -31,7 +47,7 @@ stage=$(mktemp -d "${receipt_dir}.stage.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 printf 'schema\thusklet-checkpoint-backend-matrix-receipt-v1\n' >"$stage/results.tsv"
 printf 'host\t%s\n' "$host" >>"$stage/results.tsv"
-printf 'manifest_sha256\t%s\n' "$(sha256sum "$manifest" | cut -d' ' -f1)" >>"$stage/results.tsv"
+printf 'manifest_sha256\t%s\n' "$(hash_file "$manifest")" >>"$stage/results.tsv"
 
 seen=0
 failed=0
@@ -50,15 +66,17 @@ while IFS=$'\t' read -r id lane_host guest backend contract kind artifact_env se
     continue
   fi
 
-  artifact=${!artifact_env-}
-  [[ -n "$artifact" && -f "$artifact" && ! -L "$artifact" && -x "$artifact" ]] || {
-    echo "$id: $artifact_env must name an executable regular file" >&2
+  artifact=$(printenv "$artifact_env" 2>/dev/null || true)
+  executable=1
+  [[ "$kind" == evidence ]] && executable=0
+  [[ -n "$artifact" && -f "$artifact" && ! -L "$artifact" && ( $executable -eq 0 || -x "$artifact" ) ]] || {
+    echo "$id: $artifact_env must name a regular $([[ $executable -eq 1 ]] && echo executable || echo evidence) file" >&2
     failed=$((failed + 1))
     printf '%s\t%s\t%s\t%s\tMISSING\t-\t-\t-\t%s\n' "$id" "$guest" "$backend" "$contract" "$artifact_env" >>"$stage/results.tsv"
     continue
   }
-  artifact=$(realpath "$artifact")
-  artifact_hash=$(sha256sum "$artifact" | cut -d' ' -f1)
+  artifact=$(canonical_file "$artifact")
+  artifact_hash=$(hash_file "$artifact")
   stdout="$stage/$id.stdout"
   stderr="$stage/$id.stderr"
 
@@ -76,11 +94,16 @@ while IFS=$'\t' read -r id lane_host guest backend contract kind artifact_env se
       [[ "$set_env" == - ]] || { echo "$id: nested lanes do not accept set_env" >&2; exit 65; }
       timeout 360s "$artifact" nested run "$selector" >"$stdout" 2>"$stderr" || status=$?
       ;;
+    evidence)
+      [[ "$set_env" == - && "$selector" == evidence ]] || { echo "$id: invalid evidence lane" >&2; exit 65; }
+      cp "$artifact" "$stdout"
+      : >"$stderr"
+      ;;
     *) echo "$id: unknown matrix kind $kind" >&2; exit 65 ;;
   esac
 
-  stdout_hash=$(sha256sum "$stdout" | cut -d' ' -f1)
-  stderr_hash=$(sha256sum "$stderr" | cut -d' ' -f1)
+  stdout_hash=$(hash_file "$stdout")
+  stderr_hash=$(hash_file "$stderr")
   proof_count=$(grep -Fxc "$proof" "$stdout" || true)
   verdict=PASS
   if [[ $status -ne 0 || $proof_count -ne 1 ]]; then

@@ -11,6 +11,8 @@ guest ISA, and backend because “ARM on x86” is not one generic translation a
 | AArch64 | x86-64 | cross-ISA translator | two capture/restore cycles |
 | x86-64 | native x86-64 | native-supervised | known pre-launch refusal |
 | AArch64 | native AArch64 | native-supervised | uncovered: the suite is x86-only |
+| macOS AArch64 | Darwin dylib host ABI | compile/link and ABI-process execution | compile evidence only |
+| macOS AArch64 | checkpoint/native policy | unavailable | explicit failing gap |
 
 The x86 -> ARM -> x86 arm is separate. It runs three architecture-bound engine bundles and the
 final guest through `tests/runtime/nested/chains-x86.yaml`; the nested runner verifies every bundle
@@ -36,3 +38,12 @@ Native-supervised is not described as a round trip because it cannot currently c
 The x86 test proves that checkpoint selection refuses before launch. The AArch64 row is an explicit
 failing gap rather than a skip. When native image capture exists, replace those contracts with real
 kill-and-restore tests; merely changing the expected text would leave the product behavior untested.
+
+The host key includes the operating system (`linux-x86_64`, `linux-aarch64`, or
+`macos-aarch64`), so an Apple Silicon compile cannot satisfy a Linux ARM runtime row. macOS CI routes
+the `host-darwin-aarch64-native` Nix derivation's immutable `evidence` file through
+`macos-arm-darwin-host-abi`. That proves the Darwin dylib, strict public C/C++ contracts, linking,
+loader-path resolution, and those ABI processes executed. It does **not** prove guest execution or
+checkpoint policy: those implementations and integration suites are Linux-only today, and the
+separate `macos-arm-checkpoint-policy-unavailable` row remains a failing gap. CI selects only the
+compile-evidence lane; it does not run the gap and call the platform green.
