@@ -126,8 +126,87 @@ struct hl_backend_jcc_invalid_site {
     uint32_t reason;
     uint64_t source;
     uint64_t target;
+    uint64_t source_mapping_start;
+    uint64_t source_mapping_offset;
+    uint64_t source_mapping_device;
+    uint64_t source_mapping_inode;
+    uint64_t target_mapping_start;
+    uint64_t target_mapping_offset;
+    uint64_t target_mapping_device;
+    uint64_t target_mapping_inode;
+    uint64_t target_bytes_lo;
+    uint64_t target_bytes_hi;
+    uint8_t target_bytes_len;
     _Atomic uint64_t count;
 };
+
+static void hl_backend_jcc_invalid_mapping_evidence(uint64_t address, uint64_t *start_out,
+                                                    uint64_t *offset_out, uint64_t *device_out,
+                                                    uint64_t *inode_out) {
+#if defined(__linux__)
+    FILE *maps = fopen("/proc/self/maps", "r");
+    char line[1024];
+    if (maps == NULL) return;
+    while (fgets(line, sizeof line, maps) != NULL) {
+        unsigned long long start, end, offset, inode;
+        unsigned major, minor;
+        char protection[5] = {0};
+        if (sscanf(line, "%llx-%llx %4s %llx %x:%x %llu", &start, &end, protection, &offset,
+                   &major, &minor, &inode) != 7 || address < start || address >= end)
+            continue;
+        *start_out = start;
+        *offset_out = offset;
+        *device_out = ((uint64_t)major << 32) | minor;
+        *inode_out = inode;
+        break;
+    }
+    fclose(maps);
+#else
+    (void)address;
+    (void)start_out;
+    (void)offset_out;
+    (void)device_out;
+    (void)inode_out;
+#endif
+}
+
+static void hl_backend_jcc_invalid_site_evidence(struct hl_backend_jcc_invalid_site *site) {
+    hl_backend_jcc_invalid_mapping_evidence(site->source, &site->source_mapping_start,
+                                            &site->source_mapping_offset, &site->source_mapping_device,
+                                            &site->source_mapping_inode);
+    hl_backend_jcc_invalid_mapping_evidence(site->target, &site->target_mapping_start,
+                                            &site->target_mapping_offset, &site->target_mapping_device,
+                                            &site->target_mapping_inode);
+    if (site->target_mapping_start == 0) return;
+    uint64_t page_end = (site->target & ~UINT64_C(0xfff)) + UINT64_C(0x1000);
+    size_t available = (size_t)(page_end - site->target);
+    site->target_bytes_len = available < 16 ? (uint8_t)available : 16;
+    memcpy(&site->target_bytes_lo, (const void *)(uintptr_t)site->target,
+           site->target_bytes_len < 8 ? site->target_bytes_len : 8);
+    if (site->target_bytes_len > 8)
+        memcpy(&site->target_bytes_hi, (const void *)(uintptr_t)(site->target + 8), site->target_bytes_len - 8);
+}
+
+static int hl_backend_jcc_invalid_site_format(char *record, size_t capacity,
+                                              const struct hl_backend_jcc_invalid_site *site) {
+    return snprintf(record, capacity,
+                    "[diag] jcc-invalid-site version=2 source=%llu target=%llu reason=%u count=%llu "
+                    "source_mapping_start=%llu source_mapping_offset=%llu source_mapping_device=%llu "
+                    "source_mapping_inode=%llu target_mapping_start=%llu target_mapping_offset=%llu "
+                    "target_mapping_device=%llu target_mapping_inode=%llu "
+                    "target_bytes_len=%u target_bytes_lo=%016llx target_bytes_hi=%016llx\n",
+                    (unsigned long long)site->source, (unsigned long long)site->target, site->reason,
+                    (unsigned long long)atomic_load_explicit(&site->count, memory_order_relaxed),
+                    (unsigned long long)site->source_mapping_start,
+                    (unsigned long long)site->source_mapping_offset,
+                    (unsigned long long)site->source_mapping_device,
+                    (unsigned long long)site->source_mapping_inode,
+                    (unsigned long long)site->target_mapping_start,
+                    (unsigned long long)site->target_mapping_offset,
+                    (unsigned long long)site->target_mapping_device,
+                    (unsigned long long)site->target_mapping_inode, site->target_bytes_len,
+                    (unsigned long long)site->target_bytes_lo, (unsigned long long)site->target_bytes_hi);
+}
 
 static void hl_backend_jcc_invalid_site_record(
     struct hl_backend_jcc_invalid_site sites[HL_BACKEND_JCC_INVALID_SITES], _Atomic uint64_t *unique,
@@ -149,6 +228,7 @@ static void hl_backend_jcc_invalid_site_record(
         site->reason = reason;
         site->source = source;
         site->target = target;
+        if (reason == HL_BACKEND_JCC_INVALID_ENTRY_ZERO) hl_backend_jcc_invalid_site_evidence(site);
         atomic_store_explicit(&site->count, 1, memory_order_relaxed);
         atomic_store_explicit(&site->state, 2, memory_order_release);
         atomic_fetch_add_explicit(unique, 1, memory_order_relaxed);
@@ -1348,15 +1428,41 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                                            HL_BACKEND_JCC_INVALID_MAGIC, 0x400000, 0x800000);
         hl_backend_jcc_invalid_site_record(fixture->sites, &fixture->unique, &fixture->overflow,
                                            HL_BACKEND_JCC_INVALID_GPC, 0xdead, 0xbeef);
+        struct invalid_fixture *evidence = mmap(NULL, sizeof *evidence, PROT_READ | PROT_WRITE,
+                                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (evidence == MAP_FAILED) {
+            (void)munmap(fixture, sizeof *fixture);
+            return 97;
+        }
+        uint8_t target_bytes[16];
+        for (unsigned index = 0; index < sizeof target_bytes; ++index) target_bytes[index] = (uint8_t)(index + 1);
+        hl_backend_jcc_invalid_site_record(evidence->sites, &evidence->unique, &evidence->overflow,
+                                           HL_BACKEND_JCC_INVALID_ENTRY_ZERO, 0x1234,
+                                           (uint64_t)(uintptr_t)target_bytes);
         uint64_t duplicate_count = 0;
+        int evidence_ok = 0;
         for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot)
             if (atomic_load_explicit(&fixture->sites[slot].state, memory_order_acquire) == 2 &&
                 fixture->sites[slot].source == 0x400000 && fixture->sites[slot].target == 0x800000)
                 duplicate_count = atomic_load_explicit(&fixture->sites[slot].count, memory_order_relaxed);
+        for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
+            struct hl_backend_jcc_invalid_site *site = &evidence->sites[slot];
+            if (atomic_load_explicit(&site->state, memory_order_acquire) == 2) {
+                char record[640];
+                int formatted = hl_backend_jcc_invalid_site_format(record, sizeof record, site);
+                evidence_ok = site->target_mapping_start != 0 && site->target_bytes_len == 16 &&
+                              site->target_bytes_lo == UINT64_C(0x0807060504030201) &&
+                              site->target_bytes_hi == UINT64_C(0x100f0e0d0c0b0a09) && formatted > 0 &&
+                              (size_t)formatted < sizeof record &&
+                              strstr(record, "jcc-invalid-site version=2 ") != NULL &&
+                              strstr(record, "target_bytes_len=16 target_bytes_lo=0807060504030201 ") != NULL;
+            }
+        }
         int ok = atomic_load_explicit(&fixture->unique, memory_order_relaxed) ==
                      HL_BACKEND_JCC_INVALID_SITES &&
                  atomic_load_explicit(&fixture->overflow, memory_order_relaxed) == 1 &&
-                 duplicate_count == 2;
+                 duplicate_count == 2 && evidence_ok;
+        (void)munmap(evidence, sizeof *evidence);
         (void)munmap(fixture, sizeof *fixture);
         return ok ? 0 : 96;
     }
@@ -2429,12 +2535,8 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
         struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];
         if (atomic_load_explicit(&site->state, memory_order_acquire) != 2) continue;
-        char site_record[192];
-        int site_len = snprintf(site_record, sizeof site_record,
-                                "[diag] jcc-invalid-site version=1 source=%llu target=%llu reason=%u count=%llu\n",
-                                (unsigned long long)site->source, (unsigned long long)site->target,
-                                site->reason,
-                                (unsigned long long)atomic_load_explicit(&site->count, memory_order_relaxed));
+        char site_record[640];
+        int site_len = hl_backend_jcc_invalid_site_format(site_record, sizeof site_record, site);
         if (site_len <= 0 || (size_t)site_len >= sizeof site_record) return;
         size_t site_offset = 0;
         while (site_offset < (size_t)site_len) {
