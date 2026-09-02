@@ -19,6 +19,7 @@
     ".": { "types": "./src/index.d.ts", "import": "./src/index.js" },
     "./examples/agent-pane-flow.mjs": "./examples/agent-pane-flow.mjs",
     "./examples/agent-day-one.mjs": "./examples/agent-day-one.mjs",
+    "./examples/agent-admin.mjs": "./examples/agent-admin.mjs",
     "./package.json": "./package.json"
   },
   "files": ["src", "examples", "README.md", "LICENSE"],

@@ -157,3 +157,19 @@ observed revision. One-shot pane waits are armed before terminal input and UI
 action. A `finally` block uses confirmed container stop/removal and restores the
 original workspace configuration. It never accepts shell command text and does
 not retry a stale semantic action.
+
+## Administrative lifecycle workflow
+
+[`examples/agent-admin.mjs`](examples/agent-admin.mjs) creates and starts one
+named workspace, performs confined directory/file create, write, and read, arms
+one pane-change wait, then removes every created resource in reverse order with
+literal confirmations. Cleanup also runs after intermediate failure.
+
+Filesystem and pane authority belongs to the socket's hosting workspace; it is
+not redirected by a workspace name passed to lifecycle tools. The helper first
+calls `husklet_workspace_info`, requires the caller's `hostingWorkspace` to
+match, and requires the separately managed workspace to have another name. This
+prevents an administrator from assuming that creating `target` makes subsequent
+file paths resolve inside `target`. The protocol currently has no workspace
+lifecycle event topic, so the example observes the existing credit-controlled
+pane-change topic and does not claim create/start/stop notifications exist.
