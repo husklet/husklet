@@ -129,7 +129,10 @@ impl<'a> Overview<'a> {
             }
             Signal::Retry => host.accept(Order::Retry),
         });
-        let (widget, page) = screens::workspace::extension::Interface::with_faults(deliveries, sink, faulted);
+        let ready_gallery = gallery.clone();
+        let ready_name = name.to_string();
+        let ready = Rc::new(move || ready_gallery.ready(&ready_name));
+        let (widget, page) = screens::workspace::extension::Interface::with_lifecycle(deliveries, sink, faulted, ready);
         let page = page.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_hexpand(true);

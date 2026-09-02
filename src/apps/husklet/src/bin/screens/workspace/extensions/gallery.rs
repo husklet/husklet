@@ -23,6 +23,10 @@ struct Exhibit {
     /// goes back to when a pane holding it closes.
     home: glib::WeakRef<gtk::Box>,
     providers: Vec<hl_extension::PaneProvider>,
+    /// Provider authority begins only after this generation has reconciled one
+    /// valid frame. A persisted/enabled record is not proof that its sidecar is
+    /// ready to draw an interface.
+    ready: bool,
     selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
     semantics: Option<Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>>,
     action: Option<Rc<dyn Fn(&str, &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
@@ -121,6 +125,7 @@ impl Gallery {
             interface: interface.as_ref().downgrade(),
             home: home.downgrade(),
             providers: providers.to_vec(),
+            ready: false,
             selected,
             semantics: None,
             action: None,
@@ -128,6 +133,14 @@ impl Gallery {
             retire: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
+    }
+
+    /// Publishes this generation's declared pane providers after its first
+    /// successfully reconciled interface frame.
+    pub fn ready(&self, extension: &str) {
+        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+            exhibit.ready = true;
+        }
     }
 
     pub fn enrol_semantics(
@@ -226,6 +239,7 @@ impl Gallery {
     pub fn offers(&self, extension: &str, provider: &str) -> bool {
         self.0.borrow().get(extension).is_some_and(|exhibit| {
             exhibit.interface.upgrade().is_some()
+                && exhibit.ready
                 && exhibit.semantics.is_some()
                 && exhibit
                     .providers
@@ -245,7 +259,9 @@ impl Gallery {
             // A provider is not inspectable merely because it has pixels. Do
             // not advertise it until its retained semantic projection is
             // registered alongside the widget it will place in the pane.
-            .filter(|(_, exhibit)| exhibit.interface.upgrade().is_some() && exhibit.semantics.is_some())
+            .filter(|(_, exhibit)| {
+                exhibit.interface.upgrade().is_some() && exhibit.ready && exhibit.semantics.is_some()
+            })
             .flat_map(|(extension, exhibit)| {
                 exhibit.providers.iter().map(move |provider| Provider {
                     extension: extension.clone(),

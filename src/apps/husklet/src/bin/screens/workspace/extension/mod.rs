@@ -49,6 +49,7 @@ pub struct Interface {
     deliveries: Deliveries,
     sink: Rc<dyn Sink>,
     faulted: Rc<dyn Fn(u32)>,
+    ready: Rc<dyn Fn()>,
     /// Monotonic tick count, which is the clock the row models age against.
     clock: u64,
 }
@@ -72,7 +73,7 @@ impl Interface {
     /// drives it.
     #[must_use]
     pub fn new(deliveries: Deliveries, sink: Rc<dyn Sink>) -> (gtk::Box, Self) {
-        Self::with_faults(deliveries, sink, Rc::new(|_| {}))
+        Self::with_lifecycle(deliveries, sink, Rc::new(|_| {}), Rc::new(|| {}))
     }
 
     /// Builds a page that also publishes structured crash-loop state on the
@@ -80,6 +81,18 @@ impl Interface {
     /// the background host never touches either one.
     #[must_use]
     pub fn with_faults(deliveries: Deliveries, sink: Rc<dyn Sink>, faulted: Rc<dyn Fn(u32)>) -> (gtk::Box, Self) {
+        Self::with_lifecycle(deliveries, sink, faulted, Rc::new(|| {}))
+    }
+
+    /// Builds a page whose provider authority is published only after a valid
+    /// frame proves this host generation can render.
+    #[must_use]
+    pub fn with_lifecycle(
+        deliveries: Deliveries,
+        sink: Rc<dyn Sink>,
+        faulted: Rc<dyn Fn(u32)>,
+        ready: Rc<dyn Fn()>,
+    ) -> (gtk::Box, Self) {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.set_hexpand(true);
         widget.set_vexpand(true);
@@ -97,6 +110,7 @@ impl Interface {
             deliveries,
             sink,
             faulted,
+            ready,
             clock: 0,
         };
         (widget, interface)
@@ -367,6 +381,7 @@ impl Interface {
     fn draw(&mut self, frame: &Frame) {
         match self.tree.apply(frame, &mut self.surface) {
             Ok(()) => {
+                (self.ready)();
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }
@@ -378,6 +393,7 @@ impl Interface {
         let pane = self.panes.entry(slot.to_owned()).or_insert_with(PaneInterface::new);
         match pane.tree.apply(frame, &mut pane.surface) {
             Ok(()) => {
+                (self.ready)();
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }

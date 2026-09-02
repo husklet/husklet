@@ -2,7 +2,7 @@
 //! per-tick cap, nothing is dropped, a stopped extension keeps its last
 //! interface on screen, and interaction reaches the caller's sink.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -79,6 +79,30 @@ fn panel(title: &str) -> Element {
         .child(Element::button("Restart", EventId::new("restart")).key("restart"))
 }
 
+fn provider_authority_waits_for_a_valid_frame() {
+    let (post, deliveries) = channel();
+    let ready = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&ready);
+    let (_widget, mut page) = Interface::with_lifecycle(
+        deliveries,
+        Rc::new(|_| {}),
+        Rc::new(|_| {}),
+        Rc::new(move || observed.set(observed.get() + 1)),
+    );
+
+    let mut out_of_sequence = Reconciliation::new();
+    let _ = out_of_sequence.reconcile(&Element::heading("discarded initial frame"));
+    let rejected = out_of_sequence.reconcile(&Element::heading("update without root"));
+    post.send(Delivery::Frame(rejected)).expect("page listening");
+    page.tick();
+    assert_eq!(ready.get(), 0, "a rejected frame cannot publish provider authority");
+
+    let accepted = Reconciliation::new().reconcile(&Element::heading("ready"));
+    post.send(Delivery::Frame(accepted)).expect("page listening");
+    page.tick();
+    assert_eq!(ready.get(), 1, "the first valid frame publishes provider authority");
+}
+
 /// Every scenario runs inside one test, on the binary's toolkit thread.
 ///
 /// GTK belongs to whichever thread entered it and libtest gives every `#[test]`
@@ -89,6 +113,7 @@ fn panel(title: &str) -> Element {
 #[test]
 fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
+        provider_authority_waits_for_a_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
