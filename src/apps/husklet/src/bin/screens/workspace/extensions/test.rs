@@ -1777,6 +1777,36 @@ mod panes {
         assert_eq!(identity.extension, "postgres");
         assert_eq!(identity.provider, "database");
 
+        let chooser = super::descendants(&chrome)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("pane chooser");
+        PaneChooser::populate(&bench.window, &chooser);
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose pane content; currently showing Postgres · postgres")
+        );
+        let popover = chooser.popover().expect("chooser popover");
+        let widgets = super::descendants(popover.upcast_ref::<gtk::Widget>());
+        assert!(widgets.iter().any(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == "Currently showing Postgres · postgres")
+        }));
+        assert!(widgets.iter().any(|widget| {
+            widget.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                button.label().as_deref() == Some("Postgres") && button.has_css_class("suggested-action")
+            })
+        }));
+        assert!(
+            widgets.iter().any(|widget| {
+                widget
+                    .downcast_ref::<gtk::Box>()
+                    .is_some_and(|choices| choices.width_request() == 200)
+            }),
+            "the popover has a compact minimum rather than forcing a wide pane"
+        );
+
         PaneChooser::terminal(&bench.window);
         let restored = Panes::at(&bench.window, &slot).expect("restored pane");
         assert_eq!(restored.occupant, Occupant::Terminal);
@@ -1794,7 +1824,7 @@ mod panes {
         assert_eq!(chooser.icon_name().as_deref(), Some("view-grid-symbolic"));
         assert_eq!(
             chooser.tooltip_text().as_deref(),
-            Some("Choose what this pane displays")
+            Some("Choose pane content; currently showing Terminal")
         );
         let labels = || {
             chooser

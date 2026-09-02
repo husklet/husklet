@@ -52,9 +52,24 @@ impl PaneChooser {
         button.set_icon_name("view-grid-symbolic");
         button.set_tooltip_text(Some("Choose what this pane displays"));
         button.set_focusable(true);
+        button.update_property(&[gtk::accessible::Property::Label("Choose pane content")]);
         button.add_css_class("flat");
         button.set_halign(gtk::Align::End);
         button.set_valign(gtk::Align::Start);
+        let keys = gtk::EventControllerKey::new();
+        keys.connect_key_pressed(|controller, key, _, _| {
+            if matches!(
+                key,
+                gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter | gtk::gdk::Key::space | gtk::gdk::Key::Down
+            ) {
+                if let Some(button) = controller.widget().and_downcast::<gtk::MenuButton>() {
+                    button.popup();
+                    return gtk::glib::Propagation::Stop;
+                }
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        button.add_controller(keys);
         Self::populate(window, &button);
         let weak = Rc::downgrade(window);
         button.connect_notify_local(Some("active"), move |button, _| {
@@ -72,25 +87,62 @@ impl PaneChooser {
         // The menu button is an overlay child of one stable pane chrome. Bind
         // its actions to that chrome's slot instead of whichever terminal last
         // happened to own keyboard focus.
-        let target = button
+        let current = button
             .parent()
-            .and_then(|parent| Panes::all(window).into_iter().find(|pane| pane.widget == parent))
-            .map(|pane| pane.slot);
+            .and_then(|parent| Panes::all(window).into_iter().find(|pane| pane.widget == parent));
+        let target = current.as_ref().map(|pane| pane.slot.clone());
+        let identity = current
+            .as_ref()
+            .and_then(|pane| Slots::new(window).surface(&pane.content));
+        let selected_provider = identity.as_ref().and_then(|(_, extension, provider)| {
+            provider
+                .as_ref()
+                .map(|provider| (extension.as_str(), provider.as_str()))
+        });
+        let current_label = selected_provider
+            .and_then(|(extension, id)| {
+                providers
+                    .iter()
+                    .find(|provider| provider.extension == extension && provider.id == id)
+                    .map(|provider| format!("{} · {}", provider.title, provider.extension))
+            })
+            .unwrap_or_else(|| {
+                identity
+                    .as_ref()
+                    .map_or_else(|| "Terminal".to_owned(), |(_, extension, _)| extension.clone())
+            });
+        let accessible = format!("Choose pane content; currently showing {current_label}");
+        button.update_property(&[
+            gtk::accessible::Property::Label("Choose pane content"),
+            gtk::accessible::Property::Description(&accessible),
+        ]);
+        button.set_tooltip_text(Some(&accessible));
         let choices = gtk::Box::new(gtk::Orientation::Vertical, 6);
         choices.set_margin_top(10);
         choices.set_margin_bottom(10);
         choices.set_margin_start(10);
         choices.set_margin_end(10);
-        choices.set_width_request(260);
+        choices.set_size_request(200, -1);
 
         let heading = gtk::Label::new(Some("Pane content"));
         heading.add_css_class("heading");
         heading.set_xalign(0.0);
         choices.append(&heading);
 
+        let status = gtk::Label::new(Some(&format!("Currently showing {current_label}")));
+        status.add_css_class("dim-label");
+        status.set_xalign(0.0);
+        status.set_wrap(true);
+        status.set_max_width_chars(30);
+        choices.append(&status);
+
         let terminal = gtk::Button::with_label("Terminal");
         terminal.set_tooltip_text(Some("Show this pane's terminal"));
         terminal.set_halign(gtk::Align::Fill);
+        if identity.is_none() {
+            terminal.add_css_class("suggested-action");
+            terminal.update_property(&[gtk::accessible::Property::Label("Terminal, selected")]);
+        }
         {
             let window = window.clone();
             let target = target.clone();
@@ -132,6 +184,14 @@ impl PaneChooser {
                 let choice = gtk::Button::with_label(&provider.title);
                 choice.set_tooltip_text(Some(&format!("{} · {}", provider.extension, provider.id)));
                 choice.set_halign(gtk::Align::Fill);
+                choice.set_hexpand(true);
+                if selected_provider == Some((provider.extension.as_str(), provider.id.as_str())) {
+                    choice.add_css_class("suggested-action");
+                    choice.update_property(&[gtk::accessible::Property::Label(&format!(
+                        "{}, selected",
+                        provider.title
+                    ))]);
+                }
                 let identity = format!("{}\n{} {}", provider.extension, provider.title, provider.id).to_lowercase();
                 let window = window.clone();
                 let target = target.clone();
