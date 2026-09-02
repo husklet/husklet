@@ -26,7 +26,7 @@ async function host() {
     const reader = new Reader();
     stream.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
-        if (frame.channel !== 0) calls.push(frame.payload);
+        if (frame.kind === KIND.request && frame.channel !== 0) calls.push(frame.payload);
       }
     });
     stream.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'demo', granted: ['interface'] } }));

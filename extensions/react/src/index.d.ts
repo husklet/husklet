@@ -4029,15 +4029,99 @@ export function acceptsChildren(tag: string): boolean;
 export const vocabulary: { props: string[]; handlers: string[] };
 
 export const SOCKET: string;
-export const PROTOCOL: string;
+export const PROTOCOL: number;
+
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'extensions';
+export type Division = 'beside' | 'below';
+export interface WorkspaceInfo { name: string; architecture: string; image: string }
+export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
+export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface PaneSummary {
+  slot: string;
+  working_directory: string | null;
+  command: string | null;
+  occupant: 'terminal' | 'surface';
+}
+export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
+export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface FileEntry { path: string; directory: boolean; size: number }
+export interface VolumeSummary { name: string; driver: string; size: number }
+export interface NetworkSummary { name: string; driver: string; scope: string }
+
+export class ExtensionError extends Error {
+  readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
+  readonly capability?: string;
+}
+
+export interface ConnectOptions {
+  path?: string;
+  pendingLimit?: number;
+  timeout?: number;
+  onRows?: (request: unknown, channel: number) => void;
+  onReply?: (reply: unknown) => void;
+  onEvent?: (event: unknown, channel: number) => void;
+}
 
 export class Session {
-  static connect(path?: string, handlers?: Record<string, unknown>): Promise<Session>;
+  static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
+  readonly ready: Promise<void>;
+  readonly granted: readonly string[];
   call(method: string, params?: unknown): Promise<unknown>;
+  answer(channel: number, window: unknown): void;
+  onEvent(listener: (event: unknown, channel: number) => void): () => boolean;
   close(): void;
 }
 
-export function connect(options?: Record<string, unknown>): Promise<Session>;
+export function connect(options?: ConnectOptions): Promise<Session>;
+
+export interface WorkspaceApi {
+  info(): Promise<WorkspaceInfo>;
+  list(): Promise<WorkspaceState[]>;
+  containers: {
+    list(): Promise<ContainerSummary[]>;
+    inspect(id: string): Promise<ContainerSummary>;
+    create(image: string, name: string): Promise<string>;
+    start(id: string): Promise<void>;
+    stop(id: string): Promise<void>;
+    remove(id: string): Promise<void>;
+  };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
+  terminal: {
+    tabs(): Promise<TabSummary[]>;
+    openTab(title: string): Promise<string>;
+    split(slot: string, division: Division): Promise<string>;
+    spawn(slot: string, command: string[]): Promise<void>;
+    read(slot: string, lines?: number): Promise<PaneText>;
+    close(slot: string): Promise<void>;
+    focus(slot: string): Promise<void>;
+    ratio(slot: string, ratio: number): Promise<void>;
+  };
+  files: {
+    list(path: string): Promise<FileEntry[]>;
+    read(path: string): Promise<number[]>;
+    write(path: string, contents: Iterable<number>): Promise<void>;
+  };
+}
+
+export function workspace(session: Session): WorkspaceApi;
+/** Current protocol coverage. Names under `unavailable` deliberately have no methods. */
+export const protocolCoverage: Readonly<{
+  available: Readonly<{
+    workspace: readonly ('info' | 'list')[];
+    containers: readonly ('list' | 'inspect' | 'create' | 'start' | 'stop' | 'remove')[];
+    images: readonly ('list' | 'pull')[];
+    terminal: readonly ('tabs' | 'openTab' | 'split' | 'spawn' | 'read' | 'close' | 'focus' | 'ratio')[];
+    files: readonly ('list' | 'read' | 'write')[];
+    interfaceEvents: readonly ('invoke' | 'submit' | 'change' | 'select')[];
+  }>;
+  unavailable: Readonly<{
+    workspace: readonly ('create' | 'delete' | 'updateConfiguration' | 'start' | 'stop' | 'restart')[];
+    containers: readonly ('processes' | 'exec' | 'logs' | 'pause' | 'unpause' | 'restart' | 'kill')[];
+    terminal: readonly ('writeInput' | 'resizeGrid' | 'switchOccupant' | 'paneProviders')[];
+    events: readonly ('hostSnapshots' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];
+  }>;
+}>;
 
 export function render(
   element: ReactNode,
@@ -4046,4 +4130,3 @@ export function render(
 ): { update(next: ReactNode): void; close(): void };
 
 export function deliver(session: Session, payload: unknown): boolean;
-

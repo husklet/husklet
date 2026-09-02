@@ -9,27 +9,48 @@ export const PROTOCOL = 1;
 /** Where the host mounts the socket inside an extension's container. */
 export const SOCKET = 'HUSKLET_EXTENSION_SOCKET';
 
-/** The channel calls travel on. Odd, because the host allocates the even ones. */
-const CALLS = 1;
+/** The protocol's shared call channel. Replies are ordered on this channel. */
+const CALLS = 2;
+const ERROR = 2;
+
+/** Refusal returned by the host, with its stable machine-readable category. */
+export class ExtensionError extends Error {
+  constructor(failure) {
+    const kind = failure?.error ?? 'failed';
+    super(failure?.detail ?? failure?.call ?? `extension call ${kind}`);
+    this.name = 'ExtensionError';
+    this.kind = kind;
+    this.capability = failure?.capability;
+  }
+}
 
 /**
  * One connected extension.
  *
- * Calls are fire and forget: the host answers in order, and nothing here needs
- * to correlate a reply with its question. Replies and pushed events reach the
- * handlers given at construction.
+ * The host answers calls in order on one channel. A bounded FIFO correlates
+ * those answers with promises without inventing request identifiers the wire
+ * protocol does not carry.
  */
 export class Session {
   #socket;
   #reader = new Reader();
   #onReply;
   #onRows;
+  #events = new Set();
+  #pending = [];
+  #limit;
+  #timeout;
+  #closed = false;
   #granted = [];
   #greeted;
   #ready;
 
-  constructor(socket, { onReply = () => {}, onRows = () => {} } = {}) {
+  constructor(socket, { onReply = () => {}, onRows = () => {}, onEvent = () => {}, pendingLimit = 64, timeout = 30_000 } = {}) {
+    if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1) throw new RangeError('pendingLimit must be a positive integer');
+    if (!Number.isFinite(timeout) || timeout <= 0) throw new RangeError('timeout must be positive');
     this.#socket = socket;
+    this.#limit = pendingLimit;
+    this.#timeout = timeout;
     // Resolved once the host has greeted us and we have answered. Nothing may
     // be sent before that: the host reads the first frame it receives as the
     // greeting, so a call written earlier is swallowed and every call after it
@@ -39,7 +60,10 @@ export class Session {
     });
     this.#onReply = onReply;
     this.#onRows = onRows;
+    this.#events.add(onEvent);
     socket.on('data', (chunk) => this.#receive(chunk));
+    socket.on('close', () => this.#finish(new Error('extension host connection closed')));
+    socket.on('error', (error) => this.#finish(error));
   }
 
   /** Capabilities the host granted, known once the greeting arrives. */
@@ -67,10 +91,30 @@ export class Session {
     });
   }
 
-  /** Sends one call. */
+  /** Sends one call and resolves with the tagged host reply. */
   call(name, argument) {
+    if (this.#closed) return Promise.reject(new Error('extension session is closed'));
+    if (this.#pending.length >= this.#limit) {
+      return Promise.reject(new Error(`extension call limit of ${this.#limit} is exhausted`));
+    }
     const payload = argument === undefined ? { call: name } : { call: name, with: argument };
-    this.#socket.write(encode({ channel: CALLS, kind: KIND.request, payload }));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const error = new Error(`extension call ${name} timed out after ${this.#timeout}ms`);
+        // Without request identifiers, continuing after one missing ordered
+        // reply could give every later caller the wrong answer. End the session.
+        this.#finish(error);
+        this.#socket.destroy();
+      }, this.#timeout);
+      this.#pending.push({ resolve, reject, timer });
+      try {
+        this.#socket.write(encode({ channel: CALLS, kind: KIND.request, payload }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.#pending.pop();
+        reject(error);
+      }
+    });
   }
 
   /** Answers a row window the host asked for. */
@@ -78,7 +122,15 @@ export class Session {
     this.#socket.write(encode({ channel, kind: KIND.response, payload: window }));
   }
 
+  /** Adds a pushed-event observer and returns a synchronous disposer. */
+  onEvent(listener) {
+    if (typeof listener !== 'function') throw new TypeError('event listener must be a function');
+    this.#events.add(listener);
+    return () => this.#events.delete(listener);
+  }
+
   close() {
+    this.#finish(new Error('extension session closed'));
     this.#socket.end();
   }
 
@@ -94,7 +146,32 @@ export class Session {
     if (frame.payload && frame.payload.range !== undefined) {
       return this.#onRows(frame.payload, frame.channel);
     }
+    if (frame.kind === KIND.response && frame.channel === CALLS) {
+      const pending = this.#pending.shift();
+      if (!pending) return this.#onReply(frame.payload);
+      clearTimeout(pending.timer);
+      if ((frame.flags & ERROR) !== 0) pending.reject(new ExtensionError(frame.payload));
+      else pending.resolve(frame.payload);
+      this.#onReply(frame.payload);
+      return;
+    }
+    if (frame.kind === KIND.event) {
+      for (const listener of this.#events) listener(frame.payload, frame.channel);
+      // Returning one credit only after delivery bounds a producer by what the
+      // consumer has actually observed. The host coalesces state while stalled.
+      this.#socket.write(encode({ channel: frame.channel, kind: KIND.credit, payload: 1 }));
+      return;
+    }
     return this.#onReply(frame.payload);
+  }
+
+  #finish(error) {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const pending of this.#pending.splice(0)) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
   }
 
   /** The host speaks first and states the grant, so an extension knows what it

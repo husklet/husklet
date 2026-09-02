@@ -32,6 +32,28 @@ const session = await connect();          // reads HUSKLET_EXTENSION_SOCKET
 render(<App />, session, { title: 'My Extension' });
 ```
 
+## Workspace API
+
+Host calls are promises with typed results and typed failures. Outstanding
+calls are bounded; a missing ordered reply closes the session after the timeout
+rather than risking correlation with the wrong caller.
+
+```js
+import { connect, workspace } from '@husklet/react';
+
+const session = await connect({ timeout: 10_000, pendingLimit: 32 });
+const host = workspace(session);
+const containers = await host.containers.list();
+await host.containers.stop(containers[0].id);
+```
+
+`protocolCoverage` is the machine-readable inventory of what this protocol
+version really supports. Its `unavailable` section names planned deep-control
+areas such as workspace configuration, process inspection, host-published
+snapshots, terminal input and keyboard events; those names deliberately are not
+callable methods. `Session.onEvent` is low-level transport plumbing for events
+the host does send, not a promise that global workspace snapshots are published.
+
 ## Props
 
 One component per tag — `<Card>`, `<Button>`, `<TableCell>`, 133 of them,
