@@ -104,7 +104,12 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(JSON.parse(answer.content[0].text).name, 'dev');
   const id = 'a'.repeat(64);
-  const attached = await client.callTool({ name: 'husklet_container_attach_terminal', arguments: { id, command: ['sh', '-i'] } });
+  const oversized = await client.callTool({ name: 'husklet_container_attach_terminal', arguments: {
+    id, command: ['printf', '😀'.repeat(1025)],
+  } });
+  assert.equal(oversized.isError, true);
+  assert.equal(calls.length, 2, 'invalid argv must not reach the Unix host');
+  const attached = await client.callTool({ name: 'husklet_container_attach_terminal', arguments: { id, command: ['printf', 'é'] } });
   assert.equal(JSON.parse(attached.content[0].text), 'p-attached');
   const installed = await client.callTool({ name: 'husklet_extension_install', arguments: {
     job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'], confirm: true,
@@ -114,7 +119,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   assert.equal(JSON.parse(opened.content[0].text), 'terminal-default');
   assert.deepEqual(calls, [
     { call: 'workspace_info' }, { call: 'workspace_info' },
-    { call: 'container_attach_terminal', with: { id, command: ['sh', '-i'] } },
+    { call: 'container_attach_terminal', with: { id, command: ['printf', 'é'] } },
     { call: 'extension_install', with: { job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'] } },
     { call: 'terminal_open_tab', with: { title: 'Terminal' } },
   ]);

@@ -21,10 +21,12 @@ const path = z.string().min(1).max(4096);
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
 const imagePullJob = z.string().min(1).max(20).regex(/^[1-9][0-9]*$/, 'image pull job must be a positive decimal identity');
+const utf8Bytes = (value) => new TextEncoder().encode(value).byteLength;
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
   if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
-  const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
+  if (argv.some((argument) => utf8Bytes(argument) > 4096)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'each command argument must be at most 4096 UTF-8 bytes' });
+  const bytes = argv.reduce((total, argument) => total + utf8Bytes(argument), 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
 });
 const optionalCommand = z.array(z.string().max(4096)).max(64);
@@ -48,7 +50,8 @@ const containerCreate = z.object({
   const argv = [...(spec.entrypoint ?? []), ...spec.command];
   if (spec.command.length > 0 && spec.command[0].length === 0) issue('command executable must not be empty');
   if (argv.some((argument) => argument.includes('\0'))
-    || argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) issue('entrypoint and command must be NUL-free and at most 32768 bytes');
+    || argv.some((argument) => utf8Bytes(argument) > 4096)
+    || argv.reduce((total, argument) => total + utf8Bytes(argument), 0) > 32 * 1024) issue('entrypoint and command must be NUL-free, at most 4096 bytes per argument, and at most 32768 bytes in aggregate');
   const normalized = (value) => !value.split('/').some((part) => part === '.' || part === '..');
   if (spec.working_directory != null && !normalized(spec.working_directory)) issue('working_directory must be normalized');
   if (spec.mounts.some(({ target }) => !normalized(target))) issue('mount targets must be normalized');

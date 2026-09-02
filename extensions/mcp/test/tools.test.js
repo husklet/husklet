@@ -194,9 +194,12 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['printf', '😀'.repeat(1025)] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
   assert.equal(attach.inputSchema.safeParse({ id: 'c1', command: ['sh'] }).success, false);
   assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['sh', '-i'] }).success, true);
+  assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['printf', 'é'] }).success, true);
+  assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['printf', '😀'.repeat(1025)] }).success, false);
   assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: 'sh -i' }).success, false);
   const spec = create.inputSchema.parse({
     image: 'alpine:3.20', name: 'worker-1', entrypoint: ['/usr/bin/env'], command: ['worker', '--once'],
