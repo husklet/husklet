@@ -42,7 +42,7 @@ export function KeyboardAccessibilityStory() {
   return h(
     Column,
     { gap: 3, width: { maximum: { chars: 62 } } },
-    h(Heading, { label: 'Keyboard-safe extension removal', scale: 'title' }),
+    h(Heading, { label: 'Keyboard-safe extension removal', scale: 'title', wrap: true }),
     h(Text, {
       label: 'Tab through the enabled controls. Focus events and actions appear in the bounded history below.',
       color: 'text-dim',
@@ -71,9 +71,9 @@ export function KeyboardAccessibilityStory() {
     ),
     h(
       Row,
-      { gap: 2, justify: 'end' },
+      { gap: 2, justify: 'end', wrap: true },
       h(Button, {
-        label: 'Unavailable while running',
+        label: 'Unavailable',
         enabled: false,
         tooltip: 'Disabled controls are skipped by keyboard traversal.',
         onFocus: () => record('ERROR disabled control focused'),
@@ -96,7 +96,7 @@ export function KeyboardAccessibilityStory() {
           }),
           h(
             Row,
-            { gap: 2, justify: 'end' },
+            { gap: 2, justify: 'end', wrap: true },
             h(Button, {
               label: 'Cancel',
               onFocus: () => record('focused Cancel'),

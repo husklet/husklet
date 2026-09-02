@@ -80,7 +80,7 @@ test('keyboard accessibility story validates, confirms separately, and bounds fo
   const first = stage.render(h(KeyboardAccessibilityStory));
   const entry = created(first.patches).find((created) => created.tag === 'Entry')?.id;
   const review = node(first.patches, 'Button', 'Review removal');
-  const disabled = node(first.patches, 'Button', 'Unavailable while running');
+  const disabled = node(first.patches, 'Button', 'Unavailable');
   assert.ok(entry && review && disabled);
   assert.ok(first.patches.some((patch) => 'SetProp' in patch && patch.SetProp.id === disabled
     && patch.SetProp.prop === 'Enabled' && patch.SetProp.value.Flag === false));

@@ -39,9 +39,9 @@ const { createElement: h, useMemo, useRef, useState } = React;
 const INTERACTION_HISTORY = 5;
 
 /** The whole playground. */
-export function Playground({ largeSource } = {}) {
+export function Playground({ largeSource, initialStory = OPENING } = {}) {
   const families = useMemo(grouped, []);
-  const [selected, setSelected] = useState(OPENING);
+  const [selected, setSelected] = useState(initialStory);
   const [edited, setEdited] = useState(() => new Map());
 
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY || selected === NAVIGATION_STORY;
@@ -56,7 +56,7 @@ export function Playground({ largeSource } = {}) {
 
   return h(
     Row,
-    { gap: 0, grow: true },
+    { gap: 0, grow: true, wrap: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
     h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, triggers: contract?.triggers ?? [] }),
@@ -248,7 +248,7 @@ export function Inspector({ name, properties, triggers, props, onChange }) {
     h(
       Column,
       { pad: 3, gap: 2 },
-      h(Heading, { key: 'title', label: `${name} properties`, scale: 'caption' }),
+      h(Heading, { key: 'title', label: `${name} properties`, scale: 'caption', wrap: true }),
       h(Text, { key: 'note', label: notes.values, color: 'text-dim', wrap: true }),
       ...groups.flatMap((group) => [
         h(ListSubheader, { key: `group-${group.key}`, label: group.group }),

@@ -12,7 +12,6 @@ import {
   Heading,
   InlineMessage,
   Progress,
-  Row,
   Spinner,
   Text,
 } from '@husklet/react';
@@ -90,7 +89,7 @@ function AcquisitionState({ state }) {
     h(
       CardActions,
       { key: 'actions', gap: 2 },
-      h(Row, { gap: 2 }, ...state.actions.map((label) => h(Button, { key: label, label }))),
+      h(Column, { gap: 2 }, ...state.actions.map((label) => h(Button, { key: label, label }))),
     ),
   );
 }

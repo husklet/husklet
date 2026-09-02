@@ -15,5 +15,8 @@ session = await connect({
     if (window) session.answer(channel, window);
   },
 });
-surface = render(React.createElement(Playground, { largeSource: source }), session, { title: 'Storybook' });
+surface = render(React.createElement(Playground, {
+  largeSource: source,
+  initialStory: process.env.HUSKLET_STORYBOOK_STORY,
+}), session, { title: 'Storybook' });
 setTimeout(() => void source.publish(), 0);

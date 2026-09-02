@@ -15,3 +15,6 @@ hl-gui = { path = "../hl-gui" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+hl-extension = { path = "../hl-extension" }

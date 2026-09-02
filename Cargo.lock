@@ -1438,6 +1438,7 @@ name = "hl-gui-gtk"
 version = "0.1.0"
 dependencies = [
  "gtk4",
+ "hl-extension",
  "hl-gui",
 ]
 
