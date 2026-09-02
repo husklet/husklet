@@ -724,6 +724,14 @@ pub trait WorkspaceInventory {
 
 /// Creating, configuring, and controlling workspace execution domains.
 pub trait WorkspaceControl {
+    /// Current lifecycle sequence for this host process.
+    fn lifecycle_revision(&self) -> u64 {
+        0
+    }
+    /// Successful mutations after `revision`, oldest first and bounded by the host.
+    fn lifecycle_since(&self, _revision: u64) -> Result<Vec<crate::WorkspaceLifecycleChange>, HostError> {
+        Ok(Vec::new())
+    }
     fn inspect(&self, _name: &str) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }

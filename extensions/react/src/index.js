@@ -14,7 +14,7 @@ const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -221,6 +221,12 @@ export function workspace(session) {
     const off = session.onEvent((event) => { if (event?.snapshot === 'extension_acquisitions') listener(event.of); });
     try { await api.subscribe('extension-acquisitions'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('extension-acquisitions'); };
+  };
+  api.watchWorkspaceLifecycle = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('workspace lifecycle listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_lifecycle') listener(event.of); });
+    try { await api.subscribe('workspace-lifecycle'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('workspace-lifecycle'); };
   };
   return api;
 }

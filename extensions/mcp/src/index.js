@@ -175,6 +175,28 @@ export function tools(api) {
         .then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
+  if (typeof api.watchWorkspaceLifecycle === 'function') definitions.push(define(
+    'husklet_workspace_wait',
+    'Wait for one bounded workspace lifecycle invalidation under WorkspaceRead authority.',
+    z.object({
+      workspace: id.optional(),
+      action: z.enum(['create', 'update', 'remove', 'start', 'stop', 'restart']).optional(),
+      timeout_ms: z.number().int().min(1).max(30_000).default(30_000),
+    }).strict(),
+    ({ workspace: wanted, action, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      api.watchWorkspaceLifecycle((change) => {
+        if ((wanted == null || change.workspace === wanted) && (action == null || change.action === action)) {
+          finish({ changed: true, change });
+        }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
   return definitions.concat(paneTools(api.terminal));
 }
 

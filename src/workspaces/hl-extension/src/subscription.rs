@@ -39,6 +39,27 @@ pub struct ExtensionAcquisitionChange {
     pub coalesced: u64,
 }
 
+/// One successful workspace mutation. Revisions are monotonically increasing
+/// within the host process and let consumers discard stale/coalesced notices.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceLifecycleChange {
+    pub workspace: String,
+    pub action: WorkspaceLifecycleAction,
+    pub revision: u64,
+    pub coalesced: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceLifecycleAction {
+    Create,
+    Update,
+    Remove,
+    Start,
+    Stop,
+    Restart,
+}
+
 /// Window-level activity visible to an extension holding `workspace-events`.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -100,6 +121,7 @@ pub enum Snapshot {
     PaneChanges(PaneChange),
     Extensions(Vec<ExtensionSummary>),
     ExtensionAcquisitions(ExtensionAcquisitionChange),
+    WorkspaceLifecycle(WorkspaceLifecycleChange),
     WorkspaceEvents(WorkspaceEventBatch),
 }
 
@@ -118,6 +140,7 @@ impl Snapshot {
             Self::PaneChanges(_) => Topic::PaneChanges,
             Self::Extensions(_) => Topic::Extensions,
             Self::ExtensionAcquisitions(_) => Topic::ExtensionAcquisitions,
+            Self::WorkspaceLifecycle(_) => Topic::WorkspaceLifecycle,
             Self::WorkspaceEvents(_) => Topic::WorkspaceEvents,
         }
     }
@@ -143,6 +166,7 @@ impl Snapshot {
         match &mut self {
             Self::PaneChanges(change) => change.coalesced = count,
             Self::ExtensionAcquisitions(change) => change.coalesced = count,
+            Self::WorkspaceLifecycle(change) => change.coalesced = change.coalesced.saturating_add(count),
             _ => {}
         }
         self
@@ -151,7 +175,10 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExtensionAcquisitionChange, PaneChange, PaneChangeKind, Snapshot};
+    use super::{
+        ExtensionAcquisitionChange, PaneChange, PaneChangeKind, Snapshot, WorkspaceLifecycleAction,
+        WorkspaceLifecycleChange,
+    };
     use crate::request::Topic;
 
     #[test]
@@ -195,6 +222,16 @@ mod tests {
                 generation: 9,
                 coalesced: 17,
             })
+        );
+        let lifecycle = Snapshot::WorkspaceLifecycle(WorkspaceLifecycleChange {
+            workspace: "dev".into(),
+            action: WorkspaceLifecycleAction::Update,
+            revision: 12,
+            coalesced: 0,
+        });
+        assert_eq!(lifecycle.topic(), Topic::WorkspaceLifecycle);
+        assert!(
+            matches!(lifecycle.with_coalesced(3), Snapshot::WorkspaceLifecycle(change) if change.revision == 12 && change.coalesced == 3)
         );
     }
 }

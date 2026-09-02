@@ -25,6 +25,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const sockets = new Set();
   let failRead = false;
   let channel = 60;
+  let revision = 0;
   const host = net.createServer((socket) => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     const reader = new Reader();
@@ -35,15 +36,25 @@ test('admin workflow confines files to socket workspace and cleans success and f
       channel: frame.channel, kind: KIND.response,
       payload: withValue === undefined ? { reply } : { reply, with: withValue },
     }));
+    const lifecycle = (workspace, action) => socket.write(encode({ channel: channel++, kind: KIND.event, payload: {
+      snapshot: 'workspace_lifecycle', of: { workspace, action, revision: ++revision, coalesced: 0 },
+    } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
         if (frame.channel === CONTROL || frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
         const { call, with: argument } = frame.payload;
         if (call === 'workspace_info') answer(frame, 'workspace', { name: 'observer' });
-        else if (call === 'workspace_create') answer(frame, 'workspace_configuration', argument.configuration);
+        else if (call === 'workspace_create') {
+          answer(frame, 'workspace_configuration', argument.configuration);
+          if (revision === 0) lifecycle('another-workspace', 'create');
+          lifecycle(argument.configuration.name, 'create');
+        }
         else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
+          if (call === 'workspace_start') lifecycle(argument.name, 'start');
+          if (call === 'workspace_stop') lifecycle(argument.name, 'stop');
+          if (call === 'workspace_delete') lifecycle(argument.name, 'remove');
           if (call === 'terminal_write_pane') socket.write(encode({ channel: channel++, kind: KIND.event, payload: {
             snapshot: 'pane_changes', of: { slot: 'admin-terminal', kind: 'terminal', revision: 2, generation: 3, coalesced: 0 },
           } }));
@@ -79,6 +90,9 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const result = await runAgentAdmin(client, options);
   assert.equal(result.read, 'hello admin');
   assert.equal(result.event.changed, true);
+  assert.deepEqual(result.lifecycle.map(({ change }) => [change.workspace, change.action]), [
+    ['managed', 'create'], ['managed', 'start'], ['managed', 'stop'], ['managed', 'remove'],
+  ]);
 
   const beforeMismatch = calls.length;
   await assert.rejects(() => runAgentAdmin(client, { ...options, hostingWorkspace: 'managed' }), /does not match socket workspace/);
@@ -88,16 +102,20 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const failureStart = calls.length;
   await assert.rejects(() => runAgentAdmin(client, options), /husklet_file_read failed: fixture read failure/);
   assert.deepEqual(calls.slice(failureStart).map(({ call }) => call), [
-    'workspace_info', 'workspace_create', 'workspace_start', 'filesystem_mkdir', 'filesystem_write',
-    'filesystem_read', 'filesystem_remove', 'filesystem_remove', 'workspace_stop', 'workspace_delete',
+    'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
+    'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir', 'filesystem_write',
+    'filesystem_read', 'filesystem_remove', 'filesystem_remove', 'event_subscribe', 'workspace_stop',
+    'event_unsubscribe', 'event_subscribe', 'workspace_delete', 'event_unsubscribe',
   ]);
   await client.close();
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.slice(0, beforeMismatch).map(({ call }) => call), [
-    'workspace_info', 'workspace_info', 'workspace_create', 'workspace_start', 'filesystem_mkdir',
+    'workspace_info', 'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
+    'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir',
     'filesystem_write', 'filesystem_read', 'event_subscribe', 'terminal_write_pane', 'event_unsubscribe',
-    'filesystem_remove', 'filesystem_remove', 'workspace_stop', 'workspace_delete',
+    'filesystem_remove', 'filesystem_remove', 'event_subscribe', 'workspace_stop', 'event_unsubscribe',
+    'event_subscribe', 'workspace_delete', 'event_unsubscribe',
   ]);
   assert.deepEqual(calls.find(({ call }) => call === 'filesystem_write').with, {
     path: 'agent-admin/note.txt', contents: [...new TextEncoder().encode('hello admin')],

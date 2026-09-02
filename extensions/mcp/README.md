@@ -170,6 +170,9 @@ not redirected by a workspace name passed to lifecycle tools. The helper first
 calls `husklet_workspace_info`, requires the caller's `hostingWorkspace` to
 match, and requires the separately managed workspace to have another name. This
 prevents an administrator from assuming that creating `target` makes subsequent
-file paths resolve inside `target`. The protocol currently has no workspace
-lifecycle event topic, so the example observes the existing credit-controlled
-pane-change topic and does not claim create/start/stop notifications exist.
+file paths resolve inside `target`. The helper arms `husklet_workspace_wait`
+before create, start, stop, and removal and filters by the managed identity and
+action. Lifecycle notices carry a monotonic host-process revision and visible
+coalescing count under `WorkspaceRead`; an unrelated workspace notice cannot
+satisfy the filtered wait. The independent pane wait still demonstrates that
+filesystem authority remains attached to the socket workspace.

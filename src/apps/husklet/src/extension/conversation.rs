@@ -162,6 +162,7 @@ pub struct Conversation {
     pane_generation: u64,
     pane_next: Instant,
     pane_cursor: usize,
+    workspace_lifecycle_revision: Option<u64>,
     events: Option<super::host::Events>,
 }
 
@@ -200,6 +201,7 @@ impl Conversation {
             pane_generation: 0,
             pane_next: Instant::now(),
             pane_cursor: 0,
+            workspace_lifecycle_revision: None,
             events: None,
         })
     }
@@ -344,13 +346,23 @@ impl Conversation {
                 snapshots.push(Snapshot::WorkspaceEvents(batch));
             }
         }
+        if self.session.may_emit(Topic::WorkspaceLifecycle) {
+            if let Some(revision) = self.workspace_lifecycle_revision {
+                if let Ok(changes) = services.workspace_control.lifecycle_since(revision) {
+                    for change in changes {
+                        self.workspace_lifecycle_revision = Some(change.revision);
+                        snapshots.push(Snapshot::WorkspaceLifecycle(change));
+                    }
+                }
+            }
+        }
         for snapshot in snapshots {
             let topic = snapshot.topic();
-            if topic != Topic::WorkspaceEvents && self.observed.get(&topic) == Some(&snapshot) {
+            if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle && self.observed.get(&topic) == Some(&snapshot) {
                 continue;
             }
             self.publish(&snapshot)?;
-            if topic != Topic::WorkspaceEvents {
+            if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle {
                 self.observed.insert(topic, snapshot);
             }
         }
@@ -544,7 +556,19 @@ impl Conversation {
         let request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
             call: coding.to_string(),
         })?;
-        self.session.dispatch(&request, services)
+        let answer = self.session.dispatch(&request, services);
+        if answer.is_ok() {
+            match request {
+                hl_extension::Request::EventSubscribe { topic: Topic::WorkspaceLifecycle } => {
+                    self.workspace_lifecycle_revision = Some(services.workspace_control.lifecycle_revision());
+                }
+                hl_extension::Request::EventUnsubscribe { topic: Topic::WorkspaceLifecycle } => {
+                    self.workspace_lifecycle_revision = None;
+                }
+                _ => {}
+            }
+        }
+        answer
     }
 
     /// Returns the credit a peer released as it consumed frames. A payload that
@@ -824,6 +848,18 @@ mod tests {
     }
 
     impl hl_extension::port::WorkspaceControl for Host {}
+
+    struct LifecycleHost(Vec<hl_extension::WorkspaceLifecycleChange>);
+
+    impl hl_extension::port::WorkspaceControl for LifecycleHost {
+        fn lifecycle_revision(&self) -> u64 {
+            self.0.last().map_or(0, |change| change.revision)
+        }
+
+        fn lifecycle_since(&self, revision: u64) -> Result<Vec<hl_extension::WorkspaceLifecycleChange>, HostError> {
+            Ok(self.0.iter().filter(|change| change.revision > revision).cloned().collect())
+        }
+    }
 
     impl WorkspaceFiles for Host {
         fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError> {
@@ -1133,6 +1169,38 @@ mod tests {
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         conversation.observe(&services(&host)).expect("idle observation");
         assert!(ledger.reached().is_empty(), "no subscription means zero adapter calls");
+    }
+
+    #[test]
+    fn workspace_lifecycle_observation_uses_read_authority_and_preserves_revisions() {
+        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let lifecycle = LifecycleHost(vec![
+            hl_extension::WorkspaceLifecycleChange {
+                workspace: "other".into(), action: hl_extension::WorkspaceLifecycleAction::Create,
+                revision: 4, coalesced: 0,
+            },
+            hl_extension::WorkspaceLifecycleChange {
+                workspace: "target".into(), action: hl_extension::WorkspaceLifecycleAction::Start,
+                revision: 5, coalesced: 0,
+            },
+        ]);
+        let (ours, peer) = UnixStream::pair().expect("socket pair");
+        peer.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
+        conversation.workspace_lifecycle_revision = Some(3);
+        let mut ports = services(&host);
+        ports.workspace_control = &lifecycle;
+        conversation.observe(&ports).expect("observe lifecycle");
+        let mut wire = Wire::new(peer);
+        let first: Snapshot = serde_json::from_slice(&wire.receive().expect("first").payload).expect("snapshot");
+        let second: Snapshot = serde_json::from_slice(&wire.receive().expect("second").payload).expect("snapshot");
+        assert!(matches!(first, Snapshot::WorkspaceLifecycle(change) if change.workspace == "other" && change.revision == 4));
+        assert!(matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5));
     }
 
     #[test]

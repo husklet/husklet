@@ -172,7 +172,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
@@ -205,6 +205,25 @@ test('extension inventory and acquisition watchers use separate exact topics', a
   assert.equal(inventory[0][0].name, 'manager'); assert.deepEqual(acquisitions[0], { job: 'j', revision: 2, state: 'ready', coalesced: 4 });
   const stoppingInventory = stopInventory(); assert.deepEqual((await next()).payload.with, { topic: 'extensions' }); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stoppingInventory;
   const stoppingAcquisitions = stopAcquisitions(); assert.deepEqual((await next()).payload.with, { topic: 'extension-acquisitions' }); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stoppingAcquisitions;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('workspace lifecycle watcher uses its WorkspaceRead-gated exact topic', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const changes = [];
+  const opening = api.watchWorkspaceLifecycle((value) => changes.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'workspace-lifecycle' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  stage.host.write(encode({ channel: 8, kind: KIND.event, payload: { snapshot: 'workspace_lifecycle', of: {
+    workspace: 'target', action: 'update', revision: 9, coalesced: 2,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.deepEqual(changes, [{ workspace: 'target', action: 'update', revision: 9, coalesced: 2 }]);
+  const stopping = stop();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-lifecycle' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

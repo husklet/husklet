@@ -4355,7 +4355,7 @@ export const vocabulary: { props: string[]; handlers: string[] };
 export const SOCKET: string;
 export const PROTOCOL: number;
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-events';
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
@@ -4435,6 +4435,7 @@ export type WorkspaceEvent =
   | { event: 'focus'; active: boolean }
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
+export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }
 export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {
   interaction: I; trigger: T; node: number; id: string; slot?: string;
@@ -4466,6 +4467,7 @@ export type SnapshotEvent =
   | { snapshot: 'pane_changes'; of: PaneChange }
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
+  | { snapshot: 'workspace_lifecycle'; of: WorkspaceLifecycleChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
 
@@ -4587,6 +4589,7 @@ export interface WorkspaceApi {
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
+  watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;
