@@ -309,6 +309,9 @@ impl Conversation {
                 snapshots.push(Snapshot::Images(images));
             }
         }
+        if self.session.may_emit(Topic::ImagePulls) {
+            snapshots.extend(services.images.pull_changes().into_iter().map(Snapshot::ImagePulls));
+        }
         if self.session.may_emit(Topic::Volumes) {
             if let Ok(volumes) = services.volumes.list() {
                 snapshots.push(Snapshot::Volumes(volumes));
@@ -363,7 +366,10 @@ impl Conversation {
         }
         for snapshot in snapshots {
             let topic = snapshot.topic();
-            if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle && self.observed.get(&topic) == Some(&snapshot) {
+            if topic != Topic::WorkspaceEvents
+                && topic != Topic::WorkspaceLifecycle
+                && self.observed.get(&topic) == Some(&snapshot)
+            {
                 continue;
             }
             self.publish(&snapshot)?;
@@ -564,10 +570,14 @@ impl Conversation {
         let answer = self.session.dispatch(&request, services);
         if answer.is_ok() {
             match request {
-                hl_extension::Request::EventSubscribe { topic: Topic::WorkspaceLifecycle } => {
+                hl_extension::Request::EventSubscribe {
+                    topic: Topic::WorkspaceLifecycle,
+                } => {
                     self.workspace_lifecycle_revision = Some(services.workspace_control.lifecycle_revision());
                 }
-                hl_extension::Request::EventUnsubscribe { topic: Topic::WorkspaceLifecycle } => {
+                hl_extension::Request::EventUnsubscribe {
+                    topic: Topic::WorkspaceLifecycle,
+                } => {
                     self.workspace_lifecycle_revision = None;
                 }
                 _ => {}
@@ -720,8 +730,13 @@ mod tests {
             self.ledger.note("executions.list");
             Ok(hl_extension::port::ExecutionList {
                 executions: vec![hl_extension::port::ExecutionSummary {
-                    id: "e1".into(), container_id: "c1".into(), running: false,
-                    exit_code: 7, pid: 42, command: vec!["worker".into()], user: "root".into(),
+                    id: "e1".into(),
+                    container_id: "c1".into(),
+                    running: false,
+                    exit_code: 7,
+                    pid: 42,
+                    command: vec!["worker".into()],
+                    user: "root".into(),
                 }],
                 truncated: false,
             })
@@ -873,7 +888,12 @@ mod tests {
         }
 
         fn lifecycle_since(&self, revision: u64) -> Result<Vec<hl_extension::WorkspaceLifecycleChange>, HostError> {
-            Ok(self.0.iter().filter(|change| change.revision > revision).cloned().collect())
+            Ok(self
+                .0
+                .iter()
+                .filter(|change| change.revision > revision)
+                .cloned()
+                .collect())
         }
     }
 
@@ -1113,14 +1133,18 @@ mod tests {
         let ledger = Arc::new(Ledger::default());
         let (ours, theirs) = UnixStream::pair().expect("socket pair");
         let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
-        let host = Host { ledger: Arc::clone(&ledger) };
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
         conversation.observe(&services(&host)).expect("idle observation");
         assert!(!ledger.reached().contains(&"executions.list"));
         conversation.session.follow(hl_extension::Topic::Executions);
         conversation.observe(&services(&host)).expect("subscribed observation");
         let event = Wire::new(theirs).receive().expect("execution snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
-        assert!(matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e1" && !list.executions[0].running));
+        assert!(
+            matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e1" && !list.executions[0].running)
+        );
     }
 
     #[test]
@@ -1142,9 +1166,22 @@ mod tests {
         assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
         let event = wire.receive().expect("initial extension snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
-        assert!(matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager"));
-        assert_eq!(wire.receive(), Err(Transit::Pending), "unchanged inventory is coalesced");
-        assert!(ledger.reached().iter().filter(|call| **call == "extensions.list").count() > 1);
+        assert!(
+            matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager")
+        );
+        assert_eq!(
+            wire.receive(),
+            Err(Transit::Pending),
+            "unchanged inventory is coalesced"
+        );
+        assert!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "extensions.list")
+                .count()
+                > 1
+        );
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
@@ -1221,22 +1258,29 @@ mod tests {
 
     #[test]
     fn workspace_lifecycle_observation_uses_read_authority_and_preserves_revisions() {
-        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
         let lifecycle = LifecycleHost(vec![
             hl_extension::WorkspaceLifecycleChange {
-                workspace: "other".into(), action: hl_extension::WorkspaceLifecycleAction::Create,
-                revision: 4, coalesced: 0,
+                workspace: "other".into(),
+                action: hl_extension::WorkspaceLifecycleAction::Create,
+                revision: 4,
+                coalesced: 0,
             },
             hl_extension::WorkspaceLifecycleChange {
-                workspace: "target".into(), action: hl_extension::WorkspaceLifecycleAction::Start,
-                revision: 5, coalesced: 0,
+                workspace: "target".into(),
+                action: hl_extension::WorkspaceLifecycleAction::Start,
+                revision: 5,
+                coalesced: 0,
             },
         ]);
         let (ours, peer) = UnixStream::pair().expect("socket pair");
         peer.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
         let authority = Authority::new(
             ExtensionName::new("observer").expect("name"),
-            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
         );
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
@@ -1247,25 +1291,31 @@ mod tests {
         let mut wire = Wire::new(peer);
         let first: Snapshot = serde_json::from_slice(&wire.receive().expect("first").payload).expect("snapshot");
         let second: Snapshot = serde_json::from_slice(&wire.receive().expect("second").payload).expect("snapshot");
-        assert!(matches!(first, Snapshot::WorkspaceLifecycle(change) if change.workspace == "other" && change.revision == 4));
-        assert!(matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5));
+        assert!(
+            matches!(first, Snapshot::WorkspaceLifecycle(change) if change.workspace == "other" && change.revision == 4)
+        );
+        assert!(
+            matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5)
+        );
     }
 
     #[test]
     fn a_native_store_mutation_reaches_the_same_subscriber_as_an_mcp_mutation() {
-        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
         let lifecycle = SharedLifecycleHost;
         let (ours, peer) = UnixStream::pair().expect("socket pair");
         peer.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
         let authority = Authority::new(
             ExtensionName::new("observer").expect("name"),
-            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
         );
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
-        conversation.workspace_lifecycle_revision = Some(
-            hl_extension::port::WorkspaceControl::lifecycle_revision(&lifecycle),
-        );
+        conversation.workspace_lifecycle_revision =
+            Some(hl_extension::port::WorkspaceControl::lifecycle_revision(&lifecycle));
 
         let name = format!("native-observed-{}", std::process::id());
         let path = std::env::temp_dir().join(format!("husklet-{name}.conf"));
@@ -1289,13 +1339,18 @@ mod tests {
             matches!(event, Snapshot::WorkspaceLifecycle(change)
                 if change.workspace == name && change.action == hl_extension::WorkspaceLifecycleAction::Create)
         });
-        assert!(observed, "native mutation was delivered through the shared lifecycle ledger");
+        assert!(
+            observed,
+            "native mutation was delivered through the shared lifecycle ledger"
+        );
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn a_from_now_lifecycle_subscription_does_not_replay_the_hosts_prior_revision() {
-        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
         let lifecycle = LifecycleHost(vec![hl_extension::WorkspaceLifecycleChange {
             workspace: "before-subscribe".into(),
             action: hl_extension::WorkspaceLifecycleAction::Create,
@@ -1306,19 +1361,28 @@ mod tests {
         peer.set_nonblocking(true).expect("nonblocking peer");
         let authority = Authority::new(
             ExtensionName::new("observer").expect("name"),
-            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
         );
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         let mut ports = services(&host);
         ports.workspace_control = &lifecycle;
         let subscribe = codec::request(&Request::EventSubscribe {
             topic: hl_extension::Topic::WorkspaceLifecycle,
-        }).expect("subscribe request");
+        })
+        .expect("subscribe request");
         conversation.exchange(&subscribe, &ports).expect("subscribe");
         let mut wire = Wire::new(peer);
-        assert_eq!(codec::read_reply(&wire.receive().expect("reply")).expect("done"), Reply::Done);
+        assert_eq!(
+            codec::read_reply(&wire.receive().expect("reply")).expect("done"),
+            Reply::Done
+        );
         conversation.observe(&ports).expect("observe from now");
-        assert_eq!(wire.receive(), Err(Transit::Pending), "history is not replayed to a new subscriber");
+        assert_eq!(
+            wire.receive(),
+            Err(Transit::Pending),
+            "history is not replayed to a new subscriber"
+        );
     }
 
     #[test]
@@ -1392,11 +1456,7 @@ mod tests {
             .subscriptions
             .channel(hl_extension::Topic::PaneChanges)
             .expect("pane event channel");
-        let credit = Frame::new(
-            channel,
-            Kind::Credit,
-            serde_json::to_vec(&2_u32).expect("credit"),
-        );
+        let credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&2_u32).expect("credit"));
         conversation
             .exchange(&credit, &services(&host))
             .expect("event credit accepted");
@@ -1552,7 +1612,11 @@ mod tests {
             Vec::new(),
         );
         assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
-        assert_eq!(noisy.collect().frames.len(), Queue::LIMIT, "overflow is rejected atomically");
+        assert_eq!(
+            noisy.collect().frames.len(),
+            Queue::LIMIT,
+            "overflow is rejected atomically"
+        );
 
         healthy
             .deposit(

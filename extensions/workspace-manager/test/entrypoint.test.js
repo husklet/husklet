@@ -46,6 +46,10 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             ? { reply: 'logs', with: { stdout: [111, 107], stderr: [33], truncated: false } }
           : name === 'image_list'
             ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
+            : name === 'image_pull_start'
+              ? { reply: 'image_pull_job', with: { job: 'p1' } }
+            : name === 'image_pull_status'
+              ? { reply: 'image_pull', with: { job: 'p1', reference: 'alpine:3.20', revision: 2, state: 'pulling', status: 'Downloading', layer: 'layer1', current: 5, total: 10, image: null, error: null } }
             : name === 'image_inspect'
               ? { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
@@ -72,6 +76,16 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const openingRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invocation(requests, 'Images') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > openingRenders);
+    peer.write(encode({ channel: 23, kind: KIND.event, payload: changeInvocation(requests, 'registry/image:tag', 'alpine:3.20') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text === 'alpine:3.20')));
+    peer.write(encode({ channel: 24, kind: KIND.event, payload: invocation(requests, 'Pull') }));
+    await until(() => calls.includes('image_pull_start') && requests.some((request) => request.call === 'event_subscribe' && request.with.topic === 'image-pulls'));
+    peer.write(encode({ channel: 78, kind: KIND.event, payload: { snapshot: 'image_pulls', of: { job: 'p1', revision: 2, state: 'pulling', coalesced: 0 } } }));
+    await until(() => calls.includes('image_pull_status') && received.some((frame) => frame.channel === 78 && frame.kind === KIND.credit)
+      && requests.some((request) => request.call === 'interface_render_at' && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Layer layer1')));
+    peer.write(encode({ channel: 25, kind: KIND.event, payload: invocation(requests, 'Cancel pull') }));
+    await until(() => calls.includes('image_pull_cancel') && requests.some((request) => request.call === 'event_unsubscribe' && request.with.topic === 'image-pulls'));
     peer.write(encode({ channel: 10, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
     await until(() => calls.includes('image_inspect') && calls.includes('source_resize_at'));
     const resize = requests.findLast((request) => request.call === 'source_resize_at');
@@ -155,6 +169,14 @@ function invocation(requests, label) {
     && labelled.some((candidate) => candidate.SetProp.id === patch.SetHandler.id));
   assert.ok(handler, `${label} advertises Invoke`);
   return { slot: 'workspace-resources', event: 'Invoke', node: handler.SetHandler.id, id: handler.SetHandler.handler.id };
+}
+
+function changeInvocation(requests, placeholder, value) {
+  const patches = requests.filter((request) => request.call === 'interface_render_at').flatMap((request) => request.with.frame.patches);
+  const node = patches.findLast((patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder)?.SetProp.id;
+  const handler = patches.findLast((patch) => patch.SetHandler?.id === node && patch.SetHandler.handler?.trigger === 'Change');
+  assert.ok(handler, `${placeholder} advertises Change`);
+  return { slot: 'workspace-resources', event: 'Change', node, id: handler.SetHandler.handler.id, value };
 }
 
 async function until(done) {

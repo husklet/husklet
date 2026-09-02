@@ -8,9 +8,9 @@ use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerOutput, ContainerSummary, Division, Entry, ExecutionList, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
-    ImageSummary, NetworkSummary, PaneInventory, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
-    WorkspaceConfiguration, WorkspaceState,
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionList, ExecutionSummary, HostError, ImageDetails,
+    ImagePruneResult, ImagePullJob, ImagePullStatus, ImageSummary, NetworkSummary, PaneInventory, PaneText,
+    ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
 };
 
 /// A call from an extension.
@@ -96,7 +96,11 @@ pub enum Request {
         id: String,
     },
     ExecutionList,
-    ExecutionLogs { id: String, stdout: bool, stderr: bool },
+    ExecutionLogs {
+        id: String,
+        stdout: bool,
+        stderr: bool,
+    },
     ExecutionWait {
         id: String,
         timeout_ms: u32,
@@ -105,8 +109,12 @@ pub enum Request {
         id: String,
         signal: String,
     },
-    ExecutionRemove { id: String },
-    ContainerCreate { spec: crate::port::ContainerCreateSpec },
+    ExecutionRemove {
+        id: String,
+    },
+    ContainerCreate {
+        spec: crate::port::ContainerCreateSpec,
+    },
     ContainerStart {
         id: String,
     },
@@ -138,6 +146,15 @@ pub enum Request {
     ImageList,
     ImagePull {
         reference: String,
+    },
+    ImagePullStart {
+        reference: String,
+    },
+    ImagePullStatus {
+        job: String,
+    },
+    ImagePullCancel {
+        job: String,
     },
     ImageInspect {
         reference: String,
@@ -313,7 +330,12 @@ impl Request {
             | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
-            Self::ImagePull { .. } | Self::ImageRemove { .. } | Self::ImagePrune => Capability::ImageWrite,
+            Self::ImagePull { .. }
+            | Self::ImagePullStart { .. }
+            | Self::ImagePullStatus { .. }
+            | Self::ImagePullCancel { .. }
+            | Self::ImageRemove { .. }
+            | Self::ImagePrune => Capability::ImageWrite,
             Self::VolumeList | Self::VolumeInspect { .. } => Capability::VolumeRead,
             Self::VolumeCreate { .. } | Self::VolumeRemove { .. } => Capability::VolumeWrite,
             Self::NetworkList | Self::NetworkInspect { .. } => Capability::NetworkRead,
@@ -377,6 +399,7 @@ pub enum Topic {
     Containers,
     Executions,
     Images,
+    ImagePulls,
     Volumes,
     Networks,
     Terminal,
@@ -396,6 +419,7 @@ impl Topic {
             Self::Containers => Capability::ContainerRead,
             Self::Executions => Capability::ContainerRead,
             Self::Images => Capability::ImageRead,
+            Self::ImagePulls => Capability::ImageWrite,
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
@@ -411,6 +435,7 @@ impl Topic {
         Self::Containers,
         Self::Executions,
         Self::Images,
+        Self::ImagePulls,
         Self::Volumes,
         Self::Networks,
         Self::Terminal,
@@ -458,6 +483,8 @@ pub enum Reply {
     Executions(ExecutionList),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
+    ImagePullJob(ImagePullJob),
+    ImagePull(ImagePullStatus),
     ImageDetails(ImageDetails),
     ImagePrune(ImagePruneResult),
     Volumes(Vec<VolumeSummary>),
@@ -551,10 +578,20 @@ mod tests {
         assert_eq!(
             Request::ContainerCreate {
                 spec: crate::port::ContainerCreateSpec {
-                    image: "alpine:3.20".into(), name: "worker".into(), entrypoint: None,
-                    command: Vec::new(), environment: Vec::new(), working_directory: None,
-                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
-                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                    image: "alpine:3.20".into(),
+                    name: "worker".into(),
+                    entrypoint: None,
+                    command: Vec::new(),
+                    environment: Vec::new(),
+                    working_directory: None,
+                    user: None,
+                    labels: Vec::new(),
+                    mounts: Vec::new(),
+                    network: None,
+                    ports: Vec::new(),
+                    memory_mb: None,
+                    cpus: None,
+                    pids_limit: None,
                 },
             }
             .capability(),

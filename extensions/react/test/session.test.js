@@ -172,7 +172,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
@@ -251,6 +251,23 @@ test('container watcher uses existing snapshot topic and returns credit after de
   stage.host.write(encode({ channel: 10, kind: KIND.event, payload: { snapshot: 'containers', of: containers } }));
   assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [containers]);
   const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'containers' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('image pull jobs and progress watcher preserve exact typed wire shapes', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const opening = api.watchImagePulls(() => {});
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'image-pulls' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); const stop = await opening;
+  const operations = [api.images.startPull('alpine:3.20'), api.images.pullStatus('7'), api.images.cancelPull('7')];
+  assert.deepEqual((await next()).payload, { call: 'image_pull_start', with: { reference: 'alpine:3.20' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull_job', with: { job: '7' } } }));
+  assert.deepEqual((await next()).payload, { call: 'image_pull_status', with: { job: '7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull', with: { job: '7' } } }));
+  assert.deepEqual((await next()).payload, { call: 'image_pull_cancel', with: { job: '7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await Promise.all(operations);
+  const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'image-pulls' });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });

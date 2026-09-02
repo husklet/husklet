@@ -145,6 +145,36 @@ pub struct ImagePruneResult {
     pub space_reclaimed: u64,
 }
 
+/// Opaque identity returned when a bounded background image pull starts.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePullJob {
+    pub job: String,
+}
+
+/// Latest truthful state of one image pull. Byte totals are absent when the registry omits them.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePullStatus {
+    pub job: String,
+    pub reference: String,
+    pub revision: u64,
+    pub state: String,
+    pub status: Option<String>,
+    pub layer: Option<String>,
+    pub current: Option<u64>,
+    pub total: Option<u64>,
+    pub image: Option<ImageSummary>,
+    pub error: Option<String>,
+}
+
+/// Coalesced invalidation; callers read status for the bounded full snapshot.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePullChange {
+    pub job: String,
+    pub revision: u64,
+    pub state: String,
+    pub coalesced: u64,
+}
+
 /// A local volume as an extension sees it. The daemon does not calculate
 /// recursive disk usage during inventory, so this deliberately carries no
 /// synthetic size.
@@ -541,16 +571,22 @@ pub trait ContainerInventory {
     }
 
     fn executions(&self) -> Result<ExecutionList, HostError> {
-        Err(HostError::Unsupported("execution listing is unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution listing is unsupported by this host".into(),
+        ))
     }
 
     fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
-        Err(HostError::Unsupported("execution logs are unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution logs are unsupported by this host".into(),
+        ))
     }
 
     /// Waits at most `timeout_ms` for an execution to stop, then returns its final state.
     fn execution_wait(&self, _id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
-        Err(HostError::Unsupported("execution waiting is unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution waiting is unsupported by this host".into(),
+        ))
     }
 }
 
@@ -562,14 +598,24 @@ pub trait ContainerControl {
     fn create(&self, image: &str, name: &str) -> Result<String, HostError>;
 
     fn create_spec(&self, spec: &ContainerCreateSpec) -> Result<String, HostError> {
-        if spec.entrypoint.is_none() && spec.command.is_empty() && spec.environment.is_empty()
-            && spec.working_directory.is_none() && spec.user.is_none() && spec.labels.is_empty()
-            && spec.mounts.is_empty() && spec.network.is_none() && spec.ports.is_empty()
-            && spec.memory_mb.is_none() && spec.cpus.is_none() && spec.pids_limit.is_none()
+        if spec.entrypoint.is_none()
+            && spec.command.is_empty()
+            && spec.environment.is_empty()
+            && spec.working_directory.is_none()
+            && spec.user.is_none()
+            && spec.labels.is_empty()
+            && spec.mounts.is_empty()
+            && spec.network.is_none()
+            && spec.ports.is_empty()
+            && spec.memory_mb.is_none()
+            && spec.cpus.is_none()
+            && spec.pids_limit.is_none()
         {
             self.create(&spec.image, &spec.name)
         } else {
-            Err(HostError::Unsupported("configured container creation is unavailable".into()))
+            Err(HostError::Unsupported(
+                "configured container creation is unavailable".into(),
+            ))
         }
     }
 
@@ -623,7 +669,9 @@ pub trait ContainerControl {
 
     /// Removes one stopped execution record and its captured output.
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
-        Err(HostError::Unsupported("execution removal is unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution removal is unsupported by this host".into(),
+        ))
     }
 
     /// Starts an additional process detached from the extension connection and
@@ -650,6 +698,19 @@ pub trait ImageStore {
     /// # Errors
     /// Returns a host failure.
     fn pull(&self, reference: &str) -> Result<ImageSummary, HostError>;
+
+    fn pull_start(&self, _reference: &str) -> Result<ImagePullJob, HostError> {
+        Err(HostError::Unsupported("image pull progress is unavailable".into()))
+    }
+    fn pull_status(&self, _job: &str) -> Result<ImagePullStatus, HostError> {
+        Err(HostError::Unsupported("image pull progress is unavailable".into()))
+    }
+    fn pull_cancel(&self, _job: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("image pull cancellation is unavailable".into()))
+    }
+    fn pull_changes(&self) -> Vec<ImagePullChange> {
+        Vec::new()
+    }
 
     fn inspect(&self, _reference: &str) -> Result<ImageDetails, HostError> {
         Err(HostError::Unsupported("image inspection is unavailable".into()))
@@ -872,7 +933,7 @@ pub trait WorkspaceFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{Division, LayoutNode, Occupant, PANE_LINES, PaneSummary, pane_lines};
+    use super::{pane_lines, Division, LayoutNode, Occupant, PaneSummary, PANE_LINES};
 
     #[test]
     fn a_pane_read_is_bounded_however_it_is_asked_for() {

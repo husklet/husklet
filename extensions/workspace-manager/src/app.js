@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Row, Scroll, Separator, Spinner, Text,
+  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, Progress, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
 import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
@@ -281,12 +281,32 @@ export function Images({ api, resource, imageDetails }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
+  const [pull, setPull] = useState(null);
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const run = async (name, operation) => {
     setBusy(name); setError(null); setNotice('');
     try { await operation(); } catch (cause) { setError(cause); } finally { setBusy(''); }
   };
-  const pull = () => run('pull', async () => { await api.images.pull(reference.trim()); setReference(''); await resource.reload(); });
+  const startPull = () => run('pull', async () => {
+    if (typeof api.images.startPull !== 'function') { await api.images.pull(reference.trim()); await resource.reload(); return; }
+    const started = await api.images.startPull(reference.trim());
+    setPull({ job: started.job, reference: reference.trim(), revision: 0, state: 'starting', status: 'Starting pull…', layer: null, current: null, total: null, error: null });
+  });
+  useEffect(() => {
+    if (!pull?.job || typeof api.watchImagePulls !== 'function' || ['complete', 'failed', 'cancelled'].includes(pull.state)) return undefined;
+    let disposed = false; let stop = null;
+    void api.watchImagePulls(async (change) => {
+      if (disposed || change.job !== pull.job || change.revision <= pull.revision) return;
+      const status = await api.images.pullStatus(pull.job);
+      if (disposed) return;
+      setPull(status);
+      if (status.state === 'complete') { setNotice(`Pulled ${status.reference}.`); await resource.reload(); }
+    }).then((dispose) => { if (disposed) void dispose(); else stop = dispose; }).catch((error) => {
+      if (!disposed) setPull((current) => ({ ...current, state: 'failed', error: error.message ?? String(error) }));
+    });
+    return () => { disposed = true; if (stop) void stop(); };
+  }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
+  const cancelPull = () => run('pull-cancel', async () => { await api.images.cancelPull(pull.job); setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' })); });
   const inspect = (item) => run(`inspect:${item.id}`, async () => {
     setDetail(null);
     setInspection({ id: item.id, state: 'loading', count: 0, error: null });
@@ -312,7 +332,13 @@ export function Images({ api, resource, imageDetails }) {
   });
   const view = bounded(resource.data);
   return h(Page, { title: 'Images', subtitle: 'Images available to this workspace.' },
-    h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: busy === 'pull' ? 'Pulling…' : 'Pull', enabled: !busy && reference.trim().length > 0, onInvoke: pull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
+    h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull', enabled: !busy && reference.trim().length > 0 && (!pull || ['complete', 'failed', 'cancelled'].includes(pull.state)), onInvoke: startPull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
+    pull ? h(Card, { variant: pull.state === 'failed' ? 'outline' : 'filled' },
+      h(CardHeader, { label: pull.reference, detail: pull.status ?? pull.state }),
+      h(CardContent, { gap: 1 }, pull.total > 0 ? h(Meter, { fraction: Math.min(1, pull.current / pull.total), value: `${pull.current} / ${pull.total} bytes` }) : pull.state === 'pulling' || pull.state === 'starting' ? h(Progress, { busy: true }) : null,
+        pull.layer ? h(Text, { label: `Layer ${pull.layer}`, color: 'text-dim' }) : null,
+        pull.error ? h(Text, { label: pull.error, color: 'danger', wrap: true }) : null),
+      h(CardActions, {}, !['complete', 'failed', 'cancelled'].includes(pull.state) ? h(Button, { label: 'Cancel pull', onInvoke: cancelPull }) : null)) : null,
     h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
       ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', enabled: !busy, tone: 'danger', destructive: true, onInvoke: prune }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),

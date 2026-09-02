@@ -117,6 +117,42 @@ test('an empty typed image inspection has an explicit semantic empty state', asy
     patch.SetProp?.prop === 'Detail' && patch.SetProp.value?.Text === 'The host returned no inspectable fields.'));
 });
 
+test('image pull progress is determinate, cancellable and retryable from retained input', async () => {
+  const calls = []; let publish;
+  const controlled = { ...api, images: {
+    ...api.images,
+    startPull: async (reference) => { calls.push(['start', reference]); return { job: String(calls.length) }; },
+    pullStatus: async (job) => ({ job, reference: 'alpine:3.20', revision: 2, state: 'pulling', status: 'Downloading', layer: 'sha256:layer', current: 25, total: 100, image: null, error: null }),
+    cancelPull: async (job) => calls.push(['cancel', job]),
+  }, watchImagePulls: async (listener) => { publish = listener; return async () => calls.push(['unsubscribe']); } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host(); stage.render(h(Images, { api: controlled, resource }));
+  change(stage, 'registry/image:tag', 'alpine:3.20'); invoke(stage, 'Pull'); await settled(); await settled();
+  assert.deepEqual(calls, [['start', 'alpine:3.20']]);
+  publish({ job: '1', revision: 2, state: 'pulling', coalesced: 0 }); await settled(); await settled();
+  assert.ok(labelled(stage, 'Layer sha256:layer'));
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.SetProp?.prop === 'Fraction' && patch.SetProp.value?.Number === 0.25));
+  invoke(stage, 'Cancel pull'); await settled(); await settled();
+  assert.ok(calls.some((call) => call[0] === 'cancel'));
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.SetProp?.prop === 'Detail' && patch.SetProp.value?.Text === 'Pull cancelled.'));
+  invoke(stage, 'Pull'); await settled(); await settled();
+  assert.deepEqual(calls.filter((call) => call[0] === 'start').map((call) => call[1]), ['alpine:3.20', 'alpine:3.20']);
+});
+
+test('a completed image pull reports success, refreshes inventory and retains its reference', async () => {
+  const calls = []; let publish;
+  const controlled = { ...api, images: { ...api.images,
+    startPull: async () => ({ job: 'done' }),
+    pullStatus: async () => ({ job: 'done', reference: 'alpine:3.20', revision: 2, state: 'complete', status: 'Pull complete', layer: null, current: 100, total: 100, image: { id: 'i1', reference: 'alpine:3.20', size: 1, created: 0 }, error: null }),
+    cancelPull: async () => {},
+  }, watchImagePulls: async (listener) => { publish = listener; return async () => {}; } };
+  const stage = host(); stage.render(h(Images, { api: controlled, resource: { data: [], loading: false, error: null, reload: async () => calls.push('reload') } }));
+  change(stage, 'registry/image:tag', 'alpine:3.20'); invoke(stage, 'Pull'); await settled(); await settled();
+  publish({ job: 'done', revision: 2, state: 'complete', coalesced: 0 }); await settled(); await settled();
+  assert.ok(labelled(stage, 'Pulled alpine:3.20.')); assert.deepEqual(calls, ['reload']);
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text === 'alpine:3.20'));
+});
+
 test('volume and network panels render bounded real inventories and controls', () => {
   const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
   const volumeFrame = host().render(h(Volumes, { api, resource: resource([{ name: 'cache', driver: 'local' }]) }));

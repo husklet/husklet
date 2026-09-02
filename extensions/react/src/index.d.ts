@@ -4429,7 +4429,7 @@ export const PROTOCOL: number;
 /** Maximum Unicode characters retained by a LogView; Value patches append. */
 export const LOG_VIEW_CHARACTER_LIMIT: 4096;
 
-export type Topic = 'containers' | 'executions' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
+export type Topic = 'containers' | 'executions' | 'images' | 'image-pulls' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
@@ -4494,6 +4494,9 @@ export interface ExecutionSummary {
 }
 export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface ImagePullJob { job: string }
+export interface ImagePullStatus { job: string; reference: string; revision: number; state: string; status: string | null; layer: string | null; current: number | null; total: number | null; image: ImageSummary | null; error: string | null }
+export interface ImagePullChange { job: string; revision: number; state: string; coalesced: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
 export interface VolumeSummary { name: string; driver: string }
@@ -4553,6 +4556,7 @@ export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'executions'; of: ExecutionList }
   | { snapshot: 'images'; of: ImageSummary[] }
+  | { snapshot: 'image_pulls'; of: ImagePullChange }
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
   | { snapshot: 'terminal'; of: TabSummary[] }
@@ -4642,7 +4646,7 @@ export interface WorkspaceApi {
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
   };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
@@ -4687,6 +4691,7 @@ export interface WorkspaceApi {
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
   watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
+  watchImagePulls(listener: (change: ImagePullChange) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
   watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
