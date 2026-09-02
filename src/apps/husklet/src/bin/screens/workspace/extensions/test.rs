@@ -56,8 +56,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
-        panes::disabling_an_extension_restores_its_nonfocused_surface_pane();
-        panes::removing_an_extension_restores_its_nonfocused_surface_pane();
+        panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
+        panes::removing_an_extension_tombstones_without_displacing_its_shell();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::splitting_an_interface_again_moves_its_one_surface();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
@@ -1448,9 +1448,14 @@ mod panes {
         }
         shelf.refresh(&name);
 
-        let restored = Panes::at(&bench.window, &first_slot).expect("restored pane identity");
-        assert_eq!(restored.occupant, Occupant::Terminal);
-        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
+        let frozen = Panes::at(&bench.window, &first_slot).expect("tombstoned pane identity");
+        assert_eq!(frozen.occupant, Occupant::Surface);
+        assert!(
+            super::descendants(&frozen.content)
+                .iter()
+                .any(|widget| widget.has_css_class(ABSENCE)),
+            "withdrawal leaves an explicit recovery placeholder"
+        );
         assert_eq!(
             Panes::at(&bench.window, &second_slot).expect("unrelated pane").slot,
             second_slot,
@@ -1461,17 +1466,45 @@ mod panes {
             "withdrawal disappears from every chooser immediately"
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
-        assert!(
-            Slots::new(&bench.window).surface(&restored.content).is_none(),
-            "the removed provider identity is no longer a live surface registration"
+        assert_eq!(
+            Slots::new(&bench.window).surface(&frozen.content),
+            Some((first_slot.clone(), "postgres".to_owned(), Some("database".to_owned()))),
+            "the persisted provider identity survives lifecycle withdrawal"
         );
+
+        if !remove {
+            gallery.enrol(
+                "postgres",
+                &interface,
+                &home,
+                &[hl_extension::PaneProvider {
+                    id: ExtensionName::new("database").expect("provider id"),
+                    title: "Postgres".to_owned(),
+                    icon: None,
+                }],
+                Rc::new(|_| {}),
+            );
+            PaneChooser::recover(&bench.window, "postgres");
+            assert_eq!(
+                interface.parent().as_ref(),
+                Some(frozen.content.upcast_ref::<gtk::Widget>())
+            );
+            PaneChooser::withdraw(&bench.window, "postgres");
+            gallery.withdraw("postgres");
+        }
+
+        assert!(Panes::focus(&bench.window, &first_slot));
+        PaneChooser::terminal(&bench.window);
+        let restored = Panes::at(&bench.window, &first_slot).expect("explicitly restored shell");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
     }
 
-    pub(super) fn disabling_an_extension_restores_its_nonfocused_surface_pane() {
+    pub(super) fn disabling_an_extension_tombstones_and_recovers_its_surface_pane() {
         lifecycle_withdrawal(false);
     }
 
-    pub(super) fn removing_an_extension_restores_its_nonfocused_surface_pane() {
+    pub(super) fn removing_an_extension_tombstones_without_displacing_its_shell() {
         lifecycle_withdrawal(true);
     }
 
@@ -1589,7 +1622,8 @@ mod panes {
 
     pub(super) fn a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell() {
         let bench = Bench::new();
-        Window::exhibit(&bench.window, Gallery::new());
+        let gallery = Gallery::new();
+        Window::exhibit(&bench.window, gallery.clone());
         let storage = tempfile::tempdir().expect("temporary directory");
         let node = PaneNode::Surface(SurfacePane {
             extension: "departed".to_owned(),
@@ -1615,5 +1649,16 @@ mod panes {
         );
         let held = Panes::at(&bench.window, "7").expect("the restored pane keeps its slot");
         assert_eq!(held.occupant, Occupant::Surface);
+
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol("departed", &interface, &home, &[], Rc::new(|_| {}));
+        PaneChooser::recover(&bench.window, "departed");
+        assert_eq!(
+            interface.parent().as_ref(),
+            Some(held.content.upcast_ref::<gtk::Widget>()),
+            "re-enabling after restart rehydrates the preserved pane"
+        );
     }
 }

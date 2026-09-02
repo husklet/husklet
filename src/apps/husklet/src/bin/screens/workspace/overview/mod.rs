@@ -180,7 +180,11 @@ impl<'a> Overview<'a> {
                 .as_ref()
                 .and_then(std::rc::Weak::upgrade)
                 .map_or_else(hl::extension::Events::default, |window| window.observer());
-            Self::surface(&held, &entry.name, providers, &port, events, &shown, faulted)
+            let surface = Self::surface(&held, &entry.name, providers, &port, events, &shown, faulted);
+            if let Some(window) = observed.as_ref().and_then(std::rc::Weak::upgrade) {
+                screens::workspace::terminal::PaneChooser::recover(&window, entry.name.as_str());
+            }
+            surface
         });
         let gallery_for_withdrawal = gallery.clone();
         let window = window.map(Rc::downgrade);

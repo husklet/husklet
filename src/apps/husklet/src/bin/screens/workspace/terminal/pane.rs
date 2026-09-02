@@ -143,9 +143,8 @@ impl PaneChooser {
         Self::terminal_at(window, &current, true);
     }
 
-    /// Restores every pane occupied by one extension without changing which
-    /// unrelated pane has focus. Lifecycle removal is window-wide, not a
-    /// chooser action on the currently selected leaf.
+    /// Freezes every pane occupied by one extension without changing layout,
+    /// persisted provider identity, or a displaced terminal.
     pub(crate) fn withdraw(window: &Rc<TermWin>, extension: &str) {
         let held: Vec<_> = Panes::all(window)
             .into_iter()
@@ -156,7 +155,27 @@ impl PaneChooser {
             })
             .collect();
         for pane in held {
-            Self::terminal_at(window, &pane, false);
+            Surface::tombstone(window, &pane.content);
+        }
+    }
+
+    /// Rehydrates tombstones after an extension is enabled again. A provider
+    /// removed from the new manifest remains frozen.
+    pub(crate) fn recover(window: &Rc<TermWin>, extension: &str) {
+        let Some(gallery) = Window::gallery(window) else { return };
+        let held: Vec<_> = Panes::all(window)
+            .into_iter()
+            .filter_map(|pane| {
+                let (_, owner, provider) = Slots::new(window).surface(&pane.content)?;
+                (owner == extension && provider.as_deref().map_or(true, |id| gallery.offers(extension, id)))
+                    .then_some((pane.content, provider))
+            })
+            .collect();
+        for (pane, provider) in held {
+            Surface::restore(window, extension, &pane);
+            if let Some(provider) = provider {
+                gallery.select(extension, &provider);
+            }
         }
     }
 
