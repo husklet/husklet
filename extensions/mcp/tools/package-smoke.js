@@ -20,7 +20,7 @@ try {
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { tools, createServer, semanticXml } from '@husklet/mcp';
     if (typeof tools !== 'function' || typeof createServer !== 'function') process.exit(1);
-    const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, actions: [], children: [] } });
+    const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     if (!xml.startsWith('<pane slot="packed"')) process.exit(1);
   `], { cwd: consumer, stdio: 'pipe' });
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
@@ -29,7 +29,7 @@ try {
     declare const session: Session;
     const server = createServer(session);
     const definitions: ToolDefinition[] = tools({} as Parameters<typeof tools>[0]);
-    const xml: string = semanticXml({ slot: 'typed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, actions: [], children: [] } });
+    const xml: string = semanticXml({ slot: 'typed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     void server; void definitions; void xml;
     // @ts-expect-error a Session is required
     createServer({});

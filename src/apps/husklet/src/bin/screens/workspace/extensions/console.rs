@@ -80,6 +80,9 @@ impl Console {
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
             Request::Read { slot, lines } => Self::read(window, slot, *lines).map(Answer::Text),
             Request::Semantics { slot } => Self::semantics(window, slot).map(Answer::Semantics),
+            Request::SemanticRequirement { slot, node } => {
+                Self::semantic_requirement(window, slot, *node).map(Answer::Capability)
+            }
             Request::SemanticAction { slot, action } => {
                 Self::semantic_action(window, slot, action).map(|()| Answer::Done)
             }
@@ -223,6 +226,20 @@ impl Console {
         Window::gallery(window)
             .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
             .semantic_action(&extension, action)
+    }
+
+    fn semantic_requirement(
+        window: &Rc<TermWin>,
+        slot: &str,
+        node: u64,
+    ) -> Result<hl_extension::Capability, HostError> {
+        if slot != "workspace" {
+            Self::surface_owner(window, slot)?;
+            return Ok(hl_extension::Capability::PaneSemanticControl);
+        }
+        Window::gallery(window)
+            .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+            .native_requirement(node)
     }
 
     fn write(window: &Rc<TermWin>, slot: &str, contents: &[u8]) -> Result<(), HostError> {

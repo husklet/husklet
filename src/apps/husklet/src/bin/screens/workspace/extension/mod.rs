@@ -161,6 +161,7 @@ impl Interface {
                 .text(hl_gui::Prop::Value)
                 .map(|value| if secret { "[redacted]".to_owned() } else { clip(value) }),
             disabled: !node.flag(hl_gui::Prop::Enabled, true),
+            destructive: false,
             actions,
             children,
         })

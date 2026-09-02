@@ -37,6 +37,8 @@ pub enum Capability {
     PaneObserve,
     PaneSemanticRead,
     PaneSemanticControl,
+    /// Installing, updating, enabling, disabling, or removing extensions.
+    ExtensionControl,
     FilesystemRead,
     FilesystemWrite,
     Interface,
@@ -64,6 +66,7 @@ impl Capability {
             Self::PaneObserve => "pane-observe",
             Self::PaneSemanticRead => "pane-semantic-read",
             Self::PaneSemanticControl => "pane-semantic-control",
+            Self::ExtensionControl => "extension-control",
             Self::FilesystemRead => "filesystem-read",
             Self::FilesystemWrite => "filesystem-write",
             Self::Interface => "interface",
@@ -83,6 +86,7 @@ impl Capability {
                 | Self::NetworkWrite
                 | Self::TerminalControl
                 | Self::PaneSemanticControl
+                | Self::ExtensionControl
                 | Self::FilesystemWrite
         )
     }
@@ -116,6 +120,7 @@ impl Capability {
         Self::PaneObserve,
         Self::PaneSemanticRead,
         Self::PaneSemanticControl,
+        Self::ExtensionControl,
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::Interface,

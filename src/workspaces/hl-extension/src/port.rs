@@ -193,6 +193,8 @@ pub struct SemanticNode {
     pub label: Option<String>,
     pub value: Option<String>,
     pub disabled: bool,
+    /// Whether invoking this node performs an irreversible operation.
+    pub destructive: bool,
     pub actions: Vec<SemanticActionKind>,
     pub children: Vec<SemanticNode>,
 }
@@ -546,6 +548,13 @@ pub trait TerminalSurface {
 
     fn semantic_action(&self, _slot: &str, _action: &PaneSemanticAction) -> Result<(), HostError> {
         Err(HostError::Unsupported("pane semantic actions are unavailable".into()))
+    }
+
+    /// Additional domain authority required by a semantic action. Extension
+    /// surfaces default to their explicit semantic-control grant; native panes
+    /// override this from their product-owned registry.
+    fn semantic_requirement(&self, _slot: &str, _node: u64) -> Result<crate::Capability, HostError> {
+        Ok(crate::Capability::PaneSemanticControl)
     }
 
     /// Writes raw bytes into a terminal pane, without appending a newline.

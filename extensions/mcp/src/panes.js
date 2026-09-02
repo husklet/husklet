@@ -31,7 +31,7 @@ const text = (value) => escape(String(value).slice(0, TEXT_LIMIT));
     nodes += 1;
     const actions = Array.isArray(entry.actions) ? entry.actions.slice(0, 16).map(attr).join(',') : '';
     const close = '</node>';
-    if (!append(`<node id="${attr(entry.id ?? '')}" role="${attr(entry.role ?? '')}" disabled="${entry.disabled === true}" actions="${actions}">`, reserve + bytes(close) + 14)) return;
+    if (!append(`<node id="${attr(entry.id ?? '')}" role="${attr(entry.role ?? '')}" disabled="${entry.disabled === true}" destructive="${entry.destructive === true}" actions="${actions}">`, reserve + bytes(close) + 14)) return;
     if (entry.label != null) append(`<label>${text(entry.label)}</label>`, reserve + bytes(close) + 14);
     if (entry.value != null) {
       const value = SECRET.test(`${entry.role ?? ''} ${entry.label ?? ''}`) ? '[redacted]' : entry.value;
@@ -124,7 +124,18 @@ export const semanticAction = z.object({
   node: z.number().int().nonnegative(),
   action: z.enum(['invoke', 'change', 'submit', 'toggle', 'expand', 'focus']),
   value: z.string().max(8192).nullable().optional(),
+  confirm: z.boolean().optional(),
 }).strict();
+
+const findNode = (node, id) => {
+  if (!node || typeof node !== 'object') return undefined;
+  if (node.id === id) return node;
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return undefined;
+};
 
 export function paneTools(terminal) {
   if (typeof terminal?.semantics !== 'function' || typeof terminal?.act !== 'function') return [];
@@ -134,7 +145,13 @@ export function paneTools(terminal) {
     ['husklet_pane_snapshot', 'Read the bounded semantic tree exposed by a pane.', z.object({ slot: z.string().min(1).max(256) }).strict(),
       async ({ slot }) => xmlResult(await terminal.semantics(slot)), true],
     ['husklet_pane_action', 'Act on a semantic node from a matching tree revision.', semanticAction,
-      async ({ slot, ...action }) => { await terminal.act(slot, action); return { done: true }; }],
+      async ({ slot, confirm, ...action }) => {
+        const tree = await terminal.semantics(slot);
+        const node = findNode(tree.root, action.node);
+        if (node?.destructive === true && confirm !== true) throw new Error('destructive pane action requires confirm: true');
+        await terminal.act(slot, action);
+        return { done: true };
+      }],
   ];
   return tools.map(([name, description, inputSchema, run, formatted = false]) => ({
     name, description, inputSchema,

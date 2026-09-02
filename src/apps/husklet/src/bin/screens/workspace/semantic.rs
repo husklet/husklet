@@ -35,6 +35,7 @@ pub struct Node {
     pub label: Option<String>,
     pub value: Option<String>,
     pub disabled: bool,
+    pub destructive: bool,
     pub actions: Vec<ActionKind>,
     pub children: Vec<Node>,
 }
@@ -108,6 +109,7 @@ impl Registry {
                 Value::Secret => "[redacted]".to_owned(),
             }),
             disabled: false,
+            destructive: false,
             actions: actions.to_vec(),
             children: Vec::new(),
         };
@@ -155,6 +157,40 @@ impl Registry {
         }
     }
 
+    pub fn set_disabled(&self, path: &str, disabled: bool) {
+        let mut entries = self.entries.borrow_mut();
+        let Some(entry) = entries.get_mut(&stable_id(path)) else {
+            return;
+        };
+        if entry.node.disabled != disabled {
+            entry.node.disabled = disabled;
+            self.bump();
+        }
+    }
+
+    pub fn set_destructive(&self, path: &str) {
+        let mut entries = self.entries.borrow_mut();
+        let Some(entry) = entries.get_mut(&stable_id(path)) else {
+            return;
+        };
+        if !entry.node.destructive {
+            entry.node.destructive = true;
+            self.bump();
+        }
+    }
+
+    pub fn requirement(&self, node: u64) -> Result<hl_extension::Capability, Refusal> {
+        let entries = self.entries.borrow();
+        let entry = entries.get(&node).ok_or(Refusal::Absent(node))?;
+        if entry.path.starts_with("settings/") {
+            Ok(hl_extension::Capability::WorkspaceControl)
+        } else if entry.path.starts_with("extensions/") {
+            Ok(hl_extension::Capability::ExtensionControl)
+        } else {
+            Ok(hl_extension::Capability::PaneSemanticControl)
+        }
+    }
+
     pub fn select(&self, path: &str) {
         let selected = stable_id(path);
         let mut changed = false;
@@ -190,6 +226,7 @@ impl Registry {
                 label: Some("Workspace".to_owned()),
                 value: None,
                 disabled: false,
+                destructive: false,
                 actions: Vec::new(),
                 children,
             },
@@ -334,6 +371,96 @@ mod tests {
                 value: Some("x".repeat(ACTION_VALUE_LIMIT + 1)),
             }),
             Err(Refusal::ValueTooLong)
+        );
+    }
+
+    #[test]
+    fn destructive_confirmation_is_disabled_until_phase_one_and_changes_revision() {
+        let registry = Registry::new("workspace");
+        let removed = Rc::new(Cell::new(false));
+        let mark = Rc::clone(&removed);
+        let path = "extensions/installed/demo/Confirm removal";
+        let id = registry.register(
+            path,
+            "button",
+            Some("Confirm removal"),
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| mark.set(true)),
+        );
+        registry.set_destructive(path);
+        registry.set_disabled(path, true);
+        let initial = registry.snapshot();
+        let node = initial
+            .root
+            .children
+            .iter()
+            .find(|node| node.id == id)
+            .expect("confirm node");
+        assert!(node.destructive);
+        assert!(node.disabled);
+        assert_eq!(
+            registry.act(&Action {
+                revision: initial.revision,
+                node: id,
+                action: ActionKind::Invoke,
+                value: None,
+            }),
+            Err(Refusal::Disabled(id))
+        );
+        assert!(!removed.get(), "initial direct confirmation preserved the installation");
+        registry.set_disabled(path, false);
+        let armed = registry.snapshot();
+        assert_ne!(
+            armed.revision, initial.revision,
+            "phase transition must stale the initial snapshot"
+        );
+        assert!(matches!(
+            registry.act(&Action {
+                revision: initial.revision,
+                node: id,
+                action: ActionKind::Invoke,
+                value: None,
+            }),
+            Err(Refusal::Stale { .. })
+        ));
+        registry
+            .act(&Action {
+                revision: armed.revision,
+                node: id,
+                action: ActionKind::Invoke,
+                value: None,
+            })
+            .expect("armed confirmation");
+        assert!(removed.get());
+    }
+
+    #[test]
+    fn native_action_paths_resolve_to_their_domain_authority() {
+        let registry = Registry::new("workspace");
+        let settings = registry.register(
+            "settings/save",
+            "button",
+            None,
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(|_, _| {}),
+        );
+        let extension = registry.register(
+            "extensions/installed/demo/Disable",
+            "button",
+            None,
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(|_, _| {}),
+        );
+        assert_eq!(
+            registry.requirement(settings),
+            Ok(hl_extension::Capability::WorkspaceControl)
+        );
+        assert_eq!(
+            registry.requirement(extension),
+            Ok(hl_extension::Capability::ExtensionControl)
         );
     }
 }

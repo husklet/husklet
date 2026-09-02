@@ -96,6 +96,15 @@ impl Gallery {
             })
     }
 
+    pub fn native_requirement(&self, node: u64) -> Result<hl_extension::Capability, hl_extension::HostError> {
+        self.1
+            .borrow()
+            .as_ref()
+            .ok_or_else(|| hl_extension::HostError::Absent("workspace has no native semantic pane".into()))?
+            .requirement(node)
+            .map_err(|refusal| hl_extension::HostError::Absent(format!("native semantic node refused: {refusal:?}")))
+    }
+
     /// Records where one extension's interface is, replacing whatever was
     /// recorded under that name — a rebuilt page is a new interface.
     pub fn enrol(
@@ -255,6 +264,7 @@ fn native_node(node: super::super::semantic::Node) -> hl_extension::SemanticNode
         label: node.label,
         value: node.value,
         disabled: node.disabled,
+        destructive: node.destructive,
         actions: node.actions.into_iter().map(wire_action).collect(),
         children: node.children.into_iter().map(native_node).collect(),
     }

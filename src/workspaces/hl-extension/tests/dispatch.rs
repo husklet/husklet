@@ -322,6 +322,7 @@ impl TerminalSurface for Host {
                 label: None,
                 value: None,
                 disabled: false,
+                destructive: false,
                 actions: vec![],
                 children: vec![],
             },
@@ -331,6 +332,14 @@ impl TerminalSurface for Host {
     fn semantic_action(&self, _slot: &str, _action: &PaneSemanticAction) -> Result<(), HostError> {
         self.ledger.note("terminal.semantic_action");
         Ok(())
+    }
+
+    fn semantic_requirement(&self, slot: &str, node: u64) -> Result<Capability, HostError> {
+        match (slot, node) {
+            ("workspace", 98) => Ok(Capability::WorkspaceControl),
+            ("workspace", 99) => Ok(Capability::ExtensionControl),
+            _ => Ok(Capability::PaneSemanticControl),
+        }
     }
 
     fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
@@ -386,6 +395,35 @@ fn pane_semantic_read_and_control_are_separately_granted() {
     assert_eq!(
         host.ledger.reached(),
         vec!["terminal.semantics", "terminal.semantic_action"]
+    );
+}
+
+#[test]
+fn native_semantic_actions_require_the_underlying_domain_grant() {
+    let host = Host::new();
+    let action = |node| Request::PaneSemanticAction {
+        slot: "workspace".into(),
+        action: PaneSemanticAction {
+            revision: 1,
+            node,
+            action: SemanticActionKind::Invoke,
+            value: None,
+        },
+    };
+    for node in [98, 99] {
+        let denied = session(&[Capability::PaneSemanticControl], &[]).dispatch(&action(node), &services(&host));
+        assert!(matches!(denied, Err(Failure::Denied { .. })));
+    }
+    assert!(host.ledger.reached().is_empty(), "denial must precede the callback");
+    session(&[Capability::PaneSemanticControl, Capability::ExtensionControl], &[])
+        .dispatch(&action(99), &services(&host))
+        .expect("explicit lifecycle grant");
+    session(&[Capability::PaneSemanticControl, Capability::WorkspaceControl], &[])
+        .dispatch(&action(98), &services(&host))
+        .expect("explicit workspace grant");
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["terminal.semantic_action", "terminal.semantic_action"]
     );
 }
 

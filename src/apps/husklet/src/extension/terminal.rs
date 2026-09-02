@@ -69,6 +69,10 @@ pub enum Request {
     Semantics {
         slot: String,
     },
+    SemanticRequirement {
+        slot: String,
+        node: u64,
+    },
     SemanticAction {
         slot: String,
         action: PaneSemanticAction,
@@ -124,6 +128,7 @@ pub enum Answer {
     /// The text one pane is showing, for [`Request::Read`].
     Text(PaneText),
     Semantics(PaneSemanticTree),
+    Capability(hl_extension::Capability),
     /// The work was done and names nothing.
     Done,
 }
@@ -292,6 +297,16 @@ impl TerminalSurface for Relay {
             slot: slot.to_owned(),
             action: action.clone(),
         })
+    }
+
+    fn semantic_requirement(&self, slot: &str, node: u64) -> Result<hl_extension::Capability, HostError> {
+        match self.ask(Request::SemanticRequirement {
+            slot: slot.to_owned(),
+            node,
+        })? {
+            Answer::Capability(capability) => Ok(capability),
+            other => Err(other.mismatch()),
+        }
     }
 
     fn write(&self, slot: &str, contents: &[u8]) -> Result<(), HostError> {

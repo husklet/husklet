@@ -9,8 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface,
+    VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -160,6 +160,8 @@ impl Session {
                     .peer
                     .authority()
                     .port(Capability::PaneSemanticControl, services.terminal)?;
+                let requirement = port.semantic_requirement(slot, action.node).map_err(Failure::from)?;
+                self.peer.authority().port(requirement, services.terminal)?;
                 port.semantic_action(slot, action)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)

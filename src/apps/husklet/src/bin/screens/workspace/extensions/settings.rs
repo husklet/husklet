@@ -259,18 +259,24 @@ fn removal(
             Rc::new(move |_, _| button.emit_clicked()),
         );
     }
+    let confirm_path = format!("extensions/installed/{}/Confirm removal", entry.name);
+    semantics.set_destructive(&confirm_path);
+    semantics.set_disabled(&confirm_path, true);
 
     {
         let remove = remove.clone();
         let confirm = confirm.clone();
         let cancel = cancel.clone();
         let refusal = refusal.clone();
+        let semantics = semantics.clone();
+        let confirm_path = confirm_path.clone();
         remove.clone().connect_clicked(move |_| {
             refusal.set_text("Remove this extension, its saved grant, and its managed sidecar?");
             refusal.set_visible(true);
             remove.set_visible(false);
             confirm.set_visible(true);
             cancel.set_visible(true);
+            semantics.set_disabled(&confirm_path, false);
         });
     }
     {
@@ -278,11 +284,14 @@ fn removal(
         let confirm = confirm.clone();
         let cancel = cancel.clone();
         let refusal = refusal.clone();
+        let semantics = semantics.clone();
+        let confirm_path = confirm_path.clone();
         cancel.clone().connect_clicked(move |_| {
             refusal.set_visible(false);
             remove.set_visible(true);
             confirm.set_visible(false);
             cancel.set_visible(false);
+            semantics.set_disabled(&confirm_path, true);
         });
     }
     {
@@ -292,7 +301,10 @@ fn removal(
         let cancel = cancel.clone();
         let refusal = refusal.clone();
         let standing = standing.clone();
+        let semantics = semantics.clone();
+        let confirm_path = confirm_path.clone();
         confirm.clone().connect_clicked(move |_| {
+            semantics.set_disabled(&confirm_path, true);
             let entry = match shelf.quiesce(&name) {
                 Ok(entry) => entry,
                 Err(fault) => {
