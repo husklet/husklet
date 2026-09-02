@@ -40,6 +40,16 @@ fn a_parentless_member_declaring_no_domain_is_refused() {
 #[test]
 fn an_unknown_scenario_is_refused() {
     for isa in [1, 2] {
-        assert_eq!(hl_native::checkpoint_identity_test(isa, 2), Err(-22));
+        assert_eq!(hl_native::checkpoint_identity_test(isa, 3), Err(-22));
     }
+}
+
+/// A same-ISA AArch64 restore validates images before the normal engine initializer. The early restore
+/// path must nevertheless reconstruct every code-generation mode which contributed to the captured
+/// translator identity; diagnostics is the mode which exposed the missing lifecycle step.
+#[test]
+#[cfg(target_arch = "aarch64")]
+fn aarch64_restore_reconstructs_the_captured_translator_identity() {
+    hl_native::checkpoint_identity_test(1, 2)
+        .unwrap_or_else(|status| panic!("AArch64 restore changed translator identity at {status}"));
 }

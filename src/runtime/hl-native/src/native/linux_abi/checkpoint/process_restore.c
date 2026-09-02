@@ -1589,6 +1589,9 @@ done:
 // scenario in a forked child that has called setsid(), which is the launch shape rather than an imitation
 // of it, and report through the exit status.
 HL_API int HL_TARGET_LOCAL(checkpoint_identity_test)(uint32_t scenario) {
+#if defined(G_CKPT_TRANSLATOR_IDENTITY_TEST)
+    if (scenario == 2) return G_CKPT_TRANSLATOR_IDENTITY_TEST();
+#endif
     if (scenario > 1) return -22;
     pid_t child = hl_host_process_clone_current();
     if (child < 0) return -1;

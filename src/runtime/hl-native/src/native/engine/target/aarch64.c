@@ -568,6 +568,10 @@ static int translit_unsupported_report(char *out, size_t size) {
 static void ckpt_poll(struct cpu *c);
 #define G_CKPT_POLL(c) ckpt_poll(c)
 #define G_CKPT_ARCH 2
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int a64_checkpoint_translator_identity_lifecycle_test(void);
+#define G_CKPT_TRANSLATOR_IDENTITY_TEST() a64_checkpoint_translator_identity_lifecycle_test()
+#endif
 #define G_CKPT_CPU_SANITIZE(c)                                                                                         \
     do {                                                                                                               \
         (c)->ic_site = 0;                                                                                              \
@@ -595,6 +599,28 @@ static int engine_global_init(void);
 // runs it to completion, and returns the guest's exit code. argv is the guest
 // argv (program + args). The execution lifecycle calls this once per engine.
 static int g_engine_inited;
+
+/* Restore validates the checkpoint before engine_global_init(), while a normal
+ * launch enables diagnostics inside that later initializer.  Diagnostics is a
+ * code-generation mode and therefore part of the translator identity: refresh
+ * it before the restore loader compares identities, just as the x86-64 target
+ * does on its early-restore path. */
+static void a64_restore_codegen_identity_init(int diagnostics_enabled) {
+    g_prof = diagnostics_enabled != 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int a64_checkpoint_translator_identity_lifecycle_test(void) {
+    int saved_prof = g_prof;
+    g_prof = 1;
+    hl_identity_digest captured = pcache_translator_identity();
+    g_prof = 0; /* fresh engine generation before its normal initializer */
+    a64_restore_codegen_identity_init(1);
+    hl_identity_digest restored = pcache_translator_identity();
+    g_prof = saved_prof;
+    return hl_identity_digest_equal(&captured, &restored) ? 0 : -1;
+}
+#endif
 
 static int container_init(const char *rootfs) {
     g_rootfs_mode = rootfs != NULL && rootfs[0] != 0;
@@ -903,6 +929,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 // Rebuild the checkpointed process tree selected by the engine restore option. Guest memory for the init is rebuilt
 // FIRST -- before container_init/engine_global_init allocate anything -- inside ckpt_restore_tree.
 static int hl_restore_checkpoint(const char *rootfs) {
+    a64_restore_codegen_identity_init(hl_option_get("HL_C_DIAGNOSTICS") != NULL);
     g_pcache = hl_option_get("HL_PCACHE") != NULL;
     return ckpt_restore_tree(rootfs);
 }
