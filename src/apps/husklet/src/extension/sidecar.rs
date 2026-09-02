@@ -382,6 +382,24 @@ impl Sidecar {
         }
     }
 
+    /// Stops only the container generation created from `spec`.
+    ///
+    /// Shutdown can finish after an updated extension has recreated the stable
+    /// name. The signature selects ownership and the immutable inspected id is
+    /// the stop target, so delayed cleanup cannot stop that replacement.
+    pub fn stop_owned(&self, spec: &SidecarSpec) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        let container = match self.bridge.wait(client.containers().inspect(spec.container())) {
+            Ok(container) => container,
+            Err(error) => return absence(&error).map(|_| ()),
+        };
+        let actual = container.config.labels.get(SIGNATURE_LABEL).map(String::as_str);
+        let Some(target) = stop_target(&spec.signature(), actual, &container.details.metadata.id) else {
+            return Ok(());
+        };
+        self.stop(target)
+    }
+
     /// Removes an extension container, forcing it down if it is still running.
     ///
     /// Forcing is right here and wrong in the extension-facing control port:
@@ -409,6 +427,10 @@ fn removal_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Resu
     ))
 }
 
+fn stop_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Option<&'a str> {
+    (!id.is_empty() && actual == Some(expected)).then_some(id)
+}
+
 /// Turns a "no such container" into an absence and anything else into a failure.
 fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
     match failure(error) {
@@ -419,7 +441,9 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{removal_target, Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
+    use super::{
+        removal_target, stop_target, Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+    };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
@@ -467,6 +491,14 @@ mod tests {
         assert_eq!(removal_target("ours", Some("ours"), "immutable-id"), Ok("immutable-id"));
         assert!(removal_target("ours", Some("foreign"), "foreign-id").is_err());
         assert!(removal_target("ours", None, "unlabelled-id").is_err());
+    }
+
+    #[test]
+    fn delayed_stop_targets_only_the_inspected_owned_generation() {
+        assert_eq!(stop_target("ours", Some("ours"), "old-id"), Some("old-id"));
+        assert_eq!(stop_target("ours", Some("replacement"), "replacement-id"), None);
+        assert_eq!(stop_target("ours", None, "unrelated-id"), None);
+        assert_eq!(stop_target("ours", Some("ours"), ""), None);
     }
 
     #[test]

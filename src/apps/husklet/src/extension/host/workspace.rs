@@ -238,7 +238,7 @@ impl Supply for Workspace {
         let Ok(bridge) = self.bridge() else {
             return;
         };
-        if let Err(error) = Sidecar::new(bridge).stop(plan.spec.container()) {
+        if let Err(error) = Sidecar::new(bridge).stop_owned(&plan.spec) {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "extension {}: {error}", plan.record.name);
         }
     }
