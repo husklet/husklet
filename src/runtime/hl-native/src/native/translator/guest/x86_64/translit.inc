@@ -667,6 +667,7 @@ static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
 static int translit_mixed_fixture_test(unsigned scenario);
 static int translit_movsd_memory_fixture_test(void);
+static int translit_movsd_far_fixture_test(void);
 static int translit_jcc_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario);
 static int translit_fallthrough_ibtc_fixture_test(unsigned scenario);
@@ -3297,6 +3298,46 @@ static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct ins
     return 1;
 }
 
+// A copied RIP-relative MOVSD can only retain its original disp32 while the code arena is within
+// reach of the guest datum.  Materialise the exact storage address through R11 when it is not.  R11
+// is first made canonical in cpu->r[] and is restored only after a load destination has committed,
+// so the caller can describe the source/next boundary and the borrowed-register interval exactly.
+static int translit_lower_movsd_riprel(hl_x64_asm *a, const struct insn *insn,
+                                       const uint8_t *bytes, uint64_t storage_target,
+                                       uint8_t **save_end, uint8_t **op_end) {
+    if (!insn->two || insn->op < 0x10 || insn->op > 0x11 || !insn->repne || insn->rep ||
+        insn->p66 || insn->lock || insn->addr32 || insn->seg || insn->vex || insn->evex ||
+        insn->map3 || !insn->has_modrm || !insn->is_mem || !insn->rip_rel ||
+        insn->mod != 0 || insn->rm != 5 || insn->imm_bytes != 0)
+        return 0;
+    int modrm_offset = insn->len - 5;
+    if (modrm_offset < 2 || modrm_offset + 5 != insn->len) return 0;
+
+    hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+    *save_end = a->cursor;
+    hl_x64_mov_imm64(a, HL_X64_R11, storage_target);
+    int legacy_end = 0;
+    while (legacy_end < modrm_offset) {
+        uint8_t byte = bytes[legacy_end];
+        if (byte != 0xF2 && byte != 0x66 && byte != 0xF3) break;
+        ++legacy_end;
+    }
+    int rex_offset = legacy_end < modrm_offset && (bytes[legacy_end] & 0xF0) == 0x40
+                         ? legacy_end
+                         : -1;
+    if (rex_offset < 0) {
+        for (int i = 0; i < legacy_end; ++i) hl_x64_u8(a, bytes[i]);
+        hl_x64_u8(a, 0x41); // REX.B selects R11 as the replacement memory base.
+        for (int i = legacy_end; i < modrm_offset; ++i) hl_x64_u8(a, bytes[i]);
+    } else {
+        for (int i = 0; i < modrm_offset; ++i)
+            hl_x64_u8(a, (uint8_t)(bytes[i] | (i == rex_offset ? 1 : 0)));
+    }
+    hl_x64_u8(a, (uint8_t)((bytes[modrm_offset] & 0xF8) | 3));
+    *op_end = a->cursor;
+    return !a->overflow;
+}
+
 static int translit_fix_riprel(struct translit_builder *b, const struct insn *insn, uint64_t guest_next,
                                uint8_t *copy_start) {
     int disp_offset = insn->len - insn->imm_bytes - 4;
@@ -3397,6 +3438,7 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    if (scenario == 223) return translit_movsd_far_fixture_test();
     if (scenario == 219) return translit_movsd_memory_fixture_test();
     if (scenario == 217) return translit_jitdump_lifecycle_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
@@ -5150,6 +5192,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         uint8_t *riprel_readonly_save_end = NULL, *riprel_readonly_op_end = NULL;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
         uint8_t *jmp_mem_borrow_start = NULL, *jmp_mem_rip_end = NULL, *jmp_mem_r11_end = NULL;
+        uint8_t *movsd_borrow_start = NULL, *movsd_save_end = NULL, *movsd_op_end = NULL;
 
         if (kind == TL_COPY) {
             hl_x64_copy(a, bytes, insn.len);
@@ -5346,20 +5389,54 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_copy(a, bytes, insn.len);
             if (a->overflow) break;
             if (insn.rip_rel && !translit_fix_riprel(&builder, &insn, next, guest_instruction)) {
-                a->cursor = instruction_start;
-                fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;
-                break;
+                a->cursor = guest_instruction;
+                uint64_t guest_target = next + (uint64_t)insn.disp;
+                uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target,
+                                                                 g_nonpie_lo, g_nonpie_hi,
+                                                                 g_nonpie_bias);
+                movsd_borrow_start = a->cursor;
+                if (!translit_lower_movsd_riprel(a, &insn, bytes, storage_target,
+                                                 &movsd_save_end, &movsd_op_end)) {
+                    a->cursor = instruction_start;
+                    fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;
+                    break;
+                }
             }
             if (!sse2_store && insn.op != 0x7E) translit_xmm_cpu(a, destination, 0);
+            uint8_t *semantic_end = a->cursor;
+            if (movsd_borrow_start != NULL) hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             if (a->overflow) {
                 a->cursor = instruction_start;
                 break;
             }
             uint8_t *commit_end = a->cursor;
             owner_normal_pending = 0;
-            if (!translit_owner_append(owners, &owner_count, instruction_start, commit_end, pc, 0) ||
-                !translit_owner_append(instruction_ranges, &instruction_range_count, instruction_start,
-                                       commit_end, pc, 0)) {
+            int movsd_ranges_exact = movsd_borrow_start == NULL ||
+                                     (movsd_borrow_start < movsd_save_end && movsd_save_end < movsd_op_end &&
+                                      movsd_op_end <= semantic_end && semantic_end < commit_end);
+            int owner_ok = movsd_borrow_start == NULL
+                               ? translit_owner_append(owners, &owner_count, instruction_start,
+                                                       commit_end, pc, 0)
+                               : translit_owner_append(owners, &owner_count, instruction_start,
+                                                       movsd_save_end, pc, 0) &&
+                                     translit_owner_append(owners, &owner_count, movsd_save_end,
+                                                           semantic_end, pc,
+                                                           translit_preserve_mask(HL_X64_R11)) &&
+                                     translit_owner_append(owners, &owner_count, semantic_end,
+                                                           commit_end, next,
+                                                           translit_preserve_mask(HL_X64_R11));
+            int range_ok = movsd_borrow_start == NULL
+                               ? translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                       instruction_start, commit_end, pc, 0)
+                               : translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                       instruction_start, movsd_save_end, pc, 0) &&
+                                     translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                           movsd_save_end, semantic_end, pc,
+                                                           translit_preserve_mask(HL_X64_R11)) &&
+                                     translit_owner_append(instruction_ranges, &instruction_range_count,
+                                                           semantic_end, commit_end, next,
+                                                           translit_preserve_mask(HL_X64_R11));
+            if (!movsd_ranges_exact || !owner_ok || !range_ok) {
                 a->overflow = 1;
                 a->cursor = instruction_start;
                 break;
@@ -6946,6 +7023,89 @@ done:
     g_cp = saved_cp;
     g_rw2rx = saved_rw2rx;
     g_cache_gen = saved_generation;
+    munmap(arena, arena_size);
+    return result;
+}
+
+static int translit_movsd_far_fixture_test(void) {
+    const size_t arena_size = 8192, guest_size = 4096;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, guest_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, arena_size);
+        if (guest != MAP_FAILED) munmap(guest, guest_size);
+        return 135;
+    }
+    static const uint8_t operations[] = {
+        0xF2, 0x0F, 0x10, 0x05, 0, 0, 0, 0, // movsd xmm0,[rip+disp32]
+        0xF2, 0x0F, 0x11, 0x0D, 0, 0, 0, 0, // movsd [rip+disp32],xmm1
+        0x0F, 0x0B,                         // deterministic unsupported tail
+    };
+    memcpy(guest, operations, sizeof operations);
+    const uint32_t load_offset = 64, store_offset = 72;
+    int32_t load_disp = (int32_t)load_offset - 8;
+    int32_t store_disp = (int32_t)store_offset - 16;
+    memcpy(guest + 4, &load_disp, 4);
+    memcpy(guest + 12, &store_disp, 4);
+    uint64_t load_value = UINT64_C(0x1122334455667788);
+    uint64_t store_guard = UINT64_C(0xaabbccddeeff0011);
+    memcpy(guest + load_offset, &load_value, 8);
+    memcpy(guest + store_offset, &store_guard, 8);
+    memcpy(guest + store_offset + 8, &store_guard, 8);
+
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    g_cache = arena;
+    g_cp = arena + sizeof(struct interp_block);
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - 223;
+    map_clear();
+    struct interp_block *block = (struct interp_block *)arena;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = guest_size;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    int result = 136;
+    if (context == NULL || jit_body_owner_set_for(g_cache_gen, 1) == NULL) goto done;
+    int64_t separation = (int64_t)(uintptr_t)arena - (int64_t)(uintptr_t)guest;
+    if (separation >= INT32_MIN && separation <= INT32_MAX) goto done;
+
+    void *body = translit_build(context, block, translit_fall_fixture_guest, NULL);
+    struct cpu cpu = {0};
+    cpu.rip = translit_fall_fixture_guest;
+    cpu.r[HL_X64_R11] = UINT64_C(0x8877665544332211);
+    cpu.v[0] = UINT64_MAX;
+    cpu.v[1] = UINT64_C(0xeeeeeeeeeeeeeeee);
+    cpu.v[2] = UINT64_C(0x0123456789abcdef);
+    cpu.v[3] = UINT64_C(0xdddddddddddddddd);
+    block->magic = INTERP_BLOCK_MAGIC;
+    block->gpc = translit_fall_fixture_guest;
+    if (body != NULL) run_block(context, &cpu, block);
+    uint64_t stored = 0, guard = 0;
+    memcpy(&stored, guest + store_offset, 8);
+    memcpy(&guard, guest + store_offset + 8, 8);
+    result = body != NULL && block->profile_insns == 2 && cpu.reason == R_BRANCH &&
+                     cpu.rip == translit_fall_fixture_guest + 16 &&
+                     cpu.r[HL_X64_R11] == UINT64_C(0x8877665544332211) &&
+                     cpu.v[0] == load_value && cpu.v[1] == 0 &&
+                     stored == UINT64_C(0x0123456789abcdef) && guard == store_guard
+                 ? 0
+                 : 136;
+
+done:
+    map_clear();
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    munmap(guest, guest_size);
     munmap(arena, arena_size);
     return result;
 }

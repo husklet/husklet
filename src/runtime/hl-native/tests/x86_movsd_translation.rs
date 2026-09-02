@@ -17,4 +17,9 @@ fn memory_movsd_translates_with_exact_load_store_and_rip_relative_semantics() {
         0,
         "MOVSD must zero the load destination upper qword, preload the store source, and fix RIP-relative memory"
     );
+    assert_eq!(
+        hl_native::x86_64_translit_displaced_test(223),
+        0,
+        "far RIP-relative MOVSD load/store must preserve R11, retire exactly, and leave adjacent memory untouched"
+    );
 }
