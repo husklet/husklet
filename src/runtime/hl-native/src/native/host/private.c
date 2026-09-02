@@ -40,8 +40,6 @@ typedef struct hl_private_process {
 
 static hl_private_process *hl_private;
 static _Atomic uint64_t *hl_private_epoch;
-static _Thread_local int64_t hl_private_pid;
-static _Thread_local uint64_t hl_private_start;
 static uint64_t *hl_private_fork_cells;
 static void hl_private_configure_limit(void);
 static size_t hl_private_fork_count;
@@ -83,8 +81,6 @@ static void hl_private_fork_child(void) {
        parent snapshot into the child's rows, which would be silent. */
     hl_private_fork_cells = NULL;
     hl_private_fork_count = 0;
-    hl_private_pid = 0;
-    hl_private_start = 0;
     hl_private_fork_disarm();
     hl_private_fork_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 }
@@ -218,10 +214,6 @@ static int hl_private_add_unlocked(int fd) {
     int64_t pid = 0;
     uint64_t start = 0;
     (void)hl_host_process_self_identity(&pid, &start);
-    if (hl_private_pid != pid || hl_private_start != start) {
-        hl_private_pid = pid;
-        hl_private_start = start;
-    }
     if (!hl_private || fd < 0 || fd == INT32_MAX || start == 0) return -ENOSPC;
     for (unsigned record = 0; record < HL_PRIVATE_PROCESSES; ++record) {
         hl_private_process *process = &hl_private[record];
@@ -720,17 +712,12 @@ int hl_host_process_fd_private_fork_prepare(void) {
             return -EAGAIN;
         }
     }
-    hl_private_pid = pid;
-    hl_private_start = start;
     return 0;
 }
 
 int hl_host_process_fd_private_fork_complete(int child) {
     int result = 0;
     if (child) {
-        hl_private_pid = 0;
-        hl_private_start = 0;
-        (void)hl_host_process_self_identity(&hl_private_pid, &hl_private_start);
         for (size_t index = 0; index < hl_private_fork_count; ++index) {
             int fd = (int)((uint32_t)(hl_private_fork_cells[index] >> 32) - 1u);
             uint32_t references = (uint32_t)hl_private_fork_cells[index];
