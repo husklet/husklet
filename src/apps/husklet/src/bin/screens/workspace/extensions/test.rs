@@ -1306,6 +1306,7 @@ type Heard = Arc<Mutex<Vec<String>>>;
 /// the host's own socket, speaks the handshake, and then listens.
 struct Bench {
     socket: std::path::PathBuf,
+    digest: String,
     heard: Heard,
     greeted: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
@@ -1317,7 +1318,7 @@ impl hl::extension::Supply for Bench {
         let manifest = manifest("sample");
         let record = Record {
             name: manifest.name.clone(),
-            image_digest: "sha256:aaaa".to_owned(),
+            image_digest: self.digest.clone(),
             version: manifest.version.clone(),
             granted: manifest.capabilities.clone(),
             enabled: true,
@@ -1326,7 +1327,7 @@ impl hl::extension::Supply for Bench {
         };
         let image = hl::extension::Image {
             reference: "extension:1".to_owned(),
-            digest: "sha256:aaaa".to_owned(),
+            digest: self.digest.clone(),
             entrypoint: vec!["/usr/bin/extension".to_owned()],
             user: "1000:1000".to_owned(),
         };
@@ -1455,6 +1456,7 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     let host = Rc::new(hl::extension::Host::open(
         Bench {
             socket,
+            digest: "sha256:aaaa".to_owned(),
             heard: Arc::clone(&heard),
             greeted: Arc::clone(&greeted),
             ended,
@@ -1675,6 +1677,7 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         let host = Rc::new(hl::extension::Host::open(
             Bench {
                 socket: socket.clone(),
+                digest: entry.image_digest.clone(),
                 heard: Arc::clone(&heard),
                 greeted: Arc::clone(&connected),
                 ended: Arc::clone(&disconnected),
@@ -1785,6 +1788,68 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         "the accepted first frame publishes the provider only after durable retry; semantics={:?}",
         gallery.semantics("sample", "")
     );
+
+    let mut replacement = described.clone();
+    replacement.version = "2.0.0".to_owned();
+    replacement.pane_providers[0].title = "Dashboard v2".to_owned();
+    let pending = roster
+        .borrow()
+        .prepare_update(&replacement, "sha256:bbbb")
+        .expect("prepared update");
+    std::fs::remove_dir_all(&root).expect("remove durable root before update");
+    std::fs::write(&root, b"jammed").expect("jam update write");
+    assert!(
+        roster
+            .borrow_mut()
+            .commit_update(pending, &replacement.capabilities, 2)
+            .is_err(),
+        "failed durable replacement is visible"
+    );
+    assert_eq!(roster.borrow().entries()[0].image_digest, "sha256:aaaa");
+    assert_eq!(
+        gallery.providers()[0].title,
+        "Dashboard",
+        "failed update leaves old provider usable"
+    );
+    assert!(
+        !ended.load(Ordering::Acquire),
+        "failed update leaves the old digest socket live"
+    );
+
+    std::fs::remove_file(&root).expect("clear update jam");
+    std::fs::create_dir(&root).expect("repair storage for update");
+    let pending = roster
+        .borrow()
+        .prepare_update(&replacement, "sha256:bbbb")
+        .expect("prepare retry");
+    roster
+        .borrow_mut()
+        .commit_update(pending, &replacement.capabilities, 3)
+        .expect("durable replacement");
+    greeted.store(false, Ordering::Release);
+    shelf.refresh(&named("sample"));
+    assert!(
+        gallery.providers().is_empty(),
+        "replacement does not inherit old-generation readiness"
+    );
+    assert!(
+        until(|| greeted.load(Ordering::Acquire)),
+        "new digest opens its own Unix conversation"
+    );
+    assert!(
+        until(|| {
+            for page in pages.borrow().iter() {
+                page.borrow_mut().tick();
+            }
+            gallery
+                .providers()
+                .first()
+                .is_some_and(|provider| provider.title == "Dashboard v2")
+        }),
+        "only the new digest's first frame publishes its provider"
+    );
+    assert_eq!(roster.borrow().entries()[0].image_digest, "sha256:bbbb");
+    ended.store(false, Ordering::Release);
 
     std::fs::remove_dir_all(&root).expect("remove durable root before disable");
     std::fs::write(&root, b"jammed").expect("jam disable write");
