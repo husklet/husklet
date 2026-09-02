@@ -168,8 +168,12 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when the name is already installed or the
     /// digest is empty, and `Refusal::Record` when the record cannot be written.
     pub fn register(&mut self, manifest: &Manifest, digest: &str, consented: &Grant, at: i64) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
         let record = self.installation.install(manifest, digest, consented, at)?.clone();
-        self.records.save(&record)?;
+        if let Err(fault) = self.records.save(&record) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
         Ok(())
     }
 
@@ -200,8 +204,12 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when nothing is recorded under `name`, and
     /// `Refusal::Record` when the record cannot be written.
     pub fn enable(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
         let record = self.installation.enable(name)?.clone();
-        self.records.save(&record)?;
+        if let Err(fault) = self.records.save(&record) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
         Ok(())
     }
 
@@ -212,8 +220,12 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when nothing is recorded under `name`, and
     /// `Refusal::Record` when the record cannot be written.
     pub fn disable(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
         let record = self.installation.disable(name)?.clone();
-        self.records.save(&record)?;
+        if let Err(fault) = self.records.save(&record) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
         Ok(())
     }
 
@@ -223,17 +235,24 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when nothing is recorded under `name`, and
     /// `Refusal::Record` when the record cannot be written.
     pub fn retry(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
         let record = self.installation.retry(name)?.clone();
-        self.records.save(&record)?;
-        self.records.clear_fault(name)?;
+        if let Err(fault) = self.records.save(&record).and_then(|()| self.records.clear_fault(name)) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
         Ok(())
     }
 
     /// Records a crash loop observed by the live host and makes it visible to
     /// every central Settings page, including after an application restart.
     pub fn fault(&mut self, name: &ExtensionName, restarts: u32) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
         self.installation.fault(name, restarts)?;
-        self.records.save_fault(name, restarts)?;
+        if let Err(fault) = self.records.save_fault(name, restarts) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
         Ok(())
     }
 
@@ -245,8 +264,12 @@ impl<S: Storage> Roster<S> {
     /// # Errors
     /// Returns `Refusal::Record` when the record cannot be removed.
     pub fn remove(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
         self.installation.uninstall(name);
-        self.records.forget(name)?;
+        if let Err(fault) = self.records.forget(name) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
         Ok(())
     }
 }
@@ -415,6 +438,43 @@ mod tests {
 
         assert!(matches!(refused, Refusal::Policy(_)));
         assert_eq!(roster.entries()[0].image_digest, "sha256:aaaa");
+    }
+
+    #[test]
+    fn failed_persistence_never_leaves_install_or_run_authority_in_memory() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir(&root).expect("workspace storage root");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut roster = opened(&root);
+
+        std::fs::remove_dir(&root).expect("empty storage root");
+        std::fs::write(&root, b"not a directory").expect("jam storage path");
+        assert!(
+            roster.register(&asked, "sha256:aaaa", &asked.capabilities, 7).is_err(),
+            "the durable write is refused"
+        );
+        assert_eq!(
+            roster.stage(&asked.name),
+            Stage::Vacancy,
+            "failed consent persistence grants nothing"
+        );
+
+        std::fs::remove_file(&root).expect("clear jammed path");
+        std::fs::create_dir(&root).expect("restore storage root");
+        roster
+            .register(&asked, "sha256:aaaa", &asked.capabilities, 7)
+            .expect("the same consent can be retried");
+        assert_eq!(roster.stage(&asked.name), Stage::Standby);
+
+        std::fs::remove_dir_all(&root).expect("remove recorded storage");
+        std::fs::write(&root, b"not a directory").expect("jam storage again");
+        assert!(roster.enable(&asked.name).is_err(), "enabling cannot be persisted");
+        assert_eq!(
+            roster.stage(&asked.name),
+            Stage::Standby,
+            "a failed enable cannot start a sidecar or advertise providers"
+        );
     }
 
     #[test]

@@ -160,13 +160,14 @@ struct Restarts {
     faulted: bool,
 }
 
+#[derive(Clone)]
 struct Entry {
     record: Record,
     restarts: Restarts,
 }
 
 /// Every extension recorded for one workspace.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Installation {
     entries: BTreeMap<ExtensionName, Entry>,
 }
