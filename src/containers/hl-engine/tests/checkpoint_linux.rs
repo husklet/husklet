@@ -2736,6 +2736,9 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     assert_eq!(output.matches("CAPACITY-PREFIX phase=0 value=42").count(), 1, "{output}");
     assert_eq!(output.matches("CAPACITY-PREFIX phase=1 value=43").count(), 1, "{output}");
     assert_eq!(output.matches("CAPACITY-PREFIX phase=2 value=44").count(), 1, "{output}");
+    assert_eq!(output.matches("FAR-MOVSD phase=0 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("FAR-MOVSD phase=1 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("FAR-MOVSD phase=2 value=42").count(), 1, "{output}");
     if translit {
         let diagnostic_text = [
             capture_terminal.text(),
@@ -2761,6 +2764,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
                     field("mixed_sse_executed="),
                     field("mixed_sse_executed_transitions="),
                     field("mixed_sse_disabled_boundaries="),
+                    field("fall_sse_riprel="),
                 )
             })
             .collect::<Vec<_>>();
@@ -2776,11 +2780,15 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             assert!(
                 shapes
                     .iter()
-                    .all(|(_, _, capacity, descriptors, transitions, boundaries)| *capacity > 0
+                    .all(|(_, _, capacity, descriptors, transitions, boundaries, sse_riprel)| *capacity > 0
                         && *descriptors > 0
                         && *transitions >= *descriptors
                         && *boundaries == 0),
                 "each x86 capture/restore generation must execute translated mixed bodies in its own fork-shared census: {shapes:?}\n{diagnostic_text}"
+            );
+            assert!(
+                shapes[0].6 <= 7 && shapes[1..].iter().all(|shape| shape.6 <= 2),
+                "the dedicated far MOVSD must not add an SSE RIP-relative fallback in any generation: {shapes:?}\n{diagnostic_text}"
             );
         }
     }

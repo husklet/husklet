@@ -7028,7 +7028,7 @@ done:
 }
 
 static int translit_movsd_far_fixture_test(void) {
-    const size_t arena_size = 8192, guest_size = 4096;
+    const size_t arena_size = 8192, guest_size = 8192;
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uint8_t *guest = mmap(NULL, guest_size, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -7044,7 +7044,7 @@ static int translit_movsd_far_fixture_test(void) {
         0x0F, 0x0B,                         // deterministic unsupported tail
     };
     memcpy(guest, operations, sizeof operations);
-    const uint32_t load_offset = 64, store_offset = 72;
+    const uint32_t load_offset = 4092, store_offset = 4112;
     int32_t load_disp = (int32_t)load_offset - 8;
     int32_t store_disp = (int32_t)store_offset - 16;
     memcpy(guest + 4, &load_disp, 4);
