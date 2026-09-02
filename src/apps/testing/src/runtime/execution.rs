@@ -531,28 +531,18 @@ impl<'a> CaseExecution<'a> {
         let output = state.join("output");
         let mut offset = 0;
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
-        wait_for_marker(&output, "READY leader=", deadline).await?;
-        bounded_checkpoint_phase(
-            deadline,
-            "first container checkpoint",
-            self.containers.checkpoint(name, remaining(deadline)?),
-        )
-        .await?;
-        offset = validate_checkpoint_generation(&output, offset)?;
-
-        std::fs::write(state.join("cycle1"), [])?;
-        bounded_checkpoint_phase(deadline, "first container restore", self.containers.start(name)).await?;
-        wait_for_marker(&output, "CYCLE 1 progress=", deadline).await?;
-        bounded_checkpoint_phase(
-            deadline,
-            "second container checkpoint",
-            self.containers.checkpoint(name, remaining(deadline)?),
-        )
-        .await?;
-        offset = validate_checkpoint_generation(&output, offset)?;
-
-        std::fs::write(state.join("cycle2"), [])?;
-        bounded_checkpoint_phase(deadline, "second container restore", self.containers.start(name)).await?;
+        for (marker, cycle) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")] {
+            wait_for_marker(&output, marker, deadline).await?;
+            bounded_checkpoint_phase(
+                deadline,
+                "container checkpoint",
+                self.containers.checkpoint(name, remaining(deadline)?),
+            )
+            .await?;
+            offset = validate_checkpoint_generation(&output, offset)?;
+            std::fs::write(state.join(cycle), [])?;
+            bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
+        }
         wait_for_marker(&output, "CYCLE 2 progress=", deadline).await?;
         std::fs::write(state.join("stop"), [])?;
         let status = bounded_checkpoint_phase(
