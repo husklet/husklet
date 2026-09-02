@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
 use hl::extension::{Acquisition, Cancellation, Entry, Roster};
-use hl_extension::ExtensionName;
+use hl_extension::{ExtensionName, Stage};
 use hl_ws::storage::Directory;
 
 pub(crate) use console::Console;
@@ -260,7 +260,7 @@ impl Shelf {
             .borrow()
             .entries()
             .iter()
-            .any(|entry| entry.name.as_str() == MANAGEMENT_EXTENSION);
+            .any(|entry| entry.name.as_str() == MANAGEMENT_EXTENSION && entry.stage == Stage::Duty);
         (self.reconcile)(managed);
     }
 

@@ -3,7 +3,7 @@
 //! recorded after somebody agreed to what it asks for, and a click on a
 //! rendered widget reaches the extension that drew it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
@@ -467,22 +467,100 @@ fn management_extension_reconciles_native_fallback_pages() {
         }
     });
     let surfaces: Surfaces = Rc::new(|_| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
-    let shelf = Shelf::with_reconciliation(&view, &roster, surfaces, reconcile);
+    let withdrawals = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&withdrawals);
+    let withdraw = Rc::new(move |name: &ExtensionName| {
+        if name.as_str() == super::MANAGEMENT_EXTENSION {
+            counted.set(counted.get() + 1);
+        }
+    });
+    let shelf = Shelf::with_lifecycle(&view, &roster, surfaces, reconcile, withdraw);
     shelf.install();
 
-    assert_eq!(
-        view.entries(),
-        ["Settings", "Extensions", super::MANAGEMENT_EXTENSION],
-        "the management extension has no duplicate native operational pages"
+    let assert_pages = |managed: bool| {
+        let entries = view.entries();
+        for title in [Page::Overview.title(), Page::Containers.title()] {
+            assert_eq!(
+                entries.iter().filter(|entry| entry.as_str() == title).count(),
+                usize::from(!managed),
+                "{title} ownership must follow Duty without duplicates: {entries:?}"
+            );
+        }
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.as_str() == super::MANAGEMENT_EXTENSION)
+                .count(),
+            1,
+            "the extension surface itself is never duplicated: {entries:?}"
+        );
+    };
+    assert_pages(true);
+
+    let before = withdrawals.get();
+    roster
+        .borrow_mut()
+        .disable(&named(super::MANAGEMENT_EXTENSION))
+        .expect("disabled");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(false);
+    assert!(
+        withdrawals.get() > before,
+        "disable withdraws any provider panes before fallback returns"
     );
 
+    roster
+        .borrow_mut()
+        .enable(&named(super::MANAGEMENT_EXTENSION))
+        .expect("enabled");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(true);
+
+    let before = withdrawals.get();
+    roster
+        .borrow_mut()
+        .fault(&named(super::MANAGEMENT_EXTENSION), 3)
+        .expect("fault recorded");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(false);
+    assert!(
+        withdrawals.get() > before,
+        "fault withdraws provider panes before fallback returns"
+    );
+
+    let before = withdrawals.get();
+    roster
+        .borrow_mut()
+        .retry(&named(super::MANAGEMENT_EXTENSION))
+        .expect("retry returns to duty");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_pages(true);
+    assert!(
+        withdrawals.get() > before,
+        "retry replaces the faulted surface before taking ownership"
+    );
+
+    let before = withdrawals.get();
     roster
         .borrow_mut()
         .remove(&named(super::MANAGEMENT_EXTENSION))
         .expect("removed management extension");
     shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert_eq!(
+        roster.borrow().stage(&named(super::MANAGEMENT_EXTENSION)),
+        Stage::Vacancy
+    );
     assert!(view.holds(Page::Overview.title()));
     assert!(view.holds(Page::Containers.title()));
+    assert_eq!(
+        view.entries()
+            .iter()
+            .filter(|entry| entry.as_str() == Page::Overview.title())
+            .count(),
+        1,
+        "removal restores one fallback page"
+    );
+    assert!(withdrawals.get() > before, "removal withdraws provider panes");
 
     record(&roster, "containers", true);
     let legacy = roster
