@@ -252,6 +252,34 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.equal(mountOversized.isError, true);
   assert.equal(calls.length, mountOversizedStart);
 
+  const exactVolume = 'v'.repeat(255);
+  const exactNetwork = 'n'.repeat(255);
+  const resourceReferenceStart = calls.length;
+  const resourceReferences = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: {
+      image: 'alpine:3.20', name: 'resource-reference-boundary',
+      mounts: [{ volume: exactVolume, target: '/data' }], network: exactNetwork,
+    },
+  });
+  assert.notEqual(resourceReferences.isError, true);
+  assert.deepEqual(calls.slice(resourceReferenceStart), [{
+    call: 'container_create', with: { spec: {
+      image: 'alpine:3.20', name: 'resource-reference-boundary', entrypoint: null, command: [],
+      environment: [], working_directory: null, user: null, labels: [],
+      mounts: [{ volume: exactVolume, target: '/data', read_only: false }], network: exactNetwork,
+      ports: [], memory_mb: null, cpus: null, pids_limit: null,
+    } },
+  }]);
+
+  const resourceReferenceOversizedStart = calls.length;
+  const resourceReferenceOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'resource-reference-overflow', network: 'n'.repeat(256) },
+  });
+  assert.equal(resourceReferenceOversized.isError, true);
+  assert.equal(calls.length, resourceReferenceOversizedStart);
+
   const exactCommand = ['printf', '%s', '$(touch /tmp/not-run)', 'two words', "single'quote", ''];
   const spawnStart = calls.length;
   const spawned = await client.callTool({

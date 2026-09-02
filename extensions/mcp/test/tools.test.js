@@ -243,6 +243,9 @@ test('container create and exec accept only bounded structured authority', async
   const oversizedTarget = `/${'😀'.repeat(1024)}a`;
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: exactTarget }] }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: oversizedTarget }] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'v'.repeat(255), target: '/data' }], network: 'n'.repeat(255) }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'v'.repeat(256), target: '/data' }] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', network: '-invalid' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', ports: [{ container: 80, host: 0, protocol: 'tcp' }] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
