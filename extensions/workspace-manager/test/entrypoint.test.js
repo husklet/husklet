@@ -142,7 +142,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 77, kind: KIND.event, payload: { snapshot: 'executions', of: {
       executions: [
         { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
-        { id: 'e2', container_id: 'c1', running: true, exit_code: 0, pid: 42, command: ['live-command'], user: 'root' },
+        { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', container_id: 'c1', running: true, exit_code: 0, pid: 42, command: ['live-command'], user: 'root' },
       ], truncated: true,
     } } }));
     await until(() => received.some((frame) => frame.channel === 77 && frame.kind === KIND.credit)
@@ -158,10 +158,10 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert.ok(requests.filter((request) => request.call === 'interface_render_at').length > beforeExecutions);
     peer.write(encode({ channel: 34, kind: KIND.event, payload: invocation(requests, 'Terminate') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
-      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Send SIGTERM to execution e2?')));
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Send SIGTERM to execution bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb?')));
     peer.write(encode({ channel: 35, kind: KIND.event, payload: invocation(requests, 'Confirm SIGTERM') }));
     await until(() => calls.includes('execution_kill'));
-    assert.deepEqual(requests.find((request) => request.call === 'execution_kill').with, { id: 'e2', signal: 'SIGTERM' });
+    assert.deepEqual(requests.find((request) => request.call === 'execution_kill').with, { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', signal: 'SIGTERM' });
     peer.write(encode({ channel: 14, kind: KIND.event, payload: invocation(requests, 'Details') }));
     await until(() => calls.includes('execution_inspect') && requests.some((request) =>
       request.call === 'source_resize_at' && request.with.mutation.Length?.source === 203));
