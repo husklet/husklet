@@ -122,10 +122,14 @@ impl TerminalPort for PaneTerminal {
 }
 
 fn fixture(directory: &Path) -> PathBuf {
+    fixture_with_link(directory, "-static-pie")
+}
+
+fn fixture_with_link(directory: &Path, link: &str) -> PathBuf {
     let output = directory.join("native-supervised-fixture");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native_supervised.c");
     let status = std::process::Command::new(HOST_CC)
-        .args(["-static-pie", "-O2", "-o"])
+        .args([link, "-O2", "-o"])
         .arg(&output)
         .arg(source)
         .status()
@@ -425,6 +429,16 @@ fn supervised_system_true_reaches_guest_entry() {
     let (status, output, error) = run(Path::new("/bin/true"), &[], true);
     assert_eq!(status, 0);
     assert!(output.is_empty());
+    assert!(error.is_empty());
+}
+
+#[test]
+fn supervised_static_exec_reaches_guest_entry() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture_with_link(work.path(), "-static");
+    let (status, output, error) = run(&executable, &["output"], true);
+    assert_eq!(status, 23);
+    assert_eq!(output, b"native-supervised");
     assert!(error.is_empty());
 }
 
