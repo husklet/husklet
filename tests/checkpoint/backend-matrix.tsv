@@ -7,7 +7,7 @@
 # the pre-launch refusal; changing `contract` to round-trip is part of implementing that backend,
 # not a test-only edit. The aarch64 native row is an executable gap because native_supervised.rs is
 # currently cfg(x86_64), so a green ARM CI run must not be mistaken for native coverage.
-x86-native-supervised-refusal	x86_64	x86_64	native-supervised	refusal	rust-test	HL_NATIVE_SUPERVISED_TEST_BINARY	supervised_checkpoint_phase1_registers_freezes_and_resumes_one_workload	-	test supervised_checkpoint_phase1_registers_freezes_and_resumes_one_workload ... ok
+x86-native-supervised-refusal	x86_64	x86_64	native-supervised	refusal	rust-test	HL_NATIVE_SUPERVISED_TEST_BINARY	supervised_checkpoint_lifecycle_refuses_before_launch_or_storage_access	-	test supervised_checkpoint_lifecycle_refuses_before_launch_or_storage_access ... ok
 x86-transliterated-x86-roundtrip	x86_64	x86_64	same-isa-transliterator	round-trip	rust-test	HL_CHECKPOINT_LINUX_TEST_BINARY	amd64_transliterated_jcc_links_are_rebuilt_across_two_checkpoint_cycles	-	test amd64_transliterated_jcc_links_are_rebuilt_across_two_checkpoint_cycles ... ok
 x86-interpreted-arm-roundtrip	x86_64	aarch64	cross-isa-interpreter	round-trip	rust-test	HL_CHECKPOINT_LINUX_TEST_BINARY	aarch64_daily_development_workload_survives_two_checkpoint_cycles	-	test aarch64_daily_development_workload_survives_two_checkpoint_cycles ... ok
 x86-arm-x86-nested	x86_64	x86_64>aarch64>x86_64	nested-translated	execution	nested	HL_TESTING_BINARY	tests/runtime/nested/chains-x86.yaml	-	PASS nested/amd64-arm64-amd64
