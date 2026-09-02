@@ -18,6 +18,51 @@ export function resourceReference(resource) {
   return String(resource?.id || resource?.name || '');
 }
 
+export const IMAGE_DETAIL_SOURCE = 201;
+export const IMAGE_DETAIL_LIMIT = 64;
+export const IMAGE_DETAIL_WINDOW_LIMIT = 4;
+
+/** Windowed rows derived only from the public typed ImageDetails contract. */
+export class ImageDetailsSource {
+  constructor(send = async () => {}) {
+    this.send = send;
+    this.version = 0;
+    this.rows = [];
+    this.generated = 0;
+  }
+
+  async replace(details) {
+    const values = [
+      ['ID', details?.id],
+      ['References', details?.references?.join(', ')],
+      ['Created', details?.created],
+      ['Size', Number.isFinite(details?.size) ? bytes(details.size) : null],
+      ['Operating system', details?.os],
+      ['Architecture', details?.architecture],
+      ['Entrypoint', details?.entrypoint?.join(' ')],
+      ['Command', details?.command?.join(' ')],
+      ['Working directory', details?.working_directory],
+      ['User', details && 'user' in details ? details.user || 'default user' : null],
+    ];
+    this.rows = values
+      .filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
+      .slice(0, IMAGE_DETAIL_LIMIT)
+      .map(([key, value], index) => ({ id: index + 1, cells: [{ Text: key }, { Code: String(value) }] }));
+    this.version += 1;
+    await this.send({ Length: { source: IMAGE_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    return this.rows.length;
+  }
+
+  answer(request) {
+    if (request.source !== IMAGE_DETAIL_SOURCE || request.version !== this.version) return null;
+    const count = Math.min(request.range.count, IMAGE_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start));
+    const rows = this.rows.slice(request.range.start, request.range.start + count);
+    this.generated += rows.length;
+    return { source: IMAGE_DETAIL_SOURCE, version: this.version, request: request.id, range: request.range, rows };
+  }
+}
+
 export function bytes(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount) || amount < 1) return '0 B';

@@ -11,8 +11,11 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const directory = await mkdtemp(join(tmpdir(), 'husklet-workspace-manager-'));
   const socketPath = join(directory, 'host.sock');
   const calls = [];
+  const requests = [];
+  let peer;
   let tearingDown = false;
   const server = net.createServer((socket) => {
+    peer = socket;
     const reader = new Reader();
     socket.on('error', (error) => {
       if (!tearingDown) throw error;
@@ -26,18 +29,21 @@ test('the production entrypoint handshakes and renders through a real Unix socke
         const name = frame.payload?.call;
         if (!name) continue;
         calls.push(name);
+        requests.push(frame.payload);
         const payload = name === 'interface_open_tab'
           ? { reply: 'identity', with: 'workspace-resources' }
           : name === 'container_list'
           ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
           : name === 'image_list'
             ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
+            : name === 'image_inspect'
+              ? { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
               ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }] }
             : { reply: 'done' };
-        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
       }
     });
   });
@@ -49,6 +55,13 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
     await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
+    const openingRenders = requests.filter((request) => request.call === 'interface_render_at').length;
+    peer.write(encode({ channel: 9, kind: KIND.event, payload: invocation(requests, 'Images') }));
+    await until(() => requests.filter((request) => request.call === 'interface_render_at').length > openingRenders);
+    peer.write(encode({ channel: 10, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
+    await until(() => calls.includes('image_inspect') && calls.includes('source_resize_at'));
+    const resize = requests.findLast((request) => request.call === 'source_resize_at');
+    assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 1, rows: 9 });
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;
@@ -58,6 +71,17 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+function invocation(requests, label) {
+  const patches = requests.filter((request) => request.call === 'interface_render_at')
+    .flatMap((request) => request.with.frame.patches);
+  const labelled = patches.filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label);
+  assert.ok(labelled.length, `${label} is present on the live socket surface`);
+  const handler = patches.findLast((patch) => patch.SetHandler?.handler?.trigger === 'Invoke'
+    && labelled.some((candidate) => candidate.SetProp.id === patch.SetHandler.id));
+  assert.ok(handler, `${label} advertises Invoke`);
+  return { slot: 'workspace-resources', event: 'Invoke', node: handler.SetHandler.id, id: handler.SetHandler.handler.id };
+}
 
 async function until(done) {
   const deadline = Date.now() + 5_000;
