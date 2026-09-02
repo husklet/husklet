@@ -164,6 +164,14 @@ impl ContainerInventory for Host {
             user: "root".into(),
         })
     }
+    fn executions(&self) -> Result<hl_extension::port::ExecutionList, HostError> {
+        self.ledger.note("executions.list");
+        Ok(hl_extension::port::ExecutionList { executions: vec![self.execution("e1")?], truncated: false })
+    }
+    fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
+        self.ledger.note("executions.logs");
+        Ok(ContainerOutput { stdout: b"exec out\n".to_vec(), stderr: b"exec err\n".to_vec(), truncated: false })
+    }
 
     fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
         self.ledger.note("executions.wait");
@@ -764,6 +772,8 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerRead,
         ),
         (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
+        (Request::ExecutionList, Capability::ContainerRead),
+        (Request::ExecutionLogs { id: "e1".into(), stdout: true, stderr: true }, Capability::ContainerRead),
         (Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, Capability::ContainerRead),
         (
             Request::ContainerCreate {
@@ -1226,6 +1236,14 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let mut session = session(&[Capability::ContainerRead], &[]);
     assert!(session.dispatch(&Request::ExecutionWait { id: "e1".into(), timeout_ms: 30_001 }, &services(&host)).is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
+}
+
+#[test]
+fn execution_logs_require_a_stream_before_calling_host() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    assert!(session.dispatch(&Request::ExecutionLogs { id: "e1".into(), stdout: false, stderr: false }, &services(&host)).is_err());
+    assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
 #[test]

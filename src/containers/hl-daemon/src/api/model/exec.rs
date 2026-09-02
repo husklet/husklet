@@ -2,6 +2,18 @@
 use super::{CompatibilityFields, EnvVars};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ExecOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ExecCatalogue {
+    pub executions: Vec<ExecInspect>,
+    pub truncated: bool,
+}
+
 #[cfg(feature = "runtime")]
 #[hl_design::classify(domain = "docker")]
 pub(crate) fn console_size(value: Option<[u64; 2]>) -> Result<Option<hl_container::Size>, String> {

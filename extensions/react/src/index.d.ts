@@ -4456,6 +4456,7 @@ export interface ExecutionSummary {
   id: string; container_id: string; running: boolean; exit_code: number; pid: number;
   command: string[]; user: string;
 }
+export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
@@ -4588,6 +4589,8 @@ export interface WorkspaceApi {
     processes(id: string): Promise<ProcessList>;
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
+    executions(): Promise<ExecutionList>;
+    executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
     create(spec: ContainerCreateSpec): Promise<string>;

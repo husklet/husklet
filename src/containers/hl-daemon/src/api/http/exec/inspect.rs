@@ -21,6 +21,10 @@ pub(in crate::api::http) async fn inspect(
         .inspect(&exec_id)
         .await
         .map_err(ApiError::container)?;
+    model(exec)
+}
+
+pub(super) fn model(exec: hl_container::Exec) -> ApiResult<Json<ExecInspect>> {
     let Inspection {
         running,
         exit_code,

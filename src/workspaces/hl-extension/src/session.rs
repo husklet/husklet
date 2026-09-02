@@ -150,6 +150,8 @@ impl Session {
             | Request::ContainerProcesses { .. }
             | Request::ContainerLogs { .. }
             | Request::ExecutionInspect { .. }
+            | Request::ExecutionList
+            | Request::ExecutionLogs { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
@@ -252,6 +254,11 @@ impl Session {
             Request::ContainerProcesses { id } => Ok(Reply::Processes(port.processes(id)?)),
             Request::ContainerLogs { id, stdout, stderr } => Ok(Reply::Logs(port.logs(id, *stdout, *stderr)?)),
             Request::ExecutionInspect { id } => Ok(Reply::Execution(port.execution(id)?)),
+            Request::ExecutionList => Ok(Reply::Executions(port.executions()?)),
+            Request::ExecutionLogs { id, stdout, stderr } => {
+                if !stdout && !stderr { return Err(Failure::Conflict { detail: "execution logs require stdout or stderr".into() }); }
+                Ok(Reply::Logs(port.execution_logs(id, *stdout, *stderr)?))
+            }
             Request::ExecutionWait { id, timeout_ms } => {
                 if !(1..=30_000).contains(timeout_ms) {
                     return Err(Failure::Conflict {

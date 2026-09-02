@@ -24,7 +24,7 @@ pub use model::{
     CompatibilityFields, Container, ContainerConfig, ContainerCreation, ContainerDetails, ContainerLogs,
     ContainerMetadata, ContainerPrune, ContainerState, Cpu, CpuUsage, CreateContainer, Credentials, DiskUsage,
     Distribution, DockerError, DockerMount, DriverConfig, EndpointSettings, EndpointsConfig, EnvError, EnvVar, EnvVars,
-    ExecAttach, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen, ExecProcess, ExecStart,
+    ExecAttach, ExecCatalogue, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen, ExecOutput, ExecProcess, ExecStart,
     HealthLog, HealthState, Healthcheck, HostConfig, HostInspection, ImageCommit, ImageConfig, ImageDelete,
     ImageHistory, ImageLoad, ImagePrune, ImageSummary, InspectContainer, InspectImage, LogOptions, LogProtocolError,
     LogStreams, Memory, MountPoint, NetworkSettings, NetworkingConfig, PathStat, Pids, Plugin, ProgressDetail,

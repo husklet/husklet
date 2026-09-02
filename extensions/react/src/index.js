@@ -125,6 +125,10 @@ export function workspace(session) {
         await session.call('container_logs', { id, stdout, stderr }), 'logs',
       ),
       execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
+      executions: async () => expect(await session.call('execution_list'), 'executions'),
+      executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(
+        await session.call('execution_logs', { id, stdout, stderr }), 'logs',
+      ),
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
         await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
       ),
@@ -413,7 +417,7 @@ export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'waitExecution', 'signalExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],

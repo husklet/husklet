@@ -409,6 +409,10 @@ async fn exec(client: &Client, rootfs: &Path) -> Result<(), Box<dyn std::error::
         !exec_inspect.running && exec_inspect.exit_code == 29 && exec_inspect.pid == running_pid,
         "daemon exec inspection did not preserve the nonzero exit and process ID",
     )?;
+    let catalogue = client.executions().list(1024).await?;
+    require(catalogue.executions.iter().any(|entry| entry.id == exec.id), "daemon exec catalogue omitted durable identity")?;
+    let replay = client.executions().logs(&exec.id).await?;
+    require(replay.stdout == b"exec:alpine:value\n" && replay.stderr == b"exec-error\n", "daemon exec replay changed captured streams")?;
     require(
         std::fs::read(rootfs.join("tmp/exec-shared"))? == b"shared",
         "daemon exec did not mutate the parent rootfs",

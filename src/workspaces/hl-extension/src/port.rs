@@ -108,6 +108,12 @@ pub struct ExecutionSummary {
     pub user: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExecutionList {
+    pub executions: Vec<ExecutionSummary>,
+    pub truncated: bool,
+}
+
 /// An image as an extension sees it.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ImageSummary {
@@ -532,6 +538,14 @@ pub trait ContainerInventory {
         Err(HostError::Unsupported(
             "execution inspection is unsupported by this host".into(),
         ))
+    }
+
+    fn executions(&self) -> Result<ExecutionList, HostError> {
+        Err(HostError::Unsupported("execution listing is unsupported by this host".into()))
+    }
+
+    fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
+        Err(HostError::Unsupported("execution logs are unsupported by this host".into()))
     }
 
     /// Waits at most `timeout_ms` for an execution to stop, then returns its final state.

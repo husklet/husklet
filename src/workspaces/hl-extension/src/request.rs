@@ -8,7 +8,7 @@ use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionList, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
     ImageSummary, NetworkSummary, PaneInventory, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
     WorkspaceConfiguration, WorkspaceState,
 };
@@ -95,6 +95,8 @@ pub enum Request {
     ExecutionInspect {
         id: String,
     },
+    ExecutionList,
+    ExecutionLogs { id: String, stdout: bool, stderr: bool },
     ExecutionWait {
         id: String,
         timeout_ms: u32,
@@ -294,6 +296,8 @@ impl Request {
             | Self::ContainerProcesses { .. }
             | Self::ContainerLogs { .. }
             | Self::ExecutionInspect { .. }
+            | Self::ExecutionList
+            | Self::ExecutionLogs { .. }
             | Self::ExecutionWait { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
@@ -444,6 +448,7 @@ pub enum Reply {
     Processes(ProcessList),
     Logs(ContainerOutput),
     Execution(ExecutionSummary),
+    Executions(ExecutionList),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
     ImageDetails(ImageDetails),

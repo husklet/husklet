@@ -101,6 +101,30 @@ async fn create_and_inspect_use_docker_paths_and_shared_wire_casing() {
 }
 
 #[tokio::test]
+async fn list_and_logs_use_finite_exec_endpoints() {
+    let root = TempDir::new().unwrap();
+    let socket = root.path().join("daemon.sock");
+    let listener = listener(&socket);
+    let server = tokio::spawn(async move {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(parts(&request(&mut peer).await).0.starts_with("GET /v1.43/exec/json?limit=7 HTTP/1.1\r\n"));
+        let response = r#"{"executions":[],"truncated":false}"#;
+        peer.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+
+        let (mut peer, _) = listener.accept().await.unwrap();
+        assert!(parts(&request(&mut peer).await).0.starts_with("GET /v1.43/exec/exec%2Fid/logs HTTP/1.1\r\n"));
+        let response = r#"{"stdout":[0,255],"stderr":[3]}"#;
+        peer.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+    });
+    let client = Client::unix(&socket).unwrap();
+    assert!(client.executions().list(7).await.unwrap().executions.is_empty());
+    let logs = client.executions().logs("exec/id").await.unwrap();
+    assert_eq!(logs.stdout, [0, 255]);
+    assert_eq!(logs.stderr, [3]);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn wait_uses_the_blocking_exec_endpoint_and_returns_the_terminal_status() {
     let root = TempDir::new().unwrap();
     let socket = root.path().join("daemon.sock");

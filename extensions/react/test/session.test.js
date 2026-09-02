@@ -336,7 +336,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const api = workspace(stage.session);
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
-    api.containers.execution('e1'), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.pause('c1'), api.containers.unpause('c1'),
+    api.containers.execution('e1'), api.containers.executions(), api.containers.executionLogs('e1', { stdout: true, stderr: false }), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.pause('c1'), api.containers.unpause('c1'),
     api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
@@ -347,6 +347,8 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_processes', with: { id: 'c1' } },
     { call: 'container_logs', with: { id: 'c1', stdout: true, stderr: false } },
     { call: 'execution_inspect', with: { id: 'e1' } },
+    { call: 'execution_list' },
+    { call: 'execution_logs', with: { id: 'e1', stdout: true, stderr: false } },
     { call: 'execution_wait', with: { id: 'e1', timeout_ms: 250 } },
     { call: 'container_pause', with: { id: 'c1' } },
     { call: 'container_unpause', with: { id: 'c1' } },
@@ -360,6 +362,8 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'processes', with: { titles: [], processes: [] } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
     { reply: 'execution', with: { id: 'e1' } },
+    { reply: 'executions', with: { executions: [], truncated: false } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
     { reply: 'execution', with: { id: 'e1', running: false, exit_code: 0 } },
     ...Array(5).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
@@ -369,7 +373,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
-  assert.equal(results[9], 'e2');
+  assert.equal(results[11], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
