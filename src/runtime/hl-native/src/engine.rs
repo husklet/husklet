@@ -1768,6 +1768,52 @@ right: .skip 134217728
         create_engine_with_options(isa, &[], &[])
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn native_supervision_pins_the_executable_without_faulting_in_its_image() {
+        let _serial = engine_test_lock();
+        let mut executable = tempfile::tempfile().unwrap();
+        let mut header = image();
+        put16(&mut header, 18, 0x3e);
+        executable.write_all(&header).unwrap();
+        executable.set_len(32 * 1024 * 1024).unwrap();
+        executable.seek(SeekFrom::Start(0)).unwrap();
+        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+        let name = CString::new("HL_NATIVE_SUPERVISED").unwrap();
+        let value = CString::new("1").unwrap();
+        let option_names = [name.as_ptr()];
+        let option_values = [value.as_ptr()];
+        let before = minor_faults();
+        let config = EngineConfig {
+            isa: 2,
+            rootfs: None,
+            executable_host: None,
+            executable_fd: executable.as_raw_fd(),
+            option_names: &option_names,
+            option_values: &option_values,
+            box_config: None,
+            standard_fds: [standard.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        // SAFETY: the descriptors, option strings, and pointer arrays remain live through construction.
+        let engine = unsafe { Engine::create(config) }.unwrap();
+        let faults = minor_faults().saturating_sub(before);
+        assert!(
+            faults < 1024,
+            "native construction faulted in {faults} pages of an executable consumed by execveat"
+        );
+        drop(engine);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn minor_faults() -> i64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        // SAFETY: getrusage initializes the complete caller-owned record on success.
+        assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) }, 0);
+        // SAFETY: the successful call above initialized the record.
+        unsafe { usage.assume_init() }.ru_minflt
+    }
+
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn requesting_stop_after_native_finish_is_idempotent() {
