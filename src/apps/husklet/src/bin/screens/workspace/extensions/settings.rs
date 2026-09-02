@@ -31,6 +31,8 @@ pub const STANDING: &str = "hl-extension-standing";
 pub const REFUSAL: &str = "hl-extension-refusal";
 /// Style class identifying one lifecycle card in the central catalogue.
 pub const CARD: &str = "hl-extension-card";
+/// Wrapping action region inside a lifecycle card.
+pub const ACTIONS: &str = "hl-extension-actions";
 
 /// One extension's lifecycle card.
 pub struct Settings;
@@ -170,33 +172,32 @@ fn actions(
     refusal: &gtk::Label,
     standing: &gtk::Label,
     semantics: &super::super::semantic::Registry,
-) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+) -> gtk::FlowBox {
+    let row = gtk::FlowBox::new();
+    row.add_css_class(ACTIONS);
+    row.set_selection_mode(gtk::SelectionMode::None);
+    row.set_min_children_per_line(1);
+    row.set_max_children_per_line(3);
+    row.set_column_spacing(8);
+    row.set_row_spacing(8);
     if entry.stage.is_fault() {
-        row.append(&action(shelf, entry, refusal, "Retry", RETRY, Deed::Retry, semantics));
+        row.insert(
+            &action(shelf, entry, refusal, "Retry", RETRY, Deed::Retry, semantics),
+            -1,
+        );
     }
     if entry.stage == Stage::Duty {
-        row.append(&action(
-            shelf,
-            entry,
-            refusal,
-            "Disable",
-            DISABLE,
-            Deed::Disable,
-            semantics,
-        ));
+        row.insert(
+            &action(shelf, entry, refusal, "Disable", DISABLE, Deed::Disable, semantics),
+            -1,
+        );
     } else {
-        row.append(&action(
-            shelf,
-            entry,
-            refusal,
-            "Enable",
-            ENABLE,
-            Deed::Enable,
-            semantics,
-        ));
+        row.insert(
+            &action(shelf, entry, refusal, "Enable", ENABLE, Deed::Enable, semantics),
+            -1,
+        );
     }
-    row.append(&removal(shelf, entry, refusal, standing, semantics));
+    row.insert(&removal(shelf, entry, refusal, standing, semantics), -1);
     row
 }
 

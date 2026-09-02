@@ -38,6 +38,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         selecting_an_extension_shows_the_surface_it_draws();
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
+        fault_removal_actions_wrap_at_narrow_and_wide_sizes();
         the_settings_actions_drive_the_installation();
         lifecycle_actions_share_keyboard_and_semantic_focus();
         native_extension_cards_are_semantic_and_actionable();
@@ -412,6 +413,47 @@ fn a_live_host_fault_reaches_central_settings_and_can_retry() {
         fixture.extension_tagged("alpha", settings::REMOVE).is_some(),
         "retry did not remove it"
     );
+}
+
+fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
+    let fixture = Fixture::new(&[("alpha", true)]);
+    fixture.shelf.fault(&named("alpha"), 5);
+    fixture.act("alpha", settings::REMOVE);
+    let root = fixture._catalogue.widget().clone().upcast::<gtk::Widget>();
+    let actions = descendants(&root)
+        .into_iter()
+        .find(|widget| widget.has_css_class(settings::ACTIONS))
+        .and_downcast::<gtk::FlowBox>()
+        .expect("faulted lifecycle card has a wrapping action region");
+
+    for width in [300, 1_200] {
+        root.measure(gtk::Orientation::Horizontal, -1);
+        root.measure(gtk::Orientation::Vertical, width);
+        root.allocate(width, 1_000, -1, None);
+        let children = descendants(actions.upcast_ref())
+            .into_iter()
+            .filter(|widget| widget.parent().as_ref() == Some(actions.upcast_ref()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            children.len(),
+            3,
+            "Retry, Enable and removal confirmation stay represented"
+        );
+        assert!(
+            children.iter().all(|child| {
+                let allocation = child.allocation();
+                allocation.x() >= 0 && allocation.x() + allocation.width() <= actions.width()
+            }),
+            "lifecycle actions overflowed at {width}px"
+        );
+        if width == 300 {
+            let first_y = children[0].allocation().y();
+            assert!(
+                children.iter().any(|child| child.allocation().y() > first_y),
+                "the worst-case fault confirmation did not wrap at 300px"
+            );
+        }
+    }
 }
 
 fn the_settings_actions_drive_the_installation() {
