@@ -300,8 +300,9 @@ impl PaneChooser {
         Self::terminal_at(window, &current, true);
     }
 
-    /// Freezes every pane occupied by one extension without changing layout,
-    /// persisted provider identity, or a displaced terminal.
+    /// Restores every pane occupied by one extension without changing layout
+    /// or focus. Lifecycle withdrawal must not leave provider authority in the
+    /// live or subsequently persisted pane tree.
     pub(crate) fn withdraw(window: &Rc<TermWin>, extension: &str) {
         let held: Vec<_> = Panes::all(window)
             .into_iter()
@@ -312,7 +313,7 @@ impl PaneChooser {
             })
             .collect();
         for pane in held {
-            Surface::tombstone(window, &pane.content);
+            Self::terminal_at(window, &pane, false);
         }
     }
 

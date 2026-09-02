@@ -67,8 +67,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
         panes::pane_chooser_groups_and_filters_many_extension_views();
-        panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
-        panes::removing_an_extension_tombstones_without_displacing_its_shell();
+        panes::disabling_an_extension_restores_its_surface_pane_terminal();
+        panes::removing_an_extension_restores_its_surface_pane_terminal();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::two_same_extension_panes_render_independently_by_slot();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
@@ -3141,14 +3141,9 @@ mod panes {
         }
         shelf.refresh(&name);
 
-        let frozen = Panes::at(&bench.window, &first_slot).expect("tombstoned pane identity");
-        assert_eq!(frozen.occupant, Occupant::Surface);
-        assert!(
-            super::descendants(&frozen.content)
-                .iter()
-                .any(|widget| widget.has_css_class(ABSENCE)),
-            "withdrawal leaves an explicit recovery placeholder"
-        );
+        let restored = Panes::at(&bench.window, &first_slot).expect("restored pane identity");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert_eq!(restored.content, first.clone().upcast::<gtk::Widget>());
         assert_eq!(
             Panes::at(&bench.window, &second_slot).expect("unrelated pane").slot,
             second_slot,
@@ -3159,10 +3154,19 @@ mod panes {
             "withdrawal disappears from every chooser immediately"
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
-        assert_eq!(
-            Slots::new(&bench.window).surface(&frozen.content),
-            Some((first_slot.clone(), "postgres".to_owned(), Some("database".to_owned()))),
-            "the persisted provider identity survives lifecycle withdrawal"
+        assert!(
+            Slots::new(&bench.window).surface(&restored.content).is_none(),
+            "withdrawal retires provider identity before layout persistence"
+        );
+        let storage = tempfile::tempdir().expect("layout storage");
+        let mut history = 0;
+        let persisted = WindowSession::new(&bench.window)
+            .snapshot_node(&restored.widget, storage.path(), "withdrawn", &mut history)
+            .expect("layout snapshot")
+            .expect("pane snapshot");
+        assert!(
+            matches!(persisted, PaneNode::Leaf(ref pane) if pane.slot.as_deref() == Some(first_slot.as_str())),
+            "persisted layout contains the restored terminal, not a stale provider: {persisted:?}"
         );
 
         if !remove {
@@ -3179,27 +3183,15 @@ mod panes {
             );
             readable(&gallery, "postgres");
             gallery.ready("postgres", generation);
-            PaneChooser::recover(&bench.window, "postgres");
-            assert_eq!(
-                interface.parent().as_ref(),
-                Some(frozen.content.upcast_ref::<gtk::Widget>())
-            );
-            PaneChooser::withdraw(&bench.window, "postgres");
             gallery.withdraw("postgres");
         }
-
-        assert!(Panes::focus(&bench.window, &first_slot));
-        PaneChooser::terminal(&bench.window);
-        let restored = Panes::at(&bench.window, &first_slot).expect("explicitly restored shell");
-        assert_eq!(restored.occupant, Occupant::Terminal);
-        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
     }
 
-    pub(super) fn disabling_an_extension_tombstones_and_recovers_its_surface_pane() {
+    pub(super) fn disabling_an_extension_restores_its_surface_pane_terminal() {
         lifecycle_withdrawal(false);
     }
 
-    pub(super) fn removing_an_extension_tombstones_without_displacing_its_shell() {
+    pub(super) fn removing_an_extension_restores_its_surface_pane_terminal() {
         lifecycle_withdrawal(true);
     }
 
