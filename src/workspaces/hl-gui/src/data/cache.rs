@@ -190,6 +190,12 @@ impl RowCache {
         if window.source != self.source || window.version < self.version {
             return false;
         }
+        let Ok(delivered) = u32::try_from(window.rows.len()) else {
+            return false;
+        };
+        if window.range.count > RowRange::BLOCK || delivered > window.range.count {
+            return false;
+        }
         if window.version > self.version {
             self.discard();
             self.version = window.version;

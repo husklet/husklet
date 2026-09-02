@@ -20,9 +20,9 @@ use std::time::{Duration, Instant};
 
 use hl_extension::port::Occupant;
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
+    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -89,7 +89,14 @@ impl Queue {
                 .fold(0usize, |total, frame| {
                     total.saturating_add(frame.frame.patches.len().max(1))
                 })
-                .saturating_add(mutations.len())
+                .saturating_add(mutations.iter().fold(0usize, |total, mutation| {
+                    let work = match &mutation.mutation {
+                        hl_gui::SourceMutation::Open { columns, .. } => columns.len().max(1),
+                        hl_gui::SourceMutation::Window(window) => window.rows.len().max(1),
+                        _ => 1,
+                    };
+                    total.saturating_add(work)
+                }))
         };
         let incoming = cost(&frames, &mutations);
         let occupied = cost(&held.frames, &held.mutations);
@@ -699,8 +706,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
-        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1718,6 +1725,28 @@ mod tests {
             )
             .expect("a sibling extension retains its independent render budget");
         assert_eq!(healthy.collect().frames.len(), 1);
+    }
+
+    #[test]
+    fn one_row_window_cannot_hide_unbounded_gtk_work_inside_one_mutation() {
+        let queue = Queue::new();
+        let rows = (0..=Queue::LIMIT)
+            .map(|index| hl_gui::Row::new(index as u64, [hl_gui::Cell::text(index.to_string())]))
+            .collect();
+        let mutation = hl_extension::SurfaceMutation {
+            slot: "table-pane".into(),
+            mutation: hl_gui::SourceMutation::Window(hl_gui::RowWindow {
+                source: hl_gui::SourceId::new(1),
+                version: hl_gui::Version::new(1),
+                request: hl_gui::RequestId::new(1),
+                range: hl_gui::RowRange::new(0, hl_gui::RowRange::BLOCK),
+                rows,
+            }),
+        };
+
+        let overflow = queue.deposit(Vec::new(), vec![mutation]);
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
+        assert!(queue.is_empty(), "the oversized source answer is rejected atomically");
     }
 
     #[test]

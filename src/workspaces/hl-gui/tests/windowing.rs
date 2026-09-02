@@ -85,6 +85,30 @@ fn a_delivered_window_becomes_readable() {
 }
 
 #[test]
+fn a_response_cannot_smuggle_rows_beyond_the_requested_window() {
+    let (mut cache, mut producer) = opened(100_000);
+    let request = cache.observe(RowRange::new(0, 40), 0).remove(0);
+    let outstanding = cache.in_flight();
+    let mut oversized = producer.answer(&request);
+    oversized.rows.push(Row::new(
+        u64::from(request.range.count),
+        [Cell::text("outside request")],
+    ));
+
+    assert!(!cache.deliver(&oversized), "the whole oversized answer is refused");
+    assert_eq!(cache.row(0), Lookup::Pending, "no prefix of the invalid answer lands");
+    assert_eq!(
+        cache.in_flight(),
+        outstanding,
+        "the valid outstanding request remains recoverable"
+    );
+
+    let valid = producer.answer(&request);
+    assert!(cache.deliver(&valid));
+    assert!(matches!(cache.row(0), Lookup::Ready(_)));
+}
+
+#[test]
 fn a_long_scroll_requests_the_landing_block_not_every_block_crossed() {
     let (mut cache, mut producer) = opened(100_000);
     settle(&mut cache, &mut producer, 900, 0);
