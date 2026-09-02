@@ -52,25 +52,6 @@ impl WorkspaceDirectory {
         confine(&self.root, resolved)
     }
 
-    /// Resolves a path that may not exist yet, by resolving its parent.
-    ///
-    /// A file that is already there is resolved too, because an existing entry
-    /// can itself be a symbolic link pointing out of the root.
-    fn destination(&self, path: &RelativePath) -> Result<PathBuf, HostError> {
-        let parts = path.parts();
-        let Some((name, parents)) = parts.split_last() else {
-            return Err(HostError::Conflict("the workspace root is a directory".to_owned()));
-        };
-        let parent = join(&self.root, parents.to_vec());
-        let parent = parent.canonicalize().map_err(|error| absence(path, &error))?;
-        let parent = confine(&self.root, parent)?;
-        let target = parent.join(name);
-        let Ok(resolved) = target.canonicalize() else {
-            return Ok(target);
-        };
-        confine(&self.root, resolved)
-    }
-
     /// Resolves the parent while leaving the final entry itself untouched.
     fn entry(&self, path: &RelativePath) -> Result<PathBuf, HostError> {
         let parts = path.parts();
@@ -88,6 +69,11 @@ impl WorkspaceDirectory {
             return Err(HostError::Conflict(format!("{path} is a symbolic link")));
         }
         Ok(target)
+    }
+
+    fn pinned(&self, path: &RelativePath) -> Result<PinnedEntry, HostError> {
+        let target = self.entry(path)?;
+        pin_entry_with(&target, || Ok(())).map_err(|error| absence(path, &error))
     }
 }
 
@@ -134,29 +120,81 @@ impl WorkspaceFiles for WorkspaceDirectory {
     }
 
     fn mkdir(&self, path: &RelativePath) -> Result<(), HostError> {
-        let directory = self.destination(path)?;
-        std::fs::create_dir(directory).map_err(|error| absence(path, &error))
+        let entry = self.pinned(path)?;
+        rustix::fs::mkdirat(&entry.directory, &entry.name, rustix::fs::Mode::from_raw_mode(0o777))
+            .map_err(io::Error::from)
+            .and_then(|()| entry.directory.sync_all())
+            .map_err(|error| absence(path, &error))
     }
 
     fn rename(&self, from: &RelativePath, to: &RelativePath) -> Result<(), HostError> {
-        let source = self.entry(from)?;
-        std::fs::symlink_metadata(&source).map_err(|error| absence(from, &error))?;
-        let destination = self.entry(to)?;
-        if std::fs::symlink_metadata(&destination).is_ok() {
-            return Err(HostError::Conflict(format!("{to} already exists")));
+        let source = self.pinned(from)?;
+        let destination = self.pinned(to)?;
+        rename_noreplace(&source, &destination).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                HostError::Conflict(format!("{to} already exists"))
+            } else {
+                absence(from, &error)
+            }
+        })?;
+        source.directory.sync_all().map_err(|error| absence(from, &error))?;
+        if (source.metadata.dev(), source.metadata.ino()) != (destination.metadata.dev(), destination.metadata.ino()) {
+            destination.directory.sync_all().map_err(|error| absence(to, &error))?;
         }
-        std::fs::rename(source, destination).map_err(|error| absence(from, &error))
+        Ok(())
     }
 
     fn remove(&self, path: &RelativePath) -> Result<(), HostError> {
-        let target = self.entry(path)?;
-        let metadata = std::fs::symlink_metadata(&target).map_err(|error| absence(path, &error))?;
-        if metadata.is_dir() {
-            std::fs::remove_dir(target).map_err(|error| absence(path, &error))
-        } else {
-            std::fs::remove_file(target).map_err(|error| absence(path, &error))
-        }
+        let entry = self.pinned(path)?;
+        remove_entry(&entry)
+            .and_then(|()| entry.directory.sync_all())
+            .map_err(|error| absence(path, &error))
     }
+}
+
+struct PinnedEntry {
+    directory: File,
+    metadata: std::fs::Metadata,
+    name: CString,
+}
+
+fn pin_entry_with(target: &Path, before_open: impl FnOnce() -> io::Result<()>) -> io::Result<PinnedEntry> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other("entry has no parent directory"))?;
+    let expected = std::fs::metadata(parent)?;
+    before_open()?;
+    let directory = File::open(parent)?;
+    let actual = directory.metadata()?;
+    if (expected.dev(), expected.ino()) != (actual.dev(), actual.ino()) {
+        return Err(io::Error::other("containing directory changed before operation"));
+    }
+    Ok(PinnedEntry {
+        directory,
+        metadata: actual,
+        name: c_name(target)?,
+    })
+}
+
+fn rename_noreplace(source: &PinnedEntry, destination: &PinnedEntry) -> io::Result<()> {
+    rustix::fs::renameat_with(
+        &source.directory,
+        &source.name,
+        &destination.directory,
+        &destination.name,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(Into::into)
+}
+
+fn remove_entry(entry: &PinnedEntry) -> io::Result<()> {
+    let status = rustix::fs::statat(&entry.directory, &entry.name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+    let flags = if rustix::fs::FileType::from_raw_mode(status.st_mode) == rustix::fs::FileType::Directory {
+        rustix::fs::AtFlags::REMOVEDIR
+    } else {
+        rustix::fs::AtFlags::empty()
+    };
+    rustix::fs::unlinkat(&entry.directory, &entry.name, flags).map_err(Into::into)
 }
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
@@ -538,6 +576,91 @@ mod tests {
         files.write(&path("state"), b"new").expect("write");
         assert_eq!(std::fs::read(root.join("state")).expect("state"), b"new");
         assert_eq!(std::fs::read(torn).expect("unowned temporary"), b"torn");
+    }
+
+    #[test]
+    fn mutation_parent_replacement_is_rejected_before_opening_authority() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let parent = temporary.path().join("parent");
+        let displaced = temporary.path().join("displaced");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir_all(&parent).expect("parent");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let target = parent.join("entry");
+
+        let result = super::pin_entry_with(&target, || {
+            std::fs::rename(&parent, &displaced)?;
+            std::os::unix::fs::symlink(&outside, &parent)?;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert!(std::fs::read_dir(&outside).expect("outside listing").next().is_none());
+    }
+
+    #[test]
+    fn final_symlinks_are_never_followed_by_mutations() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(&outside, b"outside").expect("outside");
+        std::os::unix::fs::symlink(&outside, root.join("remove-link")).expect("remove link");
+        std::os::unix::fs::symlink(&outside, root.join("rename-link")).expect("rename link");
+        std::os::unix::fs::symlink(&outside, root.join("mkdir-link")).expect("mkdir link");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+
+        assert!(files.mkdir(&path("mkdir-link")).is_err());
+        files.remove(&path("remove-link")).expect("remove link itself");
+        files
+            .rename(&path("rename-link"), &path("renamed-link"))
+            .expect("rename link itself");
+
+        assert_eq!(std::fs::read(&outside).expect("outside"), b"outside");
+        assert!(!root.join("remove-link").exists());
+        assert!(std::fs::symlink_metadata(root.join("renamed-link"))
+            .expect("renamed link")
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn concurrent_renames_never_overwrite_the_winner() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("first"), b"first").expect("first");
+        std::fs::write(root.join("second"), b"second").expect("second");
+        let files = std::sync::Arc::new(WorkspaceDirectory::new(&root).expect("root"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let threads = ["first", "second"].map(|source| {
+            let files = std::sync::Arc::clone(&files);
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                files.rename(&path(source), &path("winner"))
+            })
+        });
+        barrier.wait();
+        let results = threads.map(|thread| thread.join().expect("renamer"));
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(HostError::Conflict(_))))
+                .count(),
+            1
+        );
+        let winner = std::fs::read(root.join("winner")).expect("winner");
+        assert!(winner == b"first" || winner == b"second");
+        assert_eq!(
+            [root.join("first"), root.join("second")]
+                .into_iter()
+                .filter(|source| source.exists())
+                .count(),
+            1
+        );
     }
 
     #[test]
