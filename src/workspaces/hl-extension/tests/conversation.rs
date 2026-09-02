@@ -623,7 +623,7 @@ fn turn(
     };
     wire.send(&answer).expect("the answer is sent");
     for pending in session.drain() {
-        tree.apply(&pending, journal)
+        tree.apply(&pending.frame, journal)
             .expect("the host applies what it accepted");
     }
     outcome

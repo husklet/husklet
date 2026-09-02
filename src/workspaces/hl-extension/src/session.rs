@@ -35,9 +35,27 @@ pub struct Services<'a> {
 /// One connected extension.
 pub struct Session {
     peer: hl_rpc::Session<Topic>,
-    tab: Option<String>,
-    pending: Vec<hl_gui::Frame>,
-    mutations: Vec<hl_gui::SourceMutation>,
+    surfaces: std::collections::BTreeSet<String>,
+    pending: Vec<SurfaceFrame>,
+    mutations: Vec<SurfaceMutation>,
+}
+
+/// One reconciliation frame and the surface that owns its sequence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceFrame {
+    /// Stable workspace pane identity.
+    pub slot: String,
+    /// Frame whose sequence is local to `slot`.
+    pub frame: hl_gui::Frame,
+}
+
+/// One data-source mutation and the surface whose table owns it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceMutation {
+    /// Stable workspace pane identity.
+    pub slot: String,
+    /// Mutation applied only to the addressed surface.
+    pub mutation: hl_gui::SourceMutation,
 }
 
 impl std::ops::Deref for Session {
@@ -60,7 +78,7 @@ impl Session {
     pub fn new(authority: Authority) -> Self {
         Self {
             peer: hl_rpc::Session::new(authority),
-            tab: None,
+            surfaces: std::collections::BTreeSet::new(),
             pending: Vec::new(),
             mutations: Vec::new(),
         }
@@ -69,7 +87,11 @@ impl Session {
     /// The tab this session owns, if it has opened one.
     #[must_use]
     pub fn tab(&self) -> Option<&str> {
-        self.tab.as_deref()
+        if self.surfaces.len() == 1 {
+            self.surfaces.iter().next().map(String::as_str)
+        } else {
+            None
+        }
     }
 
     /// Handles one call.
@@ -181,8 +203,10 @@ impl Session {
             | Request::FilesystemRemove { .. } => self.files(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
-            Request::InterfaceRender { frame } => self.render(frame),
-            Request::SourceResize { mutation } => self.mutate(mutation.clone()),
+            Request::InterfaceRender { frame } => self.render_legacy(frame),
+            Request::InterfaceRenderAt { slot, frame } => self.render(slot, frame),
+            Request::SourceResize { mutation } => self.mutate_legacy(mutation.clone()),
+            Request::SourceResizeAt { slot, mutation } => self.mutate(slot, mutation.clone()),
             Request::EventSubscribe { topic } => {
                 self.peer.follow(*topic);
                 Ok(Reply::Done)
@@ -453,30 +477,55 @@ impl Session {
     /// The frame is handed to the surface the host owns; an extension that has
     /// not opened a tab has nowhere to draw, which is a conflict rather than a
     /// refusal, because the grant is present and only the order is wrong.
-    fn render(&mut self, frame: &hl_gui::Frame) -> Result<Reply, Failure> {
-        if self.tab.is_none() {
+    fn render(&mut self, slot: &str, frame: &hl_gui::Frame) -> Result<Reply, Failure> {
+        if !self.surfaces.contains(slot) {
             return Err(Failure::Conflict {
-                detail: "no tab is open to render into".into(),
+                detail: format!("surface {slot} is not owned by this session"),
             });
         }
-        self.pending.push(frame.clone());
+        self.pending.push(SurfaceFrame {
+            slot: slot.to_owned(),
+            frame: frame.clone(),
+        });
         Ok(Reply::Done)
     }
 
+    fn render_legacy(&mut self, frame: &hl_gui::Frame) -> Result<Reply, Failure> {
+        let slot = self.only_surface()?;
+        self.render(&slot, frame)
+    }
+
     /// Accepts a change to a windowed source the session's tables draw from.
-    fn mutate(&mut self, mutation: hl_gui::SourceMutation) -> Result<Reply, Failure> {
-        if self.tab.is_none() {
+    fn mutate(&mut self, slot: &str, mutation: hl_gui::SourceMutation) -> Result<Reply, Failure> {
+        if !self.surfaces.contains(slot) {
             return Err(Failure::Conflict {
-                detail: "no tab is open to hold a source".into(),
+                detail: format!("surface {slot} is not owned by this session"),
             });
         }
-        self.mutations.push(mutation);
+        self.mutations.push(SurfaceMutation {
+            slot: slot.to_owned(),
+            mutation,
+        });
         Ok(Reply::Done)
+    }
+
+    fn mutate_legacy(&mut self, mutation: hl_gui::SourceMutation) -> Result<Reply, Failure> {
+        let slot = self.only_surface()?;
+        self.mutate(&slot, mutation)
+    }
+
+    fn only_surface(&self) -> Result<String, Failure> {
+        if self.surfaces.len() != 1 {
+            return Err(Failure::Conflict {
+                detail: "an unaddressed interface call requires exactly one owned surface".into(),
+            });
+        }
+        Ok(self.surfaces.iter().next().expect("one surface").clone())
     }
 
     /// Source changes received since the host last collected them.
     #[must_use]
-    pub fn drain_sources(&mut self) -> Vec<hl_gui::SourceMutation> {
+    pub fn drain_sources(&mut self) -> Vec<SurfaceMutation> {
         std::mem::take(&mut self.mutations)
     }
 
@@ -485,32 +534,34 @@ impl Session {
     /// The protocol layer holds them rather than applying them: it owns no
     /// toolkit, and the surface belongs to the host.
     #[must_use]
-    pub fn drain(&mut self) -> Vec<hl_gui::Frame> {
+    pub fn drain(&mut self) -> Vec<SurfaceFrame> {
         std::mem::take(&mut self.pending)
     }
 
-    /// Opens the one tab a session owns. A second call returns the same tab
-    /// rather than accumulating surfaces the extension has forgotten about.
+    /// Opens and records one independently addressable interface surface.
     fn open_tab(&mut self, title: &str, services: &Services<'_>) -> Result<Reply, Failure> {
-        if let Some(existing) = &self.tab {
-            return Ok(Reply::Identity(existing.clone()));
+        const SURFACE_LIMIT: usize = 32;
+        if self.surfaces.len() >= SURFACE_LIMIT {
+            return Err(Failure::Conflict {
+                detail: format!("interface surface limit of {SURFACE_LIMIT} is exhausted"),
+            });
         }
         let port = self.peer.authority().port(Capability::Interface, services.terminal)?;
         let id = port.open_tab(title)?;
-        self.tab = Some(id.clone());
+        self.surfaces.insert(id.clone());
         Ok(Reply::Identity(id))
     }
 
-    /// Divides a pane and takes the new one as the surface this session draws
-    /// into.
-    ///
-    /// A session has one interface, so the pane replaces whatever surface it was
-    /// drawing on rather than becoming a second one: two trees fed by one stream
-    /// of reconciliation frames would disagree the moment either missed a frame.
+    /// Divides a pane and records the new independently addressable surface.
     fn open_pane(&mut self, slot: &str, division: Division, services: &Services<'_>) -> Result<Reply, Failure> {
+        if self.surfaces.len() >= 32 {
+            return Err(Failure::Conflict {
+                detail: "interface surface limit of 32 is exhausted".into(),
+            });
+        }
         let port = self.peer.authority().port(Capability::Interface, services.terminal)?;
         let id = port.surface(slot, division)?;
-        self.tab = Some(id.clone());
+        self.surfaces.insert(id.clone());
         Ok(Reply::Identity(id))
     }
 }

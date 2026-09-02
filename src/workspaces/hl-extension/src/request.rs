@@ -211,7 +211,15 @@ pub enum Request {
     InterfaceRender {
         frame: hl_gui::Frame,
     },
+    InterfaceRenderAt {
+        slot: String,
+        frame: hl_gui::Frame,
+    },
     SourceResize {
+        mutation: hl_gui::SourceMutation,
+    },
+    SourceResizeAt {
+        slot: String,
         mutation: hl_gui::SourceMutation,
     },
     EventSubscribe {
@@ -282,7 +290,9 @@ impl Request {
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceRender { .. }
-            | Self::SourceResize { .. } => Capability::Interface,
+            | Self::InterfaceRenderAt { .. }
+            | Self::SourceResize { .. }
+            | Self::SourceResizeAt { .. } => Capability::Interface,
             Self::EventSubscribe { topic } | Self::EventUnsubscribe { topic } => topic.capability(),
         }
     }

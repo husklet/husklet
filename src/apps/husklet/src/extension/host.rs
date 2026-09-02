@@ -63,9 +63,9 @@ pub const VACANCY: &str = "no extension is installed in this workspace";
 #[derive(Clone, Debug, PartialEq)]
 pub enum Report {
     /// A description of what to draw.
-    Frame(hl_gui::Frame),
+    Frame(hl_extension::SurfaceFrame),
     /// A change to a windowed source the extension's tables draw from.
-    Source(hl_gui::SourceMutation),
+    Source(hl_extension::SurfaceMutation),
     /// The extension is not speaking any more, and why.
     Loss(String),
     /// The restart policy has latched a crash loop. Structured rather than
@@ -761,7 +761,7 @@ mod tests {
             self.reports()
                 .into_iter()
                 .filter_map(|report| match report {
-                    Report::Frame(frame) => Some(frame.sequence),
+                    Report::Frame(frame) => Some(frame.frame.sequence),
                     _ => None,
                 })
                 .collect()
@@ -791,7 +791,10 @@ mod tests {
             self.reports()
                 .into_iter()
                 .filter_map(|report| match report {
-                    Report::Source(hl_gui::SourceMutation::Window(window)) => Some(window),
+                    Report::Source(mutation) => match mutation.mutation {
+                        hl_gui::SourceMutation::Window(window) => Some(window),
+                        _ => None,
+                    },
                     _ => None,
                 })
                 .collect()
