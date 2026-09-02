@@ -232,14 +232,16 @@ impl Overview<'_> {
                 let Some(save) = save.upgrade() else {
                     return gtk::glib::ControlFlow::Break;
                 };
-                let changed = form
-                    .configuration()
-                    .map_or(true, |current| current != *saved.borrow());
+                let changed = form.configuration().map_or(true, |current| current != *saved.borrow());
                 if changed != dirty.get() {
                     dirty.set(changed);
                     save.set_sensitive(changed);
                     status.remove_css_class("err");
-                    status.set_text(if changed { "Unsaved changes." } else { "No unsaved changes." });
+                    status.set_text(if changed {
+                        "Unsaved changes."
+                    } else {
+                        "No unsaved changes."
+                    });
                 }
                 gtk::glib::ControlFlow::Continue
             });
@@ -382,12 +384,7 @@ fn register_cursor(semantics: &screens::workspace::semantic::Registry, form: &Fo
     }
 }
 
-fn register_color(
-    semantics: &screens::workspace::semantic::Registry,
-    path: &str,
-    label: &str,
-    input: &ColorPicker,
-) {
+fn register_color(semantics: &screens::workspace::semantic::Registry, path: &str, label: &str, input: &ColorPicker) {
     use screens::workspace::semantic::{ActionKind, Value};
     let initial = input.value();
     let changed = input.clone();
@@ -411,12 +408,7 @@ fn register_color(
     input.connect_value_changed(move |value| registry.update(&path, Value::Public(value), false));
 }
 
-fn register_font(
-    semantics: &screens::workspace::semantic::Registry,
-    path: &str,
-    label: &str,
-    input: &FontPicker,
-) {
+fn register_font(semantics: &screens::workspace::semantic::Registry, path: &str, label: &str, input: &FontPicker) {
     use screens::workspace::semantic::{ActionKind, Value};
     let initial = input.value();
     let changed = input.clone();
@@ -675,15 +667,20 @@ mod tests {
                 .iter()
                 .filter(|widget| !initial_focus.iter().any(|focused| focused == *widget))
                 .map(|widget| {
-                    widget.downcast_ref::<gtk::Button>().and_then(gtk::Button::label).map_or_else(
-                        || widget.type_().name().to_string(),
-                        |label| format!("{}:{label}", widget.type_().name()),
-                    )
+                    widget
+                        .downcast_ref::<gtk::Button>()
+                        .and_then(gtk::Button::label)
+                        .map_or_else(
+                            || widget.type_().name().to_string(),
+                            |label| format!("{}:{label}", widget.type_().name()),
+                        )
                 })
                 .collect();
             assert!(missed.is_empty(), "Tab traversal missed {missed:?}");
             assert!(
-                initial_focus.iter().all(|widget| !widget.has_css_class("settings-card")),
+                initial_focus
+                    .iter()
+                    .all(|widget| !widget.has_css_class("settings-card")),
                 "card containers never enter keyboard traversal"
             );
             assert!(
@@ -721,7 +718,6 @@ mod tests {
                 ("Font size", "spinbutton", ActionKind::Change, false),
                 ("Cursor blink", "switch", ActionKind::Toggle, false),
                 ("Docker socket", "switch", ActionKind::Toggle, false),
-                ("Save changes", "button", ActionKind::Invoke, false),
             ];
             for (label, role, action, redacted) in editable_contract {
                 let node = snapshot
@@ -733,11 +729,31 @@ mod tests {
                 assert_eq!(node.role, role, "{label} has the wrong semantic role");
                 assert!(node.actions.contains(&action), "{label} is not actionable");
                 if redacted {
-                    assert_eq!(node.value.as_deref(), Some("[redacted]"), "{label} leaked a sensitive value");
+                    assert_eq!(
+                        node.value.as_deref(),
+                        Some("[redacted]"),
+                        "{label} leaked a sensitive value"
+                    );
                 } else {
-                    assert_ne!(node.value.as_deref(), Some("[redacted]"), "{label} was needlessly hidden");
+                    assert_ne!(
+                        node.value.as_deref(),
+                        Some("[redacted]"),
+                        "{label} was needlessly hidden"
+                    );
                 }
             }
+            let pristine_save = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Save changes"))
+                .expect("visible Settings save action lacks semantics");
+            assert_eq!(pristine_save.role, "button");
+            assert!(pristine_save.disabled, "a pristine Settings form cannot be saved");
+            assert!(
+                pristine_save.actions.is_empty(),
+                "a disabled save action must not advertise an operation the host will reject"
+            );
             let vpn = snapshot
                 .root
                 .children
@@ -888,15 +904,19 @@ mod tests {
                     .and_then(|node| node.value.as_deref()),
                 Some("/bin/zsh -l")
             );
+            let changed_save = changed
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Save changes"))
+                .expect("save semantics remain live");
             assert!(
-                !changed
-                    .root
-                    .children
-                    .iter()
-                    .find(|node| node.label.as_deref() == Some("Save changes"))
-                    .expect("save semantics remain live")
-                    .disabled,
+                !changed_save.disabled,
                 "assistive actions see that saving is now available"
+            );
+            assert!(
+                changed_save.actions.contains(&ActionKind::Invoke),
+                "an enabled save action advertises the operation the host accepts"
             );
             window.close();
         }) {
@@ -921,7 +941,9 @@ mod tests {
             if !window.child_focus(gtk::DirectionType::TabForward) {
                 break;
             }
-            let Some(focus) = gtk::prelude::RootExt::focus(window) else { break };
+            let Some(focus) = gtk::prelude::RootExt::focus(window) else {
+                break;
+            };
             if found.iter().any(|seen| seen == &focus) {
                 break;
             }
