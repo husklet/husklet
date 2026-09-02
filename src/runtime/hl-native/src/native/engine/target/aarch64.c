@@ -62,6 +62,13 @@ static void translit_sampling_receipt(const char *stage) { (void)stage; }
 #include "../../linux_abi/bus.h"
 #include "../../host/range.h"
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    (void)scenario;
+    return -1; /* the x86 same-ISA transliterator is absent on this host */
+}
+#endif
+
 /* Instance-scoped host seam supplied by hl_engine. CLI launches retain their native-host path with NULL. */
 static hl_target_services g_target_services;
 #define g_host_services (g_target_services.injected)
