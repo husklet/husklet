@@ -15,7 +15,7 @@ mod sink;
 #[cfg(test)]
 mod test;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -44,6 +44,8 @@ pub struct Interface {
     tree: Tree,
     panes: HashMap<String, PaneInterface>,
     banner: Banner,
+    /// A retry is one request, not a repeatable action while the host reopens.
+    recovery_pending: Cell<bool>,
     deliveries: Deliveries,
     sink: Rc<dyn Sink>,
     faulted: Rc<dyn Fn(u32)>,
@@ -91,6 +93,7 @@ impl Interface {
             tree: Tree::new(),
             panes: HashMap::new(),
             banner,
+            recovery_pending: Cell::new(false),
             deliveries,
             sink,
             faulted,
@@ -141,7 +144,7 @@ impl Interface {
                             .take(hl_extension::port::SEMANTIC_TEXT_LIMIT)
                             .collect(),
                     ),
-                    disabled: false,
+                    disabled: self.recovery_pending.get(),
                     destructive: false,
                     actions: vec![SemanticActionKind::Invoke],
                     children: Vec::new(),
@@ -150,7 +153,7 @@ impl Interface {
         }
         Ok(PaneSemanticTree {
             slot: slot.to_owned(),
-            revision: Self::semantic_revision(tree, self.banner.is_visible()),
+            revision: self.semantic_revision(tree),
             root,
             truncated,
         })
@@ -221,15 +224,18 @@ impl Interface {
 
     pub fn semantic_action_at(&self, slot: &str, action: &PaneSemanticAction) -> Result<(), HostError> {
         let tree = self.panes.get(slot).map_or(&self.tree, |pane| &pane.tree);
-        let revision = Self::semantic_revision(tree, self.banner.is_visible());
+        let revision = self.semantic_revision(tree);
         if action.revision != revision {
             return Err(HostError::Conflict(format!(
                 "stale semantic revision {}; current is {}",
-                action.revision,
-                revision
+                action.revision, revision
             )));
         }
         if action.node == FAULT_NODE && action.action == SemanticActionKind::Invoke && self.banner.is_visible() {
+            if self.recovery_pending.replace(true) {
+                return Err(HostError::Conflict("extension recovery is already pending".into()));
+            }
+            self.banner.pending();
             self.sink.accept(Signal::Retry);
             return Ok(());
         }
@@ -276,8 +282,15 @@ impl Interface {
         Ok(())
     }
 
-    fn semantic_revision(tree: &Tree, faulted: bool) -> u64 {
-        tree.sequence().saturating_mul(2).saturating_add(u64::from(faulted))
+    fn semantic_revision(&self, tree: &Tree) -> u64 {
+        let state = if self.recovery_pending.get() {
+            2
+        } else if self.banner.is_visible() {
+            1
+        } else {
+            0
+        };
+        tree.sequence().saturating_mul(3).saturating_add(state)
     }
 
     /// Returns the independently retained widget for one stable pane slot.
@@ -335,7 +348,10 @@ impl Interface {
             Delivery::Source(mutation) => self.feed(&mutation),
             Delivery::FrameAt { slot, frame } => self.draw_at(&slot, &frame),
             Delivery::SourceAt { slot, mutation } => self.feed_at(&slot, &mutation),
-            Delivery::Loss(reason) => self.banner.show(&reason),
+            Delivery::Loss(reason) => {
+                self.recovery_pending.set(false);
+                self.banner.show(&reason);
+            }
             Delivery::Fault { restarts } => (self.faulted)(restarts),
         }
     }
@@ -343,19 +359,23 @@ impl Interface {
     /// Applies one frame. A rejected frame means the producer and the tree no
     /// longer agree, which the user sees as the extension having stopped.
     fn draw(&mut self, frame: &Frame) {
-        // A frame arriving means the extension is speaking again, so a banner
-        // from an earlier loss no longer describes what is on screen.
-        self.banner.hide();
-        if let Err(fault) = self.tree.apply(frame, &mut self.surface) {
-            self.banner.show(&fault.to_string());
+        match self.tree.apply(frame, &mut self.surface) {
+            Ok(()) => {
+                self.recovery_pending.set(false);
+                self.banner.hide();
+            }
+            Err(fault) => self.banner.show(&fault.to_string()),
         }
     }
 
     fn draw_at(&mut self, slot: &str, frame: &Frame) {
-        self.banner.hide();
         let pane = self.panes.entry(slot.to_owned()).or_insert_with(PaneInterface::new);
-        if let Err(fault) = pane.tree.apply(frame, &mut pane.surface) {
-            self.banner.show(&fault.to_string());
+        match pane.tree.apply(frame, &mut pane.surface) {
+            Ok(()) => {
+                self.recovery_pending.set(false);
+                self.banner.hide();
+            }
+            Err(fault) => self.banner.show(&fault.to_string()),
         }
     }
 
