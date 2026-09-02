@@ -541,6 +541,10 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.read");
         Ok(b"contents".to_vec())
     }
+    fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
+        self.ledger.note("files.stat");
+        Ok(Entry { path: path.clone(), directory: false, size: 7 })
+    }
 
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
         self.ledger.note("files.write");
@@ -901,6 +905,7 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::FilesystemRead,
         ),
+        (Request::FilesystemStat { path: path("logs/app.log") }, Capability::FilesystemRead),
         (
             Request::FilesystemWrite {
                 path: path("logs/app.log"),

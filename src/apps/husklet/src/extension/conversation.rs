@@ -904,6 +904,11 @@ mod tests {
             Ok(b"contents".to_vec())
         }
 
+        fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
+            self.ledger.note("files.stat");
+            Ok(Entry { path: path.clone(), directory: false, size: 8 })
+        }
+
         fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
             self.ledger.note("files.write");
             Ok(())

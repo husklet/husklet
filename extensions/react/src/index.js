@@ -222,6 +222,7 @@ export function workspace(session) {
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
+      stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
       mkdir: (path) => done('filesystem_mkdir', { path }),
       rename: (from, to) => done('filesystem_rename', { from, to }),
@@ -435,7 +436,7 @@ export const protocolCoverage = Object.freeze({
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
-    files: ['list', 'read', 'write', 'mkdir', 'rename', 'remove'],
+    files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     workspaceEvents: ['key', 'focus', 'pointer'],

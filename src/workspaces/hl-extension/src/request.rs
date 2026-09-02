@@ -224,6 +224,7 @@ pub enum Request {
     FilesystemRead {
         path: RelativePath,
     },
+    FilesystemStat { path: RelativePath },
     FilesystemWrite {
         path: RelativePath,
         contents: Vec<u8>,
@@ -336,7 +337,7 @@ impl Request {
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
+            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemStat { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
@@ -359,6 +360,7 @@ impl Request {
         match self {
             Self::FilesystemList { path }
             | Self::FilesystemRead { path }
+            | Self::FilesystemStat { path }
             | Self::FilesystemWrite { path, .. }
             | Self::FilesystemMkdir { path }
             | Self::FilesystemRemove { path } => Some(path),
@@ -468,6 +470,7 @@ pub enum Reply {
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
+    Entry(Entry),
     Contents(Vec<u8>),
     Identity(String),
     Done,

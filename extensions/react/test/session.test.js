@@ -496,14 +496,16 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   const next = frames(stage.host);
   await next();
   const files = workspace(stage.session).files;
-  const operations = [files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
+  const operations = [files.stat('logs/app.log'), files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
+  assert.deepEqual((await next()).payload, { call: 'filesystem_stat', with: { path: 'logs/app.log' } });
   assert.deepEqual((await next()).payload, { call: 'filesystem_mkdir', with: { path: 'logs/new' } });
   assert.deepEqual((await next()).payload, { call: 'filesystem_rename', with: { from: 'logs/a', to: 'logs/b' } });
   assert.deepEqual((await next()).payload, { call: 'filesystem_remove', with: { path: 'logs/b' } });
-  for (let index = 0; index < operations.length; index += 1) {
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'entry', with: { path: 'logs/app.log', directory: false, size: 4 } } }));
+  for (let index = 1; index < operations.length; index += 1) {
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   }
-  await Promise.all(operations);
+  const results = await Promise.all(operations); assert.equal(results[0].size, 4);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

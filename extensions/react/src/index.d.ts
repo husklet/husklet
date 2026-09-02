@@ -4675,6 +4675,7 @@ export interface WorkspaceApi {
   };
   files: {
     list(path: string): Promise<FileEntry[]>;
+    stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
     write(path: string, contents: Iterable<number>): Promise<void>;
     mkdir(path: string): Promise<void>;

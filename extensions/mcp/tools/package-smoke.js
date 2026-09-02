@@ -39,7 +39,7 @@ try {
     for (const name of ['husklet_volume_list', 'husklet_volume_inspect', 'husklet_volume_create', 'husklet_volume_remove', 'husklet_network_list', 'husklet_network_inspect', 'husklet_network_create', 'husklet_network_remove', 'husklet_network_connect', 'husklet_network_disconnect']) {
       if (!names.has(name)) process.exit(1);
     }
-    for (const name of ['husklet_file_mkdir', 'husklet_file_rename', 'husklet_file_remove']) if (!names.has(name)) process.exit(1);
+    for (const name of ['husklet_file_stat', 'husklet_file_mkdir', 'husklet_file_rename', 'husklet_file_remove']) if (!names.has(name)) process.exit(1);
     if (!names.has('husklet_terminal_write_bytes')) process.exit(1);
     let written;
     const byteTool = tools({ terminal: { writeInput: async (slot, input) => { written = [slot, [...input]]; } } })

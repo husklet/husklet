@@ -223,6 +223,7 @@ impl Session {
             }
             Request::FilesystemList { .. }
             | Request::FilesystemRead { .. }
+            | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
             | Request::FilesystemMkdir { .. }
             | Request::FilesystemRename { .. }
@@ -540,6 +541,10 @@ impl Session {
             Request::FilesystemRead { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Contents(port.read(path)?))
+            }
+            Request::FilesystemStat { path } => {
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::Entry(port.stat(path)?))
             }
             Request::FilesystemWrite { path, contents } => {
                 let port = self

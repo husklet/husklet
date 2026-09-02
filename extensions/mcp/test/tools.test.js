@@ -16,7 +16,7 @@ function fake() {
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
-    files: { list: record('files.list'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
+    files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {},
   }};
 }
@@ -205,10 +205,11 @@ test('filesystem controls are strict and removal requires explicit confirmation'
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt' }).success, false);
   assert.equal(byName('husklet_file_rename').inputSchema.safeParse({ from: 'a', to: 'b', extra: true }).success, false);
+  await byName('husklet_file_stat').run({ path: 'logs/app.log' });
   await byName('husklet_file_mkdir').run({ path: 'logs/new' });
   await byName('husklet_file_rename').run({ from: 'logs/a', to: 'logs/b' });
   await byName('husklet_file_remove').run({ path: 'logs/b', confirm: true });
-  assert.deepEqual(calls, [['files.mkdir', 'logs/new'], ['files.rename', 'logs/a', 'logs/b'], ['files.remove', 'logs/b']]);
+  assert.deepEqual(calls, [['files.stat', 'logs/app.log'], ['files.mkdir', 'logs/new'], ['files.rename', 'logs/a', 'logs/b'], ['files.remove', 'logs/b']]);
 });
 
 test('container execution inspection is a strict bounded read through the typed API', async () => {

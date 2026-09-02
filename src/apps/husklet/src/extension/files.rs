@@ -101,6 +101,12 @@ impl WorkspaceFiles for WorkspaceDirectory {
         std::fs::read(file).map_err(|error| absence(path, &error))
     }
 
+    fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
+        let resolved = self.existing(path)?;
+        let metadata = std::fs::metadata(resolved).map_err(|error| absence(path, &error))?;
+        Ok(Entry { path: path.clone(), directory: metadata.is_dir(), size: metadata.len() })
+    }
+
     /// # Errors
     /// Returns `HostError::Absent` when the containing directory does not exist,
     /// `HostError::Conflict` for a path that resolves outside the root, and a
@@ -211,6 +217,7 @@ mod tests {
         assert_eq!(listed[0].path.as_str(), "logs/app.log");
         assert_eq!(listed[0].size, 5);
         assert!(!listed[0].directory);
+        assert_eq!(files.stat(&path("logs/app.log")).expect("metadata"), listed[0]);
 
         files.write(&path("logs/written.txt"), b"new").expect("write");
         assert_eq!(std::fs::read(root.join("logs/written.txt")).expect("file"), b"new");
@@ -238,6 +245,7 @@ mod tests {
         // upstream of this adapter can refuse it.
         let escape = path("escape.txt");
         assert!(matches!(files.read(&escape), Err(HostError::Conflict(_))));
+        assert!(matches!(files.stat(&escape), Err(HostError::Conflict(_))));
         assert!(matches!(files.write(&escape, b"owned"), Err(HostError::Conflict(_))));
         assert!(matches!(files.list(&path("outside")), Err(HostError::Conflict(_))));
         assert!(

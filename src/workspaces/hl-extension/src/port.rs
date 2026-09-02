@@ -848,6 +848,11 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn read(&self, path: &RelativePath) -> Result<Vec<u8>, HostError>;
 
+    /// Reads metadata for exactly one confined workspace-relative path.
+    fn stat(&self, _path: &RelativePath) -> Result<Entry, HostError> {
+        Err(HostError::Unsupported("filesystem metadata is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;

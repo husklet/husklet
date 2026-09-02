@@ -164,6 +164,7 @@ export function tools(api) {
     define('husklet_terminal_ratio', 'Set the pane share of its split.', z.object({ slot: id, ratio: z.number().min(0.05).max(0.95) }).strict(), async ({ slot: value, ratio }) => { await api.terminal.ratio(value, ratio); return { done: true }; }),
     define('husklet_terminal_close', 'Close one pane after explicit confirmation.', z.object({ slot: id, confirm: z.literal(true) }).strict(), async ({ slot: value }) => { await api.terminal.close(value); return { done: true }; }),
     define('husklet_file_list', 'List a workspace-relative directory.', z.object({ path }).strict(), ({ path: value }) => api.files.list(value)),
+    define('husklet_file_stat', 'Read bounded metadata for one workspace-relative path without reading contents.', z.object({ path }).strict(), ({ path: value }) => api.files.stat(value)),
     define('husklet_file_read', 'Read one bounded workspace-relative file.', z.object({ path }).strict(), ({ path: value }) => api.files.read(value)),
     define('husklet_file_write', 'Write bounded UTF-8 contents to a workspace-relative file.', z.object({ path, contents: z.string().max(64 * 1024) }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
     define('husklet_file_mkdir', 'Create one workspace-relative directory.', z.object({ path }).strict(), async ({ path: value }) => { await api.files.mkdir(value); return { done: true }; }),
