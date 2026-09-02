@@ -1307,24 +1307,6 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
     }
-    for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
-        struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];
-        if (atomic_load_explicit(&site->state, memory_order_acquire) != 2) continue;
-        char site_record[192];
-        int site_len = snprintf(site_record, sizeof site_record,
-                                "[diag] jcc-invalid-site version=1 source=%llu target=%llu reason=%u count=%llu\n",
-                                (unsigned long long)site->source, (unsigned long long)site->target,
-                                site->reason,
-                                (unsigned long long)atomic_load_explicit(&site->count, memory_order_relaxed));
-        if (site_len <= 0 || (size_t)site_len >= sizeof site_record) return;
-        size_t site_offset = 0;
-        while (site_offset < (size_t)site_len) {
-            int64_t written = hl_linux_write(box, STDERR_FILENO, site_record + site_offset,
-                                             (size_t)site_len - site_offset);
-            if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)site_len - site_offset) return;
-            site_offset += (size_t)written;
-        }
-    }
 }
 
 static _Noreturn void hl_backend_tree_abnormal_exit(int status) {
@@ -1568,7 +1550,7 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                    : 36;
     if (scenario == 9) {
         char record[2048];
-        int formatted = hl_backend_would_link_format(shared, record, sizeof record);
+        int formatted = hl_backend_would_link_format(g_backend_tree, record, sizeof record);
         uint64_t candidates[HL_BACKEND_WOULD_LINK_FAMILY_COUNT] = {0};
         for (unsigned family = 0; family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT; ++family)
             for (unsigned disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
@@ -2443,6 +2425,24 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
+    }
+    for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
+        struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];
+        if (atomic_load_explicit(&site->state, memory_order_acquire) != 2) continue;
+        char site_record[192];
+        int site_len = snprintf(site_record, sizeof site_record,
+                                "[diag] jcc-invalid-site version=1 source=%llu target=%llu reason=%u count=%llu\n",
+                                (unsigned long long)site->source, (unsigned long long)site->target,
+                                site->reason,
+                                (unsigned long long)atomic_load_explicit(&site->count, memory_order_relaxed));
+        if (site_len <= 0 || (size_t)site_len >= sizeof site_record) return;
+        size_t site_offset = 0;
+        while (site_offset < (size_t)site_len) {
+            int64_t written = hl_linux_write(box, STDERR_FILENO, site_record + site_offset,
+                                             (size_t)site_len - site_offset);
+            if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)site_len - site_offset) return;
+            site_offset += (size_t)written;
+        }
     }
 }
 
