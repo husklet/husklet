@@ -1955,7 +1955,12 @@ static int translit_test_jcc_guard = -1;
 #endif
 
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
-    return translit_jcc_ibtc_stub_entry != NULL && (source >> 12) == (target >> 12);
+    (void)source;
+    (void)target;
+    /* This dynamic lookup stores the architectural target, not a translated
+     * body address. Target removal drops matching IBTC entries before the map
+     * is tombstoned, so crossing a guest page does not weaken invalidation. */
+    return translit_jcc_ibtc_stub_entry != NULL;
 }
 
 // One generation-owned shared probe.  Every source hands it a target in RAX
@@ -4558,6 +4563,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
     if (scenario >= 208 && scenario <= 216) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
+    if (scenario == 218) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
@@ -7718,6 +7732,10 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         scenario = guard_scenarios[scenario - 208];
         translit_test_jcc_guard = 1;
     }
+    if (scenario == 218) {
+        scenario = 94;
+        translit_test_jcc_guard = 1;
+    }
     if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0}, a_off = {off, off + sizeof off, 0};
@@ -7745,9 +7763,10 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (arena == MAP_FAILED) return 134;
-    static _Alignas(4096) uint8_t guest_bytes[4096];
+    static _Alignas(4096) uint8_t guest_bytes[8192];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
-    const size_t target_offset = 0x40;
+    const size_t source_offset = requested_scenario == 218 ? 0xff0 : 0;
+    const size_t target_offset = source_offset + 0x40;
     if (scenario == 98) {
         // Eight legal taken-side sites followed by enough one-byte ordinary
         // instructions to hit the architectural instruction cap. The rejected
@@ -7767,12 +7786,12 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
             guest_bytes[TL_STITCH_MAX_JMPS * 2 + 1] = 0x0b;
         }
     } else {
-        guest_bytes[0] = 0x31; // xor eax,eax -> ZF=1
-        guest_bytes[1] = 0xc0;
-        guest_bytes[2] = 0x74; // je target
-        guest_bytes[3] = (uint8_t)(target_offset - 4);
-        guest_bytes[4] = 0x0f; // deterministic unsupported fall successor
-        guest_bytes[5] = 0x0b;
+        guest_bytes[source_offset + 0] = 0x31; // xor eax,eax -> ZF=1
+        guest_bytes[source_offset + 1] = 0xc0;
+        guest_bytes[source_offset + 2] = 0x74; // je target
+        guest_bytes[source_offset + 3] = (uint8_t)(target_offset - source_offset - 4);
+        guest_bytes[source_offset + 4] = 0x0f; // deterministic unsupported fall successor
+        guest_bytes[source_offset + 5] = 0x0b;
         guest_bytes[target_offset + 0] = 0xb8; // mov $42,%eax
         guest_bytes[target_offset + 1] = 42;
         guest_bytes[target_offset + 2] = 0;
@@ -7793,8 +7812,8 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     if (context == NULL) return 135;
     hl_backend_tree_begin(1, effective_host_services());
-    uint64_t source = translit_fall_fixture_guest;
-    uint64_t target = source + target_offset;
+    uint64_t source = translit_fall_fixture_guest + source_offset;
+    uint64_t target = translit_fall_fixture_guest + target_offset;
     uint64_t emitted_before = __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED);
     uint64_t hit_before = __atomic_load_n(&translit_jcc_ibtc_hit, __ATOMIC_RELAXED);
     uint64_t miss_before = __atomic_load_n(&translit_jcc_ibtc_miss, __ATOMIC_RELAXED);

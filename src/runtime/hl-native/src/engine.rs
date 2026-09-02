@@ -539,6 +539,8 @@ mod tests {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "JCC IBTC scenario {scenario}");
         }
+        // SAFETY: selector 218 is the cross-page form of the same isolated lifecycle fixture.
+        assert_eq!(unsafe { hook(218) }, 0, "cross-page JCC IBTC lifecycle");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
