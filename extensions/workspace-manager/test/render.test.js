@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { Containers, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
-import { ImageDetailsSource } from '../src/model.js';
+import { ContainerDetailsSource, ImageDetailsSource } from '../src/model.js';
 import { host } from './host.js';
 
 const api = {
@@ -110,6 +110,7 @@ test('container stop and kill cannot call the API before final confirmation', as
   const calls = [];
   const controlled = {
     containers: {
+      inspect: async (id) => ({ id, name: 'api', image: 'alpine', state: 'running', created: 0 }),
       stop: async (...args) => calls.push(['stop', ...args]),
       kill: async (...args) => calls.push(['kill', ...args]),
       exec: async () => {}, logs: async () => new Uint8Array(),
@@ -133,12 +134,51 @@ test('container stop and kill cannot call the API before final confirmation', as
   assert.deepEqual(calls, [['stop', 'container-one']]);
 
   invoke(stage, 'Details');
+  await settled(); await settled();
   invoke(stage, 'Kill');
   assert.deepEqual(calls, [['stop', 'container-one']], 'opening kill confirmation performs no operation');
   assert.equal(isDestructive(stage, 'Confirm kill'), true);
   invoke(stage, 'Confirm kill');
   await settled();
   assert.deepEqual(calls.at(-1), ['kill', 'container-one', 'SIGKILL']);
+});
+
+test('container details load through the bounded source and a failed read is retryable', async () => {
+  let attempts = 0;
+  const mutations = [];
+  const controlled = { containers: {
+    inspect: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('container inspect unavailable');
+      return { id: 'container-one', name: 'api', image: 'alpine:3.20', state: 'running', created: 42 };
+    },
+    exec: async () => {}, logs: async () => new Uint8Array(),
+  } };
+  const resource = { data: [{ id: 'container-one', name: 'api', image: 'alpine:3.20', state: 'running' }], loading: false, error: null, reload: async () => {} };
+  const details = new ContainerDetailsSource(async (mutation) => mutations.push(mutation));
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource, containerDetails: details }));
+  invoke(stage, 'Details');
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'Reading container details…'));
+  assert.ok(labelled(stage, 'container inspect unavailable'));
+  invoke(stage, 'Retry details');
+  await settled(); await settled();
+  assert.equal(attempts, 2);
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.deepEqual(mutations, [{ Length: { source: 202, version: 1, rows: 5 } }]);
+  assert.equal(details.answer({ source: 202, version: 1, id: 2, range: { start: 0, count: 999 } }).rows.length, 4);
+});
+
+test('empty container inspection remains understandable and leaves quick actions available', async () => {
+  const controlled = { containers: { inspect: async () => ({}), exec: async () => {}, logs: async () => new Uint8Array() } };
+  const resource = { data: [{ id: 'container-empty', name: 'empty', image: '', state: 'created' }], loading: false, error: null, reload: async () => {} };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource, containerDetails: new ContainerDetailsSource() }));
+  invoke(stage, 'Details');
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'No container details'));
+  assert.ok(labelled(stage, 'Quick actions'), 'empty metadata does not withdraw operational controls');
 });
 
 test('volume and network mutations expose danger only on final confirm and cancel safely', async () => {

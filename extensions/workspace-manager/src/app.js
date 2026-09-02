@@ -3,12 +3,12 @@ import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
   EmptyState, Heading, KeyValueTable, List, ListItemButton, Row, Scroll, Separator, Spinner, Text,
 } from '@husklet/react';
-import { IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'images', 'volumes', 'networks'];
 
-export function WorkspaceManager({ api, selections, imageDetails, initial = {} }) {
+export function WorkspaceManager({ api, selections, containerDetails, imageDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -39,7 +39,7 @@ export function WorkspaceManager({ api, selections, imageDetails, initial = {} }
   const body = section === 'overview'
     ? h(Overview, { containers, images, volumes, networks, onOpen: setSection })
     : section === 'containers'
-      ? h(Containers, { api, resource: containers })
+      ? h(Containers, { api, resource: containers, containerDetails })
       : section === 'processes'
         ? h(Processes, { api, resource: containers })
         : section === 'images'
@@ -78,12 +78,33 @@ function Summary({ title: label, value, detail, onOpen }) {
     h(CardActions, {}, h(Button, { label: 'Open', variant: 'ghost', onInvoke: onOpen })));
 }
 
-export function Containers({ api, resource }) {
+export function Containers({ api, resource, containerDetails }) {
+  const localDetails = useMemo(() => new ContainerDetailsSource(), []);
+  const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const act = async (verb, id, ...args) => {
     setBusy(`${verb}:${id}`);
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
+  };
+  const inspect = async (item) => {
+    setSelected(item.id);
+    setInspection({ id: item.id, state: 'loading', count: 0, error: null });
+    try {
+      const detail = await api.containers.inspect(item.id);
+      const count = await detailsSource.replace(detail);
+      setInspection({ id: item.id, state: 'ready', count, error: null });
+    } catch (cause) {
+      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+    }
+  };
+  const toggleDetails = (item) => {
+    if (selected === item.id && inspection.state !== 'error') {
+      setSelected(null);
+      return;
+    }
+    void inspect(item);
   };
   const view = bounded(resource.data);
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
@@ -92,9 +113,9 @@ export function Containers({ api, resource }) {
       h(CardHeader, { label: item.name || shortId(item.id), detail: item.image }),
       h(CardContent, {}, h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' }))),
       h(CardActions, { gap: 1 },
-        h(Button, { label: selected === item.id ? 'Hide details' : 'Details', onInvoke: () => setSelected(selected === item.id ? null : item.id) }),
+        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
         ...containerActions(item, busy, act)),
-      selected === item.id ? h(ContainerDetail, { api, container: item, act }) : null)),
+      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection }) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
@@ -112,7 +133,7 @@ function containerActions(item, busy, act) {
   ];
 }
 
-function ContainerDetail({ api, container, act }) {
+function ContainerDetail({ api, container, act, inspection }) {
   const [command, setCommand] = useState('');
   const [logs, setLogs] = useState(null);
   const run = async () => {
@@ -121,6 +142,15 @@ function ContainerDetail({ api, container, act }) {
   };
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
   return h(CardContent, { gap: 2 },
+    inspection.state === 'loading'
+      ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading container details…' }))
+      : inspection.state === 'error'
+        ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+        : inspection.state === 'ready' && inspection.count === 0
+          ? h(EmptyState, { label: 'No container details', detail: 'The host returned no inspectable fields.' })
+          : inspection.state === 'ready'
+            ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
+            : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1 }, h(Entry, { value: command, placeholder: 'Command and arguments', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: 'Execute', enabled: command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
       label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)}?`,

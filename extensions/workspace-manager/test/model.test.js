@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  CONTAINER_DETAIL_SOURCE, CONTAINER_DETAIL_WINDOW_LIMIT, ContainerDetailsSource,
   IMAGE_DETAIL_SOURCE, IMAGE_DETAIL_WINDOW_LIMIT, ImageDetailsSource,
   bounded, bytes, logText, processRows, resourceReference, shortId,
 } from '../src/model.js';
@@ -9,6 +10,16 @@ test('records are bounded and omissions stay visible', () => {
   const view = bounded(Array.from({ length: 205 }, (_, index) => index));
   assert.equal(view.records.length, 200);
   assert.equal(view.omitted, 5);
+});
+
+test('typed container inspection exposes only authoritative bounded fields', async () => {
+  const mutations = [];
+  const source = new ContainerDetailsSource(async (mutation) => mutations.push(mutation));
+  assert.equal(await source.replace({ id: 'c1', name: 'api', state: 'running', image: 'alpine:3.20', created: 42 }), 5);
+  assert.deepEqual(mutations, [{ Length: { source: CONTAINER_DETAIL_SOURCE, version: 1, rows: 5 } }]);
+  const window = source.answer({ source: CONTAINER_DETAIL_SOURCE, version: 1, id: 5, range: { start: 0, count: 999 } });
+  assert.equal(window.rows.length, CONTAINER_DETAIL_WINDOW_LIMIT);
+  assert.deepEqual(window.rows[0].cells, [{ Text: 'Immutable ID' }, { Code: 'c1' }]);
 });
 
 test('typed image details become revisioned bounded source windows', async () => {

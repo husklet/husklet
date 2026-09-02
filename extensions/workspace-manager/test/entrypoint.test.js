@@ -34,6 +34,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           ? { reply: 'identity', with: 'workspace-resources' }
           : name === 'container_list'
           ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
+          : name === 'container_inspect'
+            ? { reply: 'container', with: { id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
           : name === 'image_list'
             ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
             : name === 'image_inspect'
@@ -62,6 +64,15 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await until(() => calls.includes('image_inspect') && calls.includes('source_resize_at'));
     const resize = requests.findLast((request) => request.call === 'source_resize_at');
     assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 1, rows: 9 });
+    const imageRenders = requests.filter((request) => request.call === 'interface_render_at').length;
+    peer.write(encode({ channel: 11, kind: KIND.event, payload: invocation(requests, 'Containers') }));
+    await until(() => requests.filter((request) => request.call === 'interface_render_at').length > imageRenders);
+    peer.write(encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }));
+    await until(() => calls.includes('container_inspect') && requests.some((request) =>
+      request.call === 'source_resize_at' && request.with.mutation.Length?.source === 202));
+    const containerResize = requests.findLast((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 202);
+    assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;

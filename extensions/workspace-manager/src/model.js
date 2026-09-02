@@ -21,6 +21,8 @@ export function resourceReference(resource) {
 export const IMAGE_DETAIL_SOURCE = 201;
 export const IMAGE_DETAIL_LIMIT = 64;
 export const IMAGE_DETAIL_WINDOW_LIMIT = 4;
+export const CONTAINER_DETAIL_SOURCE = 202;
+export const CONTAINER_DETAIL_WINDOW_LIMIT = 4;
 
 /** Windowed rows derived only from the public typed ImageDetails contract. */
 export class ImageDetailsSource {
@@ -60,6 +62,38 @@ export class ImageDetailsSource {
     const rows = this.rows.slice(request.range.start, request.range.start + count);
     this.generated += rows.length;
     return { source: IMAGE_DETAIL_SOURCE, version: this.version, request: request.id, range: request.range, rows };
+  }
+}
+
+/** Windowed rows derived only from the public typed ContainerSummary contract. */
+export class ContainerDetailsSource {
+  constructor(send = async () => {}) {
+    this.send = send;
+    this.version = 0;
+    this.rows = [];
+  }
+
+  async replace(details) {
+    const values = [
+      ['Immutable ID', details?.id],
+      ['Name', details?.name],
+      ['State', details?.state],
+      ['Image', details?.image],
+      ['Created', Number.isFinite(details?.created) ? String(details.created) : null],
+    ];
+    this.rows = values.filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
+      .map(([key, value], index) => ({ id: index + 1, cells: [{ Text: key }, { Code: String(value) }] }));
+    this.version += 1;
+    await this.send({ Length: { source: CONTAINER_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    return this.rows.length;
+  }
+
+  answer(request) {
+    if (request.source !== CONTAINER_DETAIL_SOURCE || request.version !== this.version) return null;
+    const count = Math.min(request.range.count, CONTAINER_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start));
+    return { source: CONTAINER_DETAIL_SOURCE, version: this.version, request: request.id,
+      range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
   }
 }
 
