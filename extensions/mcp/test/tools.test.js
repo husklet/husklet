@@ -472,6 +472,10 @@ test('volume and network tools preserve typed read/control operations and confir
   assert.equal(byName('husklet_network_remove').inputSchema.safeParse({ reference: 'private' }).success, false);
   assert.equal(byName('husklet_network_disconnect').inputSchema.safeParse({ reference: 'private', container: 'c1' }).success, false);
   assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: 'private', container: 'c1', extra: true }).success, false);
+  assert.equal(byName('husklet_volume_create').inputSchema.safeParse({ name: 'a'.repeat(255) }).success, true);
+  assert.equal(byName('husklet_volume_create').inputSchema.safeParse({ name: 'a'.repeat(256) }).success, false);
+  assert.equal(byName('husklet_volume_create').inputSchema.safeParse({ name: '-leading' }).success, false);
+  assert.equal(byName('husklet_network_create').inputSchema.safeParse({ name: 'é' }).success, false);
   const networkId = 'a'.repeat(32);
   const containerId = 'b'.repeat(64);
   assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: networkId, container: 'friendly' }).success, false);

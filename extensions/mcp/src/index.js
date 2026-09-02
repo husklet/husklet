@@ -30,6 +30,10 @@ const fileContents = z.string().max(64 * 1024).refine(
   'file contents exceed 65536 UTF-8 bytes',
 );
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
+const resourceName = z.string().min(1).max(255).regex(
+  /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
+  'resource name must start with an ASCII alphanumeric and contain only ASCII alphanumerics, underscores, periods, or hyphens',
+);
 const imageReference = z.string().min(1).max(512).superRefine((value, context) => {
   if (value.trim() !== value || /\s/.test(value)) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'image reference must not contain whitespace' });
@@ -192,12 +196,12 @@ export function tools(api) {
     define('husklet_container_remove', 'Remove one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
     define('husklet_container_kill', 'Signal one complete immutable container ID after explicit confirmation; names, prefixes and process PIDs are refused.', z.object({ id: containerIdentity, signal: signalName, confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
     define('husklet_volume_list', 'List bounded local volume summaries.', empty, () => api.volumes.list()),
-    define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.inspect(name)),
-    define('husklet_volume_create', 'Create one named local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.create(name)),
-    define('husklet_volume_remove', 'Remove one exact observed volume generation after explicit confirmation.', z.object({ name: id, generation: volumeGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.volumes.remove(name, generation); return { done: true }; }),
+    define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: resourceName }).strict(), ({ name }) => api.volumes.inspect(name)),
+    define('husklet_volume_create', 'Create one named local volume.', z.object({ name: resourceName }).strict(), ({ name }) => api.volumes.create(name)),
+    define('husklet_volume_remove', 'Remove one exact observed volume generation after explicit confirmation.', z.object({ name: resourceName, generation: volumeGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.volumes.remove(name, generation); return { done: true }; }),
     define('husklet_network_list', 'List bounded local network summaries.', empty, () => api.networks.list()),
     define('husklet_network_inspect', 'Inspect one local network.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference)),
-    define('husklet_network_create', 'Create one named local network.', z.object({ name: id }).strict(), ({ name }) => api.networks.create(name)),
+    define('husklet_network_create', 'Create one named local network.', z.object({ name: resourceName }).strict(), ({ name }) => api.networks.create(name)),
     define('husklet_network_remove', 'Remove one immutable network ID after explicit confirmation; names and prefixes are refused.', z.object({ reference: networkIdentity, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.networks.remove(reference); return { done: true }; }),
     define('husklet_network_connect', 'Connect one immutable container ID to one immutable network ID.', z.object({ reference: networkIdentity, container: containerIdentity }).strict(), async ({ reference, container }) => { await api.networks.connect(reference, container); return { done: true }; }),
     define('husklet_network_disconnect', 'Disconnect one immutable container ID from one immutable network ID after explicit confirmation.', z.object({ reference: networkIdentity, container: containerIdentity, confirm: z.literal(true) }).strict(), async ({ reference, container }) => { await api.networks.disconnect(reference, container); return { done: true }; }),

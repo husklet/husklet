@@ -51,6 +51,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
           lifecycle(argument.configuration.name, 'create');
         }
         else if (call === 'container_create') answer(frame, 'identity', 'c'.repeat(64));
+        else if (call === 'network_create') answer(frame, 'identity', 'n'.repeat(32));
         else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
           if (call === 'workspace_start') lifecycle(argument.name, 'start');
@@ -299,6 +300,23 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(signalOversized.isError, true);
   assert.equal(calls.length, signalOversizedStart);
+
+  const exactResourceName = 'n'.repeat(255);
+  const resourceStart = calls.length;
+  const resourceCreated = await client.callTool({
+    name: 'husklet_network_create', arguments: { name: exactResourceName },
+  });
+  assert.notEqual(resourceCreated.isError, true);
+  assert.deepEqual(calls.slice(resourceStart), [{
+    call: 'network_create', with: { name: exactResourceName },
+  }]);
+
+  const resourceOversizedStart = calls.length;
+  const resourceOversized = await client.callTool({
+    name: 'husklet_network_create', arguments: { name: 'n'.repeat(256) },
+  });
+  assert.equal(resourceOversized.isError, true);
+  assert.equal(calls.length, resourceOversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 
