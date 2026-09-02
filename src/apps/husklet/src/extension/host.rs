@@ -293,7 +293,7 @@ pub struct Host {
     orders: mpsc::Sender<Order>,
     standing: Arc<Mutex<Standing>>,
     stop: Arc<AtomicBool>,
-    ended: mpsc::Receiver<()>,
+    ended: Option<mpsc::Receiver<()>>,
     driver: Option<JoinHandle<()>>,
 }
 
@@ -326,7 +326,7 @@ impl Host {
             orders,
             standing,
             stop,
-            ended,
+            ended: Some(ended),
             driver: Some(driver),
         }
     }
@@ -358,21 +358,35 @@ impl Host {
     /// Returns `Overrun::Deadline` when the driver outlasted the deadline. It is
     /// joined either way, so no thread outlives this call.
     pub fn close(mut self) -> Result<(), Overrun> {
-        self.shutdown()
+        self.begin_shutdown().map_or(Ok(()), HostShutdown::wait)
     }
 
     /// The whole of shutdown, written once so dropping a host does exactly what
     /// closing it does.
-    fn shutdown(&mut self) -> Result<(), Overrun> {
+    fn begin_shutdown(&mut self) -> Option<HostShutdown> {
         let Some(driver) = self.driver.take() else {
-            return Ok(());
+            return None;
         };
         self.stop.store(true, Ordering::Release);
+        Some(HostShutdown {
+            ended: self.ended.take().expect("a live driver has its completion channel"),
+            driver,
+        })
+    }
+}
+
+struct HostShutdown {
+    ended: mpsc::Receiver<()>,
+    driver: JoinHandle<()>,
+}
+
+impl HostShutdown {
+    fn wait(self) -> Result<(), Overrun> {
         let started = Instant::now();
-        let late = self.ended.recv_timeout(Self::DEADLINE).is_err() && started.elapsed() >= Self::DEADLINE;
-        let _ = driver.join();
+        let late = self.ended.recv_timeout(Host::DEADLINE).is_err() && started.elapsed() >= Host::DEADLINE;
+        let _ = self.driver.join();
         if late {
-            return Err(Overrun::Deadline(Self::DEADLINE));
+            return Err(Overrun::Deadline(Host::DEADLINE));
         }
         Ok(())
     }
@@ -380,11 +394,12 @@ impl Host {
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // Dropping cannot report, and a driver that outran its deadline is the
-        // one thing shutdown does not resolve on its own.
-        if let Err(fault) = self.shutdown() {
-            hl_log::hl_error!(hl_log::tag::RUNTIME, "{fault}");
-        }
+        let Some(shutdown) = self.begin_shutdown() else { return };
+        std::thread::spawn(move || {
+            if let Err(fault) = shutdown.wait() {
+                hl_log::hl_error!(hl_log::tag::RUNTIME, "{fault}");
+            }
+        });
     }
 }
 
@@ -1276,6 +1291,48 @@ mod tests {
     }
 
     #[test]
+    fn dropping_a_host_never_waits_for_sidecar_halt() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let token = Arc::new(());
+        let bench = Arc::new(Bench::new(
+            &socket,
+            &[Script {
+                sequence: 1,
+                linger: true,
+            }],
+            &token,
+        ));
+        let (release, blocked) = mpsc::channel();
+        let halted = Arc::new(AtomicBool::new(false));
+        let supply = BlockingHalt {
+            bench: Arc::clone(&bench),
+            blocked: Mutex::new(blocked),
+            halted: Arc::clone(&halted),
+        };
+        let gallery = Gallery::default();
+        let host = Host::open(supply, gallery.audience());
+        assert!(until(|| gallery.frames() == vec![1]), "the extension is running");
+
+        let started = Instant::now();
+        drop(host);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "GTK-facing drop never joins the driver"
+        );
+        assert!(
+            !halted.load(Ordering::Acquire),
+            "the slow halt is genuinely still pending"
+        );
+
+        release.send(()).expect("release halt");
+        assert!(
+            until(|| halted.load(Ordering::Acquire)),
+            "the reaper lets shutdown finish"
+        );
+    }
+
+    #[test]
     fn an_extension_that_is_not_installed_is_reported_as_an_absence() {
         let gallery = Gallery::default();
 
@@ -1325,6 +1382,32 @@ mod tests {
 
         fn halt(&self, plan: &Plan) {
             self.0.halt(plan);
+        }
+    }
+
+    struct BlockingHalt {
+        bench: Arc<Bench>,
+        blocked: Mutex<mpsc::Receiver<()>>,
+        halted: Arc<AtomicBool>,
+    }
+
+    impl Supply for BlockingHalt {
+        fn plan(&self) -> Result<Option<Plan>, String> {
+            self.bench.plan()
+        }
+
+        fn ensure(&self, plan: &Plan) -> Result<(), String> {
+            self.bench.ensure(plan)
+        }
+
+        fn attend(&self, plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
+            self.bench.attend(plan, conversation)
+        }
+
+        fn halt(&self, plan: &Plan) {
+            self.bench.halt(plan);
+            let _ = self.blocked.lock().expect("release").recv();
+            self.halted.store(true, Ordering::Release);
         }
     }
 }

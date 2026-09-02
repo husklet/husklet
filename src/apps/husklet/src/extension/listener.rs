@@ -15,7 +15,7 @@
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -52,7 +52,7 @@ pub struct Listener {
     socket: std::path::PathBuf,
     stop: Arc<AtomicBool>,
     live: Live,
-    ended: mpsc::Receiver<()>,
+    ended: Option<mpsc::Receiver<()>>,
     accepting: Option<JoinHandle<()>>,
 }
 
@@ -113,7 +113,7 @@ impl Listener {
     /// Returns `Fault::Deadline` when a conversation outlasted the deadline.
     /// The threads are joined either way, so no thread outlives this call.
     pub fn close(mut self) -> Result<(), Fault> {
-        self.shutdown()
+        self.begin_shutdown().map_or(Ok(()), ListenerShutdown::wait)
     }
 
     fn start<F>(socket: std::path::PathBuf, listener: UnixListener, attend: Arc<F>) -> Self
@@ -132,27 +132,24 @@ impl Listener {
             socket,
             stop,
             live,
-            ended,
+            ended: Some(ended),
             accepting: Some(accepting),
         }
     }
 
     /// The whole of shutdown, written once so dropping a listener does exactly
     /// what closing it does.
-    fn shutdown(&mut self) -> Result<(), Fault> {
+    fn begin_shutdown(&mut self) -> Option<ListenerShutdown> {
         let Some(accepting) = self.accepting.take() else {
-            return Ok(());
+            return None;
         };
         self.stop.store(true, Ordering::Release);
         self.wake();
-        let started = Instant::now();
-        let late = self.ended.recv_timeout(Self::DEADLINE).is_err() && started.elapsed() >= Self::DEADLINE;
-        let _ = accepting.join();
-        let _ = std::fs::remove_file(&self.socket);
-        if late {
-            return Err(Fault::Deadline(Self::DEADLINE));
-        }
-        Ok(())
+        Some(ListenerShutdown {
+            socket: self.socket.clone(),
+            ended: self.ended.take().expect("a live listener has its completion channel"),
+            accepting,
+        })
     }
 
     /// Shuts the live connection down so the thread reading it returns.
@@ -167,17 +164,34 @@ impl Listener {
     }
 }
 
+struct ListenerShutdown {
+    socket: std::path::PathBuf,
+    ended: mpsc::Receiver<()>,
+    accepting: JoinHandle<()>,
+}
+
+impl ListenerShutdown {
+    fn wait(self) -> Result<(), Fault> {
+        let started = Instant::now();
+        let late = self.ended.recv_timeout(Listener::DEADLINE).is_err() && started.elapsed() >= Listener::DEADLINE;
+        let _ = self.accepting.join();
+        let _ = std::fs::remove_file(&self.socket);
+        if late {
+            return Err(Fault::Deadline(Listener::DEADLINE));
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Listener {
     fn drop(&mut self) {
-        // Dropping cannot report, and a slow conversation is the one thing
-        // shutdown does not resolve on its own, so it is said out loud here.
-        if let Err(fault) = self.shutdown() {
-            hl_log::hl_error!(
-                hl_log::tag::RUNTIME,
-                "extension socket {}: {fault}",
-                self.socket.display()
-            );
-        }
+        let Some(shutdown) = self.begin_shutdown() else { return };
+        let socket = self.socket.clone();
+        std::thread::spawn(move || {
+            if let Err(fault) = shutdown.wait() {
+                hl_log::hl_error!(hl_log::tag::RUNTIME, "extension socket {}: {fault}", socket.display());
+            }
+        });
     }
 }
 
@@ -272,7 +286,7 @@ where
 mod tests {
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier, Mutex};
     use std::time::{Duration, Instant};
 
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
@@ -436,7 +450,42 @@ mod tests {
 
         drop(listener);
 
-        assert_eq!(Arc::strong_count(&token), 1, "no thread outlives the listener");
-        assert!(!socket.exists());
+        assert!(
+            until(|| Arc::strong_count(&token) == 1 && !socket.exists()),
+            "the background reaper joins every thread and removes the socket"
+        );
+    }
+
+    #[test]
+    fn dropping_never_waits_for_a_stuck_conversation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let (release, blocked) = mpsc::channel();
+        let blocked = Arc::new(Mutex::new(blocked));
+        let (entered, serving) = mpsc::channel();
+        let listener = Listener::open(&spec(&socket), {
+            let blocked = Arc::clone(&blocked);
+            move |_stream| {
+                let _ = entered.send(());
+                let _ = blocked.lock().expect("release").recv();
+            }
+        })
+        .expect("bound");
+        let peer = UnixStream::connect(&socket).expect("connected");
+        serving
+            .recv_timeout(Duration::from_secs(1))
+            .expect("conversation entered");
+
+        let started = Instant::now();
+        drop(listener);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "drop must not join conversation work"
+        );
+        assert!(socket.exists(), "cleanup is genuinely still pending when drop returns");
+
+        release.send(()).expect("release conversation");
+        assert!(until(|| !socket.exists()), "the reaper still completes cleanup");
+        drop(peer);
     }
 }
