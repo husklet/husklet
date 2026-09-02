@@ -137,8 +137,86 @@ struct hl_backend_jcc_invalid_site {
     uint64_t target_bytes_lo;
     uint64_t target_bytes_hi;
     uint8_t target_bytes_len;
+    uint8_t build_failure_reason;
+    uint8_t build_failure_index;
+    uint8_t build_failure_bytes_len;
+    uint8_t build_failure_transient;
+    uint64_t build_failure_pc;
+    uint64_t build_failure_form;
+    uint64_t build_failure_bytes_lo;
+    uint64_t build_failure_bytes_hi;
     _Atomic uint64_t count;
 };
+
+enum hl_backend_translit_failure_reason {
+    HL_BACKEND_TRANSLIT_FAILURE_NONE,
+    HL_BACKEND_TRANSLIT_FAILURE_IMAGE,
+    HL_BACKEND_TRANSLIT_FAILURE_AUTHORITY,
+    HL_BACKEND_TRANSLIT_FAILURE_OWNER_RESERVE,
+    HL_BACKEND_TRANSLIT_FAILURE_ARENA,
+    HL_BACKEND_TRANSLIT_FAILURE_FIRST_DECODE,
+    HL_BACKEND_TRANSLIT_FAILURE_FIRST_UNSUPPORTED,
+    HL_BACKEND_TRANSLIT_FAILURE_FIRST_DISPLACED,
+    HL_BACKEND_TRANSLIT_FAILURE_FIRST_EMIT,
+    HL_BACKEND_TRANSLIT_FAILURE_TRANSACTION,
+    HL_BACKEND_TRANSLIT_FAILURE_OWNER_PUBLISH,
+};
+
+#define HL_BACKEND_TRANSLIT_FAILURE_SITES 4096u
+struct hl_backend_translit_failure {
+    _Atomic uint32_t state;
+    uint64_t gpc, pc, form, bytes_lo, bytes_hi;
+    uint8_t reason, index, bytes_len, transient;
+};
+static struct hl_backend_translit_failure g_backend_translit_failures[HL_BACKEND_TRANSLIT_FAILURE_SITES];
+
+static void hl_backend_tree_translit_failure(unsigned reason, uint64_t gpc, uint64_t pc, unsigned index,
+                                             uint64_t form, const uint8_t *bytes, unsigned bytes_len,
+                                             int transient) {
+    if (!g_prof || reason == HL_BACKEND_TRANSLIT_FAILURE_NONE) return;
+    uint32_t start = (uint32_t)(hl_backend_executed_form_mix(gpc) &
+                                (HL_BACKEND_TRANSLIT_FAILURE_SITES - 1));
+    struct hl_backend_translit_failure *failure = NULL;
+    for (uint32_t probe = 0; probe < HL_BACKEND_TRANSLIT_FAILURE_SITES; ++probe) {
+        struct hl_backend_translit_failure *candidate =
+            &g_backend_translit_failures[(start + probe) & (HL_BACKEND_TRANSLIT_FAILURE_SITES - 1)];
+        uint32_t state = atomic_load_explicit(&candidate->state, memory_order_acquire);
+        if (state == 2 && candidate->gpc == gpc) return; /* Preserve the original refusal. */
+        if (state != 0) continue;
+        uint32_t empty = 0;
+        if (!atomic_compare_exchange_strong_explicit(&candidate->state, &empty, 1, memory_order_acq_rel,
+                                                     memory_order_acquire))
+            continue;
+        failure = candidate;
+        break;
+    }
+    if (failure == NULL) return;
+    failure->gpc = gpc;
+    failure->pc = pc;
+    failure->form = form;
+    failure->reason = (uint8_t)reason;
+    failure->index = (uint8_t)index;
+    failure->bytes_len = (uint8_t)(bytes_len > 16 ? 16 : bytes_len);
+    failure->transient = transient != 0;
+    if (bytes != NULL) {
+        memcpy(&failure->bytes_lo, bytes, failure->bytes_len < 8 ? failure->bytes_len : 8);
+        if (failure->bytes_len > 8) memcpy(&failure->bytes_hi, bytes + 8, failure->bytes_len - 8);
+    }
+    atomic_store_explicit(&failure->state, 2, memory_order_release);
+}
+
+static const struct hl_backend_translit_failure *hl_backend_tree_translit_failure_find(uint64_t gpc) {
+    uint32_t start = (uint32_t)(hl_backend_executed_form_mix(gpc) &
+                                (HL_BACKEND_TRANSLIT_FAILURE_SITES - 1));
+    for (uint32_t probe = 0; probe < HL_BACKEND_TRANSLIT_FAILURE_SITES; ++probe) {
+        const struct hl_backend_translit_failure *failure =
+            &g_backend_translit_failures[(start + probe) & (HL_BACKEND_TRANSLIT_FAILURE_SITES - 1)];
+        uint32_t state = atomic_load_explicit(&failure->state, memory_order_acquire);
+        if (state == 0) return NULL;
+        if (state == 2 && failure->gpc == gpc) return failure;
+    }
+    return NULL;
+}
 
 static void hl_backend_jcc_invalid_mapping_evidence(uint64_t address, uint64_t *start_out,
                                                     uint64_t *offset_out, uint64_t *device_out,
@@ -185,6 +263,17 @@ static void hl_backend_jcc_invalid_site_evidence(struct hl_backend_jcc_invalid_s
            site->target_bytes_len < 8 ? site->target_bytes_len : 8);
     if (site->target_bytes_len > 8)
         memcpy(&site->target_bytes_hi, (const void *)(uintptr_t)(site->target + 8), site->target_bytes_len - 8);
+    const struct hl_backend_translit_failure *failure = hl_backend_tree_translit_failure_find(site->target);
+    if (failure != NULL) {
+        site->build_failure_reason = failure->reason;
+        site->build_failure_index = failure->index;
+        site->build_failure_bytes_len = failure->bytes_len;
+        site->build_failure_transient = failure->transient;
+        site->build_failure_pc = failure->pc;
+        site->build_failure_form = failure->form;
+        site->build_failure_bytes_lo = failure->bytes_lo;
+        site->build_failure_bytes_hi = failure->bytes_hi;
+    }
 }
 
 static int hl_backend_jcc_invalid_site_format(char *record, size_t capacity,
@@ -194,7 +283,10 @@ static int hl_backend_jcc_invalid_site_format(char *record, size_t capacity,
                     "source_mapping_start=%llu source_mapping_offset=%llu source_mapping_device=%llu "
                     "source_mapping_inode=%llu target_mapping_start=%llu target_mapping_offset=%llu "
                     "target_mapping_device=%llu target_mapping_inode=%llu "
-                    "target_bytes_len=%u target_bytes_lo=%016llx target_bytes_hi=%016llx\n",
+                    "target_bytes_len=%u target_bytes_lo=%016llx target_bytes_hi=%016llx "
+                    "build_failure_reason=%u build_failure_index=%u build_failure_transient=%u "
+                    "build_failure_pc=%llu build_failure_form=%llu build_failure_bytes_len=%u "
+                    "build_failure_bytes_lo=%016llx build_failure_bytes_hi=%016llx\n",
                     (unsigned long long)site->source, (unsigned long long)site->target, site->reason,
                     (unsigned long long)atomic_load_explicit(&site->count, memory_order_relaxed),
                     (unsigned long long)site->source_mapping_start,
@@ -205,7 +297,12 @@ static int hl_backend_jcc_invalid_site_format(char *record, size_t capacity,
                     (unsigned long long)site->target_mapping_offset,
                     (unsigned long long)site->target_mapping_device,
                     (unsigned long long)site->target_mapping_inode, site->target_bytes_len,
-                    (unsigned long long)site->target_bytes_lo, (unsigned long long)site->target_bytes_hi);
+                    (unsigned long long)site->target_bytes_lo, (unsigned long long)site->target_bytes_hi,
+                    site->build_failure_reason, site->build_failure_index, site->build_failure_transient,
+                    (unsigned long long)site->build_failure_pc,
+                    (unsigned long long)site->build_failure_form, site->build_failure_bytes_len,
+                    (unsigned long long)site->build_failure_bytes_lo,
+                    (unsigned long long)site->build_failure_bytes_hi);
 }
 
 static void hl_backend_jcc_invalid_site_record(
@@ -1436,9 +1533,30 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         }
         uint8_t target_bytes[16];
         for (unsigned index = 0; index < sizeof target_bytes; ++index) target_bytes[index] = (uint8_t)(index + 1);
+        int saved_prof = g_prof;
+        g_prof = 1;
+        int failures_ok = 1;
+        for (unsigned reason = HL_BACKEND_TRANSLIT_FAILURE_IMAGE;
+             reason <= HL_BACKEND_TRANSLIT_FAILURE_OWNER_PUBLISH; ++reason) {
+            uint64_t key = UINT64_C(0x70000000) + reason * UINT64_C(0x1000);
+            hl_backend_tree_translit_failure(reason, key, key + 7, reason, UINT64_C(0xabc000) + reason,
+                                             target_bytes, sizeof target_bytes,
+                                             reason == HL_BACKEND_TRANSLIT_FAILURE_TRANSACTION);
+            const struct hl_backend_translit_failure *failure = hl_backend_tree_translit_failure_find(key);
+            failures_ok &= failure != NULL && failure->reason == reason && failure->pc == key + 7 &&
+                           failure->index == reason && failure->form == UINT64_C(0xabc000) + reason &&
+                           failure->bytes_len == 16 &&
+                           failure->bytes_lo == UINT64_C(0x0807060504030201) &&
+                           failure->transient == (reason == HL_BACKEND_TRANSLIT_FAILURE_TRANSACTION);
+        }
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_TRANSACTION,
+                                         (uint64_t)(uintptr_t)target_bytes,
+                                         (uint64_t)(uintptr_t)target_bytes + 3, 2, UINT64_C(0x123456),
+                                         target_bytes, sizeof target_bytes, 1);
         hl_backend_jcc_invalid_site_record(evidence->sites, &evidence->unique, &evidence->overflow,
                                            HL_BACKEND_JCC_INVALID_ENTRY_ZERO, 0x1234,
                                            (uint64_t)(uintptr_t)target_bytes);
+        g_prof = saved_prof;
         uint64_t duplicate_count = 0;
         int evidence_ok = 0;
         for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot)
@@ -1448,20 +1566,24 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
             struct hl_backend_jcc_invalid_site *site = &evidence->sites[slot];
             if (atomic_load_explicit(&site->state, memory_order_acquire) == 2) {
-                char record[640];
+                char record[896];
                 int formatted = hl_backend_jcc_invalid_site_format(record, sizeof record, site);
                 evidence_ok = site->target_mapping_start != 0 && site->target_bytes_len == 16 &&
                               site->target_bytes_lo == UINT64_C(0x0807060504030201) &&
                               site->target_bytes_hi == UINT64_C(0x100f0e0d0c0b0a09) && formatted > 0 &&
                               (size_t)formatted < sizeof record &&
                               strstr(record, "jcc-invalid-site version=2 ") != NULL &&
-                              strstr(record, "target_bytes_len=16 target_bytes_lo=0807060504030201 ") != NULL;
+                              strstr(record, "target_bytes_len=16 target_bytes_lo=0807060504030201 ") != NULL &&
+                              site->build_failure_reason == HL_BACKEND_TRANSLIT_FAILURE_TRANSACTION &&
+                              site->build_failure_index == 2 && site->build_failure_transient == 1 &&
+                              site->build_failure_pc == (uint64_t)(uintptr_t)target_bytes + 3 &&
+                              site->build_failure_form == UINT64_C(0x123456);
             }
         }
         int ok = atomic_load_explicit(&fixture->unique, memory_order_relaxed) ==
                      HL_BACKEND_JCC_INVALID_SITES &&
                  atomic_load_explicit(&fixture->overflow, memory_order_relaxed) == 1 &&
-                 duplicate_count == 2 && evidence_ok;
+                 duplicate_count == 2 && evidence_ok && failures_ok;
         (void)munmap(evidence, sizeof *evidence);
         (void)munmap(fixture, sizeof *fixture);
         return ok ? 0 : 96;
@@ -2535,7 +2657,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
         struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];
         if (atomic_load_explicit(&site->state, memory_order_acquire) != 2) continue;
-        char site_record[640];
+        char site_record[896];
         int site_len = hl_backend_jcc_invalid_site_format(site_record, sizeof site_record, site);
         if (site_len <= 0 || (size_t)site_len >= sizeof site_record) return;
         size_t site_offset = 0;

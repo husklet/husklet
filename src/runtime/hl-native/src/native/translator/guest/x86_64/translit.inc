@@ -4903,6 +4903,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = translit_enabled() ? HL_BACKEND_SHAPE_I_IMAGE : HL_BACKEND_SHAPE_I_DISABLED;
 #endif
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_IMAGE, gpc, gpc, 0, 0, NULL, 0, 0);
         return NULL;
     }
     int staged_telemetry = context != NULL && context->authority_state == 1;
@@ -4933,6 +4934,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_AUTHORITY;
 #endif
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_AUTHORITY, gpc, gpc, 0,
+                                         first_decoded > 0 ? translit_unsupported_key(&first_insn) : 0,
+                                         first_bytes, first_decoded > 0 ? (unsigned)first_insn.len : 0, 0);
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
@@ -4953,6 +4957,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_OWNER_RESERVE, gpc, gpc, 0,
+                                         first_decoded > 0 ? translit_unsupported_key(&first_insn) : 0,
+                                         first_bytes, first_decoded > 0 ? (unsigned)first_insn.len : 0, 0);
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
@@ -4962,6 +4969,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_ARENA, gpc, gpc, 0,
+                                         first_decoded > 0 ? translit_unsupported_key(&first_insn) : 0,
+                                         first_bytes, first_decoded > 0 ? (unsigned)first_insn.len : 0, 0);
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
@@ -5016,6 +5026,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t direct_jmp_ibtc_sites = 0;
     uint64_t linked_page_lo = UINT64_MAX, linked_page_hi = 0;
     uint8_t bytes[16];
+    struct insn failure_insn = first_insn;
+    uint8_t failure_bytes[16] = {0};
+    uint64_t failure_pc = gpc;
+    unsigned failure_index = 0;
+    int failure_decoded = first_decoded;
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
@@ -5026,6 +5041,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         } else {
             decoded = hl_x86_decode_context_bytes(context, pc, &insn, bytes);
         }
+        if (count == 0 && pc == gpc && first_decoded > 0)
+            memcpy(bytes, first_bytes, (size_t)first_insn.len);
+        if (decoded > 0) {
+            failure_insn = insn;
+            memcpy(failure_bytes, bytes, (size_t)insn.len);
+        }
+        failure_pc = pc;
+        failure_index = (unsigned)count;
+        failure_decoded = decoded;
         if (decoded <= 0) {
             fall_stop = HL_BACKEND_FALL_DECODE;
             break;
@@ -5070,8 +5094,6 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             fall_stop = HL_BACKEND_FALL_DISPLACED_UNSAFE;
             break;
         }
-        if (count == 0 && pc == gpc) memcpy(bytes, first_bytes, (size_t)insn.len);
-
         uint64_t next = pc + (uint64_t)insn.len;
         unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
         uint8_t *instruction_start = a->cursor;
@@ -5694,6 +5716,16 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (block->profile_fallback_kind == HL_BACKEND_SHAPE_I_OTHER)
             block->profile_fallback_kind = HL_BACKEND_SHAPE_I_EMIT;
 #endif
+        unsigned failure_reason = failure_decoded <= 0 ? HL_BACKEND_TRANSLIT_FAILURE_FIRST_DECODE
+                                  : translit_classify(&failure_insn) == TL_NO
+                                      ? HL_BACKEND_TRANSLIT_FAILURE_FIRST_UNSUPPORTED
+                                  : fall_stop == HL_BACKEND_FALL_DISPLACED_UNSAFE
+                                      ? HL_BACKEND_TRANSLIT_FAILURE_FIRST_DISPLACED
+                                      : HL_BACKEND_TRANSLIT_FAILURE_FIRST_EMIT;
+        hl_backend_tree_translit_failure(failure_reason, gpc, failure_pc, failure_index,
+                                         failure_decoded > 0 ? translit_unsupported_key(&failure_insn) : 0,
+                                         failure_bytes,
+                                         failure_decoded > 0 ? (unsigned)failure_insn.len : 0, 0);
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
@@ -5753,6 +5785,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
        intent before waiting, so none can enter until translate_block publishes
        the descriptor and map entry and releases this lease. */
     if (!hl_x86_decode_transaction_commit(context)) {
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_TRANSACTION, gpc, pc, (unsigned)count,
+                                         0, NULL, 0, 1);
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
@@ -5761,6 +5795,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_RESOURCE;
 #endif
+        hl_backend_tree_translit_failure(HL_BACKEND_TRANSLIT_FAILURE_OWNER_PUBLISH, gpc, pc,
+                                         (unsigned)count, 0, NULL, 0, 0);
         hl_x86_decode_transaction_release(context);
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
