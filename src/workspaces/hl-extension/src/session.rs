@@ -9,8 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface,
-    VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -23,6 +24,7 @@ pub struct Services<'a> {
     pub workspace: WorkspaceInfo,
     pub workspaces: &'a dyn WorkspaceInventory,
     pub workspace_control: &'a dyn WorkspaceControl,
+    pub extensions: &'a dyn ExtensionStore,
     pub containers: &'a dyn ContainerInventory,
     pub control: &'a dyn ContainerControl,
     pub images: &'a dyn ImageStore,
@@ -134,6 +136,11 @@ impl Session {
             | Request::WorkspaceStart { .. }
             | Request::WorkspaceStop { .. }
             | Request::WorkspaceRestart { .. } => self.workspace_control(request, services),
+            Request::ExtensionList
+            | Request::ExtensionInspect { .. }
+            | Request::ExtensionEnable { .. }
+            | Request::ExtensionDisable { .. }
+            | Request::ExtensionRemove { .. } => self.extensions(request, services),
             Request::ContainerList
             | Request::ContainerInspect { .. }
             | Request::ContainerProcesses { .. }
@@ -355,6 +362,20 @@ impl Session {
             Request::WorkspaceRestart { name } => port.restart(name).map(|()| Reply::Done).map_err(Failure::from),
             _ => Err(Failure::Unsupported {
                 call: "workspace control".into(),
+            }),
+        }
+    }
+
+    fn extensions(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        let port = self.peer.authority().port(request.capability(), services.extensions)?;
+        match request {
+            Request::ExtensionList => Ok(Reply::Extensions(port.list()?)),
+            Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
+            Request::ExtensionEnable { name } => port.enable(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionDisable { name } => port.disable(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            _ => Err(Failure::Unsupported {
+                call: "extension management".into(),
             }),
         }
     }

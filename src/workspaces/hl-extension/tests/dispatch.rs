@@ -9,9 +9,9 @@ use std::cell::RefCell;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
-    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
-    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ExtensionStore, ExtensionSummary, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary,
+    Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind,
+    SemanticNode, TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -512,6 +512,37 @@ impl WorkspaceFiles for Host {
     }
 }
 
+impl ExtensionStore for Host {
+    fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
+        self.ledger.note("extensions.list");
+        Ok(vec![ExtensionSummary {
+            name: "sample".into(),
+            image_digest: "sha256:abc".into(),
+            status: "duty".into(),
+        }])
+    }
+    fn inspect(&self, name: &str) -> Result<ExtensionSummary, HostError> {
+        self.ledger.note("extensions.inspect");
+        Ok(ExtensionSummary {
+            name: name.into(),
+            image_digest: "sha256:abc".into(),
+            status: "duty".into(),
+        })
+    }
+    fn enable(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.enable");
+        Ok(())
+    }
+    fn disable(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.disable");
+        Ok(())
+    }
+    fn remove(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.remove");
+        Ok(())
+    }
+}
+
 fn services(host: &Host) -> Services<'_> {
     Services {
         workspace: WorkspaceInfo {
@@ -521,6 +552,7 @@ fn services(host: &Host) -> Services<'_> {
         },
         workspaces: host,
         workspace_control: host,
+        extensions: host,
         containers: host,
         control: host,
         images: host,
@@ -602,6 +634,23 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::WorkspaceRestart { name: "other".into() },
             Capability::WorkspaceControl,
+        ),
+        (Request::ExtensionList, Capability::ExtensionRead),
+        (
+            Request::ExtensionInspect { name: "sample".into() },
+            Capability::ExtensionRead,
+        ),
+        (
+            Request::ExtensionEnable { name: "sample".into() },
+            Capability::ExtensionControl,
+        ),
+        (
+            Request::ExtensionDisable { name: "sample".into() },
+            Capability::ExtensionControl,
+        ),
+        (
+            Request::ExtensionRemove { name: "sample".into() },
+            Capability::ExtensionControl,
         ),
         (Request::ContainerList, Capability::ContainerRead),
         (Request::ContainerInspect { id: "c1".into() }, Capability::ContainerRead),

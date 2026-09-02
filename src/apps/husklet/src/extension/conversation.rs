@@ -765,6 +765,8 @@ mod tests {
         }
     }
 
+    impl hl_extension::port::ExtensionStore for Host {}
+
     fn services(host: &Host) -> Services<'_> {
         Services {
             workspace: WorkspaceInfo {
@@ -774,6 +776,7 @@ mod tests {
             },
             workspaces: host,
             workspace_control: host,
+            extensions: host,
             containers: host,
             control: host,
             images: host,

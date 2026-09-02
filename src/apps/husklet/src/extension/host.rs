@@ -917,6 +917,8 @@ mod tests {
         }
     }
 
+    impl hl_extension::port::ExtensionStore for Ports {}
+
     fn manifest() -> Manifest {
         Manifest {
             name: ExtensionName::new("sample").expect("name"),
@@ -1030,6 +1032,7 @@ mod tests {
                 },
                 workspaces: &ports,
                 workspace_control: &ports,
+                extensions: &ports,
                 containers: &ports,
                 control: &ports,
                 images: &ports,

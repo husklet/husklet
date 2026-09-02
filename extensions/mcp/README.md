@@ -28,6 +28,11 @@ VPN, scrollback, and execution lifetime. Every collection and string is bounded.
 Updates require `confirm: true`, refuse renaming, and still require the host's
 `WorkspaceControl` grant and stopped-workspace validation.
 
+Installed extensions can be listed and inspected under `ExtensionRead`.
+Enable, disable, and record removal each require literal `confirm: true` and the
+host's `ExtensionControl` grant. Installation and update remain human-consent
+workflows and intentionally have no MCP tool.
+
 Volume and network inventory/inspection use the host's separate `VolumeRead`
 and `NetworkRead` grants. Creation and attachment controls retain their
 `VolumeWrite` or `NetworkWrite` grants. Volume/network removal and network

@@ -4092,6 +4092,7 @@ export const PROTOCOL: number;
 export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
+export interface ExtensionSummary { name: string; image_digest: string; status: string }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
 export interface WorkspaceMount { host: string; container: string; read_only: boolean }
 export interface WorkspaceTerminal {
@@ -4199,6 +4200,13 @@ export interface WorkspaceApi {
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;
+  extensions: {
+    list(): Promise<ExtensionSummary[]>;
+    inspect(name: string): Promise<ExtensionSummary>;
+    enable(name: string): Promise<void>;
+    disable(name: string): Promise<void>;
+    remove(name: string): Promise<void>;
+  };
   containers: {
     list(): Promise<ContainerSummary[]>;
     inspect(id: string): Promise<ContainerSummary>;

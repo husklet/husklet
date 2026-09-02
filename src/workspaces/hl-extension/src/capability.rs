@@ -37,6 +37,8 @@ pub enum Capability {
     PaneObserve,
     PaneSemanticRead,
     PaneSemanticControl,
+    /// Reading installed extension identity and lifecycle status.
+    ExtensionRead,
     /// Installing, updating, enabling, disabling, or removing extensions.
     ExtensionControl,
     FilesystemRead,
@@ -66,6 +68,7 @@ impl Capability {
             Self::PaneObserve => "pane-observe",
             Self::PaneSemanticRead => "pane-semantic-read",
             Self::PaneSemanticControl => "pane-semantic-control",
+            Self::ExtensionRead => "extension-read",
             Self::ExtensionControl => "extension-control",
             Self::FilesystemRead => "filesystem-read",
             Self::FilesystemWrite => "filesystem-write",
@@ -120,6 +123,7 @@ impl Capability {
         Self::PaneObserve,
         Self::PaneSemanticRead,
         Self::PaneSemanticControl,
+        Self::ExtensionRead,
         Self::ExtensionControl,
         Self::FilesystemRead,
         Self::FilesystemWrite,

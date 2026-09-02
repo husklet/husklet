@@ -175,6 +175,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(protocolCoverage.unavailable.events.includes('extensions'));
+  assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove']);
+  assert.deepEqual(protocolCoverage.unavailable.extensions, ['install', 'update']);
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
   const api = workspace({ call() { throw new Error('not called'); } });
   assert.equal(api.renameWorkspace, undefined);
@@ -183,6 +185,31 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.equal(typeof api.networks.connect, 'function');
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(api.terminal.switchOccupant, undefined);
+});
+
+test('extension facade preserves exact read and control request shapes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const operations = [api.extensions.list(), api.extensions.inspect('workspace-manager'),
+    api.extensions.enable('workspace-manager'), api.extensions.disable('workspace-manager'),
+    api.extensions.remove('workspace-manager')];
+  const calls = [];
+  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  assert.deepEqual(calls, [
+    { call: 'extension_list' },
+    { call: 'extension_inspect', with: { name: 'workspace-manager' } },
+    { call: 'extension_enable', with: { name: 'workspace-manager' } },
+    { call: 'extension_disable', with: { name: 'workspace-manager' } },
+    { call: 'extension_remove', with: { name: 'workspace-manager' } },
+  ]);
+  const summary = { name: 'workspace-manager', image_digest: 'sha256:abc', status: 'standby' };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }));
+  for (let index = 0; index < 3; index += 1) stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await Promise.all(operations), [[summary], summary, undefined, undefined, undefined]);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('volume and network facades preserve safe request shapes', async () => {

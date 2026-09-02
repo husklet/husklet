@@ -102,6 +102,13 @@ export function workspace(session) {
     start: (name) => done('workspace_start', { name }),
     stop: (name) => done('workspace_stop', { name }),
     restart: (name) => done('workspace_restart', { name }),
+    extensions: {
+      list: async () => expect(await session.call('extension_list'), 'extensions'),
+      inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
+      enable: (name) => done('extension_enable', { name }),
+      disable: (name) => done('extension_disable', { name }),
+      remove: (name) => done('extension_remove', { name }),
+    },
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
       inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
@@ -359,6 +366,7 @@ export const protocolCoverage = Object.freeze({
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write', 'mkdir', 'rename', 'remove'],
+    extensions: ['list', 'inspect', 'enable', 'disable', 'remove'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,
@@ -368,5 +376,6 @@ export const protocolCoverage = Object.freeze({
     containers: [],
     terminal: ['switchOccupant'],
     events: ['extensions', 'drag', 'drop'],
+    extensions: ['install', 'update'],
   }),
 });

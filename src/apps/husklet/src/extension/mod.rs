@@ -21,6 +21,7 @@ mod host;
 mod image;
 mod inventory;
 mod listener;
+mod management;
 mod registration;
 mod resource;
 mod roster;
@@ -33,7 +34,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hl_extension::port::{
-    ContainerControl, ContainerInventory, HostError, ImageStore, NetworkStore, VolumeStore, WorkspaceFiles,
+    ContainerControl, ContainerInventory, ExtensionStore, HostError, ImageStore, NetworkStore, VolumeStore,
+    WorkspaceFiles,
 };
 
 pub use control::ContainerLifecycle;
@@ -43,6 +45,7 @@ pub use host::{Audience, Events, Host, Order, Overrun, Plan, Report, Standing, S
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
+pub use management::ExtensionManagement;
 pub use registration::{Acquisition, Cancellation, Candidate};
 pub use resource::Resources;
 pub use roster::{described, Entry, Refusal, Roster, UpdateRefusal};
@@ -128,6 +131,7 @@ pub struct Extensions {
     images: ImageLibrary,
     resources: Resources,
     files: WorkspaceDirectory,
+    management: ExtensionManagement,
 }
 
 impl Extensions {
@@ -146,6 +150,7 @@ impl Extensions {
             images: ImageLibrary::new(Arc::clone(&bridge)),
             resources: Resources::new(bridge),
             files: WorkspaceDirectory::new(root)?,
+            management: ExtensionManagement::new(workspace),
         })
     }
 
@@ -181,6 +186,11 @@ impl Extensions {
     #[must_use]
     pub fn files(&self) -> &dyn WorkspaceFiles {
         &self.files
+    }
+
+    #[must_use]
+    pub fn management(&self) -> &dyn ExtensionStore {
+        &self.management
     }
 }
 

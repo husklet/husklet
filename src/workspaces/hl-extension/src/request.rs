@@ -48,6 +48,19 @@ pub enum Request {
     WorkspaceRestart {
         name: String,
     },
+    ExtensionList,
+    ExtensionInspect {
+        name: String,
+    },
+    ExtensionEnable {
+        name: String,
+    },
+    ExtensionDisable {
+        name: String,
+    },
+    ExtensionRemove {
+        name: String,
+    },
     ContainerList,
     ContainerInspect {
         id: String,
@@ -246,6 +259,10 @@ impl Request {
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
+            Self::ExtensionList | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
+            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRemove { .. } => {
+                Capability::ExtensionControl
+            }
             Self::ContainerList
             | Self::ContainerInspect { .. }
             | Self::ContainerProcesses { .. }
@@ -384,6 +401,8 @@ pub enum Reply {
     Workspace(WorkspaceInfo),
     WorkspaceConfiguration(WorkspaceConfiguration),
     Workspaces(Vec<WorkspaceState>),
+    Extensions(Vec<crate::port::ExtensionSummary>),
+    Extension(crate::port::ExtensionSummary),
     Containers(Vec<ContainerSummary>),
     Container(ContainerSummary),
     Processes(ProcessList),

@@ -347,6 +347,33 @@ pub struct Entry {
     pub size: u64,
 }
 
+/// One installed extension and its durable lifecycle policy.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionSummary {
+    pub name: String,
+    pub image_digest: String,
+    pub status: String,
+}
+
+/// Installed-extension inventory and persisted lifecycle controls.
+pub trait ExtensionStore {
+    fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
+        Err(HostError::Unsupported("extension inventory is unavailable".into()))
+    }
+    fn inspect(&self, _name: &str) -> Result<ExtensionSummary, HostError> {
+        Err(HostError::Unsupported("extension inspection is unavailable".into()))
+    }
+    fn enable(&self, _name: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension enable is unavailable".into()))
+    }
+    fn disable(&self, _name: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension disable is unavailable".into()))
+    }
+    fn remove(&self, _name: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension removal is unavailable".into()))
+    }
+}
+
 /// Reading container state.
 pub trait ContainerInventory {
     /// # Errors
