@@ -540,7 +540,7 @@ fn daily_dev_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-daily-dev-aarch64"),
         GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-daily-dev-x86_64"),
     };
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/daily_dev.c");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/checkpoint-translated/daily_dev.c");
     let output = directory.join(name);
     let status = std::process::Command::new(compiler)
         .args(["-static", "-O2", "-o"])

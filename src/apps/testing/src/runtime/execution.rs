@@ -11,7 +11,7 @@ use super::{
     output,
 };
 use crate::suite::{BoundedCapture as _, Target};
-use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
+use hl_container::{Config, Console, ContainerSpec, Containers, ExitStatus, Isolation, Mount, Process, Sandbox, Size};
 use retention::FailureRetention;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, sync::Arc, time::Duration};
@@ -366,6 +366,16 @@ impl<'a> CaseExecution<'a> {
             self.case.id.replace('/', "-")
         );
         let mut process = Process::new(&self.case.destination).args(self.case.arguments.iter().map(String::as_str));
+        let checkpoint_cycles = self
+            .case
+            .orchestration
+            .and_then(|orchestration| orchestration.container_checkpoint_cycles);
+        if checkpoint_cycles.is_some() {
+            process = process.console(Console {
+                stdin: false,
+                terminal: Some(Size::new(24, 80).expect("fixed checkpoint fixture terminal")),
+            });
+        }
         if let Some(cwd) = &self.case.working_directory {
             process = process.working_dir(cwd);
         }
@@ -392,9 +402,19 @@ impl<'a> CaseExecution<'a> {
         for mount in options.mounts() {
             spec = spec.mount(mount.clone());
         }
+        let checkpoint_state = checkpoint_cycles
+            .map(|_| tempfile::Builder::new().prefix("container-checkpoint-").tempdir())
+            .transpose();
+        let checkpoint_state = match checkpoint_state {
+            Ok(value) => value,
+            Err(error) => return CaseResult::Failed(self.case.id.clone(), attempt, error.to_string()),
+        };
+        if let Some(state) = &checkpoint_state {
+            spec = spec.mount(Mount::read_write(state.path(), "/checkpoint-state"));
+        }
         let mut status = None;
         let outcome = self
-            .execute(spec, &name, timeout, &mut status)
+            .execute(spec, &name, timeout, &mut status, checkpoint_state.as_ref())
             .await
             .map_err(|error| error.to_string());
         let retained = if outcome.is_err() {
@@ -433,6 +453,7 @@ impl<'a> CaseExecution<'a> {
         name: &str,
         timeout: Duration,
         observed: &mut Option<ExitStatus>,
+        checkpoint_state: Option<&tempfile::TempDir>,
     ) -> Result<(), Error> {
         self.containers.create(spec).await?;
         if let Some((network, endpoint)) = self.case.engine_options.bridge()? {
@@ -441,8 +462,13 @@ impl<'a> CaseExecution<'a> {
             networks.connect(&created.name, name, endpoint).await?;
         }
         self.containers.start(name).await?;
+        if let Some(state) = checkpoint_state {
+            return self
+                .container_checkpoint_cycles(name, timeout, observed, state.path())
+                .await;
+        }
         let status = if let Some(orchestration) = self.case.orchestration {
-            let delay = Duration::from_millis(orchestration.stop_after_ms);
+            let delay = Duration::from_millis(orchestration.stop_after_ms.expect("validated stop orchestration"));
             tokio::time::sleep(delay).await;
             // The manifest timeout bounds the complete attempt, including the pre-stop delay.
             // Validation proves the delay is shorter, so this never silently widens the case.
@@ -490,6 +516,118 @@ impl<'a> CaseExecution<'a> {
             &self.case.stderr,
             profile_validation,
         )
+    }
+
+    /// Two checkpoint/start cycles against one persisted container. This deliberately does not model
+    /// workspace Continue-later, whose domain process is killed and reopened by a separate product journey.
+    async fn container_checkpoint_cycles(
+        &self,
+        name: &str,
+        timeout: Duration,
+        observed: &mut Option<ExitStatus>,
+        state: &Path,
+    ) -> Result<(), Error> {
+        let deadline = Instant::now() + timeout;
+        let output = state.join("output");
+        let mut offset = 0;
+        wait_for_marker(&output, "READY leader=", deadline).await?;
+        self.containers.checkpoint(name, remaining(deadline)?).await?;
+        offset = validate_checkpoint_generation(&output, offset)?;
+
+        std::fs::write(state.join("cycle1"), [])?;
+        self.containers.start(name).await?;
+        wait_for_marker(&output, "CYCLE 1 progress=", deadline).await?;
+        self.containers.checkpoint(name, remaining(deadline)?).await?;
+        offset = validate_checkpoint_generation(&output, offset)?;
+
+        std::fs::write(state.join("cycle2"), [])?;
+        self.containers.start(name).await?;
+        wait_for_marker(&output, "CYCLE 2 progress=", deadline).await?;
+        std::fs::write(state.join("stop"), [])?;
+        let status = self.wait(name, remaining(deadline)?).await?;
+        *observed = Some(status);
+        validate_checkpoint_generation(&output, offset)?;
+        let text = std::fs::read_to_string(output)?;
+        validate_daily_dev_protocol(&text)?;
+        if status != ExitStatus::Code(0) {
+            return Err(format!("container checkpoint fixture exited as {status:?}").into());
+        }
+        Ok(())
+    }
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, Error> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (!remaining.is_zero())
+        .then_some(remaining)
+        .ok_or_else(|| "container checkpoint orchestration exceeded its case timeout".into())
+}
+
+async fn wait_for_marker(path: &Path, marker: &str, deadline: Instant) -> Result<(), Error> {
+    loop {
+        if tokio::fs::read_to_string(path)
+            .await
+            .is_ok_and(|text| text.contains(marker))
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("container checkpoint marker {marker:?} was not emitted").into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn validate_checkpoint_generation(path: &Path, offset: usize) -> Result<usize, Error> {
+    let bytes = std::fs::read(path)?;
+    let generation = bytes
+        .get(offset..)
+        .ok_or("checkpoint output shrank between generations")?;
+    output::validate_backend_tree(generation, true)?;
+    output::validate_translated_execution(generation)?;
+    output::validate_profile(std::str::from_utf8(generation)?)?;
+    Ok(bytes.len())
+}
+
+fn validate_daily_dev_protocol(text: &str) -> Result<(), Error> {
+    for marker in [
+        "READY leader=",
+        "SLEEP-READY ",
+        "CYCLE 1 ",
+        "CYCLE 2 ",
+        "DONE progress=",
+        "JCC-LINK phase=0 value=42",
+        "JCC-LINK phase=1 value=43",
+        "JCC-LINK phase=2 value=44",
+        "MIXED-SSE phase=0 value=42",
+        "MIXED-SSE phase=1 value=43",
+        "MIXED-SSE phase=2 value=44",
+    ] {
+        if text.matches(marker).count() != 1 {
+            return Err(format!("daily-development checkpoint marker {marker:?} was not emitted exactly once").into());
+        }
+    }
+    if text.contains("SLEEP-RETURN") || text.contains("IDENTITY-ERROR") {
+        return Err("daily-development checkpoint process identity was not preserved".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod checkpoint_protocol_tests {
+    use super::validate_daily_dev_protocol;
+
+    const COMPLETE: &str = "READY leader=1\nSLEEP-READY pid=2\nCYCLE 1 progress=5\nCYCLE 2 progress=10\n\
+        DONE progress=11\nJCC-LINK phase=0 value=42\nJCC-LINK phase=1 value=43\n\
+        JCC-LINK phase=2 value=44\nMIXED-SSE phase=0 value=42\nMIXED-SSE phase=1 value=43\n\
+        MIXED-SSE phase=2 value=44\n";
+
+    #[test]
+    fn daily_development_protocol_requires_each_generation_exactly_once() {
+        validate_daily_dev_protocol(COMPLETE).unwrap();
+        assert!(validate_daily_dev_protocol(&format!("{COMPLETE}CYCLE 1 progress=6\n")).is_err());
+        assert!(validate_daily_dev_protocol(&COMPLETE.replace("DONE progress=11\n", "")).is_err());
+        assert!(validate_daily_dev_protocol(&format!("{COMPLETE}IDENTITY-ERROR\n")).is_err());
     }
 }
 

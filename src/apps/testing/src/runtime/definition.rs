@@ -154,11 +154,16 @@ impl App {
                     .into());
                 }
                 if let Some(orchestration) = case.orchestration {
-                    if orchestration.stop_after_ms == 0 || orchestration.stop_after_ms >= case.timeout * 1000 {
-                        return Err(format!("{} has an out-of-range stop-after-ms", case.id).into());
-                    }
-                    if case.expect.signal.is_none() {
-                        return Err(format!("{} orchestrates a stop without an expected signal", case.id).into());
+                    match (orchestration.stop_after_ms, orchestration.container_checkpoint_cycles) {
+                        (Some(delay), None) if delay != 0 && delay < case.timeout * 1000 => {
+                            if case.expect.signal.is_none() {
+                                return Err(
+                                    format!("{} orchestrates a stop without an expected signal", case.id).into()
+                                );
+                            }
+                        }
+                        (None, Some(2)) if case.expect.signal.is_none() => {}
+                        _ => return Err(format!("{} has invalid lifecycle orchestration", case.id).into()),
                     }
                 } else if case.expect.signal.is_some() {
                     return Err(format!("{} expects a signal without lifecycle orchestration", case.id).into());

@@ -1,0 +1,17 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { translated: true, translated_diagnostics: true }
+build:
+  source: daily_dev.c
+  output: daily_dev
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static, -O2]
+artifact: { destination: /opt/husklet/daily_dev }
+cases:
+  - id: runtime/checkpoint-translated/two-container-cycles
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    run: [/checkpoint-state]
+    orchestration: { container-checkpoint-cycles: 2 }
+    expect: { exit: 0, stdout_empty: true }

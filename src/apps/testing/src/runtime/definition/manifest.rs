@@ -106,8 +106,12 @@ pub(super) struct RuntimeSpecification {
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Orchestration {
+    #[serde(default)]
     #[serde(rename = "stop-after-ms")]
-    pub(crate) stop_after_ms: u64,
+    pub(crate) stop_after_ms: Option<u64>,
+    /// Container checkpoint/start cycles. This does not close or reopen a workspace domain.
+    #[serde(default, rename = "container-checkpoint-cycles")]
+    pub(crate) container_checkpoint_cycles: Option<u8>,
 }
 
 /// Root filesystem supplied to one runtime case.
