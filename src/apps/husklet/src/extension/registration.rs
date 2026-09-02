@@ -14,8 +14,10 @@
 
 use std::collections::BTreeMap;
 use std::io::Read as _;
+use std::sync::mpsc::Sender;
 
 use hl_client::model::{CreateContainer, InspectImage};
+use hl_extension::port::HostError;
 use hl_extension::{Manifest, PROTOCOL};
 
 use super::Bridge;
@@ -40,7 +42,41 @@ pub struct Candidate {
     pub manifest: Manifest,
 }
 
+/// One truthful step while turning an image reference into a consent candidate.
+///
+/// The daemon currently reports registry status records, and may report byte
+/// totals when its registry implementation has them. An absent total stays
+/// absent: the UI must not turn a stage boundary into invented download
+/// progress.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Acquisition {
+    Inspecting,
+    Pulling {
+        status: String,
+        id: Option<String>,
+        current: Option<u64>,
+        total: Option<u64>,
+    },
+    ReadingManifest,
+    Ready(Candidate),
+    Failed(String),
+}
+
 impl Candidate {
+    /// Resolves a local image, pulling an absent reference before inspecting it.
+    ///
+    /// Every stage is sent to `progress`. Losing the receiver is not a failure:
+    /// closing the window stops displaying an acquisition but must not panic a
+    /// worker that is already inside the daemon.
+    pub fn acquire(workspace: &WorkspaceConfig, reference: &str, progress: &Sender<Acquisition>) {
+        let result = Self::acquire_inner(workspace, reference, progress);
+        let event = match result {
+            Ok(candidate) => Acquisition::Ready(candidate),
+            Err(reason) => Acquisition::Failed(reason),
+        };
+        let _ = progress.send(event);
+    }
+
     /// Reads what `reference` declares about itself.
     ///
     /// The image is inspected, a container is created from it but never
@@ -53,14 +89,32 @@ impl Candidate {
     /// not be inspected, the manifest could not be read out of it, or the
     /// document is not a manifest this host speaks.
     pub fn read(workspace: &WorkspaceConfig, reference: &str) -> Result<Self, String> {
+        let (sent, _ignored) = std::sync::mpsc::channel();
+        Self::acquire_inner(workspace, reference, &sent)
+    }
+
+    fn acquire_inner(
+        workspace: &WorkspaceConfig,
+        reference: &str,
+        progress: &Sender<Acquisition>,
+    ) -> Result<Self, String> {
         let socket = crate::runtime::domain::Domain::new(workspace)
             .ensure(workspace)
             .map_err(|error| error.to_string())?;
         let bridge = Bridge::new(socket).map_err(|error| error.to_string())?;
         let client = bridge.client();
-        let inspection: InspectImage = bridge
-            .wait(client.images().inspect(reference))
-            .map_err(|error| error.to_string())?;
+        let _ = progress.send(Acquisition::Inspecting);
+        let inspection: InspectImage = match bridge.wait(client.images().inspect(reference)) {
+            Ok(inspection) => inspection,
+            Err(error) if matches!(super::failure(&error), HostError::Absent(_)) => {
+                pull(&bridge, reference, progress)?;
+                bridge
+                    .wait(client.images().inspect(reference))
+                    .map_err(|error| error.to_string())?
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let _ = progress.send(Acquisition::ReadingManifest);
         let path = manifest_path(&inspection.config.labels);
         let archive = extract(&bridge, reference, &path)?;
         let manifest = Manifest::parse(&document(&archive)?, PROTOCOL).map_err(|invalid| invalid.to_string())?;
@@ -70,6 +124,44 @@ impl Candidate {
             manifest,
         })
     }
+}
+
+/// Pulls one registry reference, forwarding only progress the daemon actually
+/// supplied. The daemon embeds registry failures in an otherwise successful
+/// HTTP stream, so every record must be inspected.
+fn pull(bridge: &Bridge, reference: &str, progress: &Sender<Acquisition>) -> Result<(), String> {
+    let (name, tag) = split(reference);
+    let client = bridge.client();
+    let mut stream = bridge
+        .wait(client.images().pull(name, tag, None))
+        .map_err(|error| error.to_string())?;
+    loop {
+        let record = bridge.wait(stream.next()).map_err(|error| error.to_string())?;
+        let Some(record) = record else { return Ok(()) };
+        if let Some(reason) = record.error {
+            return Err(reason);
+        }
+        let detail = record.progress_detail;
+        let _ = progress.send(Acquisition::Pulling {
+            status: record.status.unwrap_or_else(|| "pulling image".to_owned()),
+            id: record.id,
+            current: detail.as_ref().and_then(|value| u64::try_from(value.current).ok()),
+            total: detail.and_then(|value| u64::try_from(value.total).ok()),
+        });
+    }
+}
+
+/// Splits a reference without mistaking a registry host's port for a tag.
+fn split(reference: &str) -> (&str, Option<&str>) {
+    if let Some(index) = reference.find('@') {
+        return (&reference[..index], Some(&reference[index + 1..]));
+    }
+    let start = reference.rfind('/').map_or(0, |index| index + 1);
+    let Some(relative) = reference[start..].rfind(':') else {
+        return (reference, None);
+    };
+    let index = start + relative;
+    (&reference[..index], Some(&reference[index + 1..]))
 }
 
 /// Copies one path out of a container made from `reference`, and removes it again.
@@ -153,7 +245,7 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{document, manifest_path};
+    use super::{document, manifest_path, split};
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
 
@@ -198,5 +290,19 @@ mod tests {
     fn an_archive_with_no_file_is_named_rather_than_read_as_empty() {
         let refusal = document(&archive(&[])).expect_err("nothing to read");
         assert!(refusal.contains("no manifest"), "got {refusal}");
+    }
+
+    #[test]
+    fn registry_ports_are_not_mistaken_for_tags() {
+        assert_eq!(split("localhost:5000/team/tool"), ("localhost:5000/team/tool", None));
+        assert_eq!(
+            split("localhost:5000/team/tool:edge"),
+            ("localhost:5000/team/tool", Some("edge"))
+        );
+    }
+
+    #[test]
+    fn digests_are_forwarded_as_the_pull_selector() {
+        assert_eq!(split("team/tool@sha256:abcd"), ("team/tool", Some("sha256:abcd")));
     }
 }

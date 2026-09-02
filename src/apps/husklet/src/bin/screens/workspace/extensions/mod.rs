@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
-use hl::extension::{Candidate, Entry, Roster};
+use hl::extension::{Acquisition, Entry, Roster};
 use hl_extension::ExtensionName;
 use hl_ws::storage::Directory;
 
@@ -46,7 +46,7 @@ pub type Surfaces = Rc<dyn Fn(&ExtensionName) -> gtk::Widget>;
 ///
 /// The answer arrives on a channel because reading a manifest means reaching a
 /// container daemon, and the main loop must keep drawing while that happens.
-pub type Inspection = Rc<dyn Fn(&str) -> Receiver<Result<Candidate, String>>>;
+pub type Inspection = Rc<dyn Fn(&str) -> Receiver<Acquisition>>;
 
 /// The word that separates an extension's name from the page of ours that is
 /// about it. Used to build the sidebar label and nothing else.

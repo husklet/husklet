@@ -12,12 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use hl::extension::{Candidate, Roster};
-use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wire, PROTOCOL};
+use hl::extension::{Acquisition, Candidate, Roster};
+use hl_extension::{Capability, ExtensionName, Grant, Manifest, PROTOCOL, Record, Stage, Wire};
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{directory, settings, Catalogue, Inspection, Shared, Shelf, Surfaces};
+use super::{Catalogue, Inspection, Shared, Shelf, Surfaces, directory, settings};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -40,6 +40,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_settings_actions_drive_the_installation();
         removing_an_extension_takes_its_pages_with_it();
         an_image_is_read_before_anybody_is_asked();
+        remote_image_progress_precedes_the_consent_prompt();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
@@ -47,6 +48,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
+        panes::splitting_an_interface_again_moves_its_one_surface();
+        panes::a_failed_interface_split_leaves_its_surface_where_it_was();
         panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
     });
     if !ran {
@@ -266,7 +269,11 @@ fn catalogue(fixture: &Fixture, answer: Result<Candidate, String>) -> Rc<Catalog
         let (answered, answer) = std::sync::mpsc::channel();
         let taken = held.lock().expect("answer").take();
         if let Some(taken) = taken {
-            let _ = answered.send(taken);
+            let event = match taken {
+                Ok(candidate) => Acquisition::Ready(candidate),
+                Err(reason) => Acquisition::Failed(reason),
+            };
+            let _ = answered.send(event);
         }
         answer
     });
@@ -339,6 +346,47 @@ fn a_declined_image_records_nothing() {
     assert!(
         fixture.roster.borrow().entries().is_empty(),
         "a declined candidate cannot be installed afterwards"
+    );
+}
+
+fn remote_image_progress_precedes_the_consent_prompt() {
+    let fixture = Fixture::new(&[]);
+    let events = Mutex::new(Some(vec![
+        Acquisition::Inspecting,
+        Acquisition::Pulling {
+            status: "Pulling from team/tool".to_owned(),
+            id: Some("team/tool:latest".to_owned()),
+            current: None,
+            total: None,
+        },
+        Acquisition::ReadingManifest,
+        Acquisition::Ready(candidate()),
+    ]));
+    let inspection: Inspection = Rc::new(move |_| {
+        let (sent, received) = std::sync::mpsc::channel();
+        if let Some(events) = events.lock().expect("events").take() {
+            for event in events {
+                sent.send(event).expect("catalogue is listening");
+            }
+        }
+        received
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    typed(&page, "team/tool:latest");
+    page.inspect();
+
+    assert!(page.poll());
+    assert_eq!(page.notice(), "checking local images");
+    assert!(page.poll());
+    assert!(page.notice().contains("Pulling from team/tool"));
+    assert!(fixture.roster.borrow().entries().is_empty(), "progress is not consent");
+    assert!(page.poll());
+    assert_eq!(page.notice(), "reading extension manifest");
+    assert!(page.poll());
+    assert!(page.notice().contains("asks for"));
+    assert!(
+        fixture.roster.borrow().entries().is_empty(),
+        "a ready image still awaits consent"
     );
 }
 
@@ -456,7 +504,7 @@ fn shake(wire: &mut Wire<UnixStream>) -> Result<(), hl_extension::Transit> {
 }
 
 fn a_click_on_a_rendered_button_reaches_the_extension() {
-    use super::super::extension::{channel, Delivery, Interface, Signal};
+    use super::super::extension::{Delivery, Interface, Signal, channel};
     use hl_gui::{Element, EventId, Reconciliation};
 
     let temporary = tempfile::tempdir().expect("temporary directory");
@@ -661,13 +709,14 @@ mod panes {
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
-    use hl_extension::port::Occupant;
+    use hl_extension::port::{Division, HostError, Occupant};
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin, Window,
-        WindowSession, ABSENCE,
+        ABSENCE, Adjustment, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin, Window,
+        WindowSession,
     };
+    use super::super::Console;
     use super::super::Gallery;
     use hl::config::WorkspaceConfig;
     use vte4::prelude::TerminalExt as _;
@@ -859,6 +908,83 @@ mod panes {
             interface.parent().as_ref(),
             Some(home.upcast_ref::<gtk::Widget>()),
             "and hands the interface back to its page rather than taking it away"
+        );
+        drop(first);
+    }
+
+    pub(super) fn splitting_an_interface_again_moves_its_one_surface() {
+        let bench = Bench::new();
+        let (first, one) = bench.shell();
+        let (_second, two) = bench.beside(&first);
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        interface.add_css_class(super::SURFACE);
+        home.append(&interface);
+        gallery.enrol("sample", &interface, &home);
+        Window::exhibit(&bench.window, gallery);
+
+        let old = Console::surface(&bench.window, Some("sample"), &one, Division::Below).expect("the first surface");
+        let moved =
+            Console::surface(&bench.window, Some("sample"), &two, Division::Below).expect("the relocated surface");
+
+        assert_ne!(moved, old, "the new pane has its own authoritative slot");
+        assert!(Panes::at(&bench.window, &old).is_none(), "the old holder was collapsed");
+        let held = Panes::at(&bench.window, &moved).expect("the returned slot names the new pane");
+        assert_eq!(held.occupant, Occupant::Surface);
+        assert!(
+            super::descendants(&held.widget)
+                .iter()
+                .any(|found| found == interface.upcast_ref::<gtk::Widget>()),
+            "the same interface widget moved rather than a second tree being built"
+        );
+        assert_eq!(
+            super::descendants(bench.page.upcast_ref::<gtk::Widget>())
+                .iter()
+                .filter(|found| *found == interface.upcast_ref::<gtk::Widget>())
+                .count(),
+            1,
+            "the interface appears exactly once in the layout"
+        );
+    }
+
+    pub(super) fn a_failed_interface_split_leaves_its_surface_where_it_was() {
+        let bench = Bench::new();
+        let (first, one) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol("sample", &interface, &home);
+        Window::exhibit(&bench.window, gallery);
+        let old = Console::surface(&bench.window, Some("sample"), &one, Division::Beside).expect("the first surface");
+        let before = interface.parent();
+        // A registered pane under a Grid is addressable, but PaneSplit cannot
+        // restructure that parent: terminal layouts accept only their Box and
+        // Paned shapes. This reaches the post-borrow rollback path rather than
+        // the missing-slot preflight.
+        let unsupported = vte4::Terminal::new();
+        let unsupported_slot = Window::slot(&bench.window);
+        Slots::new(&bench.window).hold(&unsupported, unsupported_slot.clone());
+        let grid = gtk::Grid::new();
+        grid.attach(&unsupported, 0, 0, 1, 1);
+        bench.page.append(&grid);
+
+        let failure = Console::surface(&bench.window, Some("sample"), &unsupported_slot, Division::Below);
+
+        assert!(matches!(failure, Err(HostError::Absent(_))));
+        assert!(
+            Panes::at(&bench.window, &old).is_some(),
+            "the old slot remains addressable"
+        );
+        assert_eq!(interface.parent(), before, "the same holder still owns the interface");
+        assert_eq!(
+            Panes::all(&bench.window)
+                .iter()
+                .filter(|pane| pane.occupant == Occupant::Surface)
+                .count(),
+            1,
+            "failure creates no placeholder surface"
         );
         drop(first);
     }
