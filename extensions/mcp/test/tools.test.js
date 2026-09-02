@@ -183,6 +183,7 @@ test('container create and exec accept only bounded structured authority', async
   const listed = tools(api);
   const create = listed.find(({ name }) => name === 'husklet_container_create');
   const exec = listed.find(({ name }) => name === 'husklet_container_exec');
+  const attach = listed.find(({ name }) => name === 'husklet_container_attach_terminal');
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
@@ -192,6 +193,9 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
+  assert.equal(attach.inputSchema.safeParse({ id: 'c1', command: ['sh'] }).success, false);
+  assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['sh', '-i'] }).success, true);
+  assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: 'sh -i' }).success, false);
   const spec = create.inputSchema.parse({
     image: 'alpine:3.20', name: 'worker-1', entrypoint: ['/usr/bin/env'], command: ['worker', '--once'],
     environment: [['MODE', 'agent']], working_directory: '/work', user: '1000', labels: [['owner', 'agent']],

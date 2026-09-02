@@ -199,6 +199,7 @@ function containerActions(item, busy, act) {
 function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
   const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
   const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
+  const [attachment, setAttachment] = useState({ state: 'idle', slot: '', error: null });
   const [logs, setLogs] = useState(null);
   const run = async () => {
     setExecution({ state: 'loading', id: '', error: null });
@@ -222,6 +223,20 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
     } catch (error) { setExecution({ state: 'error', id: '', error }); }
   };
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
+  const attach = async () => {
+    setAttachment({ state: 'loading', slot: '', error: null });
+    try {
+      let argv;
+      try { argv = JSON.parse(command.argv); }
+      catch { throw new Error('Command must be valid JSON, such as ["sh"].'); }
+      if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64
+        || argv.some((argument) => typeof argument !== 'string' || !argument.length || argument.length > 4_096)) {
+        throw new Error('Command must be a JSON array of 1–64 non-empty strings, each at most 4096 characters.');
+      }
+      const slot = await api.containers.attachTerminal(container.id, argv);
+      setAttachment({ state: 'ready', slot, error: null });
+    } catch (error) { setAttachment({ state: 'error', slot: '', error }); }
+  };
   return h(CardContent, { gap: 2 },
     inspection.state === 'loading'
       ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading container details…' }))
@@ -245,7 +260,11 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
       h(Entry, { value: command.argv, placeholder: 'Command argv JSON', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, argv: String(event.value ?? '') })) }),
       h(Entry, { value: command.user, placeholder: 'Run as user (optional)', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, user: String(event.value ?? '') })) }),
       h(Entry, { value: command.workingDirectory, placeholder: 'Working directory (optional)', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) })),
-    h(Row, { gap: 1, wrap: true }, h(Button, { label: execution.state === 'loading' ? 'Executing…' : 'Execute', enabled: execution.state !== 'loading' && command.argv.trim().length > 0, onInvoke: run })),
+    h(Row, { gap: 1, wrap: true },
+      h(Button, { label: execution.state === 'loading' ? 'Executing…' : 'Execute', enabled: execution.state !== 'loading' && command.argv.trim().length > 0, onInvoke: run }),
+      h(Button, { label: attachment.state === 'loading' ? 'Attaching…' : 'Attach terminal', enabled: attachment.state !== 'loading' && command.argv.trim().length > 0 && container.state === 'running', onInvoke: attach })),
+    attachment.state === 'error' ? h(Text, { label: attachment.error?.message ?? String(attachment.error), color: 'danger', wrap: true }) : null,
+    attachment.state === 'ready' ? h(Text, { label: `Interactive terminal opened in ${attachment.slot}.`, color: 'positive', wrap: true }) : null,
     execution.state === 'error' ? h(Text, { label: execution.error?.message ?? String(execution.error), color: 'danger', wrap: true }) : null,
     execution.state === 'ready' ? h(Row, { gap: 1, wrap: true, align: 'center' },
       h(Text, { label: `Execution ${execution.id} created.`, color: 'positive', wrap: true }),

@@ -18,7 +18,17 @@ const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'im
 
 function immutableIdentity(id, widths, noun) {
   if (typeof id === 'string' && widths.includes(id.length) && /^[0-9a-f]+$/.test(id)) return id;
-  throw new TypeError(`${noun} signaling requires the complete immutable ID returned by inspection`);
+  throw new TypeError(`${noun} operation requires the complete immutable ID returned by inspection`);
+}
+
+function exactCommand(command) {
+  if (!Array.isArray(command) || command.length < 1 || command.length > 64
+    || command[0] === '' || command.some((argument) => typeof argument !== 'string'
+      || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
+    || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32768) {
+    throw new TypeError('command must contain 1..64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+  }
+  return command;
 }
 
 function immutableDigest(value, noun) {
@@ -168,6 +178,9 @@ export function workspace(session) {
           id, command, user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
+      attachTerminal: (id, command) => session.call('container_attach_terminal', {
+        id: immutableIdentity(id, [32, 64], 'container'), command: exactCommand(command),
+      }).then((reply) => expect(reply, 'identity')),
     },
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
@@ -456,7 +469,7 @@ export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec', 'attachTerminal'],
     images: ['list', 'pull', 'startPull', 'pullStatus', 'cancelPull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],

@@ -173,7 +173,10 @@ impl ContainerInventory for Host {
     }
     fn executions(&self) -> Result<hl_extension::port::ExecutionList, HostError> {
         self.ledger.note("executions.list");
-        Ok(hl_extension::port::ExecutionList { executions: vec![self.execution("e1")?], truncated: false })
+        Ok(hl_extension::port::ExecutionList {
+            executions: vec![self.execution("e1")?],
+            truncated: false,
+        })
     }
     fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
         self.ledger.note("executions.logs");
@@ -189,8 +192,15 @@ impl ContainerInventory for Host {
 
     fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
         self.ledger.note("executions.wait");
-        Ok(ExecutionSummary { id: id.into(), container_id: "c1".into(), running: false,
-            exit_code: 17, pid: 0, command: vec!["worker".into()], user: "root".into() })
+        Ok(ExecutionSummary {
+            id: id.into(),
+            container_id: "c1".into(),
+            running: false,
+            exit_code: 17,
+            pid: 0,
+            command: vec!["worker".into()],
+            user: "root".into(),
+        })
     }
 }
 
@@ -308,6 +318,10 @@ impl ImageStore for Host {
 }
 
 impl TerminalSurface for Host {
+    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+        self.ledger.note("terminal.attach_container");
+        Ok("attached-pane".into())
+    }
     fn pane_inventory(&self) -> Result<hl_extension::port::PaneInventory, HostError> {
         self.ledger.note("terminal.pane_inventory");
         Ok(hl_extension::port::PaneInventory {
@@ -451,7 +465,9 @@ fn terminal_screen_bytes_are_bounded_before_the_reply_is_encoded() {
             &services(&host),
         )
         .expect("bounded screen");
-    let Reply::Text(text) = reply else { panic!("wrong reply") };
+    let Reply::Text(text) = reply else {
+        panic!("wrong reply")
+    };
     assert!(text.truncated);
     assert_eq!(text.lines, vec!["new"]);
     assert_eq!((text.cursor_column, text.cursor_row), (0, 0));
@@ -489,11 +505,15 @@ fn pane_semantic_read_and_control_are_separately_granted() {
 #[test]
 fn pane_discovery_requires_observation_without_content_authority() {
     let host = Host::new();
-    assert!(session(&[], &[]).dispatch(&Request::PaneList, &services(&host)).is_err());
+    assert!(session(&[], &[])
+        .dispatch(&Request::PaneList, &services(&host))
+        .is_err());
     let reply = session(&[Capability::PaneObserve], &[])
         .dispatch(&Request::PaneList, &services(&host))
         .expect("pane observation grants bounded discovery");
-    let Reply::Panes(inventory) = reply else { panic!("wrong reply") };
+    let Reply::Panes(inventory) = reply else {
+        panic!("wrong reply")
+    };
     assert_eq!(inventory.panes[0].slot, "workspace");
     assert_eq!(host.ledger.reached(), vec!["terminal.pane_inventory"]);
 }
@@ -586,7 +606,11 @@ impl WorkspaceFiles for Host {
     }
     fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
         self.ledger.note("files.stat");
-        Ok(Entry { path: path.clone(), directory: false, size: 7 })
+        Ok(Entry {
+            path: path.clone(),
+            directory: false,
+            size: 7,
+        })
     }
 
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
@@ -824,15 +848,38 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
         (Request::ExecutionList, Capability::ContainerRead),
-        (Request::ExecutionLogs { id: "e1".into(), stdout: true, stderr: true }, Capability::ContainerRead),
-        (Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, Capability::ContainerRead),
+        (
+            Request::ExecutionLogs {
+                id: "e1".into(),
+                stdout: true,
+                stderr: true,
+            },
+            Capability::ContainerRead,
+        ),
+        (
+            Request::ExecutionWait {
+                id: "e1".into(),
+                timeout_ms: 500,
+            },
+            Capability::ContainerRead,
+        ),
         (
             Request::ContainerCreate {
                 spec: hl_extension::port::ContainerCreateSpec {
-                    image: "alpine".into(), name: "x".into(), entrypoint: None,
-                    command: Vec::new(), environment: Vec::new(), working_directory: None,
-                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
-                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                    image: "alpine".into(),
+                    name: "x".into(),
+                    entrypoint: None,
+                    command: Vec::new(),
+                    environment: Vec::new(),
+                    working_directory: None,
+                    user: None,
+                    labels: Vec::new(),
+                    mounts: Vec::new(),
+                    network: None,
+                    ports: Vec::new(),
+                    memory_mb: None,
+                    cpus: None,
+                    pids_limit: None,
                 },
             },
             Capability::ContainerControl,
@@ -872,7 +919,10 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ContainerControl,
         ),
-        (Request::ExecutionRemove { id: "e1".into() }, Capability::ContainerControl),
+        (
+            Request::ExecutionRemove { id: "e1".into() },
+            Capability::ContainerControl,
+        ),
         (
             Request::ContainerExec {
                 id: "c1".into(),
@@ -948,7 +998,12 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::FilesystemRead,
         ),
-        (Request::FilesystemStat { path: path("logs/app.log") }, Capability::FilesystemRead),
+        (
+            Request::FilesystemStat {
+                path: path("logs/app.log"),
+            },
+            Capability::FilesystemRead,
+        ),
         (
             Request::FilesystemWrite {
                 path: path("logs/app.log"),
@@ -1082,7 +1137,13 @@ fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
         vec!["x".into(); hl_extension::port::TERMINAL_COMMAND_ARGUMENTS + 1],
     ] {
         assert!(matches!(
-            session.dispatch(&Request::TerminalSpawn { slot: "s1".into(), command }, &services(&host)),
+            session.dispatch(
+                &Request::TerminalSpawn {
+                    slot: "s1".into(),
+                    command
+                },
+                &services(&host)
+            ),
             Err(Failure::Conflict { .. })
         ));
     }
@@ -1104,18 +1165,37 @@ fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
 fn configured_container_creation_is_bounded_before_control_authority() {
     use hl_extension::port::{ContainerCreateSpec, ContainerPort, ContainerVolumeMount};
     let host = Host::new();
-    let mut authorized = session(&[
-        Capability::ContainerControl, Capability::VolumeRead, Capability::NetworkWrite,
-    ], &[]);
+    let mut authorized = session(
+        &[
+            Capability::ContainerControl,
+            Capability::VolumeRead,
+            Capability::NetworkWrite,
+        ],
+        &[],
+    );
     let spec = ContainerCreateSpec {
-        image: "alpine:3.20".into(), name: "worker".into(), entrypoint: Some(vec!["/init".into()]),
-        command: vec!["serve".into()], environment: vec![("MODE".into(), "agent".into())],
-        working_directory: Some("/work".into()), user: Some("1000".into()),
+        image: "alpine:3.20".into(),
+        name: "worker".into(),
+        entrypoint: Some(vec!["/init".into()]),
+        command: vec!["serve".into()],
+        environment: vec![("MODE".into(), "agent".into())],
+        working_directory: Some("/work".into()),
+        user: Some("1000".into()),
         labels: vec![("owner".into(), "agent".into())],
-        mounts: vec![ContainerVolumeMount { volume: "cache".into(), target: "/cache".into(), read_only: true }],
+        mounts: vec![ContainerVolumeMount {
+            volume: "cache".into(),
+            target: "/cache".into(),
+            read_only: true,
+        }],
         network: Some("private".into()),
-        ports: vec![ContainerPort { container: 8080, host: Some(18080), protocol: "tcp".into() }],
-        memory_mb: Some(512), cpus: Some(2), pids_limit: Some(128),
+        ports: vec![ContainerPort {
+            container: 8080,
+            host: Some(18080),
+            protocol: "tcp".into(),
+        }],
+        memory_mb: Some(512),
+        cpus: Some(2),
+        pids_limit: Some(128),
     };
     assert_eq!(
         authorized.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
@@ -1135,7 +1215,11 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         authorized.dispatch(&Request::ContainerCreate { spec: escaped }, &services(&host)),
         Err(Failure::Conflict { .. })
     ));
-    assert_eq!(host.ledger.reached(), ["containers.create_spec"], "invalid mounts never reach control");
+    assert_eq!(
+        host.ledger.reached(),
+        ["containers.create_spec"],
+        "invalid mounts never reach control"
+    );
 }
 
 #[test]
@@ -1170,7 +1254,10 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
         Request::ExecutionKill { id: "7".into(), signal: "SIGTERM".into() },
         Request::ExecutionKill { id: "b".repeat(12), signal: "SIGTERM".into() },
     ] {
-        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
     }
     assert!(host.ledger.reached().is_empty());
 
@@ -1345,14 +1432,27 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
         .expect("execution");
     assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
 
-    let output = session.dispatch(
-        &Request::ExecutionLogs { id: "e1".into(), stdout: true, stderr: true }, &services(&host),
-    ).expect("execution output");
+    let output = session
+        .dispatch(
+            &Request::ExecutionLogs {
+                id: "e1".into(),
+                stdout: true,
+                stderr: true,
+            },
+            &services(&host),
+        )
+        .expect("execution output");
     assert!(matches!(output, Reply::Logs(output) if output.eof && !output.truncated));
 
-    let waited = session.dispatch(
-        &Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, &services(&host),
-    ).expect("execution wait");
+    let waited = session
+        .dispatch(
+            &Request::ExecutionWait {
+                id: "e1".into(),
+                timeout_ms: 500,
+            },
+            &services(&host),
+        )
+        .expect("execution wait");
     assert!(matches!(waited, Reply::Execution(execution) if !execution.running && execution.exit_code == 17));
 }
 
@@ -1360,7 +1460,15 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
 fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(session.dispatch(&Request::ExecutionWait { id: "e1".into(), timeout_ms: 30_001 }, &services(&host)).is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExecutionWait {
+                id: "e1".into(),
+                timeout_ms: 30_001
+            },
+            &services(&host)
+        )
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
 
@@ -1368,7 +1476,16 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
 fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(session.dispatch(&Request::ExecutionLogs { id: "e1".into(), stdout: false, stderr: false }, &services(&host)).is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExecutionLogs {
+                id: "e1".into(),
+                stdout: false,
+                stderr: false
+            },
+            &services(&host)
+        )
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
@@ -1713,6 +1830,37 @@ fn a_granted_call_reaches_exactly_one_service() {
 
     assert!(matches!(reply, Reply::Containers(containers) if containers.len() == 1));
     assert_eq!(host.ledger.reached(), vec!["containers.list"]);
+}
+
+#[test]
+fn container_attachment_requires_its_dedicated_grant_and_preserves_exact_argv() {
+    let request = Request::ContainerAttachTerminal {
+        id: "a".repeat(64),
+        command: vec!["sh".into(), "-lc".into(), "printf '%s' \"$HOME\"".into()],
+    };
+    let host = Host::new();
+    let mut denied = session(&[Capability::ContainerControl, Capability::TerminalControl], &[]);
+    assert!(matches!(
+        denied.dispatch(&request, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
+
+    let mut granted = session(&[Capability::ContainerAttach], &[]);
+    assert!(matches!(
+        granted.dispatch(&request, &services(&host)).expect("dedicated grant"),
+        Reply::Identity(ref slot) if slot == "attached-pane"
+    ));
+    assert_eq!(host.ledger.reached(), vec!["terminal.attach_container"]);
+
+    let invalid = Request::ContainerAttachTerminal {
+        id: "friendly".into(),
+        command: vec!["sh".into()],
+    };
+    assert!(matches!(
+        granted.dispatch(&invalid, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
 }
 
 #[test]

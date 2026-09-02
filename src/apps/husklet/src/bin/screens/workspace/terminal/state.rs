@@ -216,7 +216,11 @@ impl<'a> WindowSession<'a> {
         // entries[0] is the non-closable overview; shells are the rest.
         let entries: Vec<(String, String)> = {
             let es = tw.entries.borrow();
-            es.iter().skip(1).map(|e| (e.name.clone(), e.title())).collect()
+            es.iter()
+                .skip(1)
+                .filter(|entry| entry.persisted)
+                .map(|e| (e.name.clone(), e.title()))
+                .collect()
         };
         for (page_name, title) in entries {
             let Some(child) = tw.stack.child_by_name(&page_name) else {

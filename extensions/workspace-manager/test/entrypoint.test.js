@@ -16,6 +16,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let peer;
   let tearingDown = false;
   let executed = false;
+  const containerId = 'a'.repeat(32);
   const server = net.createServer((socket) => {
     peer = socket;
     const reader = new Reader();
@@ -24,7 +25,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       assert.equal(error.code, 'ECONNRESET');
     });
     socket.write(encode({ channel: 0, kind: KIND.request, payload: {
-      protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'interface'],
+      protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'interface'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
@@ -36,22 +37,24 @@ test('the production entrypoint handshakes and renders through a real Unix socke
         const payload = name === 'interface_open_tab'
           ? { reply: 'identity', with: 'workspace-resources' }
           : name === 'container_list'
-          ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
+          ? { reply: 'containers', with: [{ id: containerId, name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
           : name === 'container_inspect'
-            ? { reply: 'container', with: { id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
+            ? { reply: 'container', with: { id: containerId, name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
           : name === 'container_create'
             ? { reply: 'identity', with: 'created-over-socket' }
           : name === 'container_exec'
             ? (executed = true, { reply: 'identity', with: 'execution-over-socket' })
+          : name === 'container_attach_terminal'
+            ? { reply: 'identity', with: 'p-attached' }
           : name === 'execution_list'
             ? { reply: 'executions', with: { executions: [
-              { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
-              ...(executed ? [{ id: 'execution-over-socket', container_id: 'c1', running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }] : []),
+              { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
+              ...(executed ? [{ id: 'execution-over-socket', container_id: containerId, running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }] : []),
             ], truncated: false } }
           : name === 'execution_inspect'
             ? { reply: 'execution', with: frame.payload.with.id === 'execution-over-socket'
-              ? { id: 'execution-over-socket', container_id: 'c1', running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }
-              : { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' } }
+              ? { id: 'execution-over-socket', container_id: containerId, running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }
+              : { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['true'], user: '' } }
           : name === 'execution_logs'
             ? { reply: 'logs', with: { stdout: [111, 107], stderr: [33], truncated: false } }
           : name === 'image_list'
@@ -82,7 +85,11 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
-    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
+    try {
+      await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
+    } catch (error) {
+      throw new Error(`${error.message}; calls=${JSON.stringify(calls)} stderr=${JSON.stringify(stderr)}`);
+    }
     const openingRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invocation(requests, 'Images') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > openingRenders);
@@ -130,7 +137,12 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await until(() => calls.includes('container_exec') && requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Execution execution-over-socket created.')));
     assert.deepEqual(requests.find((request) => request.call === 'container_exec').with, {
-      id: 'c1', command: ['sh', '-lc', 'printf hello world'], user: '1000:1000', working_directory: '/work tree',
+      id: containerId, command: ['sh', '-lc', 'printf hello world'], user: '1000:1000', working_directory: '/work tree',
+    });
+    peer.write(encode({ channel: 36, kind: KIND.event, payload: invocation(requests, 'Attach terminal') }));
+    await until(() => calls.includes('container_attach_terminal'));
+    assert.deepEqual(requests.find((request) => request.call === 'container_attach_terminal').with, {
+      id: containerId, command: ['sh', '-lc', 'printf hello world'],
     });
     peer.write(encode({ channel: 31, kind: KIND.event, payload: invocation(requests, 'Inspect execution') }));
     await until(() => requests.some((request) => request.call === 'execution_inspect'
@@ -141,8 +153,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const eventStart = received.length;
     peer.write(encode({ channel: 77, kind: KIND.event, payload: { snapshot: 'executions', of: {
       executions: [
-        { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
-        { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', container_id: 'c1', running: true, exit_code: 0, pid: 42, command: ['live-command'], user: 'root' },
+        { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
+        { id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', container_id: containerId, running: true, exit_code: 0, pid: 42, command: ['live-command'], user: 'root' },
       ], truncated: true,
     } } }));
     await until(() => received.some((frame) => frame.channel === 77 && frame.kind === KIND.credit)

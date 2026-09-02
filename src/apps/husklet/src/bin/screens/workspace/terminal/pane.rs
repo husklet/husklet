@@ -533,6 +533,17 @@ impl<'a> Tabs<'a> {
         content: &impl IsA<gtk::Widget>,
         closable: bool,
     ) -> String {
+        self.add_with_persistence(title, icon, content, closable, true)
+    }
+
+    fn add_with_persistence(
+        &self,
+        title: &str,
+        icon: Option<&str>,
+        content: &impl IsA<gtk::Widget>,
+        closable: bool,
+        persisted: bool,
+    ) -> String {
         let tw = self.window;
         let id = tw.counter.get();
         tw.counter.set(id + 1);
@@ -572,6 +583,7 @@ impl<'a> Tabs<'a> {
         tw.entries.borrow_mut().push(TabEntry {
             name: name.clone(),
             button: bx,
+            persisted,
         });
         Page::new(tw, &name).select();
         name
@@ -604,6 +616,21 @@ impl<'a> Tabs<'a> {
         let (term, pid) = make_terminal_ex(tw, cwd, None, &Slots::new(tw).allocate());
         paneroot.append(&PaneChrome::wrap(tw, &term));
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
+        tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
+        term.grab_focus();
+        name
+    }
+
+    pub(crate) fn container_terminal(&self, container: &str, command: &[String]) -> String {
+        let tw = self.window;
+        let paneroot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        paneroot.set_hexpand(true);
+        paneroot.set_vexpand(true);
+        let slot = Slots::new(tw).allocate();
+        let (term, pid) = make_container_terminal_ex(tw, &slot, container, command);
+        paneroot.append(&PaneChrome::wrap(tw, &term));
+        let title = format!("container {}", &container[..container.len().min(12)]);
+        let name = self.add_with_persistence(&title, None, &paneroot, true, false);
         tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
         name
@@ -945,6 +972,33 @@ impl PaneReplacement {
 mod focus_ownership_tests {
     use super::*;
     use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+    #[test]
+    fn attached_container_tab_is_visible_closable_and_never_persisted() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("attach-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let overview = gtk::Label::new(Some("overview"));
+            Tabs::new(&tw).add("overview", None, &overview, false);
+            let id = "a".repeat(64);
+            let tab = Tabs::new(&tw).container_terminal(&id, &["sh".into(), "-i".into()]);
+            assert_eq!(tw.stack.visible_child_name().as_deref(), Some(tab.as_str()));
+            let persisted = tw
+                .entries
+                .borrow()
+                .iter()
+                .find(|entry| entry.name == tab)
+                .map(|entry| entry.persisted)
+                .unwrap();
+            assert!(!persisted, "attachment tabs must not enter session restore state");
+            Page::new(&tw, &tab).close();
+            assert!(tw.entries.borrow().iter().all(|entry| entry.name != tab));
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
 
     #[test]
     fn removed_page_clears_only_focus_owned_by_that_page() {

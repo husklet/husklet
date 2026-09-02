@@ -72,7 +72,11 @@ enum PersistedAction {
 
 impl PersistedAction {
     fn for_running(running: bool) -> Self {
-        if running { Self::Attach } else { Self::Restore }
+        if running {
+            Self::Attach
+        } else {
+            Self::Restore
+        }
     }
 
     fn after_failed_attach(running: Option<bool>) -> Self {
@@ -140,6 +144,70 @@ pub fn launch_live(
     launch_with_lifetime(workspace, columns, rows, cwd, slot, PaneLifetime::Live)
 }
 
+/// Starts an exact argv as an interactive, pane-owned execution inside an
+/// existing container. Nothing is persisted for restoration: dropping the
+/// transport kills the execution and the wait task removes its record.
+pub fn launch_container(
+    workspace: &WorkspaceConfig,
+    container: &str,
+    command: &[String],
+    columns: u16,
+    rows: u16,
+) -> io::Result<Box<dyn PtyBackend>> {
+    let runtime = PaneRuntime::shared()?;
+    let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
+    let client = hl_client::Client::unix(socket).map_err(LauncherError::io)?;
+    let inspected = runtime
+        .block_on(client.containers().inspect(container))
+        .map_err(LauncherError::io)?;
+    if inspected.metadata.id != container {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "container identity is not complete and immutable",
+        ));
+    }
+    if !inspected.state.activity.running || inspected.state.activity.paused {
+        return Err(io::Error::other(
+            "container must be running and unpaused before attaching a terminal",
+        ));
+    }
+    let size = Size::new(rows.max(1), columns.max(1)).map_err(LauncherError::io)?;
+    let config = container_terminal_config(command);
+    let created = runtime
+        .block_on(client.executions().create(container, &config))
+        .map_err(LauncherError::io)?;
+    let start = ExecStart {
+        tty: true,
+        kill_on_disconnect: true,
+        console_size: Some([u64::from(size.rows()), u64::from(size.columns())]),
+        ..ExecStart::default()
+    };
+    let session = match runtime.block_on(client.executions().start(&created.id, &start)) {
+        Ok(session) => session,
+        Err(error) => {
+            let _ = runtime.block_on(client.executions().remove(&created.id));
+            return Err(LauncherError::io(error));
+        }
+    };
+    session_pty(runtime, client, created.id, session, None, None)
+}
+
+fn container_terminal_config(command: &[String]) -> ExecConfig {
+    ExecConfig {
+        attach: Attachment {
+            stdin: true,
+            stdout: true,
+            stderr: true,
+        },
+        tty: true,
+        command: command.to_vec(),
+        lifetime: ExecLifetime::Ephemeral,
+        network: ExecNetwork::Container,
+        native: false,
+        ..ExecConfig::default()
+    }
+}
+
 fn launch_with_lifetime(
     workspace: &WorkspaceConfig,
     columns: u16,
@@ -148,7 +216,7 @@ fn launch_with_lifetime(
     slot: Option<&str>,
     lifetime: PaneLifetime,
 ) -> io::Result<Box<dyn PtyBackend>> {
-    let mut runtime = PaneRuntime::shared()?;
+    let runtime = PaneRuntime::shared()?;
     let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
     let client = hl_client::Client::unix(socket).map_err(LauncherError::io)?;
     let _workspace_session = runtime
@@ -310,6 +378,17 @@ fn launch_with_lifetime(
             Err(error) => return Err(LauncherError::io(error)),
         }
     };
+    session_pty(runtime, client, execution, session, pane, restore_failure)
+}
+
+fn session_pty(
+    mut runtime: PaneRuntime,
+    client: hl_client::Client,
+    execution: String,
+    session: hl_client::api::Session,
+    pane: Option<PaneExecution>,
+    restore_failure: Option<String>,
+) -> io::Result<Box<dyn PtyBackend>> {
     let (mut input, stream) = session.into_terminal().map_err(LauncherError::io)?;
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(process::OUTPUT_QUEUE_RECORDS);
@@ -443,7 +522,7 @@ fn terminal_start(cwd: Option<&str>, home: &str, base: &str) -> (String, String)
 
 #[cfg(test)]
 mod terminal_start_tests {
-    use super::terminal_start;
+    use super::{container_terminal_config, terminal_start};
 
     #[test]
     fn inherited_directory_is_attempted_from_a_safe_home_baseline() {
@@ -463,6 +542,18 @@ mod terminal_start_tests {
 
         let (_, command) = terminal_start(Some("tmp/relative"), "/root", "exec bash -il");
         assert_eq!(command, "cd '/root' 2>/dev/null || cd '/root'; exec bash -il");
+    }
+
+    #[test]
+    fn attached_container_command_is_exact_interactive_ephemeral_authority() {
+        let command = vec!["sh".into(), "-lc".into(), "printf '%s' \"$HOME\"".into()];
+        let config = container_terminal_config(&command);
+        assert_eq!(config.command, command);
+        assert!(config.tty);
+        assert!(config.attach.stdin && config.attach.stdout && config.attach.stderr);
+        assert_eq!(config.lifetime, hl_client::model::ExecLifetime::Ephemeral);
+        assert_eq!(config.network, hl_client::model::ExecNetwork::Container);
+        assert!(!config.native);
     }
 }
 
@@ -557,7 +648,7 @@ impl PaneStart {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{PaneExecution, PaneLifetime, PersistedAction, terminal_identity};
+    use super::{terminal_identity, PaneExecution, PaneLifetime, PersistedAction};
     use crate::config::WorkspaceConfig;
     use hl_client::model::{ExecLifetime, ExecNetwork};
     use hl_ws::Arch;

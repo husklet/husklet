@@ -15,6 +15,11 @@ enum Operation {
     Domain {
         name: String,
     },
+    AttachContainer {
+        name: String,
+        container: String,
+        command: Vec<String>,
+    },
 }
 
 impl Operation {
@@ -38,6 +43,22 @@ impl Operation {
             "domain" => Ok(Some(Self::Domain {
                 name: Self::only_name(name, arguments, "domain")?,
             })),
+            "attach-container" => {
+                let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
+                let container = arguments
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "container identity is missing".to_owned())?;
+                let command: Vec<String> = arguments.collect();
+                if command.is_empty() {
+                    return Err("container attachment command is missing".into());
+                }
+                Ok(Some(Self::AttachContainer {
+                    name,
+                    container,
+                    command,
+                }))
+            }
             _ => Err(format!("invalid Husklet worker operation {operation:?}")),
         }
     }
@@ -104,6 +125,11 @@ impl Worker {
                     1
                 }
             },
+            Operation::AttachContainer {
+                name,
+                container,
+                command,
+            } => hl::runtime::worker::Worker::attach_container(&name, &container, &command),
         })
     }
 }
@@ -143,6 +169,28 @@ mod tests {
         assert!(matches!(
             parse(&["--worker", "domain", "runtime"]),
             Ok(Some(Operation::Domain { name })) if name == "runtime"
+        ));
+    }
+
+    #[test]
+    fn parses_container_attachment_without_shell_joining_argv() {
+        let operation = parse(&[
+            "--worker",
+            "attach-container",
+            "dev",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sh",
+            "-lc",
+            "printf '%s' \"$HOME\"",
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            operation,
+            Operation::AttachContainer { name, container, command }
+                if name == "dev"
+                    && container == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    && command == ["sh", "-lc", "printf '%s' \"$HOME\""]
         ));
     }
 

@@ -4829,6 +4829,8 @@ export interface WorkspaceApi {
     restart(id: string): Promise<void>;
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
+    /** Open an ephemeral GUI terminal running an exact argv in this immutable container identity. */
+    attachTerminal(id: string, command: string[]): Promise<string>;
   };
   images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {

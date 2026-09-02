@@ -160,6 +160,24 @@ pub(crate) fn make_terminal_ex(
     make_terminal_with(tw, cwd, history, slot, &ProductionPaneLauncher)
 }
 
+/// Builds an ephemeral pane whose worker attaches an exact argv directly to an
+/// existing container. It deliberately has no session history or persisted slot.
+pub(crate) fn make_container_terminal_ex(
+    tw: &Rc<TermWin>,
+    slot: &str,
+    container: &str,
+    command: &[String],
+) -> (vte4::Terminal, Rc<Cell<i32>>) {
+    make_terminal_with_operation(
+        tw,
+        None,
+        None,
+        slot,
+        &ProductionPaneLauncher,
+        Some((container, command)),
+    )
+}
+
 pub(crate) trait PaneLauncher {
     fn spawn(
         &self,
@@ -198,6 +216,17 @@ pub(crate) fn make_terminal_with<L: PaneLauncher>(
     history: Option<String>,
     slot: &str,
     launcher: &L,
+) -> (vte4::Terminal, Rc<Cell<i32>>) {
+    make_terminal_with_operation(tw, cwd, history, slot, launcher, None)
+}
+
+fn make_terminal_with_operation<L: PaneLauncher>(
+    tw: &Rc<TermWin>,
+    cwd: Option<String>,
+    history: Option<String>,
+    slot: &str,
+    launcher: &L,
+    attachment: Option<(&str, &[String])>,
 ) -> (vte4::Terminal, Rc<Cell<i32>>) {
     let term = vte4::Terminal::new();
     let cfg = tw.ws.terminal_config();
@@ -239,15 +268,28 @@ pub(crate) fn make_terminal_with<L: PaneLauncher>(
     let dbg = AppConfig::get().debug_log.as_ref();
     let cwd_arg = cwd.filter(|c| c.starts_with('/'));
     let directory = cwd_arg.as_deref().unwrap_or("");
-    let launch_args: Vec<&str> = vec![
-        application.as_str(),
-        "--worker",
-        "launch",
-        workspace_key.as_str(),
-        slot,
-        dbg.map_or("", String::as_str),
-        directory,
-    ];
+    let mut launch_args: Vec<&str> = if let Some((container, _)) = attachment {
+        vec![
+            application.as_str(),
+            "--worker",
+            "attach-container",
+            workspace_key.as_str(),
+            container,
+        ]
+    } else {
+        vec![
+            application.as_str(),
+            "--worker",
+            "launch",
+            workspace_key.as_str(),
+            slot,
+            dbg.map_or("", String::as_str),
+            directory,
+        ]
+    };
+    if let Some((_, command)) = attachment {
+        launch_args.extend(command.iter().map(String::as_str));
+    }
     // A CLEAN minimal env — NOT the full parent env. Husklet runs under the nix devshell, whose
     // DYLD_*/GTK/GI library-path vars would poison `hl`'s dynamic loader (and its forked engine),
     // crashing it at startup (SIGSEGV). Pass only what a shell needs.

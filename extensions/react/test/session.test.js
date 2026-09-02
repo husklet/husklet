@@ -483,6 +483,19 @@ test('configured container creation preserves its bounded typed specification', 
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('container terminal attachment preserves immutable identity and exact argv on the wire', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const id = 'a'.repeat(64);
+  const pending = workspace(stage.session).containers.attachTerminal(id, ['sh', '-lc', 'printf "%s" "$HOME"']);
+  assert.deepEqual((await next()).payload, {
+    call: 'container_attach_terminal', with: { id, command: ['sh', '-lc', 'printf "%s" "$HOME"'] },
+  });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'p7' } }));
+  assert.equal(await pending, 'p7');
+  assert.throws(() => workspace(stage.session).containers.attachTerminal('friendly', ['sh']), /complete immutable ID/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pane change observation subscribes over the live transport, filters metadata, returns credit and disposes', async () => {
   const stage = await pair();
   const next = frames(stage.host);

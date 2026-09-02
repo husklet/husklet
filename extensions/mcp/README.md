@@ -196,6 +196,12 @@ action. A `finally` block uses confirmed container stop/removal and restores the
 original workspace configuration. It never accepts shell command text and does
 not retry a stale semantic action.
 
+`husklet_container_attach_terminal` is the interactive counterpart to detached
+exec. It accepts only the complete immutable container ID and a bounded argv
+array, opens an ephemeral Husklet tab, connects stdin/stdout/stderr through one
+TTY, and owns the process with kill-on-disconnect semantics. It requires the
+dedicated `container-attach` grant.
+
 ## Administrative lifecycle workflow
 
 [`examples/agent-admin.mjs`](examples/agent-admin.mjs) creates and starts one

@@ -110,6 +110,7 @@ await host.update('backend', { ...configuration, memory_mb: 4096 });
 await host.start('backend');
 const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);
+const pane = await host.containers.attachTerminal(containers[0].id, ['sh', '-i']);
 const processes = await host.containers.processes(containers[0].id);
 const output = await host.containers.logs(containers[0].id, { stderr: false });
 const files = await host.files.list('project');
@@ -130,6 +131,9 @@ inventory so a moved tag cannot select a different image after confirmation.
 Network inspection may use a canonical name, but remove, connect, and disconnect
 require the complete 32-hex network ID from inventory. Attachment mutations also
 require the complete immutable container ID.
+`attachTerminal` requires the separate `container-attach` grant, preserves argv
+boundaries, opens a non-restored GUI tab, and kills its interactive exec when that
+pane disconnects.
 The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads

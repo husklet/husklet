@@ -829,6 +829,15 @@ pub trait NetworkStore {
 
 /// The workspace's terminal surface.
 pub trait TerminalSurface {
+    /// Opens a non-persisted terminal tab running `command` directly in the
+    /// immutable container identity. The attachment owns the process and must
+    /// kill it when the pane disconnects.
+    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+        Err(HostError::Unsupported(
+            "container terminal attachment is unavailable".into(),
+        ))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn tabs(&self) -> Result<Vec<TabSummary>, HostError>;
@@ -998,8 +1007,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_pane_text, pane_lines, Division, LayoutNode, Occupant, PaneSummary, PaneText,
-        PANE_LINES, PANE_TEXT_BYTES,
+        bounded_pane_text, pane_lines, Division, LayoutNode, Occupant, PaneSummary, PaneText, PANE_LINES,
+        PANE_TEXT_BYTES,
     };
 
     #[test]
@@ -1014,7 +1023,11 @@ mod tests {
     fn terminal_text_retains_only_newest_complete_lines_within_the_wire_budget() {
         let text = PaneText {
             slot: "pane".into(),
-            lines: vec!["old".repeat(PANE_TEXT_BYTES / 3), "middle".repeat(PANE_TEXT_BYTES / 6), "new".into()],
+            lines: vec![
+                "old".repeat(PANE_TEXT_BYTES / 3),
+                "middle".repeat(PANE_TEXT_BYTES / 6),
+                "new".into(),
+            ],
             cursor_column: 4,
             cursor_row: 2,
             truncated: false,
@@ -1030,7 +1043,8 @@ mod tests {
     fn legacy_output_decodes_without_claiming_eof_or_per_stream_completeness() {
         let output: super::ContainerOutput = serde_json::from_value(serde_json::json!({
             "stdout": [], "stderr": [], "truncated": false
-        })).expect("legacy output");
+        }))
+        .expect("legacy output");
         assert!(!output.eof);
         assert!(!output.stdout_truncated);
         assert!(!output.stderr_truncated);
@@ -1040,7 +1054,8 @@ mod tests {
     fn legacy_process_rows_decode_as_an_incomplete_snapshot_scoped_view() {
         let processes: super::ProcessList = serde_json::from_value(serde_json::json!({
             "titles": ["PID"], "processes": [["1"]]
-        })).expect("legacy process rows");
+        }))
+        .expect("legacy process rows");
         assert_eq!(processes.scope, super::ProcessScope::Initial);
         assert_eq!(processes.pid_identity, super::ProcessPidIdentity::Snapshot);
         assert_eq!(processes.observed_at_ms, 0);

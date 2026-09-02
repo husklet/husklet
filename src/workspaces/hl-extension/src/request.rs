@@ -143,6 +143,10 @@ pub enum Request {
         user: Option<String>,
         working_directory: Option<String>,
     },
+    ContainerAttachTerminal {
+        id: String,
+        command: Vec<String>,
+    },
     ImageList,
     ImagePull {
         reference: String,
@@ -241,7 +245,9 @@ pub enum Request {
     FilesystemRead {
         path: RelativePath,
     },
-    FilesystemStat { path: RelativePath },
+    FilesystemStat {
+        path: RelativePath,
+    },
     FilesystemWrite {
         path: RelativePath,
         contents: Vec<u8>,
@@ -329,6 +335,7 @@ impl Request {
             | Self::ExecutionKill { .. }
             | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
+            Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePull { .. }
             | Self::ImagePullStart { .. }
@@ -359,7 +366,9 @@ impl Request {
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemStat { .. } => Capability::FilesystemRead,
+            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemStat { .. } => {
+                Capability::FilesystemRead
+            }
             Self::FilesystemWrite { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
@@ -606,6 +615,14 @@ mod tests {
             }
             .capability(),
             Capability::ContainerControl
+        );
+        assert_eq!(
+            Request::ContainerAttachTerminal {
+                id: "a".repeat(64),
+                command: vec!["sh".into()],
+            }
+            .capability(),
+            Capability::ContainerAttach
         );
         assert_eq!(Request::ImageList.capability(), Capability::ImageRead);
         assert_eq!(

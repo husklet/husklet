@@ -9,8 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -153,6 +154,15 @@ impl Session {
             | Request::ExecutionList
             | Request::ExecutionLogs { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
+            Request::ContainerAttachTerminal { id, command } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                validate_terminal_command(command)?;
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::ContainerAttach, services.terminal)?;
+                Ok(Reply::Identity(port.attach_container(id, command)?))
+            }
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
             | Request::ContainerStop { .. }
@@ -500,18 +510,7 @@ impl Session {
             Request::TerminalOpenTab { title } => Ok(Reply::Identity(port.open_tab(title)?)),
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {
-                if command.is_empty()
-                    || command.len() > crate::port::TERMINAL_COMMAND_ARGUMENTS
-                    || command[0].is_empty()
-                    || command.iter().any(|argument| {
-                        argument.len() > crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES || argument.contains('\0')
-                    })
-                    || command.iter().map(String::len).sum::<usize>() > crate::port::TERMINAL_COMMAND_BYTES
-                {
-                    return Err(Failure::Conflict {
-                        detail: "terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate".into(),
-                    });
-                }
+                validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::TerminalWritePane { slot, contents } => {
@@ -757,6 +756,22 @@ fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
     }
     Err(Failure::Conflict {
         detail: format!("{noun} removal requires the complete immutable sha256 digest returned by inventory"),
+    })
+}
+
+fn validate_terminal_command(command: &[String]) -> Result<(), Failure> {
+    if !command.is_empty()
+        && command.len() <= crate::port::TERMINAL_COMMAND_ARGUMENTS
+        && !command[0].is_empty()
+        && command
+            .iter()
+            .all(|argument| argument.len() <= crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES && !argument.contains('\0'))
+        && command.iter().map(String::len).sum::<usize>() <= crate::port::TERMINAL_COMMAND_BYTES
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate".into(),
     })
 }
 

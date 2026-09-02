@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use hl::extension::{Answer, Errand, Errands, Request};
 use hl_extension::port::{
-    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PANE_INVENTORY_LIMIT, PaneInventory,
-    PaneKind, PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology,
+    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PaneInventory, PaneKind,
+    PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology, PANE_INVENTORY_LIMIT,
 };
 use vte4::prelude::*;
 
@@ -73,6 +73,9 @@ impl Console {
     /// Carries out one errand and answers it.
     fn serve(window: &Rc<TermWin>, errand: Errand) {
         let answer = match errand.request() {
+            Request::AttachContainer { id, command } => {
+                Ok(Answer::Slot(Tabs::new(window).container_terminal(id, command)))
+            }
             Request::Tabs => Ok(Answer::Tabs(Self::tabs(window))),
             Request::Topology => Self::topology(window).map(Answer::Topology),
             Request::PaneList => Self::pane_inventory(window).map(Answer::Panes),

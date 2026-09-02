@@ -368,6 +368,25 @@ test('container execution preserves argv and exposes the exact inspectable ident
   assert.deepEqual(opened, ['execution-exact-42']);
 });
 
+test('container details open an interactive terminal from the same exact argv', async () => {
+  const calls = [];
+  const id = 'a'.repeat(64);
+  const controlled = { containers: {
+    inspect: async () => ({ id, name: 'api', image: 'alpine', state: 'running', created: 0 }),
+    exec: async () => 'unused',
+    attachTerminal: async (...args) => { calls.push(args); return 'p9'; },
+    logs: async () => new Uint8Array(),
+  } };
+  const resource = { data: [{ id, name: 'api', image: 'alpine', state: 'running' }], loading: false, error: null, reload: async () => {} };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  invoke(stage, 'Details'); await settled(); await settled();
+  change(stage, 'Command argv JSON', '["sh","-lc","printf hello world"]');
+  invoke(stage, 'Attach terminal'); await settled(); await settled();
+  assert.deepEqual(calls, [[id, ['sh', '-lc', 'printf hello world']]]);
+  assert.ok(labelled(stage, 'Interactive terminal opened in p9.'));
+});
+
 test('container details load through the bounded source and a failed read is retryable', async () => {
   let attempts = 0;
   const mutations = [];

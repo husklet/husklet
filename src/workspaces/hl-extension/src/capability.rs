@@ -20,6 +20,9 @@ pub enum Capability {
     WorkspaceEvents,
     ContainerRead,
     ContainerControl,
+    /// Opens an interactive, kill-on-disconnect terminal in an existing container.
+    /// Kept separate from detached container mutation and ordinary terminal control.
+    ContainerAttach,
     ImageRead,
     ImageWrite,
     VolumeRead,
@@ -58,6 +61,7 @@ impl Capability {
             Self::WorkspaceEvents => "workspace-events",
             Self::ContainerRead => "container-read",
             Self::ContainerControl => "container-control",
+            Self::ContainerAttach => "container-attach",
             Self::ImageRead => "image-read",
             Self::ImageWrite => "image-write",
             Self::VolumeRead => "volume-read",
@@ -87,6 +91,7 @@ impl Capability {
             self,
             Self::WorkspaceControl
                 | Self::ContainerControl
+                | Self::ContainerAttach
                 | Self::ImageWrite
                 | Self::VolumeWrite
                 | Self::NetworkWrite
@@ -104,7 +109,7 @@ impl Capability {
     pub const fn executes(self) -> bool {
         matches!(
             self,
-            Self::WorkspaceControl | Self::ContainerControl | Self::TerminalControl
+            Self::WorkspaceControl | Self::ContainerControl | Self::ContainerAttach | Self::TerminalControl
         )
     }
 
@@ -115,6 +120,7 @@ impl Capability {
         Self::WorkspaceEvents,
         Self::ContainerRead,
         Self::ContainerControl,
+        Self::ContainerAttach,
         Self::ImageRead,
         Self::ImageWrite,
         Self::VolumeRead,
