@@ -328,7 +328,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{Prop, Tag, Trigger, EVERY};
+    use super::{EVERY, Prop, Tag, Trigger};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {
@@ -402,7 +402,16 @@ mod tests {
         assert!(!Tag::Button.accepts(Prop::Schema), "a button holds no rows");
         assert!(Tag::DataTable.accepts(Prop::Schema));
         assert!(!Tag::Text.accepts(Prop::Checked), "a label holds no state");
-        assert_eq!(Tag::Button.triggers(), &[Trigger::Invoke]);
+        assert_eq!(
+            Tag::Button.triggers(),
+            &[
+                Trigger::Invoke,
+                Trigger::Key,
+                Trigger::Focus,
+                Trigger::Pointer,
+                Trigger::Context
+            ]
+        );
         assert!(Tag::Text.triggers().is_empty(), "a label reports nothing");
     }
 }
