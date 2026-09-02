@@ -188,7 +188,8 @@ impl Supply for Workspace {
         let manifest = described(&record);
         let bridge = self.bridge()?;
         let image = Self::image(&bridge, &record)?;
-        let spec = SidecarSpec::new(&manifest, &record.granted, &image, self.socket(&record.name));
+        let spec = SidecarSpec::new(&manifest, &record.granted, &image, self.socket(&record.name))
+            .generation(record.installed_at);
         Ok(Some(Plan {
             record,
             manifest,

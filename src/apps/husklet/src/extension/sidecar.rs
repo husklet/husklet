@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hl_client::model::{CreateContainer, DockerMount, HostConfig, InspectImage};
 use hl_extension::port::HostError;
@@ -36,6 +36,10 @@ pub const NAME_PREFIX: &str = "extension-";
 
 /// Label carrying the specification signature.
 pub const SIGNATURE_LABEL: &str = "husklet.extension.signature";
+pub const GENERATION_LABEL: &str = "husklet.extension.generation";
+
+/// Creation is a read/decide/write transaction over a reusable daemon name.
+static ENSURE: Mutex<()> = Mutex::new(());
 
 /// Label carrying the extension name, so a stray container can be traced back
 /// to the extension that owns it.
@@ -95,6 +99,7 @@ pub struct SidecarSpec {
     granted: Vec<String>,
     resources: Resources,
     socket: PathBuf,
+    generation: i64,
 }
 
 impl SidecarSpec {
@@ -117,7 +122,14 @@ impl SidecarSpec {
                 .collect(),
             resources: manifest.resources.clamp(),
             socket: socket.into(),
+            generation: 0,
         }
+    }
+
+    #[must_use]
+    pub const fn generation(mut self, generation: i64) -> Self {
+        self.generation = generation;
+        self
     }
 
     /// The container name this specification claims.
@@ -173,6 +185,7 @@ impl SidecarSpec {
             Self::field(&mut value, &limit.to_string());
         }
         Self::field(&mut value, &self.socket.to_string_lossy());
+        Self::field(&mut value, &self.generation.to_string());
         value
     }
 
@@ -203,6 +216,7 @@ impl SidecarSpec {
     fn labels(&self) -> BTreeMap<String, String> {
         BTreeMap::from([
             (SIGNATURE_LABEL.to_owned(), self.signature()),
+            (GENERATION_LABEL.to_owned(), self.generation.to_string()),
             (
                 NAME_LABEL.to_owned(),
                 self.name.trim_start_matches(NAME_PREFIX).to_owned(),
@@ -305,15 +319,17 @@ impl Sidecar {
     /// Returns a host failure from the container daemon, including the failure
     /// to remove the container that no longer matches.
     pub fn ensure(&self, spec: &SidecarSpec) -> Result<Outcome, HostError> {
-        if let Some(outcome) = self.reuse(spec)? {
-            return Ok(outcome);
-        }
-        let client = self.bridge.client();
-        self.bridge
-            .wait(client.containers().create(&spec.request(), Some(spec.container())))
-            .map_err(|error| failure(&error))?;
-        self.start(spec.container())?;
-        Ok(Outcome::Creation)
+        ensure_transaction(|| {
+            if let Some(outcome) = self.reuse(spec)? {
+                return Ok(outcome);
+            }
+            let client = self.bridge.client();
+            self.bridge
+                .wait(client.containers().create(&spec.request(), Some(spec.container())))
+                .map_err(|error| failure(&error))?;
+            self.start(spec.container())?;
+            Ok(Outcome::Creation)
+        })
     }
 
     /// Reuses the existing container when its signature still matches, and
@@ -328,7 +344,8 @@ impl Sidecar {
             Err(error) => return absence(&error),
         };
         if container.config.labels.get(SIGNATURE_LABEL) != Some(&spec.signature()) {
-            self.remove(spec.container())?;
+            let target = replacement_target(spec, &container.config.labels, &container.details.metadata.id)?;
+            self.remove(target)?;
             return Ok(None);
         }
         if container.state.activity.running {
@@ -421,6 +438,29 @@ impl Sidecar {
     }
 }
 
+fn ensure_transaction<T>(work: impl FnOnce() -> T) -> T {
+    let _transaction = ENSURE.lock().unwrap_or_else(PoisonError::into_inner);
+    work()
+}
+
+fn replacement_target<'a>(
+    spec: &SidecarSpec,
+    labels: &BTreeMap<String, String>,
+    id: &'a str,
+) -> Result<&'a str, HostError> {
+    let owner = spec.name.trim_start_matches(NAME_PREFIX);
+    let existing = labels
+        .get(GENERATION_LABEL)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    if !id.is_empty() && labels.get(NAME_LABEL).map(String::as_str) == Some(owner) && existing < spec.generation {
+        return Ok(id);
+    }
+    Err(HostError::Conflict(
+        "a newer or foreign extension generation occupies the sidecar name".to_owned(),
+    ))
+}
+
 fn removal_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Result<&'a str, HostError> {
     if !id.is_empty() && actual == Some(expected) {
         return Ok(id);
@@ -446,12 +486,13 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 mod tests {
     use std::io::{Read as _, Write as _};
     use std::os::unix::net::UnixListener;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     use super::{
-        removal_target, stop_target, Image, Sidecar, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET,
-        SOCKET_VARIABLE,
+        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec,
+        GENERATION_LABEL, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
@@ -509,6 +550,51 @@ mod tests {
         assert_eq!(stop_target("ours", Some("replacement"), "replacement-id"), None);
         assert_eq!(stop_target("ours", None, "unrelated-id"), None);
         assert_eq!(stop_target("ours", Some("ours"), ""), None);
+    }
+
+    #[test]
+    fn concurrent_ensure_transactions_never_overlap() {
+        let entered = Arc::new(Barrier::new(3));
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let entered = Arc::clone(&entered);
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            workers.push(std::thread::spawn(move || {
+                entered.wait();
+                ensure_transaction(|| {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(20));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                });
+            }));
+        }
+        entered.wait();
+        for worker in workers {
+            worker.join().expect("ensure worker");
+        }
+        assert_eq!(maximum.load(Ordering::SeqCst), 1, "two ensure transactions overlapped");
+    }
+
+    #[test]
+    fn stale_ensure_cannot_replace_a_newer_or_foreign_generation() {
+        let old = spec().generation(10);
+        let newer = spec().generation(20);
+        let mut newer_labels = newer.labels();
+        assert!(replacement_target(&old, &newer_labels, "new-id").is_err());
+        assert_eq!(replacement_target(&newer, &old.labels(), "old-id"), Ok("old-id"));
+        newer_labels.remove(NAME_LABEL);
+        assert!(replacement_target(&newer, &newer_labels, "foreign-id").is_err());
+        assert!(replacement_target(&newer, &old.labels(), "").is_err());
+        assert_eq!(newer.labels().get(GENERATION_LABEL).map(String::as_str), Some("20"));
+        assert_ne!(
+            old.signature(),
+            newer.signature(),
+            "generation belongs to the signed identity"
+        );
     }
 
     #[test]
