@@ -58,6 +58,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
+        panes::providers_are_advertised_only_with_a_readable_projection();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
@@ -1460,6 +1461,69 @@ mod panes {
         }
     }
 
+    fn readable(gallery: &Gallery, extension: &str) {
+        let owner = extension.to_owned();
+        gallery.enrol_semantics(
+            extension,
+            Rc::new(move |slot| {
+                Ok(hl_extension::PaneSemanticTree {
+                    slot: slot.to_owned(),
+                    revision: 1,
+                    root: hl_extension::SemanticNode {
+                        id: 0,
+                        role: "surface".to_owned(),
+                        label: Some(owner.clone()),
+                        value: None,
+                        disabled: false,
+                        destructive: false,
+                        actions: Vec::new(),
+                        children: Vec::new(),
+                    },
+                    truncated: false,
+                })
+            }),
+            Rc::new(|_, _| Ok(())),
+        );
+    }
+
+    pub(super) fn providers_are_advertised_only_with_a_readable_projection() {
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol(
+            "sample",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("dashboard").expect("provider id"),
+                title: "Dashboard".to_owned(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
+
+        assert!(
+            gallery.providers().is_empty(),
+            "pixels alone are not an inspectable provider"
+        );
+        assert!(!gallery.offers("sample", "dashboard"));
+        let unavailable = gallery
+            .semantics("sample", "pane-7")
+            .expect("structured unavailable projection");
+        assert_eq!(unavailable.slot, "pane-7");
+        assert_eq!(unavailable.root.label.as_deref(), Some("Interface unavailable"));
+        assert!(unavailable.root.actions.is_empty());
+
+        readable(&gallery, "sample");
+        assert!(gallery.offers("sample", "dashboard"));
+        assert_eq!(gallery.providers()[0].title, "Dashboard");
+        assert_eq!(
+            gallery.semantics("sample", "pane-7").unwrap().root.label.as_deref(),
+            Some("sample")
+        );
+    }
+
     /// Runs the main loop until a condition holds, which is how text fed to a
     /// terminal becomes text the terminal is showing.
     fn until(condition: impl Fn() -> bool) -> bool {
@@ -1679,9 +1743,10 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         };
         assert!(!inventory.truncated);
-        assert!(inventory.panes.iter().any(|pane| {
-            pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native
-        }));
+        assert!(inventory
+            .panes
+            .iter()
+            .any(|pane| { pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native }));
 
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
@@ -1837,6 +1902,37 @@ mod panes {
             "and it is not pretending to be a shell"
         );
 
+        let (relay, errands) = hl::extension::Relay::open();
+        let relay = std::sync::Arc::new(relay);
+        let console = Console::new(&bench.window, errands);
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        std::thread::spawn(move || sent.send(request.pane_inventory()).unwrap());
+        let inventory = loop {
+            console.drain();
+            if let Ok(inventory) = received.try_recv() {
+                break inventory.expect("pane inventory");
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        };
+        assert!(inventory.panes.iter().any(|pane| pane.slot == slot));
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let surface_slot = slot.clone();
+        std::thread::spawn(move || sent.send(request.semantics(&surface_slot)).unwrap());
+        let projection = loop {
+            console.drain();
+            if let Ok(projection) = received.try_recv() {
+                break projection.expect("listed surface remains readable through the pane port");
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        };
+        assert_eq!(projection.slot, slot);
+        assert_eq!(projection.root.label.as_deref(), Some("Interface unavailable"));
+        assert!(projection.root.disabled);
+        assert!(projection.root.actions.is_empty());
+
         assert!(
             Panes::close(&bench.window, &slot),
             "the surface pane closes like any other"
@@ -1869,6 +1965,7 @@ mod panes {
             }],
             Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
         );
+        readable(&gallery, "postgres");
         Window::exhibit(&bench.window, gallery.clone());
         let chrome = Panes::at(&bench.window, &slot).expect("pane chrome").widget;
 
@@ -1988,6 +2085,7 @@ mod panes {
             }],
             Rc::new(|_| {}),
         );
+        readable(&gallery, "postgres");
         Window::exhibit(&bench.window, gallery);
         PaneChooser::populate(&bench.window, &chooser);
         assert_eq!(
@@ -2016,6 +2114,7 @@ mod panes {
             }],
             Rc::new(|_| {}),
         );
+        readable(&gallery, "postgres");
         Window::exhibit(&bench.window, gallery);
         assert!(Panes::focus(&bench.window, &first_slot));
         assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
@@ -2103,6 +2202,7 @@ mod panes {
                 })
                 .collect();
             gallery.enrol(extension, &interface, &home, &providers, Rc::new(|_| {}));
+            readable(&gallery, extension);
             homes.push(home);
         }
         Window::exhibit(&bench.window, gallery);
@@ -2166,6 +2266,7 @@ mod panes {
             }],
             Rc::new(|_| {}),
         );
+        readable(&gallery, "postgres");
         Window::exhibit(&bench.window, gallery.clone());
         assert!(Panes::focus(&bench.window, &first_slot));
         PaneChooser::provider(&bench.window, "postgres", "database");
@@ -2232,6 +2333,7 @@ mod panes {
                 }],
                 Rc::new(|_| {}),
             );
+            readable(&gallery, "postgres");
             PaneChooser::recover(&bench.window, "postgres");
             assert_eq!(
                 interface.parent().as_ref(),

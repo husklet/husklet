@@ -153,12 +153,18 @@ impl Gallery {
         slot: &str,
     ) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError> {
         let held = self.0.borrow();
-        let endpoint = held
-            .get(extension)
-            .and_then(|entry| entry.semantics.clone())
-            .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
+        let endpoint = held.get(extension).and_then(|entry| entry.semantics.clone());
         drop(held);
-        endpoint(slot)
+        let Some(endpoint) = endpoint else {
+            return Ok(unavailable(slot, &format!("{extension} has no semantic projection")));
+        };
+        match endpoint(slot) {
+            Ok(tree) => Ok(tree),
+            Err(hl_extension::HostError::Absent(detail) | hl_extension::HostError::Unsupported(detail)) => {
+                Ok(unavailable(slot, &detail))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn semantic_action(
@@ -205,6 +211,7 @@ impl Gallery {
     pub fn offers(&self, extension: &str, provider: &str) -> bool {
         self.0.borrow().get(extension).is_some_and(|exhibit| {
             exhibit.interface.upgrade().is_some()
+                && exhibit.semantics.is_some()
                 && exhibit
                     .providers
                     .iter()
@@ -220,7 +227,10 @@ impl Gallery {
         extensions.sort_by_key(|(name, _)| *name);
         extensions
             .into_iter()
-            .filter(|(_, exhibit)| exhibit.interface.upgrade().is_some())
+            // A provider is not inspectable merely because it has pixels. Do
+            // not advertise it until its retained semantic projection is
+            // registered alongside the widget it will place in the pane.
+            .filter(|(_, exhibit)| exhibit.interface.upgrade().is_some() && exhibit.semantics.is_some())
             .flat_map(|(extension, exhibit)| {
                 exhibit.providers.iter().map(move |provider| Provider {
                     extension: extension.clone(),
@@ -301,6 +311,27 @@ impl Gallery {
             .borrow()
             .get(extension)
             .is_some_and(|exhibit| exhibit.pane.is_some())
+    }
+}
+
+/// A bounded, typed answer for a retained surface that genuinely cannot
+/// provide its authored tree (for example a restored pane whose sidecar is not
+/// running). It remains inspectable without pretending terminal text exists.
+fn unavailable(slot: &str, detail: &str) -> hl_extension::PaneSemanticTree {
+    hl_extension::PaneSemanticTree {
+        slot: slot.to_owned(),
+        revision: 0,
+        root: hl_extension::SemanticNode {
+            id: 0,
+            role: "status".to_owned(),
+            label: Some("Interface unavailable".to_owned()),
+            value: Some(detail.chars().take(hl_extension::port::SEMANTIC_TEXT_LIMIT).collect()),
+            disabled: true,
+            destructive: false,
+            actions: Vec::new(),
+            children: Vec::new(),
+        },
+        truncated: detail.chars().count() > hl_extension::port::SEMANTIC_TEXT_LIMIT,
     }
 }
 
