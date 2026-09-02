@@ -9,7 +9,7 @@ use hl_rpc::{CapabilityKey, RelativePath};
 use crate::capability::Capability;
 use crate::port::{
     ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
-    ImageSummary, NetworkSummary, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
+    ImageSummary, NetworkSummary, PaneInventory, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
     WorkspaceConfiguration, WorkspaceState,
 };
 
@@ -172,6 +172,7 @@ pub enum Request {
     },
     TerminalTabs,
     TerminalTopology,
+    PaneList,
     TerminalOpenTab {
         title: String,
     },
@@ -312,6 +313,7 @@ impl Request {
             | Self::NetworkConnect { .. }
             | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
+            Self::PaneList => Capability::PaneObserve,
             Self::TerminalOpenTab { .. }
             | Self::TerminalSplit { .. }
             | Self::TerminalSpawn { .. }
@@ -369,6 +371,7 @@ pub enum Topic {
     Terminal,
     PaneChanges,
     Extensions,
+    ExtensionAcquisitions,
     WorkspaceEvents,
 }
 
@@ -384,7 +387,8 @@ impl Topic {
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
             Self::PaneChanges => Capability::PaneObserve,
-            Self::Extensions => Capability::WorkspaceRead,
+            Self::Extensions => Capability::ExtensionRead,
+            Self::ExtensionAcquisitions => Capability::ExtensionInstall,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
         }
     }
@@ -397,6 +401,7 @@ impl Topic {
         Self::Terminal,
         Self::PaneChanges,
         Self::Extensions,
+        Self::ExtensionAcquisitions,
         Self::WorkspaceEvents,
     ];
 }
@@ -444,6 +449,7 @@ pub enum Reply {
     Network(NetworkSummary),
     Tabs(Vec<TabSummary>),
     Topology(TerminalTopology),
+    Panes(PaneInventory),
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
@@ -619,6 +625,8 @@ mod tests {
         }
         assert_eq!(Topic::Containers.capability(), Capability::ContainerRead);
         assert_eq!(Topic::Terminal.capability(), Capability::TerminalRead);
+        assert_eq!(Topic::Extensions.capability(), Capability::ExtensionRead);
+        assert_eq!(Topic::ExtensionAcquisitions.capability(), Capability::ExtensionInstall);
     }
 
     #[test]

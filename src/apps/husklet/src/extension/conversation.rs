@@ -146,6 +146,7 @@ pub struct Conversation {
     workspace: String,
     settle: Duration,
     observed: std::collections::BTreeMap<Topic, Snapshot>,
+    extension_events: Option<super::management_events::ExtensionEvents>,
     pane_observed: std::collections::BTreeMap<String, (PaneChangeKind, u64, u64)>,
     pane_generation: u64,
     pane_next: Instant,
@@ -183,6 +184,7 @@ impl Conversation {
             workspace: workspace.into(),
             settle: Self::SETTLE,
             observed: std::collections::BTreeMap::new(),
+            extension_events: None,
             pane_observed: std::collections::BTreeMap::new(),
             pane_generation: 0,
             pane_next: Instant::now(),
@@ -193,6 +195,18 @@ impl Conversation {
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
         self.events = Some(events);
+    }
+
+    /// Composes the native producer now; the protocol adapter drains it once
+    /// the Extensions snapshot variant is available.
+    pub(crate) fn with_extension_events(&mut self, events: super::management_events::ExtensionEvents) {
+        self.extension_events = Some(events);
+    }
+
+    pub(crate) fn drain_extension_events(&self) -> Option<super::management_events::ExtensionEventBatch> {
+        self.extension_events
+            .as_ref()
+            .and_then(super::management_events::ExtensionEvents::drain)
     }
 
     /// Shortens or lengthens the handshake window.
@@ -290,6 +304,28 @@ impl Conversation {
         if self.session.may_emit(Topic::Terminal) {
             if let Ok(tabs) = services.terminal.tabs() {
                 snapshots.push(Snapshot::Terminal(tabs));
+            }
+        }
+        if self.session.may_emit(Topic::Extensions) {
+            if let Ok(extensions) = services.extensions.list() {
+                snapshots.push(Snapshot::Extensions(extensions));
+            }
+        }
+        if self.session.may_emit(Topic::ExtensionAcquisitions) {
+            if let Some(batch) = self.drain_extension_events() {
+                for (index, invalidation) in batch.acquisitions.into_iter().enumerate() {
+                    snapshots.push(Snapshot::ExtensionAcquisitions(
+                        hl_extension::ExtensionAcquisitionChange {
+                            job: invalidation.job,
+                            revision: invalidation.snapshot.revision,
+                            state: invalidation.snapshot.state.wire_state().into(),
+                            // The native source coalesces every job to its latest
+                            // revision. A capacity eviction is visible on the
+                            // first surviving invalidation rather than hidden.
+                            coalesced: if index == 0 { batch.dropped } else { 0 },
+                        },
+                    ));
+                }
             }
         }
         if self.session.may_emit(Topic::WorkspaceEvents) {
@@ -765,7 +801,16 @@ mod tests {
         }
     }
 
-    impl hl_extension::port::ExtensionStore for Host {}
+    impl hl_extension::port::ExtensionStore for Host {
+        fn list(&self) -> Result<Vec<hl_extension::port::ExtensionSummary>, HostError> {
+            self.ledger.note("extensions.list");
+            Ok(vec![hl_extension::port::ExtensionSummary {
+                name: "workspace-manager".into(),
+                image_digest: "sha256:manager".into(),
+                status: "duty".into(),
+            }])
+        }
+    }
 
     fn services(host: &Host) -> Services<'_> {
         Services {
@@ -787,11 +832,16 @@ mod tests {
         }
     }
 
-    /// The grant every test starts from: read containers, and draw.
+    /// The grant every test starts from: read containers/extensions, and draw.
     fn authority() -> Authority {
         Authority::new(
             ExtensionName::new("sample").expect("name"),
-            Grant::new([Capability::ContainerRead, Capability::Interface]),
+            Grant::new([
+                Capability::ContainerRead,
+                Capability::ExtensionRead,
+                Capability::ExtensionInstall,
+                Capability::Interface,
+            ]),
             Vec::new(),
         )
     }
@@ -807,6 +857,59 @@ mod tests {
             conversation.serve(&services(&host))
         });
         (theirs, served)
+    }
+
+    #[test]
+    fn conversation_drains_the_composed_native_extension_source() {
+        let (_theirs, ours) = UnixStream::pair().expect("socket pair");
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let events = super::super::management_events::ExtensionEvents::default();
+        events.inventory(vec![hl_extension::port::ExtensionSummary {
+            name: "workspace-manager".into(),
+            image_digest: "sha256:observed".into(),
+            status: "duty".into(),
+        }]);
+        conversation.with_extension_events(events);
+
+        let batch = conversation.drain_extension_events().expect("native extension change");
+        assert_eq!(batch.inventory.expect("inventory")[0].name, "workspace-manager");
+        assert!(
+            conversation.drain_extension_events().is_none(),
+            "the adapter drains rather than polls history"
+        );
+    }
+
+    #[test]
+    fn native_acquisition_invalidations_cross_the_credit_controlled_event_channel() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::ExtensionAcquisitions);
+        let events = super::super::management_events::ExtensionEvents::default();
+        let job = super::super::acquisition::AcquisitionJob::parse("7").expect("job");
+        events.acquisition(
+            job,
+            super::super::acquisition::AcquisitionSnapshot {
+                reference: "registry/tool:1".into(),
+                revision: 3,
+                state: super::super::acquisition::AcquisitionState::ReadingManifest,
+            },
+        );
+        conversation.with_extension_events(events);
+        let ledger = Arc::new(Ledger::default());
+        let host = Host { ledger };
+
+        conversation.observe(&services(&host)).expect("native event observed");
+        let frame = wire.receive().expect("acquisition event");
+        let snapshot: Snapshot = serde_json::from_slice(&frame.payload).expect("typed snapshot");
+        assert!(matches!(
+            snapshot,
+            Snapshot::ExtensionAcquisitions(change)
+                if change.job == "7" && change.revision == 3 && change.state == "reading-manifest"
+        ));
     }
 
     /// Reads the welcome and answers it with a version.
@@ -887,6 +990,32 @@ mod tests {
                 >= 2,
             "the absence of a duplicate is from equality, not a stopped producer"
         );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn an_extension_inventory_subscription_receives_one_changed_bounded_listing() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(650)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Extensions,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+        let event = wire.receive().expect("initial extension snapshot");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager"));
+        assert_eq!(wire.receive(), Err(Transit::Pending), "unchanged inventory is coalesced");
+        assert!(ledger.reached().iter().filter(|call| **call == "extensions.list").count() > 1);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }

@@ -13,7 +13,7 @@ const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -159,6 +159,7 @@ export function workspace(session) {
       disconnect: (reference, container) => done('network_disconnect', { reference, container }),
     },
     terminal: {
+      panes: async () => expect(await session.call('pane_list'), 'panes'),
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
@@ -205,6 +206,18 @@ export function workspace(session) {
     });
     try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('pane-changes'); };
+  };
+  api.watchExtensions = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('extension listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'extensions') listener(event.of); });
+    try { await api.subscribe('extensions'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('extensions'); };
+  };
+  api.watchExtensionAcquisitions = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('extension acquisition listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'extension_acquisitions') listener(event.of); });
+    try { await api.subscribe('extension-acquisitions'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('extension-acquisitions'); };
   };
   return api;
 }
@@ -369,7 +382,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
@@ -380,7 +393,7 @@ export const protocolCoverage = Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: [],
     terminal: ['switchOccupant'],
-    events: ['extensions', 'drag', 'drop'],
+    events: ['drag', 'drop'],
     extensions: [],
   }),
 });

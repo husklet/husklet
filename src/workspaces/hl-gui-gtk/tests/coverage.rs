@@ -208,7 +208,7 @@ fn unhonoured(tag: Tag) -> Vec<String> {
 /// pretending otherwise by weakening the observation would hide real gaps in
 /// every other component.
 fn unobservable(tag: Tag, prop: Prop) -> bool {
-    prop == Prop::Visible && (tag == Tag::Popover || tag == Tag::ContextMenu)
+    prop == Prop::Destructive || (prop == Prop::Visible && (tag == Tag::Popover || tag == Tag::ContextMenu))
 }
 
 /// One component, rendered with the property and without it, described down to
@@ -382,7 +382,13 @@ fn offers(prop: Prop) -> Vec<PropValue> {
         Prop::Uri => vec![PropValue::text(REFERENCE)],
         Prop::Enabled | Prop::Visible => vec![PropValue::Flag(false)],
         Prop::Selected | Prop::Checked => vec![PropValue::Flag(true)],
-        Prop::Expanded | Prop::Busy | Prop::Secret | Prop::Monospace | Prop::Wrap | Prop::Ellipsize => {
+        Prop::Expanded
+        | Prop::Busy
+        | Prop::Secret
+        | Prop::Destructive
+        | Prop::Monospace
+        | Prop::Wrap
+        | Prop::Ellipsize => {
             vec![PropValue::Flag(true), PropValue::Flag(false)]
         }
         _ => shaped(prop),

@@ -23,6 +23,9 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Expanded => expanded(widget, value),
         Prop::Busy => busy(widget, value),
         Prop::Secret => secret(widget, value),
+        // Product-authored semantic metadata. It must survive in the retained
+        // tree, but has no visual state for a toolkit adapter to manufacture.
+        Prop::Destructive => {}
         Prop::Monospace => monospace(widget, value),
         Prop::Wrap => wrap(widget, node, value),
         Prop::Ellipsize => ellipsize(widget, value),

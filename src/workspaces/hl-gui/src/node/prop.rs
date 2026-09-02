@@ -23,6 +23,11 @@ pub enum Prop {
     Expanded,
     Busy,
     Secret,
+    /// Whether invoking this node can perform an irreversible operation.
+    ///
+    /// This is semantic metadata for automation and accessibility consumers;
+    /// toolkit adapters deliberately do not infer it from colour or wording.
+    Destructive,
     Monospace,
     /// Whether content runs onto further lines instead of overflowing: words
     /// for a text node, whole children for a row or a column.

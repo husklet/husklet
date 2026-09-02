@@ -111,6 +111,12 @@ export function tools(api) {
     define('husklet_file_rename', 'Rename one workspace-relative entry without overwriting.', z.object({ from: path, to: path }).strict(), async ({ from, to }) => { await api.files.rename(from, to); return { done: true }; }),
     define('husklet_file_remove', 'Remove one file or empty directory after explicit confirmation.', z.object({ path, confirm: z.literal(true) }).strict(), async ({ path: value }) => { await api.files.remove(value); return { done: true }; }),
   ];
+  if (typeof api.terminal?.panes === 'function') definitions.push(define(
+    'husklet_pane_list',
+    'List every inspectable terminal, extension surface, and native pane without reading its contents.',
+    empty,
+    () => api.terminal.panes(),
+  ));
   if (typeof api.watchPaneChanges === 'function') definitions.push(define(
     'husklet_pane_wait',
     'Wait for bounded pane-change metadata; fetch a snapshot after notification.',
@@ -128,6 +134,23 @@ export function tools(api) {
       api.watchPaneChanges((change) => {
         if (wanted == null || change.slot === wanted) finish({ changed: true, change });
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
+  if (typeof api.watchExtensions === 'function' && typeof api.watchExtensionAcquisitions === 'function') definitions.push(define(
+    'husklet_extension_wait',
+    'Wait for a bounded installed-extension snapshot or acquisition revision invalidation without polling.',
+    z.object({ kind: z.enum(['inventory', 'acquisition']), job: extensionJob.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+      .superRefine(({ kind, job }, context) => { if (job != null && kind !== 'acquisition') context.addIssue({ code: z.ZodIssueCode.custom, message: 'job filtering applies only to acquisition changes' }); }),
+    ({ kind, job, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      const watch = kind === 'inventory' ? api.watchExtensions : api.watchExtensionAcquisitions;
+      watch((change) => { if (kind === 'inventory' || job == null || change.job === job) finish({ changed: true, change }); })
+        .then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
   return definitions.concat(paneTools(api.terminal));

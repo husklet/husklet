@@ -23,6 +23,7 @@ mod image;
 mod inventory;
 mod listener;
 mod management;
+mod management_events;
 mod registration;
 mod resource;
 mod roster;
@@ -192,6 +193,10 @@ impl Extensions {
     #[must_use]
     pub fn management(&self) -> &dyn ExtensionStore {
         &self.management
+    }
+
+    pub(crate) fn extension_events(&self) -> management_events::ExtensionEvents {
+        self.management.events()
     }
 }
 

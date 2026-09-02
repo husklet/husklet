@@ -32,6 +32,7 @@ const KIND = {
   Expanded: 'flag',
   Busy: 'flag',
   Secret: 'flag',
+  Destructive: 'flag',
   Monospace: 'flag',
   Wrap: 'flag',
   Ellipsize: 'flag',

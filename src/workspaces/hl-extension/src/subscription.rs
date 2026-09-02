@@ -5,7 +5,7 @@
 
 use hl_rpc::{Coding, Frame};
 
-use crate::port::{ContainerSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
+use crate::port::{ContainerSummary, ExtensionSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
 use crate::request::Topic;
 
 /// What produced a pane notification. Contents remain behind their separate
@@ -26,6 +26,16 @@ pub struct PaneChange {
     pub kind: PaneChangeKind,
     pub revision: u64,
     pub generation: u64,
+    pub coalesced: u64,
+}
+
+/// Bounded acquisition invalidation metadata. Candidate contents remain behind
+/// an explicit status read so frequent progress never fills the event outbox.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionAcquisitionChange {
+    pub job: String,
+    pub revision: u64,
+    pub state: String,
     pub coalesced: u64,
 }
 
@@ -88,6 +98,8 @@ pub enum Snapshot {
     Networks(Vec<NetworkSummary>),
     Terminal(Vec<TabSummary>),
     PaneChanges(PaneChange),
+    Extensions(Vec<ExtensionSummary>),
+    ExtensionAcquisitions(ExtensionAcquisitionChange),
     WorkspaceEvents(WorkspaceEventBatch),
 }
 
@@ -104,6 +116,8 @@ impl Snapshot {
             Self::Networks(_) => Topic::Networks,
             Self::Terminal(_) => Topic::Terminal,
             Self::PaneChanges(_) => Topic::PaneChanges,
+            Self::Extensions(_) => Topic::Extensions,
+            Self::ExtensionAcquisitions(_) => Topic::ExtensionAcquisitions,
             Self::WorkspaceEvents(_) => Topic::WorkspaceEvents,
         }
     }
@@ -126,8 +140,10 @@ impl Snapshot {
     /// generic RPC envelope to domain consumers.
     #[must_use]
     pub fn with_coalesced(mut self, count: u64) -> Self {
-        if let Self::PaneChanges(change) = &mut self {
-            change.coalesced = count;
+        match &mut self {
+            Self::PaneChanges(change) => change.coalesced = count,
+            Self::ExtensionAcquisitions(change) => change.coalesced = count,
+            _ => {}
         }
         self
     }
@@ -135,7 +151,7 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaneChange, PaneChangeKind, Snapshot};
+    use super::{ExtensionAcquisitionChange, PaneChange, PaneChangeKind, Snapshot};
     use crate::request::Topic;
 
     #[test]
@@ -145,6 +161,23 @@ mod tests {
         assert_eq!(Snapshot::Volumes(Vec::new()).topic(), Topic::Volumes);
         assert_eq!(Snapshot::Networks(Vec::new()).topic(), Topic::Networks);
         assert_eq!(Snapshot::Terminal(Vec::new()).topic(), Topic::Terminal);
+        assert_eq!(Snapshot::Extensions(Vec::new()).topic(), Topic::Extensions);
+        let acquisition = Snapshot::ExtensionAcquisitions(ExtensionAcquisitionChange {
+            job: "job-1".into(),
+            revision: 5,
+            state: "ready".into(),
+            coalesced: 0,
+        });
+        assert_eq!(acquisition.topic(), Topic::ExtensionAcquisitions);
+        assert_eq!(
+            acquisition.with_coalesced(8),
+            Snapshot::ExtensionAcquisitions(ExtensionAcquisitionChange {
+                job: "job-1".into(),
+                revision: 5,
+                state: "ready".into(),
+                coalesced: 8,
+            })
+        );
         let change = Snapshot::PaneChanges(PaneChange {
             slot: "s1".into(),
             kind: PaneChangeKind::Surface,

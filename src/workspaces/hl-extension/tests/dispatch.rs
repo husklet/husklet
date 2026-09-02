@@ -271,6 +271,21 @@ impl ImageStore for Host {
 }
 
 impl TerminalSurface for Host {
+    fn pane_inventory(&self) -> Result<hl_extension::port::PaneInventory, HostError> {
+        self.ledger.note("terminal.pane_inventory");
+        Ok(hl_extension::port::PaneInventory {
+            panes: vec![hl_extension::port::InspectablePane {
+                slot: "workspace".into(),
+                kind: hl_extension::port::PaneKind::Native,
+                provider: None,
+                tab: None,
+                title: Some("Workspace".into()),
+                focused: false,
+            }],
+            truncated: false,
+        })
+    }
+
     fn tabs(&self) -> Result<Vec<TabSummary>, HostError> {
         self.ledger.note("terminal.tabs");
         Ok(vec![TabSummary {
@@ -403,6 +418,18 @@ fn pane_semantic_read_and_control_are_separately_granted() {
         host.ledger.reached(),
         vec!["terminal.semantics", "terminal.semantic_action"]
     );
+}
+
+#[test]
+fn pane_discovery_requires_observation_without_content_authority() {
+    let host = Host::new();
+    assert!(session(&[], &[]).dispatch(&Request::PaneList, &services(&host)).is_err());
+    let reply = session(&[Capability::PaneObserve], &[])
+        .dispatch(&Request::PaneList, &services(&host))
+        .expect("pane observation grants bounded discovery");
+    let Reply::Panes(inventory) = reply else { panic!("wrong reply") };
+    assert_eq!(inventory.panes[0].slot, "workspace");
+    assert_eq!(host.ledger.reached(), vec!["terminal.pane_inventory"]);
 }
 
 #[test]
@@ -799,6 +826,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (Request::ImagePrune, Capability::ImageWrite),
         (Request::TerminalTabs, Capability::TerminalRead),
         (Request::TerminalTopology, Capability::TerminalRead),
+        (Request::PaneList, Capability::PaneObserve),
         (
             Request::TerminalOpenTab { title: "logs".into() },
             Capability::TerminalControl,

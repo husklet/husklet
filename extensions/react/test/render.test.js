@@ -41,6 +41,13 @@ test('a button in a column is exactly six patches', () => {
   });
 });
 
+test('destructive is an explicit typed semantic property', () => {
+  const host = surface();
+  const frame = host.render(h(Button, { label: 'Delete', destructive: true, onInvoke: () => {} }));
+  assert.ok(frame.patches.some((patch) => patch.SetProp?.prop === 'Destructive'
+    && patch.SetProp.value?.Flag === true));
+});
+
 test('rendering the same tree again sends nothing at all', () => {
   const host = surface();
   const tree = () => h(Column, null, h(Button, { label: 'Go', onInvoke: () => {} }));

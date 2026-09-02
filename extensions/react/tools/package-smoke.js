@@ -48,12 +48,13 @@ try {
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
     void api.subscribe('terminal');
     void api.subscribe('volumes');
+    void api.subscribe('extensions');
+    void api.watchExtensions((extensions) => { void extensions[0]?.name; });
+    void api.watchExtensionAcquisitions((change) => { void change.revision; });
     const surface = render(null, session, { split: { slot: 'pane-1', division: 'beside' } });
     const mutation: InterfaceSourceMutation = { Length: { source: 1, version: 2, rows: 100_000 } };
     void surface.ready;
     void surface.source(mutation);
-    // @ts-expect-error unavailable topics are intentionally not advertised
-    void api.subscribe('extensions');
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',

@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use hl::extension::{Answer, Errand, Errands, Request};
 use hl_extension::port::{
-    Division, GridSize, HostError, LayoutNode, PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology,
-    TerminalTopology,
+    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PANE_INVENTORY_LIMIT, PaneInventory,
+    PaneKind, PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology,
 };
 use vte4::prelude::*;
 
@@ -75,6 +75,7 @@ impl Console {
         let answer = match errand.request() {
             Request::Tabs => Ok(Answer::Tabs(Self::tabs(window))),
             Request::Topology => Self::topology(window).map(Answer::Topology),
+            Request::PaneList => Self::pane_inventory(window).map(Answer::Panes),
             Request::OpenTab(title) => Ok(Answer::Slot(Self::open(window, title))),
             Request::Split { slot, division } => Self::split(window, slot, *division).map(Answer::Slot),
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
@@ -127,6 +128,48 @@ impl Console {
             .collect();
         let active_tab = active.filter(|active| tabs.iter().any(|tab| &tab.id == active));
         Ok(TerminalTopology { active_tab, tabs })
+    }
+
+    fn pane_inventory(window: &Rc<TermWin>) -> Result<PaneInventory, HostError> {
+        let topology = Self::topology(window)?;
+        let mut panes = Vec::new();
+        for tab in topology.tabs {
+            Self::inventory_node(&tab.root, &tab.id, &tab.title, &mut panes);
+        }
+        if Window::gallery(window).is_some_and(|gallery| gallery.native_semantics("workspace").is_ok()) {
+            panes.push(InspectablePane {
+                slot: "workspace".into(),
+                kind: PaneKind::Native,
+                provider: None,
+                tab: None,
+                title: Some("Workspace".into()),
+                focused: false,
+            });
+        }
+        let truncated = panes.len() > PANE_INVENTORY_LIMIT;
+        panes.truncate(PANE_INVENTORY_LIMIT);
+        Ok(PaneInventory { panes, truncated })
+    }
+
+    fn inventory_node(node: &LayoutNode, tab: &str, title: &str, panes: &mut Vec<InspectablePane>) {
+        match node {
+            LayoutNode::Pane { pane, focused, .. } => panes.push(InspectablePane {
+                slot: pane.slot.clone(),
+                kind: if pane.occupant == Occupant::Surface {
+                    PaneKind::Surface
+                } else {
+                    PaneKind::Terminal
+                },
+                provider: pane.provider.clone(),
+                tab: Some(tab.to_owned()),
+                title: Some(title.to_owned()),
+                focused: *focused,
+            }),
+            LayoutNode::Split { first, second, .. } => {
+                Self::inventory_node(first, tab, title, panes);
+                Self::inventory_node(second, tab, title, panes);
+            }
+        }
     }
 
     fn node(window: &Rc<TermWin>, widget: &gtk::Widget) -> Option<LayoutNode> {

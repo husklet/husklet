@@ -36,6 +36,10 @@ reveals the resolved digest, manifest identity, and requested grants, and only a
 second confirmed install or update echoes that observed revision and commits the
 caller-selected grant; a changed candidate therefore makes stale consent fail. Cancellation
 is also explicit and confirmed; no MCP call performs an unobservable blocking pull.
+`husklet_extension_wait` follows the host's credit-controlled extension topics,
+returning either the newest bounded inventory snapshot or acquisition job/revision
+metadata. Acquisition notifications never carry manifest contents; clients fetch
+status only after an invalidation, and coalescing is reported explicitly.
 
 Volume and network inventory/inspection use the host's separate `VolumeRead`
 and `NetworkRead` grants. Creation and attachment controls retain their
@@ -46,8 +50,10 @@ Image tools list and inspect local images under `ImageRead`, and pull under
 `ImageWrite`. Removing an image or pruning unused images additionally requires
 an explicit `confirm: true` MCP argument; the host still enforces `ImageWrite`.
 
-`husklet_pane_read` is the single read path for agents that do not already know
-what a pane holds. It inspects the split topology and returns one bounded XML
+`husklet_pane_list` returns bounded discovery metadata for every inspectable
+terminal, extension surface, and native pane, including stable slot and provider
+identity without reading contents. It requires the host's `PaneObserve` grant.
+Use the returned slot with `husklet_pane_read`, which inspects the split topology and returns one bounded XML
 document: terminal panes include screen lines, focus, grid and tab metadata;
 extension surfaces and the native `workspace` pane include their semantic tree.
 It uses stable slots and semantic IDs, never screenshots, coordinates, or GTK

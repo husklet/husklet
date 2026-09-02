@@ -9,20 +9,28 @@ use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
-use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
+use super::management_events::ExtensionEvents;
+use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
     acquisitions: ExtensionAcquisitions,
+    events: ExtensionEvents,
 }
 
 impl ExtensionManagement {
     pub fn new(workspace: &WorkspaceConfig) -> Self {
-        Self {
+        let events = ExtensionEvents::default();
+        let management = Self {
             workspace: workspace.clone(),
-            acquisitions: ExtensionAcquisitions::new(workspace),
+            acquisitions: ExtensionAcquisitions::new(workspace, events.clone()),
+            events,
+        };
+        if let Ok(entries) = management.list() {
+            management.events.inventory(entries);
         }
+        management
     }
 
     fn roster(&self) -> Result<Roster<Directory>, HostError> {
@@ -31,6 +39,18 @@ impl ExtensionManagement {
 
     fn name(value: &str) -> Result<ExtensionName, HostError> {
         ExtensionName::new(value).map_err(|error| HostError::Conflict(error.to_string()))
+    }
+
+    pub(crate) fn events(&self) -> ExtensionEvents {
+        self.events.clone()
+    }
+
+    fn changed(&self, result: Result<(), HostError>) -> Result<(), HostError> {
+        result?;
+        if let Ok(entries) = self.list() {
+            self.events.inventory(entries);
+        }
+        Ok(())
     }
 }
 
@@ -50,15 +70,18 @@ impl ExtensionStore for ExtensionManagement {
     }
 
     fn enable(&self, name: &str) -> Result<(), HostError> {
-        self.roster()?.enable(&Self::name(name)?).map_err(failure)
+        let result = self.roster()?.enable(&Self::name(name)?).map_err(failure);
+        self.changed(result)
     }
 
     fn disable(&self, name: &str) -> Result<(), HostError> {
-        self.roster()?.disable(&Self::name(name)?).map_err(failure)
+        let result = self.roster()?.disable(&Self::name(name)?).map_err(failure);
+        self.changed(result)
     }
 
     fn remove(&self, name: &str) -> Result<(), HostError> {
-        self.roster()?.remove(&Self::name(name)?).map_err(failure)
+        let result = self.roster()?.remove(&Self::name(name)?).map_err(failure);
+        self.changed(result)
     }
 
     fn acquisition_start(&self, reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
@@ -81,14 +104,22 @@ impl ExtensionStore for ExtensionManagement {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
         self.acquisitions.install(job, revision, granted)?;
-        self.inspect(&name)
+        let installed = self.inspect(&name)?;
+        if let Ok(entries) = self.list() {
+            self.events.inventory(entries);
+        }
+        Ok(installed)
     }
 
     fn update(&self, job: &str, revision: u64, granted: &Grant) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
         self.acquisitions.update(job, revision, granted)?;
-        self.inspect(&name)
+        let updated = self.inspect(&name)?;
+        if let Ok(entries) = self.list() {
+            self.events.inventory(entries);
+        }
+        Ok(updated)
     }
 }
 
@@ -171,6 +202,12 @@ fn failure(error: super::Refusal) -> HostError {
 mod tests {
     use super::*;
 
+    fn workspace(root: &std::path::Path) -> WorkspaceConfig {
+        let mut workspace = WorkspaceConfig::new("test", "alpine", hl_ws::Arch::Amd64);
+        workspace.storage = Some(root.to_owned());
+        workspace
+    }
+
     #[test]
     fn acquisition_status_preserves_real_registry_progress() {
         let status = acquisition_status(
@@ -195,5 +232,18 @@ mod tests {
             (progress.status.as_str(), progress.current, progress.total),
             ("downloading layer", Some(25), Some(100))
         );
+    }
+
+    #[test]
+    fn management_composes_initial_and_mutated_inventory_events() {
+        let root = tempfile::tempdir().unwrap();
+        let management = ExtensionManagement::new(&workspace(root.path()));
+        let events = management.events();
+        assert!(events.drain().unwrap().inventory.unwrap().is_empty());
+
+        // Removing an absent name is an idempotent durable mutation and still
+        // republishes the latest full inventory for a subscribed peer.
+        management.remove("absent").unwrap();
+        assert!(events.drain().unwrap().inventory.unwrap().is_empty());
     }
 }
