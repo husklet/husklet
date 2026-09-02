@@ -53,6 +53,8 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// Maximum interface operations one extension may leave behind the GUI.
+    pub const LIMIT: usize = 128;
     /// An empty queue.
     #[must_use]
     pub fn new() -> Self {
@@ -78,10 +80,19 @@ impl Queue {
     /// Adds what a session drained. Poisoning is recovered from rather than
     /// propagated: the queue is a list of drawing work, so a thread that
     /// panicked mid-deposit leaves it stale at worst, never unsound.
-    fn deposit(&self, frames: Vec<SurfaceFrame>, mutations: Vec<SurfaceMutation>) {
+    fn deposit(&self, frames: Vec<SurfaceFrame>, mutations: Vec<SurfaceMutation>) -> Result<(), Fault> {
         let mut held = self.hold();
+        let incoming = frames.len().saturating_add(mutations.len());
+        let occupied = held.frames.len().saturating_add(held.mutations.len());
+        if incoming > Self::LIMIT.saturating_sub(occupied) {
+            return Err(Fault::Malformed(format!(
+                "more than {} interface operations without letting the window catch up",
+                Self::LIMIT
+            )));
+        }
         held.frames.extend(frames);
         held.mutations.extend(mutations);
+        Ok(())
     }
 
     fn hold(&self) -> std::sync::MutexGuard<'_, Interface> {
@@ -512,7 +523,7 @@ impl Conversation {
         // Gather before answering: once the peer has its reply it may act on
         // it, and an effect the call produced must already be observable by
         // then rather than racing the window's next collection.
-        self.gather();
+        self.gather()?;
         self.respond(&answer)?;
         self.flush()
     }
@@ -566,8 +577,8 @@ impl Conversation {
     }
 
     /// Moves what the session collected into the queue the GUI reads.
-    fn gather(&mut self) {
-        self.queue.deposit(self.session.drain(), self.session.drain_sources());
+    fn gather(&mut self) -> Result<(), Fault> {
+        self.queue.deposit(self.session.drain(), self.session.drain_sources())
     }
 
     /// Allocates the channel a topic is delivered on.
@@ -1334,6 +1345,39 @@ mod tests {
         assert!(queue.is_empty(), "collecting empties the queue");
         drop(wire);
         let _ = served.join().expect("joined");
+    }
+
+    #[test]
+    fn one_extensions_interface_backlog_is_hard_bounded_and_does_not_consume_anothers() {
+        let noisy = Queue::new();
+        let healthy = Queue::new();
+        let frames = (0..Queue::LIMIT)
+            .map(|sequence| hl_extension::SurfaceFrame {
+                slot: "noisy".into(),
+                frame: hl_gui::Frame::new(u64::try_from(sequence).expect("bounded sequence")),
+            })
+            .collect();
+        noisy.deposit(frames, Vec::new()).expect("the exact bound is admitted");
+        let overflow = noisy.deposit(
+            vec![hl_extension::SurfaceFrame {
+                slot: "noisy".into(),
+                frame: hl_gui::Frame::new(999),
+            }],
+            Vec::new(),
+        );
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
+        assert_eq!(noisy.collect().frames.len(), Queue::LIMIT, "overflow is rejected atomically");
+
+        healthy
+            .deposit(
+                vec![hl_extension::SurfaceFrame {
+                    slot: "healthy".into(),
+                    frame: hl_gui::Frame::new(1),
+                }],
+                Vec::new(),
+            )
+            .expect("another extension owns an independent budget");
+        assert_eq!(healthy.collect().frames.len(), 1);
     }
 
     #[test]
