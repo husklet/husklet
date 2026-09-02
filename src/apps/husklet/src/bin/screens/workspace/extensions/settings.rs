@@ -19,6 +19,8 @@ use super::Shelf;
 pub const ENABLE: &str = "hl-extension-enable";
 /// Style class on the action that takes an extension off duty.
 pub const DISABLE: &str = "hl-extension-disable";
+/// Style class on the action that begins a reviewed image update.
+pub const UPDATE: &str = "hl-extension-update";
 /// Style class on the action that forgets an extension and its grant.
 pub const REMOVE: &str = "hl-extension-remove";
 pub const CONFIRM_REMOVE: &str = "hl-extension-confirm-remove";
@@ -40,7 +42,12 @@ pub struct Settings;
 impl Settings {
     /// Builds the page for one extension as the roster currently describes it.
     #[must_use]
-    pub fn page(shelf: &Rc<Shelf>, entry: &Entry, semantics: &super::super::semantic::Registry) -> gtk::Box {
+    pub fn page(
+        shelf: &Rc<Shelf>,
+        entry: &Entry,
+        semantics: &super::super::semantic::Registry,
+        update: Rc<dyn Fn()>,
+    ) -> gtk::Box {
         let main = gtk::Box::new(gtk::Orientation::Vertical, 12);
         main.add_css_class("dmain");
         main.add_css_class(CARD);
@@ -62,7 +69,7 @@ impl Settings {
         main.append(&capabilities(entry));
         let refusal = line("", REFUSAL);
         refusal.set_visible(false);
-        main.append(&actions(shelf, entry, &refusal, &standing, semantics));
+        main.append(&actions(shelf, entry, &refusal, &standing, semantics, update));
         main.append(&refusal);
         let prefix = format!("extensions/installed/{}/", entry.name);
         let version = if entry.version.is_empty() {
@@ -172,6 +179,7 @@ fn actions(
     refusal: &gtk::Label,
     standing: &gtk::Label,
     semantics: &super::super::semantic::Registry,
+    update: Rc<dyn Fn()>,
 ) -> gtk::FlowBox {
     let row = gtk::FlowBox::new();
     row.add_css_class(ACTIONS);
@@ -197,8 +205,36 @@ fn actions(
             -1,
         );
     }
+    row.insert(&update_action(entry, semantics, update), -1);
     row.insert(&removal(shelf, entry, refusal, standing, semantics), -1);
     row
+}
+
+/// Guides the user into the existing digest- and grant-reviewed update flow.
+fn update_action(entry: &Entry, semantics: &super::super::semantic::Registry, update: Rc<dyn Fn()>) -> gtk::Button {
+    use super::super::semantic::ActionKind;
+    let button = gtk::Button::with_label("Update");
+    button.add_css_class(UPDATE);
+    let clicked = Rc::clone(&update);
+    button.connect_clicked(move |_| clicked());
+    let focused = button.clone();
+    semantics.register(
+        &format!("extensions/installed/{}/Update", entry.name),
+        "button",
+        Some("Update"),
+        Some(super::super::semantic::Value::Public(
+            "Choose a newer image, then review its digest and capability changes",
+        )),
+        &[ActionKind::Invoke, ActionKind::Focus],
+        Rc::new(move |action, _| match action {
+            ActionKind::Invoke => update(),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    button
 }
 
 /// What one button does to the roster.

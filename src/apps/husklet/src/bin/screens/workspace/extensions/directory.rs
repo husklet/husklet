@@ -152,8 +152,29 @@ impl Catalogue {
             return;
         }
         for entry in entries {
-            self.listing
-                .append(&super::settings::Settings::page(&self.shelf, &entry, &self.semantics));
+            let reference = self.reference.clone();
+            let notice = self.notice.clone();
+            let semantics = self.semantics.clone();
+            let name = entry.name.clone();
+            let update = Rc::new(move || {
+                reference.grab_focus();
+                let message = format!(
+                    "Enter a newer image reference for {name}, then read its manifest to review the digest and capability changes."
+                );
+                notice.set_text(&message);
+                notice.set_visible(true);
+                semantics.update(
+                    "extensions/notice",
+                    super::super::semantic::Value::Public(&message),
+                    false,
+                );
+            });
+            self.listing.append(&super::settings::Settings::page(
+                &self.shelf,
+                &entry,
+                &self.semantics,
+                update,
+            ));
         }
     }
 

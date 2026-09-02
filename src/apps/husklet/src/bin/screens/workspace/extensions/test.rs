@@ -440,8 +440,8 @@ fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
             .collect::<Vec<_>>();
         assert_eq!(
             children.len(),
-            3,
-            "Retry, Enable and removal confirmation stay represented"
+            4,
+            "Retry, Enable, Update and removal confirmation stay represented"
         );
         assert!(
             children.iter().all(|child| {
@@ -1026,6 +1026,27 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     let fixture = Fixture::new(&[("sample", true)]);
     let old_surface = fixture.view.page("sample").expect("installed surface");
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    let before = fixture.view.semantic_snapshot();
+    let update = before
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Update"))
+        .expect("installed cards expose their reviewed update path");
+    fixture
+        .view
+        .semantic_action(&super::super::semantic::Action {
+            revision: before.revision,
+            node: update.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        })
+        .expect("update guidance is semantically actionable");
+    assert!(page.notice().contains("newer image reference for sample"));
+    assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Extension status")
+            && node.value.as_deref().is_some_and(|value| value.contains("review the digest"))
+    }));
     typed(&page, "sample:2");
     page.inspect();
     assert!(page.poll());
