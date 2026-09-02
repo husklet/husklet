@@ -421,6 +421,14 @@ fn diagnostics_receipt_proves_success_signal_and_pre_exec_absence() {
 }
 
 #[test]
+fn supervised_system_true_reaches_guest_entry() {
+    let (status, output, error) = run(Path::new("/bin/true"), &[], true);
+    assert_eq!(status, 0);
+    assert!(output.is_empty());
+    assert!(error.is_empty());
+}
+
+#[test]
 fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
