@@ -1,0 +1,31 @@
+{
+  "name": "@husklet/mcp",
+  "version": "0.1.0",
+  "description": "Bounded MCP tools for a Husklet workspace.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/husklet/husklet.git",
+    "directory": "extensions/mcp"
+  },
+  "homepage": "https://github.com/husklet/husklet#readme",
+  "bugs": "https://github.com/husklet/husklet/issues",
+  "keywords": ["husklet", "mcp", "containers", "terminal"],
+  "type": "module",
+  "bin": { "husklet-mcp": "src/cli.js" },
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": { ".": { "types": "./src/index.d.ts", "import": "./src/index.js" }, "./package.json": "./package.json" },
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test 'test/*.test.js' && node tools/package-smoke.js"
+  },
+  "dependencies": {
+    "@husklet/react": "0.1.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": { "typescript": "5.9.2" },
+  "engines": { "node": ">=20" },
+  "publishConfig": { "access": "public", "provenance": true }
+}

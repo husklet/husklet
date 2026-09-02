@@ -2,6 +2,6 @@
   "name": "@husklet/extensions",
   "private": true,
   "description": "The base image every extension builds from, and the extensions built on it.",
-  "workspaces": ["react", "storybook", "workspace-manager"],
+  "workspaces": ["react", "mcp", "storybook", "workspace-manager"],
   "engines": { "node": ">=20" }
 }
