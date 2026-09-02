@@ -158,7 +158,7 @@ impl Candidate {
         let inspection: InspectImage = match cancellable(&bridge, cancellation, client.images().inspect(reference))? {
             Ok(inspection) => inspection,
             Err(error) if matches!(super::failure(&error), HostError::Absent(_)) => {
-                pull(&bridge, reference, progress, cancellation)?;
+                pull(bridge, reference, architecture, progress, cancellation)?;
                 cancellable(&bridge, cancellation, client.images().inspect(reference))?
                     .map_err(|error| error.to_string())?
             }
@@ -217,13 +217,15 @@ fn platform(inspection: &InspectImage, architecture: &str) -> Result<(), String>
 fn pull(
     bridge: &Bridge,
     reference: &str,
+    architecture: &str,
     progress: &Sender<Acquisition>,
     cancellation: &Cancellation,
 ) -> Result<(), String> {
     let (name, tag) = split(reference);
     let client = bridge.client();
-    let mut stream =
-        cancellable(bridge, cancellation, client.images().pull(name, tag, None))?.map_err(|error| error.to_string())?;
+    let platform = format!("linux/{architecture}");
+    let mut stream = cancellable(bridge, cancellation, client.images().pull(name, tag, Some(&platform)))?
+        .map_err(|error| error.to_string())?;
     loop {
         let record = cancellable(bridge, cancellation, stream.next())?.map_err(|error| error.to_string())?;
         let Some(record) = record else { return Ok(()) };
@@ -457,6 +459,65 @@ mod tests {
     #[test]
     fn digests_are_forwarded_as_the_pull_selector() {
         assert_eq!(split("team/tool@sha256:abcd"), ("team/tool", Some("sha256:abcd")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acquisition_pull_names_the_workspace_platform_on_the_docker_wire() {
+        use std::io::{Read as _, Write as _};
+
+        let root = tempfile::TempDir::new().unwrap();
+        let socket = root.path().join("mock.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for body in [r#"{"message":"No such image"}"#, "{\"error\":\"fixture stop\"}\n"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut chunk).unwrap();
+                    assert_ne!(count, 0, "request ended before its headers");
+                    bytes.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                requests.push(request.lines().next().unwrap().to_owned());
+                let status = if requests.len() == 1 { "404 Not Found" } else { "200 OK" };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            requests
+        });
+        let (progress, received) = std::sync::mpsc::channel();
+        Candidate::acquire_from_socket(
+            &socket,
+            hl_ws::Arch::Arm64,
+            "registry.test/team/extension:v1",
+            &progress,
+        );
+        let terminal = received
+            .into_iter()
+            .find(|event| {
+                matches!(
+                    event,
+                    Acquisition::Failed(_) | Acquisition::Ready(_) | Acquisition::Cancelled
+                )
+            })
+            .unwrap();
+        assert!(matches!(terminal, Acquisition::Failed(reason) if reason.contains("fixture stop")));
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests[0],
+            "GET /v1.43/images/registry%2Etest%2Fteam%2Fextension%3Av1/json HTTP/1.1"
+        );
+        assert_eq!(
+            requests[1],
+            "POST /v1.43/images/create?fromImage=registry%2Etest%2Fteam%2Fextension&tag=v1&platform=linux%2Farm64 HTTP/1.1"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
