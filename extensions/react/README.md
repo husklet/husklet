@@ -7,8 +7,18 @@ socket.
 
 ## Using it
 
+For local development, install the same ordinary React package an extension
+image uses:
+
+```sh
+npm install @husklet/react react@18.3.1
+```
+
+The published base image is multi-architecture (`linux/amd64` and
+`linux/arm64`) and already contains Node, React, the reconciler, and this SDK:
+
 ```dockerfile
-ARG HUSKLET_REACT_IMAGE
+ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:latest
 FROM ${HUSKLET_REACT_IMAGE}
 COPY . /app
 CMD ["node", "/app/main.js"]
@@ -52,6 +62,10 @@ const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);
 const processes = await host.containers.processes(containers[0].id);
 const output = await host.containers.logs(containers[0].id, { stderr: false });
+const files = await host.files.list('project');
+await host.files.mkdir('project/generated');
+await host.files.write('project/generated/config.json', new TextEncoder().encode('{}'));
+await host.files.rename('project/generated/config.json', 'project/generated/app.json');
 ```
 
 Container reads include bounded logs, process tables, and execution inspection;
@@ -72,10 +86,12 @@ version really supports. Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
 delete the workspace hosting it. The `unavailable` section names remaining
-areas such as extension snapshots and keyboard events;
+areas such as extension snapshots and drag/drop events;
 those names deliberately are not callable methods. `Session.onEvent` is
-low-level transport plumbing for events the host does send, not a promise that
-global workspace snapshots are published.
+low-level transport plumbing for events the host does send. Interface handlers
+receive bounded key, focus, and pointer details, while the credit-controlled
+`workspace-events` subscription carries workspace-level key, focus, and pointer
+events. Neither is a promise that every global workspace snapshot is published.
 
 ## Props
 

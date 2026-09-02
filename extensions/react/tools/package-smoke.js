@@ -57,12 +57,15 @@ try {
   ], { cwd: consumer, stdio: 'pipe' });
 
   const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
+  assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
+  assert.match(readme, /ghcr\.io\/husklet\/husklet\/extension-react-base:latest/);
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
