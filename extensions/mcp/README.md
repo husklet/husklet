@@ -41,6 +41,12 @@ returning either the newest bounded inventory snapshot or acquisition job/revisi
 metadata. Acquisition notifications never carry manifest contents; clients fetch
 status only after an invalidation, and coalescing is reported explicitly.
 
+Container creation accepts only a bounded image reference and name, while exec
+accepts an argv vector rather than shell text. Stopping or signaling the owning
+container requires literal `confirm: true`; the signal remains explicit and is
+bounded to 32 bytes. Execution-level signaling remains a separate typed tool and
+cannot accidentally target the owning container.
+
 Volume and network inventory/inspection use the host's separate `VolumeRead`
 and `NetworkRead` grants. Creation and attachment controls retain their
 `VolumeWrite` or `NetworkWrite` grants. Volume/network removal and network

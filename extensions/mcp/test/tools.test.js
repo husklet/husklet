@@ -83,6 +83,21 @@ test('schemas are strict, controls map exactly, and no terminal shell shortcut e
   assert.deepEqual(calls, [['containers.start', 'abc']]);
 });
 
+test('container termination requires confirmation before host authority is called', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const stop = listed.find(({ name }) => name === 'husklet_container_stop');
+  const kill = listed.find(({ name }) => name === 'husklet_container_kill');
+  assert.equal(stop.inputSchema.safeParse({ id: 'abc' }).success, false);
+  assert.equal(stop.inputSchema.safeParse({ id: 'abc', confirm: false }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'SIGKILL' }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'x'.repeat(33), confirm: true }).success, false);
+  assert.deepEqual(calls, [], 'schema refusal cannot call host authority');
+  await stop.run({ id: 'abc', confirm: true });
+  await kill.run({ id: 'abc', signal: 'SIGKILL', confirm: true });
+  assert.deepEqual(calls, [['containers.stop', 'abc'], ['containers.kill', 'abc', 'SIGKILL']]);
+});
+
 test('pane list exposes bounded discovery metadata without requiring known slots', async () => {
   const { api, calls } = fake();
   api.terminal.panes = async () => ({ panes: [
@@ -440,6 +455,7 @@ test('a real MCP client lists strict tools and calls through the React session c
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
       if (name === 'execution_kill') return { reply: 'done' };
+      if (name === 'container_stop' || name === 'container_kill') return { reply: 'done' };
       if (name === 'image_list') return { reply: 'images', with: [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }] };
       if (name === 'volume_list') return { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] };
       if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
@@ -491,6 +507,12 @@ test('a real MCP client lists strict tools and calls through the React session c
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
   await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
+  const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
+  assert.equal(refusedStop.isError, true);
+  const refusedKill = await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL' } });
+  assert.equal(refusedKill.isError, true);
+  await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1', confirm: true } });
+  await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL', confirm: true } });
   const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
   assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
   const volumes = await client.callTool({ name: 'husklet_volume_list', arguments: {} });
@@ -516,6 +538,8 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
+    ['container_stop', { id: 'container-1' }],
+    ['container_kill', { id: 'container-1', signal: 'SIGKILL' }],
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],

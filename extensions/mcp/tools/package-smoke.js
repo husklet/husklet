@@ -34,6 +34,18 @@ try {
       .find(({ name }) => name === 'husklet_terminal_write_bytes');
     await byteTool.run({ slot: 'packed', input_base64: 'AAP//g==' });
     if (JSON.stringify(written) !== JSON.stringify(['packed', [0, 3, 255, 254]])) process.exit(1);
+    const terminationCalls = [];
+    const termination = tools({ containers: {
+      stop: async (id) => terminationCalls.push(['stop', id]),
+      kill: async (id, signal) => terminationCalls.push(['kill', id, signal]),
+    } });
+    const stop = termination.find(({ name }) => name === 'husklet_container_stop');
+    const kill = termination.find(({ name }) => name === 'husklet_container_kill');
+    if (stop.inputSchema.safeParse({ id: 'packed' }).success) process.exit(1);
+    if (kill.inputSchema.safeParse({ id: 'packed', signal: 'SIGKILL' }).success) process.exit(1);
+    await stop.run({ id: 'packed', confirm: true });
+    await kill.run({ id: 'packed', signal: 'SIGKILL', confirm: true });
+    if (JSON.stringify(terminationCalls) !== JSON.stringify([['stop', 'packed'], ['kill', 'packed', 'SIGKILL']])) process.exit(1);
     if (!tools({ terminal: { panes: async () => ({ panes: [], truncated: false }) } }).some(({ name }) => name === 'husklet_pane_list')) process.exit(1);
     const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     if (!xml.startsWith('<pane slot="packed"')) process.exit(1);
