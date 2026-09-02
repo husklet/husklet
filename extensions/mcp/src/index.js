@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { workspace } from '@husklet/react';
 import { result } from './bounds.js';
@@ -48,6 +49,25 @@ const workspaceUpdate = z.object({ name: id, configuration: workspaceConfigurati
 const empty = z.object({}).strict();
 const slot = z.object({ slot: id }).strict();
 const define = (name, description, inputSchema, run) => ({ name, description, inputSchema, run: async (input) => result(await run(input)) });
+const PANE_INPUT_BYTES = 64 * 1024;
+const BASE64_INPUT_CHARS = Math.ceil(PANE_INPUT_BYTES / 3) * 4;
+const canonicalBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const decodeTerminalBytes = (encoded) => {
+  if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length > BASE64_INPUT_CHARS
+      || !canonicalBase64.test(encoded)) throw new TypeError('input must be canonical padded base64');
+  const decoded = Buffer.from(encoded, 'base64');
+  if (decoded.length > PANE_INPUT_BYTES) throw new RangeError(`decoded terminal input exceeds ${PANE_INPUT_BYTES} bytes`);
+  if (decoded.toString('base64') !== encoded) throw new TypeError('input must be canonical padded base64');
+  return Uint8Array.from(decoded);
+};
+const terminalBytes = z.object({
+  slot: id,
+  input_base64: z.string().min(4).max(BASE64_INPUT_CHARS).superRefine((encoded, context) => {
+    try { decodeTerminalBytes(encoded); } catch (error) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: error.message });
+    }
+  }),
+}).strict();
 
 export function tools(api) {
   const definitions = [
@@ -98,6 +118,7 @@ export function tools(api) {
     define('husklet_terminal_topology', 'Read terminal split topology.', empty, () => api.terminal.topology()),
     define('husklet_terminal_read', 'Read at most 500 lines from one pane.', z.object({ slot: id, lines: z.number().int().min(1).max(500) }).strict(), ({ slot: value, lines }) => api.terminal.read(value, lines)),
     define('husklet_terminal_write', 'Write bounded literal input to a pane; this does not spawn a shell command.', z.object({ slot: id, input: z.string().max(8192) }).strict(), async ({ slot: value, input }) => { await api.terminal.writeInput(value, input); return { done: true }; }),
+    define('husklet_terminal_write_bytes', 'Write up to 65536 arbitrary bytes from canonical padded base64, including control and non-UTF8 bytes.', terminalBytes, async ({ slot: value, input_base64: encoded }) => { await api.terminal.writeInput(value, decodeTerminalBytes(encoded)); return { done: true }; }),
     define('husklet_terminal_open', 'Open a terminal tab.', z.object({ title: z.string().max(256).optional() }).strict(), ({ title }) => api.terminal.openTab(title ?? null)),
     define('husklet_terminal_split', 'Split a pane beside or below the selected pane.', z.object({ slot: id, division: z.enum(['beside', 'below']) }).strict(), ({ slot: value, division }) => api.terminal.split(value, division)),
     define('husklet_terminal_focus', 'Focus one pane.', slot, async ({ slot: value }) => { await api.terminal.focus(value); return { done: true }; }),

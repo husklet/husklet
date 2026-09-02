@@ -67,3 +67,9 @@ roots; removal requires `confirm: true`, and recursive deletion is unavailable.
 Terminal layout tools use the same `beside`/`below` vocabulary as the host and
 can focus, split, resize, rebalance, and close panes. Grid sizes and split ratios
 are bounded; closing a pane requires an explicit `confirm: true` argument.
+
+`husklet_terminal_write` remains the convenient bounded literal UTF-8 text path.
+`husklet_terminal_write_bytes` accepts canonical padded base64 and decodes at
+most 65,536 bytes before making any socket call, preserving NUL, control, and
+non-UTF8 bytes exactly. Whitespace, URL-safe or unpadded spellings, malformed
+padding, and decoded payloads over the protocol limit are rejected.

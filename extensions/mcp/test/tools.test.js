@@ -220,6 +220,23 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
   ]);
 });
 
+test('terminal byte input decodes canonical base64 exactly and refuses ambiguity or overflow before calling', async () => {
+  const { api, calls } = fake();
+  const write = tools(api).find(({ name }) => name === 'husklet_terminal_write_bytes');
+  const exact = Uint8Array.from([0x00, 0x03, 0x1b, 0x7f, 0x80, 0xff]);
+  const encoded = Buffer.from(exact).toString('base64');
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: encoded }).success, true);
+  for (const invalid of ['AA', 'AA==\n', 'AA', 'AA-_', 'AB==']) {
+    assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: invalid }).success, false, invalid);
+  }
+  const oversized = Buffer.alloc(65_537).toString('base64');
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: oversized }).success, false);
+  await assert.rejects(write.run({ slot: 'pane-1', input_base64: oversized }), /exceeds 65536 bytes/);
+  assert.deepEqual(calls, []);
+  await write.run({ slot: 'pane-1', input_base64: encoded });
+  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', exact]]);
+});
+
 test('image tools use typed reads and require confirmation for destructive controls', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
@@ -431,6 +448,7 @@ test('a real MCP client lists strict tools and calls through the React session c
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
+      if (name === 'terminal_write_pane') return { reply: 'done' };
       if (name === 'event_subscribe') {
         queueMicrotask(() => { for (const listener of events) listener({ snapshot: 'pane_changes', of: {
           slot: 'pane-live', kind: 'surface', revision: 12, generation: 13, coalesced: 2,
@@ -457,6 +475,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_terminal_write_bytes'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
   const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
@@ -478,6 +497,9 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(JSON.parse(volumes.content[0].text), [{ name: 'cache', driver: 'local' }]);
   const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
   assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
+  await client.callTool({ name: 'husklet_terminal_write_bytes', arguments: {
+    slot: 'pane-live', input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
+  } });
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
@@ -497,6 +519,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],
+    ['terminal_write_pane', { slot: 'pane-live', contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],

@@ -28,18 +28,25 @@ try {
       if (!names.has(name)) process.exit(1);
     }
     for (const name of ['husklet_file_mkdir', 'husklet_file_rename', 'husklet_file_remove']) if (!names.has(name)) process.exit(1);
+    if (!names.has('husklet_terminal_write_bytes')) process.exit(1);
+    let written;
+    const byteTool = tools({ terminal: { writeInput: async (slot, input) => { written = [slot, [...input]]; } } })
+      .find(({ name }) => name === 'husklet_terminal_write_bytes');
+    await byteTool.run({ slot: 'packed', input_base64: 'AAP//g==' });
+    if (JSON.stringify(written) !== JSON.stringify(['packed', [0, 3, 255, 254]])) process.exit(1);
     if (!tools({ terminal: { panes: async () => ({ panes: [], truncated: false }) } }).some(({ name }) => name === 'husklet_pane_list')) process.exit(1);
     const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     if (!xml.startsWith('<pane slot="packed"')) process.exit(1);
   `], { cwd: consumer, stdio: 'pipe' });
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { createServer, semanticXml, tools, type ToolDefinition } from '@husklet/mcp';
+    import { createServer, semanticXml, tools, type TerminalWriteBytesInput, type ToolDefinition } from '@husklet/mcp';
     import type { Session } from '@husklet/react';
     declare const session: Session;
     const server = createServer(session);
     const definitions: ToolDefinition[] = tools({} as Parameters<typeof tools>[0]);
+    const bytes: TerminalWriteBytesInput = { slot: 'packed', input_base64: 'AAP//g==' };
     const xml: string = semanticXml({ slot: 'typed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
-    void server; void definitions; void xml;
+    void server; void definitions; void bytes; void xml;
     // @ts-expect-error a Session is required
     createServer({});
   `);
