@@ -56,6 +56,26 @@ impl Node {
     pub fn handler(&self, trigger: Trigger) -> Option<&EventId> {
         self.handlers.get(&trigger)
     }
+
+    /// Whether this node is currently presented to a user.
+    #[must_use]
+    pub fn is_visible(&self) -> bool {
+        self.flag(Prop::Visible, true)
+    }
+
+    /// Whether this node can currently accept user input.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.flag(Prop::Enabled, true)
+    }
+
+    /// A declared handler is actionable only while its visible control is enabled.
+    #[must_use]
+    pub fn action(&self, trigger: Trigger) -> Option<&EventId> {
+        (self.is_visible() && self.is_enabled())
+            .then(|| self.handler(trigger))
+            .flatten()
+    }
 }
 
 /// Why a patch was rejected. Rejection happens before the adapter sees the
@@ -240,3 +260,21 @@ impl<E: std::fmt::Display> std::fmt::Display for Fault<E> {
 }
 
 mod mutation;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_visible_enabled_handlers_are_actions() {
+        let mut node = Node::new(NodeId::new(4), Tag::Button);
+        node.handlers.insert(Trigger::Invoke, EventId::new("run"));
+        assert!(node.action(Trigger::Invoke).is_some());
+
+        node.props.insert(Prop::Enabled, PropValue::Flag(false));
+        assert!(node.action(Trigger::Invoke).is_none());
+        node.props.insert(Prop::Enabled, PropValue::Flag(true));
+        node.props.insert(Prop::Visible, PropValue::Flag(false));
+        assert!(node.action(Trigger::Invoke).is_none());
+    }
+}

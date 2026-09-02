@@ -354,14 +354,16 @@ test('pane tools are capability-shaped and only appear for the real typed method
   assert(!tools(api).some(({ name }) => name.startsWith('husklet_pane_')));
   api.terminal.semantics = async (slot) => { calls.push(['terminal.semantics', slot]); return {
     slot, revision: 7, truncated: false,
-    root: { id: 0, role: 'column', label: 'A & <B>', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [] },
+    root: { id: 0, role: 'column', label: 'A & <B>', value: null, disabled: false, destructive: false, actions: [], children: [
+      { id: 3, role: 'button', label: 'Run', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [] },
+    ] },
   }; };
   api.terminal.act = async (slot, action) => { calls.push(['terminal.act', slot, action]); };
   const listed = tools(api);
   const snapshot = listed.find(({ name }) => name === 'husklet_pane_snapshot');
   const action = listed.find(({ name }) => name === 'husklet_pane_action');
   const shown = await snapshot.run({ slot: 'pane-1' });
-  assert.equal(shown.content[0].text, '<pane slot="pane-1" revision="7" truncated="false"><node id="0" role="column" disabled="false" destructive="false" actions="invoke"><label>A &amp; &lt;B&gt;</label></node></pane>');
+  assert.equal(shown.content[0].text, '<pane slot="pane-1" revision="7" truncated="false"><node id="0" role="column" disabled="false" destructive="false" actions=""><label>A &amp; &lt;B&gt;</label><node id="3" role="button" disabled="false" destructive="false" actions="invoke"><label>Run</label></node></node></pane>');
   await action.run({ slot: 'pane-1', revision: 7, node: 3, action: 'invoke' });
   assert.deepEqual(calls, [
     ['terminal.semantics', 'pane-1'],
@@ -369,6 +371,23 @@ test('pane tools are capability-shaped and only appear for the real typed method
     ['terminal.act', 'pane-1', { revision: 7, node: 3, action: 'invoke' }],
   ]);
   assert.equal(action.inputSchema.safeParse({ slot: 'pane-1', revision: 7, node: 3, action: 'run' }).success, false);
+});
+
+test('pane actions reject stale, absent, disabled and unadvertised controls before dispatch', async () => {
+  const { api, calls } = fake();
+  api.terminal.semantics = async () => ({ slot: 'pane-1', revision: 12, truncated: false, root: {
+    id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [
+      { id: 4, role: 'button', label: 'Pending', value: null, disabled: true, destructive: false, actions: [], children: [] },
+      { id: 5, role: 'entry', label: 'Name', value: '', disabled: false, destructive: false, actions: ['change'], children: [] },
+    ],
+  }});
+  api.terminal.act = async (...args) => calls.push(['terminal.act', ...args]);
+  const action = tools(api).find(({ name }) => name === 'husklet_pane_action');
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 11, node: 5, action: 'change' }), /stale semantic revision/);
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 99, action: 'invoke' }), /is absent/);
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 4, action: 'invoke' }), /is disabled/);
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 5, action: 'invoke' }), /does not advertise invoke/);
+  assert(!calls.some(([name]) => name === 'terminal.act'));
 });
 
 test('destructive semantic actions require an explicit MCP confirmation', async () => {
@@ -461,7 +480,7 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: argument.slot, revision: 11, truncated: false,
-        root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
+        root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: ['invoke'], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
       if (name === 'terminal_write_pane') return { reply: 'done' };
