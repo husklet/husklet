@@ -110,6 +110,11 @@ observed generation and revision, and the wait ignores the host's unchanged
 initial scan. A replacement generation is newer even when its content revision
 starts again at zero.
 
+`husklet_container_change_wait` accepts the exact `state` and `created` values
+last observed for its immutable container ID. Supplying that cursor prevents the
+subscription's unchanged initial catalogue from completing the wait; a state
+transition, disappearance, or changed creation identity completes it.
+
 Container creation accepts only a bounded image reference and name, while exec
 accepts an argv vector rather than shell text. Stopping or signaling the owning
 container requires literal `confirm: true`; the signal remains explicit and is

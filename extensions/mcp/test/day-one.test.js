@@ -68,6 +68,14 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
               job: '7', revision: 2, state: 'complete', coalesced: 0,
             } },
           })));
+          if (call === 'event_subscribe' && argument.topic === 'containers') setImmediate(() => {
+            socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'containers', of: [
+              { id: containerId, name: 'day-one', image: 'alpine:3.21', state: 'running', created: 41 },
+            ] } }));
+            setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'containers', of: [
+              { id: containerId, name: 'day-one', image: 'alpine:3.21', state: 'exited', created: 41 },
+            ] } })));
+          });
           if (call === 'terminal_write_pane') changed('terminal-1', 'terminal', 2);
           if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8);
         } else if (call === 'container_exec') answer(frame, 'identity', 'execution-day-one');
@@ -106,6 +114,10 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   let diagnostics = ''; transport.stderr.on('data', (chunk) => { diagnostics += chunk; });
   const client = new Client({ name: 'day-one-test', version: '1' });
   await client.connect(transport);
+  const containerChanged = await client.callTool({ name: 'husklet_container_change_wait', arguments: {
+    id: containerId, after: { state: 'running', created: 41 }, timeout_ms: 1_000,
+  } });
+  assert.equal(JSON.parse(containerChanged.content[0].text).container.state, 'exited');
   const result = await runAgentDayOne(client, {
     workspaceName: 'target', updatedConfiguration: updated,
     container: { image: 'alpine:3.21', name: 'day-one', command: ['/usr/bin/worker', '--once'] },
@@ -121,7 +133,8 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'workspace_inspect', 'image_pull_start', 'image_pull_status',
+    'workspace_info', 'event_subscribe', 'event_unsubscribe',
+    'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
     'workspace_update', 'container_create', 'container_start',
     'container_exec', 'container_processes', 'pane_list', 'pane_list', 'terminal_topology', 'terminal_read_pane',

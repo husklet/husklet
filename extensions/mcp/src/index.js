@@ -311,10 +311,16 @@ export function tools(api) {
   ));
   if (typeof api.watchContainers === 'function') definitions.push(define(
     'husklet_container_change_wait',
-    'Wait for a bounded container snapshot matching one immutable container identity.',
-    z.object({ id, state: z.string().min(1).max(64).optional(), absent: z.boolean().default(false), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+    'Wait for a bounded container snapshot newer than an optional observed state/creation cursor.',
+    z.object({
+      id,
+      after: z.object({ state: z.string().min(1).max(64), created: z.number().int().nonnegative().safe() }).strict().optional(),
+      state: z.string().min(1).max(64).optional(),
+      absent: z.boolean().default(false),
+      timeout_ms: z.number().int().min(1).max(30_000).default(30_000),
+    }).strict()
       .refine(({ state, absent }) => !absent || state == null, 'absent and state are mutually exclusive'),
-    ({ id: wanted, state, absent, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    ({ id: wanted, after, state, absent, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop; let settled = false;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
@@ -323,7 +329,8 @@ export function tools(api) {
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       api.watchContainers((containers) => {
         const container = containers.find(({ id: candidate }) => candidate === wanted);
-        if ((absent && !container) || (!absent && container && (state == null || container.state === state))) {
+        const unchanged = after != null && container?.state === after.state && container?.created === after.created;
+        if (!unchanged && ((absent && !container) || (!absent && container && (state == null || container.state === state)))) {
           finish({ changed: true, container: container ?? null });
         }
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));

@@ -701,17 +701,39 @@ test('execution change wait filters immutable identity and returns subscription 
   assert.equal(disposed, 1);
 });
 
-test('container change wait filters identity/state and disposes after match', async () => {
+test('container change wait rejects its unchanged initial cursor and disposes after a transition', async () => {
   const { api } = fake(); let listener; let disposed = 0;
   api.watchContainers = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_container_change_wait');
   assert.equal(wait.inputSchema.safeParse({ id: 'c1', state: 'running', absent: true }).success, false);
-  const pending = wait.run({ id: 'c2', state: 'exited', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ id: 'c2', after: { state: 'running' } }).success, false);
+  const pending = wait.run({ id: 'c2', after: { state: 'running', created: 41 }, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
-  listener([{ id: 'c1', state: 'exited' }, { id: 'c2', state: 'running' }]);
-  listener([{ id: 'c2', state: 'exited', name: 'worker' }]);
-  assert.deepEqual(JSON.parse((await pending).content[0].text), { changed: true, container: { id: 'c2', state: 'exited', name: 'worker' } });
+  listener([{ id: 'c1', state: 'exited' }, { id: 'c2', state: 'running', created: 41 }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the subscription initial snapshot must not settle at the observed cursor');
+  listener([{ id: 'c2', state: 'exited', created: 41, name: 'worker' }]);
+  assert.deepEqual(JSON.parse((await pending).content[0].text), { changed: true, container: { id: 'c2', state: 'exited', created: 41, name: 'worker' } });
   assert.equal(disposed, 1);
+});
+
+test('container change wait treats a changed creation identity as replacement and isolates concurrent cursors', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchContainers = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_container_change_wait');
+  const replaced = wait.run({ id: 'c2', after: { state: 'running', created: 41 }, timeout_ms: 1000 });
+  const stopped = wait.run({ id: 'c2', after: { state: 'running', created: 42 }, state: 'exited', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener([{ id: 'c2', state: 'running', created: 42 }]);
+  assert.equal(JSON.parse((await replaced).content[0].text).container.created, 42);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener([{ id: 'c2', state: 'exited', created: 42 }]);
+  assert.equal(JSON.parse((await stopped).content[0].text).container.state, 'exited');
+  assert.equal(disposed, 2);
+  assert.equal(listeners.size, 0);
 });
 
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
