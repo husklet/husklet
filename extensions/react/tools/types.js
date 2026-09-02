@@ -355,7 +355,7 @@ export interface WorkspaceApi {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
-    remove(name: string): Promise<void>;
+    remove(name: string, imageDigest: string): Promise<void>;
   };
   networks: {
     list(): Promise<NetworkSummary[]>;

@@ -415,6 +415,7 @@ fn removal(
     {
         let shelf = Rc::clone(shelf);
         let name = entry.name.clone();
+        let image_digest = entry.image_digest.clone();
         let confirm = confirm.clone();
         let cancel = cancel.clone();
         let refusal = refusal.clone();
@@ -427,6 +428,18 @@ fn removal(
         confirm.clone().connect_clicked(move |_| {
             semantics.set_disabled(&confirm_path, true);
             semantics.set_disabled(&cancel_path, true);
+            let unchanged = shelf
+                .roster()
+                .borrow()
+                .entries()
+                .into_iter()
+                .any(|entry| entry.name == name && entry.image_digest == image_digest);
+            if !unchanged {
+                refusal.set_text("The extension changed; inspect and confirm removal again.");
+                refusal.set_visible(true);
+                semantics.set_disabled(&cancel_path, false);
+                return;
+            }
             let entry = match shelf.quiesce(&name) {
                 Ok(entry) => entry,
                 Err(fault) => {
@@ -474,9 +487,10 @@ fn removal(
             let cancel_path = cancel_path.clone();
             let status_path = status_path.clone();
             let notice_path = notice_path.clone();
+            let confirmed_digest = image_digest.clone();
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || match answer.try_recv() {
                 Ok(Ok(())) => {
-                    let forgotten = shelf.roster().borrow_mut().remove(&name);
+                    let forgotten = shelf.roster().borrow_mut().remove_if_digest(&name, &confirmed_digest);
                     if let Err(fault) = forgotten {
                         let failure = format!(
                             "The managed sidecar was removed, but the installation record could not be forgotten: {fault}"

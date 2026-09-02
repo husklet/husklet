@@ -324,7 +324,7 @@ test('extension facade preserves exact read and control request shapes', async (
   const api = workspace(stage.session);
   const operations = [api.extensions.list(), api.extensions.inspect('workspace-manager'),
     api.extensions.enable('workspace-manager'), api.extensions.disable('workspace-manager'),
-    api.extensions.remove('workspace-manager')];
+    api.extensions.remove('workspace-manager', `sha256:${'a'.repeat(64)}`)];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
@@ -332,7 +332,7 @@ test('extension facade preserves exact read and control request shapes', async (
     { call: 'extension_inspect', with: { name: 'workspace-manager' } },
     { call: 'extension_enable', with: { name: 'workspace-manager' } },
     { call: 'extension_disable', with: { name: 'workspace-manager' } },
-    { call: 'extension_remove', with: { name: 'workspace-manager' } },
+    { call: 'extension_remove', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
   ]);
   const summary = { name: 'workspace-manager', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }));

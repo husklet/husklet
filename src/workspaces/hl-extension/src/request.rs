@@ -65,6 +65,7 @@ pub enum Request {
     },
     ExtensionRemove {
         name: String,
+        image_digest: String,
     },
     ExtensionAcquisitionStart {
         reference: String,

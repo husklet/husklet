@@ -272,6 +272,15 @@ impl<S: Storage> Roster<S> {
         }
         Ok(())
     }
+
+    /// Forget only the exact image incarnation the caller inspected.
+    pub fn remove_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        let current = self.entries().into_iter().find(|entry| entry.name == *name);
+        if current.as_ref().map(|entry| entry.image_digest.as_str()) != Some(image_digest) {
+            return Err(Objection::Changed(name.clone()).into());
+        }
+        self.remove(name)
+    }
 }
 
 impl<S> std::fmt::Debug for Roster<S> {
@@ -421,6 +430,44 @@ mod tests {
 
         assert!(roster.entries().is_empty());
         assert_eq!(opened(temporary.path()).stage(&asked.name), Stage::Vacancy);
+    }
+
+    #[test]
+    fn removal_consent_cannot_remove_a_reinstalled_digest() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut roster = opened(temporary.path());
+        roster.register(&asked, "sha256:new", &asked.capabilities, 7).expect("registered");
+
+        assert!(roster.remove_if_digest(&asked.name, "sha256:old").is_err());
+        assert_eq!(roster.entries()[0].image_digest, "sha256:new");
+        assert_eq!(opened(temporary.path()).entries()[0].image_digest, "sha256:new");
+    }
+
+    #[test]
+    fn delayed_removal_loses_to_a_concurrent_reinstallation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut initial = opened(temporary.path());
+        initial.register(&asked, "sha256:old", &asked.capabilities, 7).expect("registered");
+        let roster = std::sync::Arc::new(std::sync::Mutex::new(initial));
+        let replaced = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker_roster = roster.clone();
+        let worker_barrier = replaced.clone();
+        let worker_name = asked.name.clone();
+        let worker_manifest = asked.clone();
+        let worker = std::thread::spawn(move || {
+            let mut roster = worker_roster.lock().unwrap();
+            roster.remove(&worker_name).unwrap();
+            roster
+                .register(&worker_manifest, "sha256:new", &worker_manifest.capabilities, 8)
+                .unwrap();
+            worker_barrier.wait();
+        });
+        replaced.wait();
+        assert!(roster.lock().unwrap().remove_if_digest(&asked.name, "sha256:old").is_err());
+        worker.join().unwrap();
+        assert_eq!(opened(temporary.path()).entries()[0].image_digest, "sha256:new");
     }
 
     #[test]

@@ -151,13 +151,16 @@ test('extension inventory is bounded and every lifecycle mutation requires confi
   assert.equal(byName('husklet_extension_inspect').inputSchema.safeParse({ name: '../escape' }).success, false);
   for (const action of ['enable', 'disable', 'remove']) {
     assert.equal(byName(`husklet_extension_${action}`).inputSchema.safeParse({ name: 'workspace-manager' }).success, false);
-    await byName(`husklet_extension_${action}`).run({ name: 'workspace-manager', confirm: true });
+    const input = action === 'remove'
+      ? { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}`, confirm: true }
+      : { name: 'workspace-manager', confirm: true };
+    await byName(`husklet_extension_${action}`).run(input);
   }
   await byName('husklet_extension_list').run({});
   await byName('husklet_extension_inspect').run({ name: 'workspace-manager' });
   assert.deepEqual(calls, [
     ['extensions.enable', 'workspace-manager'], ['extensions.disable', 'workspace-manager'],
-    ['extensions.remove', 'workspace-manager'], ['extensions.list'], ['extensions.inspect', 'workspace-manager'],
+    ['extensions.remove', 'workspace-manager', `sha256:${'a'.repeat(64)}`], ['extensions.list'], ['extensions.inspect', 'workspace-manager'],
   ]);
 });
 

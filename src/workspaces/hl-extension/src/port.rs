@@ -576,7 +576,7 @@ pub trait ExtensionStore {
     fn disable(&self, _name: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension disable is unavailable".into()))
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension removal is unavailable".into()))
     }
     fn acquisition_start(&self, _reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {

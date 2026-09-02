@@ -131,7 +131,7 @@ export function workspace(session) {
       inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
       enable: (name) => done('extension_enable', { name }),
       disable: (name) => done('extension_disable', { name }),
-      remove: (name) => done('extension_remove', { name }),
+      remove: (name, imageDigest) => done('extension_remove', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job) => done('extension_acquisition_cancel', { job }),

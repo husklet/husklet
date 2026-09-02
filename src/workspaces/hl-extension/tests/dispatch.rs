@@ -668,7 +668,7 @@ impl ExtensionStore for Host {
         self.ledger.note("extensions.disable");
         Ok(())
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.remove");
         Ok(())
     }
@@ -822,7 +822,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionControl,
         ),
         (
-            Request::ExtensionRemove { name: "sample".into() },
+            Request::ExtensionRemove {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             Capability::ExtensionControl,
         ),
         (
@@ -1136,6 +1139,22 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
         .dispatch(
             &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
             &services(&host)
+        )
+        .is_err());
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn extension_removal_refuses_a_partial_digest_before_host_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ExtensionControl], &[]);
+    assert!(session
+        .dispatch(
+            &Request::ExtensionRemove {
+                name: "sample".into(),
+                image_digest: "sha256:abc".into(),
+            },
+            &services(&host),
         )
         .is_err());
     assert!(host.ledger.reached().is_empty());

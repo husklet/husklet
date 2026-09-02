@@ -79,8 +79,11 @@ impl ExtensionStore for ExtensionManagement {
         self.changed(result)
     }
 
-    fn remove(&self, name: &str) -> Result<(), HostError> {
-        let result = self.roster()?.remove(&Self::name(name)?).map_err(failure);
+    fn remove(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .remove_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
         self.changed(result)
     }
 
@@ -241,9 +244,7 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        // Removing an absent name is an idempotent durable mutation and still
-        // republishes the latest full inventory for a subscribed peer.
-        management.remove("absent").unwrap();
-        assert!(events.drain().unwrap().inventory.unwrap().is_empty());
+        assert!(management.remove("absent", &format!("sha256:{}", "a".repeat(64))).is_err());
+        assert!(events.drain().is_none());
     }
 }
