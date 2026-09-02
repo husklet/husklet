@@ -1,0 +1,8 @@
+name = "react-starter"
+display_name = "React starter"
+version = "0.1.0"
+protocol = 1
+capabilities = ["interface"]
+
+[interface]
+tab_title = "React starter"
