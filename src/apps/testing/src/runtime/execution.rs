@@ -495,7 +495,7 @@ impl<'a> CaseExecution<'a> {
             let retained_profile = self
                 .case
                 .expected_signal
-                .map_or_else(|| output::validate_profile(text), |_| Ok(()));
+                .map_or_else(|| output::validate_profile_or_product(text.as_bytes()), |_| Ok(()));
             profile_validation = profile_validation.and(retained_profile);
             output::forward_profile(text, std::io::stderr().lock())?;
             logs.stderr = output::guest_stderr(text);

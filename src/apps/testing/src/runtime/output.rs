@@ -381,12 +381,32 @@ pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
 }
 
 pub(super) fn validate_profile_or_product(stderr: &[u8]) -> Result<(), Error> {
+    let text = std::str::from_utf8(stderr)?;
     if product_backend_shape(stderr) {
-        backend_shape_product(stderr, true)?;
-        Ok(())
-    } else {
-        validate_profile(std::str::from_utf8(stderr)?)
+        let shape = backend_shape_product(stderr, true)?.expect("product shape cardinality");
+        let coherent = shape
+            .get("crossings")
+            .zip(shape.get("translated_entries"))
+            .zip(shape.get("interpreted_entries"))
+            .is_some_and(|((crossings, translated), interpreted)| {
+                translated.checked_add(*interpreted) == Some(*crossings)
+            });
+        if coherent
+            && shape.get("translated_entries").is_some_and(|value| *value > 0)
+            && shape.get("translated_steps").is_some_and(|value| *value > 0)
+        {
+            return Ok(());
+        }
+    } else if let Some(tree) = backend_tree(text)? {
+        if tree["crossings"] > 0
+            && tree["translations"] > 0
+            && tree["translated_entries"] > 0
+            && tree["translated_steps"] > 0
+        {
+            return Ok(());
+        }
     }
+    validate_profile(text)
 }
 
 pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), Error> {
@@ -1134,6 +1154,48 @@ mod tests {
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
         validate_profile("[prof] dispatcher crossings=41 translations=7\n").unwrap();
         validate_backend_tree(b"ordinary guest stderr\n", false).unwrap();
+    }
+
+    #[test]
+    fn retained_backend_tree_is_a_complete_profile_receipt() {
+        let captured = TREE
+            .replace("crossings=5", "crossings=1302")
+            .replace("translated_entries=2", "translated_entries=971")
+            .replace("interpreted_entries=3", "interpreted_entries=331")
+            .replace("translated_steps=8", "translated_steps=4096")
+            .replace("interpreted_steps=13", "interpreted_steps=662")
+            .replace("translations=2", "translations=971")
+            .replace("reason0=2 reason1=1", "reason0=971 reason1=329");
+        validate_profile_or_product(captured.as_bytes()).unwrap();
+
+        let missing = captured.replace(" translations=971", "");
+        assert!(
+            validate_profile_or_product(missing.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("omitted field \"translations\"")
+        );
+        let incoherent = captured.replace("crossings=1302", "crossings=1303");
+        assert!(
+            validate_profile_or_product(incoherent.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("entry totals do not reconcile")
+        );
+
+        let hook_only = TREE
+            .replace(
+                "translated_entries=2 interpreted_entries=3",
+                "translated_entries=0 interpreted_entries=5",
+            )
+            .replace("translated_steps=8", "translated_steps=0")
+            .replace("translations=2", "translations=0");
+        assert!(
+            validate_profile_or_product(hook_only.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("crossings/translations summary")
+        );
     }
 
     const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
