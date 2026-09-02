@@ -416,6 +416,22 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
     let fixture = Fixture::with_cleanup(&[("alpha", true)], cleanup);
 
     fixture.act("alpha", settings::REMOVE);
+    let confirmation = fixture.view.semantic_snapshot();
+    let confirm = confirmation
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Confirm removal"))
+        .expect("the confirmation is represented semantically");
+    assert!(confirm.destructive, "only the final removal authority is destructive");
+    assert!(!confirm.disabled, "the final authority is enabled after the first step");
+    assert!(confirmation.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Lifecycle notice")
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.contains("managed sidecar?"))
+    }));
     fixture.act("alpha", settings::CANCEL_REMOVE);
     assert_eq!(
         fixture.stage("alpha"),
@@ -423,6 +439,11 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
         "cancel leaves runtime and record alone"
     );
     assert_eq!(attempts.load(Ordering::Acquire), 0);
+    let cancelled = fixture.view.semantic_snapshot();
+    assert!(cancelled.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Lifecycle notice")
+            && node.value.as_deref() == Some("Removal cancelled; nothing changed")
+    }));
 
     fixture.act("alpha", settings::REMOVE);
     fixture.act("alpha", settings::CONFIRM_REMOVE);
@@ -434,6 +455,17 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
     }));
     assert_eq!(fixture.stage("alpha"), Stage::Standby);
     assert_eq!(attempts.load(Ordering::Acquire), 1);
+    let failed = fixture.view.semantic_snapshot();
+    assert!(failed.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("alpha") && node.value.as_deref() == Some("disabled · removal failed")
+    }));
+    assert!(failed.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Lifecycle notice")
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.contains("foreign container"))
+    }));
     assert!(
         fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE).is_some(),
         "the same confirmed action becomes an explicit cleanup retry"

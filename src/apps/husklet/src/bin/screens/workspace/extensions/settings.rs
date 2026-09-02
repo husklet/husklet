@@ -79,6 +79,14 @@ impl Settings {
             &[],
             Rc::new(|_, _| {}),
         );
+        semantics.register(
+            &format!("{prefix}notice"),
+            "status",
+            Some("Lifecycle notice"),
+            Some(super::super::semantic::Value::Public("")),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         main
     }
 }
@@ -260,6 +268,8 @@ fn removal(
         );
     }
     let confirm_path = format!("extensions/installed/{}/Confirm removal", entry.name);
+    let status_path = format!("extensions/installed/{}/status", entry.name);
+    let notice_path = format!("extensions/installed/{}/notice", entry.name);
     semantics.set_destructive(&confirm_path);
     semantics.set_disabled(&confirm_path, true);
 
@@ -270,13 +280,16 @@ fn removal(
         let refusal = refusal.clone();
         let semantics = semantics.clone();
         let confirm_path = confirm_path.clone();
+        let notice_path = notice_path.clone();
         remove.clone().connect_clicked(move |_| {
-            refusal.set_text("Remove this extension, its saved grant, and its managed sidecar?");
+            let prompt = "Remove this extension, its saved grant, and its managed sidecar?";
+            refusal.set_text(prompt);
             refusal.set_visible(true);
             remove.set_visible(false);
             confirm.set_visible(true);
             cancel.set_visible(true);
             semantics.set_disabled(&confirm_path, false);
+            semantics.update(&notice_path, super::super::semantic::Value::Public(prompt), false);
         });
     }
     {
@@ -286,12 +299,18 @@ fn removal(
         let refusal = refusal.clone();
         let semantics = semantics.clone();
         let confirm_path = confirm_path.clone();
+        let notice_path = notice_path.clone();
         cancel.clone().connect_clicked(move |_| {
             refusal.set_visible(false);
             remove.set_visible(true);
             confirm.set_visible(false);
             cancel.set_visible(false);
             semantics.set_disabled(&confirm_path, true);
+            semantics.update(
+                &notice_path,
+                super::super::semantic::Value::Public("Removal cancelled; nothing changed"),
+                false,
+            );
         });
     }
     {
@@ -303,19 +322,38 @@ fn removal(
         let standing = standing.clone();
         let semantics = semantics.clone();
         let confirm_path = confirm_path.clone();
+        let status_path = status_path.clone();
+        let notice_path = notice_path.clone();
         confirm.clone().connect_clicked(move |_| {
             semantics.set_disabled(&confirm_path, true);
             let entry = match shelf.quiesce(&name) {
                 Ok(entry) => entry,
                 Err(fault) => {
-                    refusal.set_text(&fault.to_string());
+                    let failure = fault.to_string();
+                    refusal.set_text(&failure);
                     refusal.set_visible(true);
+                    semantics.update(
+                        &notice_path,
+                        super::super::semantic::Value::Public(&failure),
+                        false,
+                    );
                     return;
                 }
             };
             standing.set_text("disabled · removing managed sidecar");
-            refusal.set_text("Removing the managed sidecar before forgetting this extension…");
+            let removing = "Removing the managed sidecar before forgetting this extension…";
+            refusal.set_text(removing);
             refusal.set_visible(true);
+            semantics.update(
+                &status_path,
+                super::super::semantic::Value::Public("disabled · removing managed sidecar"),
+                false,
+            );
+            semantics.update(
+                &notice_path,
+                super::super::semantic::Value::Public(removing),
+                false,
+            );
             confirm.set_label("Removing…");
             confirm.set_sensitive(false);
             cancel.set_sensitive(false);
@@ -326,41 +364,77 @@ fn removal(
             let cancel = cancel.clone();
             let refusal = refusal.clone();
             let standing = standing.clone();
+            let semantics = semantics.clone();
+            let status_path = status_path.clone();
+            let notice_path = notice_path.clone();
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || match answer.try_recv() {
                 Ok(Ok(())) => {
                     let forgotten = shelf.roster().borrow_mut().remove(&name);
                     if let Err(fault) = forgotten {
-                        refusal.set_text(&format!(
+                        let failure = format!(
                             "The managed sidecar was removed, but the installation record could not be forgotten: {fault}"
-                        ));
+                        );
+                        refusal.set_text(&failure);
                         refusal.set_visible(true);
                         standing.set_text("disabled · record cleanup failed");
                         confirm.set_label("Retry removal");
                         confirm.set_sensitive(true);
                         cancel.set_sensitive(true);
+                        semantics.update(
+                            &status_path,
+                            super::super::semantic::Value::Public("disabled · record cleanup failed"),
+                            false,
+                        );
+                        semantics.update(
+                            &notice_path,
+                            super::super::semantic::Value::Public(&failure),
+                            false,
+                        );
                     } else {
                         shelf.refresh(&name);
                     }
                     gtk::glib::ControlFlow::Break
                 }
                 Ok(Err(reason)) => {
-                    refusal.set_text(&format!(
+                    let failure = format!(
                         "Removal failed; the extension remains installed and disabled: {reason}"
-                    ));
+                    );
+                    refusal.set_text(&failure);
                     refusal.set_visible(true);
                     standing.set_text("disabled · removal failed");
                     confirm.set_label("Retry removal");
                     confirm.set_sensitive(true);
                     cancel.set_sensitive(true);
+                    semantics.update(
+                        &status_path,
+                        super::super::semantic::Value::Public("disabled · removal failed"),
+                        false,
+                    );
+                    semantics.update(
+                        &notice_path,
+                        super::super::semantic::Value::Public(&failure),
+                        false,
+                    );
                     gtk::glib::ControlFlow::Break
                 }
                 Err(TryRecvError::Disconnected) => {
-                    refusal.set_text("Removal failed; the cleanup worker ended without an answer");
+                    let failure = "Removal failed; the cleanup worker ended without an answer";
+                    refusal.set_text(failure);
                     refusal.set_visible(true);
                     standing.set_text("disabled · removal failed");
                     confirm.set_label("Retry removal");
                     confirm.set_sensitive(true);
                     cancel.set_sensitive(true);
+                    semantics.update(
+                        &status_path,
+                        super::super::semantic::Value::Public("disabled · removal failed"),
+                        false,
+                    );
+                    semantics.update(
+                        &notice_path,
+                        super::super::semantic::Value::Public(failure),
+                        false,
+                    );
                     gtk::glib::ControlFlow::Break
                 }
                 Err(TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
