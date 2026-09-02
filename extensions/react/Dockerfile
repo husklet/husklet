@@ -8,6 +8,8 @@ FROM ${NODE_IMAGE} AS package
 ARG HUSKLET_REACT_VERSION
 WORKDIR /source
 COPY package.json README.md LICENSE ./
+COPY catalogue.json ./
+COPY examples/starter ./examples/starter
 COPY src ./src
 RUN test -n "${HUSKLET_REACT_VERSION}" \
     && npm pkg set "version=${HUSKLET_REACT_VERSION}" \

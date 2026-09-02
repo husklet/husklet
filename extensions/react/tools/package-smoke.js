@@ -8,6 +8,21 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
+function packageStageFiles(dockerfile, destination) {
+  const packageStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\}$/m, 1)[0];
+  for (const line of packageStage.matchAll(/^COPY ([^\n]+)$/gm)) {
+    const fields = line[1].trim().split(/\s+/);
+    const target = fields.pop();
+    assert(!fields.some((field) => field.startsWith('--')), 'package-stage COPY must remain directly reproducible');
+    for (const source of fields) {
+      const output = target === './'
+        ? path.join(destination, path.basename(source))
+        : path.join(destination, target.replace(/^\.\//, ''));
+      fs.cpSync(path.join(root, source), output, { recursive: true });
+    }
+  }
+}
+
 try {
   const dryRun = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root, encoding: 'utf8',
@@ -128,6 +143,21 @@ try {
   assert.match(readme, /examples\/starter/);
   assert.match(readme, /import React, \{ useState \} from 'react';/);
   assert(!readme.includes('husklet.extension.manifest="{...}"'), 'README must not suggest an inline manifest');
+
+  // Reproduce the first Docker stage without an OCI builder or a registry. Its
+  // npm package must be the same SDK a clean npm consumer receives; otherwise
+  // an export can pass package tests and still be absent from the base image.
+  const baseSource = path.join(scratch, 'base-package-source');
+  const baseOutput = path.join(scratch, 'base-package-output');
+  fs.mkdirSync(baseSource);
+  fs.mkdirSync(baseOutput);
+  packageStageFiles(dockerfile, baseSource);
+  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: baseSource, stdio: 'pipe' });
+  const basePack = JSON.parse(execFileSync('npm', [
+    'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
+  ], { cwd: baseSource, encoding: 'utf8' }));
+  const baseNames = new Set(basePack[0].files.map(({ path: name }) => name));
+  assert.deepEqual(baseNames, names, 'base image must install the complete published SDK package');
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
