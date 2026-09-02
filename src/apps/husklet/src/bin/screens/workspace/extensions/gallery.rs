@@ -69,6 +69,13 @@ impl Gallery {
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
     }
 
+    /// Stops advertising an extension whose lifecycle page is being removed.
+    /// Pane restoration runs first, so any lent interface has already returned
+    /// home before this final strong callback and provider list are forgotten.
+    pub fn withdraw(&self, extension: &str) {
+        self.0.borrow_mut().remove(extension);
+    }
+
     /// Reports a provider choice to the extension that owns it.
     pub fn select(&self, extension: &str, provider: &str) {
         let held = self.0.borrow();

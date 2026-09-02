@@ -260,6 +260,16 @@ impl Conversation {
                 snapshots.push(Snapshot::Images(images));
             }
         }
+        if self.session.may_emit(Topic::Volumes) {
+            if let Ok(volumes) = services.volumes.list() {
+                snapshots.push(Snapshot::Volumes(volumes));
+            }
+        }
+        if self.session.may_emit(Topic::Networks) {
+            if let Ok(networks) = services.networks.list() {
+                snapshots.push(Snapshot::Networks(networks));
+            }
+        }
         if self.session.may_emit(Topic::Terminal) {
             if let Ok(tabs) = services.terminal.tabs() {
                 snapshots.push(Snapshot::Terminal(tabs));
@@ -491,6 +501,8 @@ mod tests {
     struct Host {
         ledger: Arc<Ledger>,
     }
+    impl hl_extension::port::VolumeStore for Host {}
+    impl hl_extension::port::NetworkStore for Host {}
 
     impl ContainerInventory for Host {
         fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -652,6 +664,8 @@ mod tests {
             containers: host,
             control: host,
             images: host,
+            volumes: host,
+            networks: host,
             terminal: host,
             files: host,
         }

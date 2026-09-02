@@ -154,6 +154,7 @@ export interface ScrollProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
+  onScroll?: (report: Report) => void;
 }
 
 export interface SplitterProps extends NodeProps {
@@ -478,6 +479,9 @@ export interface CardActionAreaProps extends NodeProps {
   /** semantic weight */
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
   onInvoke?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface PaperProps extends NodeProps {
@@ -753,6 +757,9 @@ export interface LinkProps extends NodeProps {
   /** semantic weight */
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
   onInvoke?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface IconProps extends NodeProps {
@@ -1316,6 +1323,10 @@ export interface ButtonProps extends NodeProps {
   /** semantic weight */
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
   onInvoke?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface IconButtonProps extends NodeProps {
@@ -1351,6 +1362,10 @@ export interface IconButtonProps extends NodeProps {
   /** semantic weight */
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
   onInvoke?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface ToggleButtonProps extends NodeProps {
@@ -1391,6 +1406,10 @@ export interface ToggleButtonProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
   onToggle?: (report: Report) => void;
   onInvoke?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface ButtonGroupProps extends NodeProps {
@@ -1643,6 +1662,10 @@ export interface EntryProps extends NodeProps {
   /** semantic weight */
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
   onChange?: (report: Report) => void;
+  onSubmit?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface SearchProps extends NodeProps {
@@ -1673,6 +1696,10 @@ export interface SearchProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
+  onSubmit?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface NumberEntryProps extends NodeProps {
@@ -1707,6 +1734,9 @@ export interface NumberEntryProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface TextAreaProps extends NodeProps {
@@ -1736,6 +1766,10 @@ export interface TextAreaProps extends NodeProps {
   monospace?: boolean;
   /** defaults to enabled when absent */
   enabled?: boolean;
+  onChange?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface PasswordEntryProps extends NodeProps {
@@ -1768,6 +1802,9 @@ export interface PasswordEntryProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface AutocompleteProps extends NodeProps {
@@ -1796,6 +1833,10 @@ export interface AutocompleteProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
+  onSelect?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface TextFieldProps extends NodeProps {
@@ -2329,6 +2370,9 @@ export interface SelectProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
+  onSelect?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
 }
 
 export interface ListProps extends NodeProps {
@@ -2804,6 +2848,12 @@ export interface DataTableProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
+  onSelect?: (report: Report) => void;
+  onScroll?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface TreeTableProps extends NodeProps {
@@ -2831,6 +2881,12 @@ export interface TreeTableProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
+  onSelect?: (report: Report) => void;
+  onScroll?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
 }
 
 export interface TablePaginationProps extends NodeProps {
@@ -3638,6 +3694,7 @@ export interface PopoverProps extends NodeProps {
   justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
   /** any value above zero expands the child on both axes */
   grow?: number | boolean;
+  onClose?: (report: Report) => void;
 }
 
 export interface ContextMenuProps extends NodeProps {
@@ -3658,6 +3715,7 @@ export interface ContextMenuProps extends NodeProps {
   justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
   /** any value above zero expands the child on both axes */
   grow?: number | boolean;
+  onClose?: (report: Report) => void;
 }
 
 export interface MenuProps extends NodeProps {
@@ -4029,159 +4087,15 @@ export function acceptsChildren(tag: string): boolean;
 export const vocabulary: { props: string[]; handlers: string[] };
 
 export const SOCKET: string;
-export const PROTOCOL: number;
-
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'extensions';
-export type Division = 'beside' | 'below';
-export interface WorkspaceInfo { name: string; architecture: string; image: string }
-export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
-export interface WorkspaceMount { host: string; container: string; read_only: boolean }
-export interface WorkspaceTerminal {
-  font_family: string | null;
-  font_size: number | null;
-  foreground: string | null;
-  background: string | null;
-  cursor_shape: string | null;
-  cursor_blink: boolean | null;
-}
-export interface WorkspaceConfiguration extends WorkspaceInfo {
-  storage: string | null;
-  shell: string | null;
-  cpus: number | null;
-  memory_mb: number | null;
-  environment: [string, string][];
-  mounts: WorkspaceMount[];
-  docker_socket: boolean;
-  scrollback: number | null;
-  vpn: string | null;
-  execution_lifetime: 'persisted' | 'live' | 'ephemeral';
-  terminal: WorkspaceTerminal;
-}
-export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
-export interface ProcessList { titles: string[]; processes: string[][] }
-export interface ContainerOutput { stdout: number[]; stderr: number[]; truncated: boolean }
-export interface ExecutionSummary {
-  id: string; container_id: string; running: boolean; exit_code: number; pid: number;
-  command: string[]; user: string;
-}
-export interface ImageSummary { id: string; reference: string; size: number; created: number }
-export interface PaneSummary {
-  slot: string;
-  working_directory: string | null;
-  command: string | null;
-  occupant: 'terminal' | 'surface';
-  provider: { extension: string; provider: string } | null;
-}
-export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; lines: string[]; truncated: boolean }
-export interface GridSize { columns: number; rows: number }
-export type LayoutNode =
-  | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
-  | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
-export interface TabTopology { id: string; title: string; root: LayoutNode }
-export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
-export interface FileEntry { path: string; directory: boolean; size: number }
-export interface VolumeSummary { name: string; driver: string; size: number }
-export interface NetworkSummary { name: string; driver: string; scope: string }
-export type SnapshotEvent =
-  | { snapshot: 'containers'; of: ContainerSummary[] }
-  | { snapshot: 'images'; of: ImageSummary[] }
-  | { snapshot: 'terminal'; of: TabSummary[] };
-
-export class ExtensionError extends Error {
-  readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
-  readonly capability?: string;
-}
-
-export interface ConnectOptions {
-  path?: string;
-  pendingLimit?: number;
-  timeout?: number;
-  onRows?: (request: unknown, channel: number) => void;
-  onReply?: (reply: unknown) => void;
-  onEvent?: (event: SnapshotEvent, channel: number) => void;
-}
+export const PROTOCOL: string;
 
 export class Session {
-  static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
-  readonly ready: Promise<void>;
-  readonly granted: readonly string[];
+  static connect(path?: string, handlers?: Record<string, unknown>): Promise<Session>;
   call(method: string, params?: unknown): Promise<unknown>;
-  answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: SnapshotEvent, channel: number) => void): () => boolean;
   close(): void;
 }
 
-export function connect(options?: ConnectOptions): Promise<Session>;
-
-export interface WorkspaceApi {
-  info(): Promise<WorkspaceInfo>;
-  list(): Promise<WorkspaceState[]>;
-  inspect(name: string): Promise<WorkspaceConfiguration>;
-  create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  update(name: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  delete(name: string): Promise<void>;
-  start(name: string): Promise<void>;
-  stop(name: string): Promise<void>;
-  restart(name: string): Promise<void>;
-  containers: {
-    list(): Promise<ContainerSummary[]>;
-    inspect(id: string): Promise<ContainerSummary>;
-    processes(id: string): Promise<ProcessList>;
-    logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
-    execution(id: string): Promise<ExecutionSummary>;
-    create(image: string, name: string): Promise<string>;
-    start(id: string): Promise<void>;
-    stop(id: string): Promise<void>;
-    remove(id: string): Promise<void>;
-    pause(id: string): Promise<void>;
-    unpause(id: string): Promise<void>;
-    restart(id: string): Promise<void>;
-    kill(id: string, signal: string): Promise<void>;
-    exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
-  };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
-  terminal: {
-    tabs(): Promise<TabSummary[]>;
-    topology(): Promise<TerminalTopology>;
-    openTab(title: string): Promise<string>;
-    split(slot: string, division: Division): Promise<string>;
-    spawn(slot: string, command: string[]): Promise<void>;
-    read(slot: string, lines?: number): Promise<PaneText>;
-    writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
-    resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
-    close(slot: string): Promise<void>;
-    focus(slot: string): Promise<void>;
-    ratio(slot: string, ratio: number): Promise<void>;
-  };
-  files: {
-    list(path: string): Promise<FileEntry[]>;
-    read(path: string): Promise<number[]>;
-    write(path: string, contents: Iterable<number>): Promise<void>;
-  };
-  subscribe(topic: 'containers' | 'images' | 'terminal'): Promise<void>;
-  unsubscribe(topic: 'containers' | 'images' | 'terminal'): Promise<void>;
-}
-
-export function workspace(session: Session): WorkspaceApi;
-/** Current protocol coverage. Names under `unavailable` deliberately have no methods. */
-export const protocolCoverage: Readonly<{
-  available: Readonly<{
-    workspace: readonly ('info' | 'list' | 'inspect' | 'create' | 'update' | 'delete' | 'start' | 'stop' | 'restart')[];
-    containers: readonly ('list' | 'inspect' | 'processes' | 'logs' | 'execution' | 'create' | 'start' | 'stop' | 'remove' | 'pause' | 'unpause' | 'restart' | 'kill' | 'exec')[];
-    images: readonly ('list' | 'pull')[];
-    terminal: readonly ('tabs' | 'topology' | 'openTab' | 'split' | 'spawn' | 'read' | 'writeInput' | 'resizeGrid' | 'close' | 'focus' | 'ratio')[];
-    files: readonly ('list' | 'read' | 'write')[];
-    interfaceEvents: readonly ('invoke' | 'submit' | 'change' | 'select')[];
-    snapshotTopics: readonly ('containers' | 'images' | 'terminal')[];
-  }>;
-  unavailable: Readonly<{
-    workspace: readonly ('renameWhileUpdating' | 'mutateWhileRunning' | 'controlHostingWorkspace')[];
-    containers: readonly never[];
-    terminal: readonly 'switchOccupant'[];
-    events: readonly ('volumes' | 'networks' | 'extensions' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];
-  }>;
-}>;
+export function connect(options?: Record<string, unknown>): Promise<Session>;
 
 export function render(
   element: ReactNode,

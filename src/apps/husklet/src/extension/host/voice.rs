@@ -44,6 +44,19 @@ fn carriage(event: &hl_gui::Event) -> Option<Vec<u8>> {
         hl_gui::Event::Submit { node, id } => envelope("submit", *node, id),
         hl_gui::Event::Change { node, id, value } => change(*node, id, value),
         hl_gui::Event::Select { node, id, rows } => selection(*node, id, rows),
+        hl_gui::Event::Scroll { node, id, dx, dy } => details("scroll", *node, id, serde_json::json!({ "dx": dx, "dy": dy })),
+        hl_gui::Event::Close { node, id } => envelope("close", *node, id),
+        hl_gui::Event::Context { node, id, x, y } => details("context", *node, id, serde_json::json!({ "x": x, "y": y })),
+        hl_gui::Event::Key { node, id, key, keycode, modifiers, pressed } => details(
+            "key", *node, id, serde_json::json!({ "key": key, "keycode": keycode, "modifiers": modifiers, "pressed": pressed }),
+        ),
+        hl_gui::Event::Focus { node, id, focused } => details("focus", *node, id, serde_json::json!({ "focused": focused })),
+        hl_gui::Event::Pointer { node, id, phase, x, y, button, modifiers } => details(
+            "pointer", *node, id, serde_json::json!({
+                "phase": format!("{phase:?}").to_ascii_lowercase(), "x": x, "y": y,
+                "button": button, "modifiers": modifiers,
+            }),
+        ),
         _ => return None,
     };
     serde_json::to_vec(&value).ok()
@@ -51,7 +64,19 @@ fn carriage(event: &hl_gui::Event) -> Option<Vec<u8>> {
 
 /// The shape every interaction is sent in.
 fn envelope(interaction: &str, node: hl_gui::NodeId, id: &hl_gui::EventId) -> serde_json::Value {
-    serde_json::json!({ "interaction": interaction, "node": node, "id": id })
+    let mut trigger = interaction.to_owned();
+    if let Some(initial) = trigger.get_mut(0..1) {
+        initial.make_ascii_uppercase();
+    }
+    serde_json::json!({ "interaction": interaction, "trigger": trigger, "node": node, "id": id })
+}
+
+fn details(interaction: &str, node: hl_gui::NodeId, id: &hl_gui::EventId, details: serde_json::Value) -> serde_json::Value {
+    let mut carried = envelope(interaction, node, id);
+    if let (Some(carried), Some(details)) = (carried.as_object_mut(), details.as_object()) {
+        carried.extend(details.clone());
+    }
+    carried
 }
 
 /// A changed value, added to the envelope it belongs in.

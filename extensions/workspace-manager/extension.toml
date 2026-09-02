@@ -4,9 +4,9 @@ version = "0.1.0"
 protocol = 1
 
 # Process inspection and execution are container authorities in the host. Image
-# pulls are separate from image reads. Volumes and networks deliberately request
-# no authority until their host APIs exist.
-capabilities = ["container-read", "container-control", "image-read", "image-write", "interface"]
+# pulls are separate from image reads. Resource mutation is likewise distinct
+# from inventory so the consent prompt describes every control authority.
+capabilities = ["container-read", "container-control", "image-read", "image-write", "volume-read", "volume-write", "network-read", "network-write", "interface"]
 
 [interface]
 tab_title = "Resources"
@@ -26,3 +26,13 @@ icon = "system-run-symbolic"
 id = "images"
 title = "Images"
 icon = "drive-harddisk-symbolic"
+
+[[pane_providers]]
+id = "volumes"
+title = "Volumes"
+icon = "drive-harddisk-symbolic"
+
+[[pane_providers]]
+id = "networks"
+title = "Networks"
+icon = "network-workgroup-symbolic"

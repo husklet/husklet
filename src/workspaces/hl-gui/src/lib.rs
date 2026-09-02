@@ -42,6 +42,6 @@ pub use identity::{Identities, NodeId};
 pub use node::{
     Choice, EventId, Fault, Frame, Handler, Node, Orientation, Patch, Prop, PropValue, Tag, Tree, TreeError, Trigger,
 };
-pub use render::{Event, Events, Renderer};
+pub use render::{Event, Events, PointerPhase, Renderer};
 pub use size::ByteSize;
 pub use style::{Align, Bounds, Density, Edges, Length, Rgb, Scale, Theme, Token, Tone, Variant};

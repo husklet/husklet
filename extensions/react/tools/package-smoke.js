@@ -44,8 +44,9 @@ try {
     void table;
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
     void api.subscribe('terminal');
-    // @ts-expect-error unavailable topics are intentionally not advertised
     void api.subscribe('volumes');
+    // @ts-expect-error unavailable topics are intentionally not advertised
+    void api.subscribe('extensions');
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',

@@ -10,9 +10,38 @@ mod table;
 pub(crate) use process::*;
 pub(crate) use resources::*;
 
-use poll::{spawn_overview_poller, Data};
+use poll::{spawn_overview_poller, Data, OverviewPoller};
 use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, Shelf, Surfaces};
 use table::Table;
+
+/// Native operational pages retained only until the management extension is
+/// installed. Their widgets stay alive while detached so removing that
+/// extension restores a working fallback immediately.
+struct Fallback {
+    view: std::rc::Weak<screens::workspace::View>,
+    pages: Vec<(screens::workspace::Page, gtk::Widget)>,
+    poller: OverviewPoller,
+}
+
+impl Fallback {
+    fn reconcile(&self, managed: bool) {
+        let Some(view) = self.view.upgrade() else { return };
+        if managed {
+            self.poller.suspend();
+        } else {
+            // Resume data production before making the fallback visible.
+            self.poller.resume();
+        }
+        for (page, content) in &self.pages {
+            let name = page.title();
+            if managed {
+                view.detach(name);
+            } else if !view.holds(name) {
+                view.attach(name, content);
+            }
+        }
+    }
+}
 
 pub(crate) struct Overview<'a> {
     workspace: &'a WorkspaceConfig,
@@ -107,6 +136,8 @@ impl<'a> Overview<'a> {
         view: &Rc<screens::workspace::View>,
         relay: &Rc<hl::extension::Relay>,
         gallery: &Gallery,
+        reconcile: screens::workspace::extensions::Reconcile,
+        window: Option<&Rc<screens::workspace::terminal::TermWin>>,
     ) -> Option<Rc<Catalogue>> {
         let roster = match hl::extension::Roster::workspace(workspace) {
             Ok(roster) => Rc::new(RefCell::new(roster)),
@@ -124,9 +155,22 @@ impl<'a> Overview<'a> {
         let surfaces: Surfaces = Rc::new(move |entry| {
             let port: std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync> =
                 std::sync::Arc::new(carried.of(entry.name.as_str()));
-            Self::surface(&held, &entry.name, &entry.pane_providers, &port, &shown)
+            let providers = if entry.stage == hl_extension::Stage::Duty {
+                entry.pane_providers.as_slice()
+            } else {
+                &[]
+            };
+            Self::surface(&held, &entry.name, providers, &port, &shown)
         });
-        let shelf = Shelf::new(view, &roster, surfaces);
+        let gallery_for_withdrawal = gallery.clone();
+        let window = window.map(Rc::downgrade);
+        let withdraw = Rc::new(move |name: &hl_extension::ExtensionName| {
+            if let Some(window) = window.as_ref().and_then(std::rc::Weak::upgrade) {
+                screens::workspace::terminal::PaneChooser::withdraw(&window, name.as_str());
+            }
+            gallery_for_withdrawal.withdraw(name.as_str());
+        });
+        let shelf = Shelf::with_lifecycle(view, &roster, surfaces, reconcile, withdraw);
         shelf.install();
         Some(Catalogue::new(&shelf, Self::inspections(workspace)))
     }
@@ -156,24 +200,30 @@ impl<'a> Overview<'a> {
 
         // Live panes fed by a background poller over the workspace daemon's Unix socket.
         let data = std::sync::Arc::new(std::sync::Mutex::new(Data::loading()));
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        spawn_overview_poller(ws.name.clone(), self.shell_label(), data.clone(), stop.clone());
+        let poller = spawn_overview_poller(ws.name.clone(), self.shell_label(), data.clone());
         let containers = Table::new(&["NAME", "IMAGE", "STATUS"]);
         let images = Table::new(&["REPOSITORY", "IMAGE ID", "SIZE"]);
         let volumes = Table::new(&["NAME", "DRIVER"]);
         let networks = Table::new(&["NAME", "DRIVER", "SCOPE"]);
         let (ppane, pbody) = live_proc_pane();
         let shelf = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let view = Rc::new(screens::workspace::View::new([
+        let fallback_pages = vec![
             (WorkspacePage::Overview, self.overview().upcast()),
             (WorkspacePage::Containers, containers.widget.clone().upcast()),
             (WorkspacePage::Images, images.widget.clone().upcast()),
             (WorkspacePage::Volumes, volumes.widget.clone().upcast()),
             (WorkspacePage::Networks, networks.widget.clone().upcast()),
             (WorkspacePage::Processes, ppane.upcast()),
-            (WorkspacePage::Extensions, shelf.clone().upcast()),
+        ];
+        let view = Rc::new(screens::workspace::View::new([
             (WorkspacePage::Settings, self.settings().upcast()),
+            (WorkspacePage::Extensions, shelf.clone().upcast()),
         ]));
+        let fallback = Rc::new(Fallback {
+            view: Rc::downgrade(&view),
+            pages: fallback_pages,
+            poller,
+        });
         // The terminal port an extension holds is a relay to whichever window is
         // drawing; the window answers it on its own tick, which is where the
         // widgets are.
@@ -185,7 +235,14 @@ impl<'a> Overview<'a> {
         if let Some(window) = self.window {
             screens::workspace::terminal::Window::exhibit(window, gallery.clone());
         }
-        let catalogue = Self::shelf(ws, &view, &relay, &gallery);
+        let reconciler = {
+            let fallback = Rc::clone(&fallback);
+            Rc::new(move |managed| fallback.reconcile(managed))
+        };
+        let catalogue = Self::shelf(ws, &view, &relay, &gallery, reconciler, self.window);
+        if catalogue.is_none() {
+            fallback.reconcile(false);
+        }
         if let Some(catalogue) = &catalogue {
             shelf.append(catalogue.widget());
         }
@@ -205,7 +262,7 @@ impl<'a> Overview<'a> {
             let live = held.widget.root().is_some();
             rooted.set(rooted.get() || live);
             if rooted.get() && !live {
-                stop.store(true, std::sync::atomic::Ordering::Release);
+                fallback.poller.stop();
                 return glib::ControlFlow::Break;
             }
             // The catalogue's own polling holds only a weak reference to

@@ -56,7 +56,7 @@ const output = await host.containers.logs(containers[0].id, { stderr: false });
 Container reads include bounded logs, process tables, and execution inspection;
 the explicit control grant covers pause, unpause, restart, kill, and detached
 `exec`. The host currently publishes changed full snapshots for `containers`,
-`images`, and `terminal`. Start and stop those bounded, credit-controlled feeds
+`images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`.
 
@@ -71,7 +71,7 @@ version really supports. Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
 delete the workspace hosting it. The `unavailable` section names remaining
-areas such as volume, network and extension snapshots, plus keyboard events;
+areas such as extension snapshots and keyboard events;
 those names deliberately are not callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send, not a promise that
 global workspace snapshots are published.

@@ -13,6 +13,11 @@ export function shortId(value) {
   return id.length > 12 ? id.slice(0, 12) : id;
 }
 
+/** Stable daemon reference: prefer an opaque ID, then the human name. */
+export function resourceReference(resource) {
+  return String(resource?.id || resource?.name || '');
+}
+
 export function bytes(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount) || amount < 1) return '0 B';

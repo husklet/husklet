@@ -113,6 +113,7 @@ impl View {
     /// Removing a page that is not there does nothing, because the caller
     /// wanted it gone and it is.
     pub fn detach(&self, name: &str) {
+        let was_shown = self.shown().as_deref() == Some(name);
         if let Some(content) = self.pages.child_by_name(name) {
             self.pages.remove(&content);
         }
@@ -121,6 +122,17 @@ impl View {
         };
         let item = self.items.borrow_mut().remove(index);
         self.sidebar.remove(&item);
+        if was_shown {
+            let next = self
+                .items
+                .borrow()
+                .first()
+                .and_then(|item| item.label())
+                .map(|label| label.to_string());
+            if let Some(next) = next {
+                self.select_name(&next);
+            }
+        }
     }
 
     /// Whether a page under this name is currently on the shell.

@@ -3,7 +3,7 @@ import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
   Heading, List, ListItemButton, Row, Scroll, Separator, Spinner, Text,
 } from '@husklet/react';
-import { LOG_LIMIT, bounded, bytes, logText, processRows, shortId } from './model.js';
+import { LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'images', 'volumes', 'networks'];
@@ -12,31 +12,41 @@ export function WorkspaceManager({ api, selections, initial = {} }) {
   const [section, setSection] = useState('overview');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
+  const volumes = useResource(api.volumes.list, initial.volumes);
+  const networks = useResource(api.networks.list, initial.networks);
   useEffect(() => selections?.subscribe((event) => {
     if (SECTIONS.includes(event?.pane_provider)) setSection(event.pane_provider);
     if (event?.snapshot === 'containers') void containers.reload();
     if (event?.snapshot === 'images') void images.reload();
-  }), [selections, containers.reload, images.reload]);
+    if (event?.snapshot === 'volumes') void volumes.reload();
+    if (event?.snapshot === 'networks') void networks.reload();
+  }), [selections, containers.reload, images.reload, volumes.reload, networks.reload]);
   useEffect(() => {
     if (typeof api.subscribe !== 'function') return undefined;
     void api.subscribe('containers');
     void api.subscribe('images');
+    void api.subscribe('volumes');
+    void api.subscribe('networks');
     return () => {
       if (typeof api.unsubscribe === 'function') {
         void api.unsubscribe('containers');
         void api.unsubscribe('images');
+        void api.unsubscribe('volumes');
+        void api.unsubscribe('networks');
       }
     };
   }, [api]);
   const body = section === 'overview'
-    ? h(Overview, { containers, images, onOpen: setSection })
+    ? h(Overview, { containers, images, volumes, networks, onOpen: setSection })
     : section === 'containers'
       ? h(Containers, { api, resource: containers })
       : section === 'processes'
         ? h(Processes, { api, resource: containers })
         : section === 'images'
           ? h(Images, { api, resource: images })
-          : h(Unsupported, { resource: section });
+          : section === 'volumes'
+            ? h(Volumes, { api, resource: volumes })
+            : h(Networks, { api, resource: networks });
   return h(Row, { grow: true, gap: 0 }, h(Navigation, { section, onSelect: setSection }), h(Separator, { orientation: 'vertical' }), body);
 }
 
@@ -49,7 +59,7 @@ function Navigation({ section, onSelect }) {
     }))));
 }
 
-function Overview({ containers, images, onOpen }) {
+function Overview({ containers, images, volumes, networks, onOpen }) {
   const running = (containers.data ?? []).filter((item) => item.state === 'running').length;
   return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 3 },
     h(Heading, { label: 'Workspace overview', scale: 'title' }),
@@ -57,9 +67,9 @@ function Overview({ containers, images, onOpen }) {
     h(Row, { gap: 2, wrap: true },
       h(Summary, { title: 'Containers', value: containers.loading ? '…' : String((containers.data ?? []).length), detail: `${running} running`, onOpen: () => onOpen('containers') }),
       h(Summary, { title: 'Images', value: images.loading ? '…' : String((images.data ?? []).length), detail: 'Available locally', onOpen: () => onOpen('images') }),
-      h(Summary, { title: 'Volumes', value: '—', detail: 'Host API unavailable', onOpen: () => onOpen('volumes') }),
-      h(Summary, { title: 'Networks', value: '—', detail: 'Host API unavailable', onOpen: () => onOpen('networks') })),
-    h(ErrorText, { error: containers.error ?? images.error })));
+      h(Summary, { title: 'Volumes', value: volumes.loading ? '…' : String((volumes.data ?? []).length), detail: 'Durable local storage', onOpen: () => onOpen('volumes') }),
+      h(Summary, { title: 'Networks', value: networks.loading ? '…' : String((networks.data ?? []).length), detail: 'Workspace-local connectivity', onOpen: () => onOpen('networks') })),
+    h(ErrorText, { error: containers.error ?? images.error ?? volumes.error ?? networks.error })));
 }
 
 function Summary({ title: label, value, detail, onOpen }) {
@@ -148,9 +158,41 @@ function Images({ api, resource }) {
     h(Omitted, { count: view.omitted }));
 }
 
-function Unsupported({ resource }) {
-  return h(Page, { title: title(resource), subtitle: `The Husklet host does not expose a ${resource} API yet.` },
-    h(Card, { tone: 'warning', variant: 'outline' }, h(CardHeader, { label: 'Unavailable in this version' }), h(CardContent, {}, h(Text, { label: `This view is intentionally read-only and empty. It will not simulate ${resource} data or claim an operation succeeded.`, wrap: true }))));
+export function Volumes({ api, resource }) {
+  const [name, setName] = useState('');
+  const [detail, setDetail] = useState(null);
+  const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
+  const remove = async (volume) => { await api.volumes.remove(volume.name); if (detail?.name === volume.name) setDetail(null); await resource.reload(); };
+  const inspect = async (volume) => setDetail(await api.volumes.inspect(volume.name));
+  const view = bounded(resource.data);
+  return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
+    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
+    h(ErrorText, { error: resource.error }),
+    ...view.records.map((volume) => h(Card, { key: volume.name, variant: detail?.name === volume.name ? 'filled' : 'outline' },
+      h(CardHeader, { label: volume.name, detail: volume.driver }),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(volume) }), h(Button, { label: 'Remove', tone: 'danger', onInvoke: () => remove(volume) })),
+      detail?.name === volume.name ? h(CardContent, {}, h(Text, { label: `Driver ${detail.driver}`, color: 'text-dim' })) : null)),
+    h(Omitted, { count: view.omitted }));
+}
+
+export function Networks({ api, resource }) {
+  const [name, setName] = useState('');
+  const [container, setContainer] = useState('');
+  const [detail, setDetail] = useState(null);
+  const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
+  const remove = async (network) => { await api.networks.remove(resourceReference(network)); if (detail?.id === network.id) setDetail(null); await resource.reload(); };
+  const inspect = async (network) => setDetail(await api.networks.inspect(resourceReference(network)));
+  const attach = async (network, verb) => { await api.networks[verb](resourceReference(network), container.trim()); await resource.reload(); };
+  const view = bounded(resource.data);
+  return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
+    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
+    h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
+    h(ErrorText, { error: resource.error }),
+    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: detail?.id === network.id ? 'filled' : 'outline' },
+      h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(Button, { label: 'Disconnect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'disconnect') }), h(Button, { label: 'Remove', tone: 'danger', onInvoke: () => remove(network) })),
+      detail?.id === network.id ? h(CardContent, {}, h(Text, { label: `${detail.id} · ${detail.driver} · ${detail.scope}`, color: 'text-dim', wrap: true })) : null)),
+    h(Omitted, { count: view.omitted }));
 }
 
 function Page({ title: label, subtitle, children }) { return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 2 }, h(Heading, { label, scale: 'title' }), h(Text, { label: subtitle, color: 'text-dim', wrap: true }), children)); }

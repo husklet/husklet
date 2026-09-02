@@ -14,7 +14,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.request, payload: {
-      protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'image-read', 'image-write', 'interface'],
+      protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'interface'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
@@ -25,6 +25,10 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
           : name === 'image_list'
             ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
+            : name === 'volume_list'
+              ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] }
+              : name === 'network_list'
+                ? { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }] }
             : { reply: 'done' };
         socket.write(encode({ channel: 2, kind: KIND.response, payload }));
       }
@@ -37,7 +41,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
-    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render') && calls.includes('container_list') && calls.includes('image_list') && calls.filter((name) => name === 'event_subscribe').length === 2);
+    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render') && calls.includes('container_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
     assert.equal(stderr, '');
   } finally {
     child.kill('SIGTERM');

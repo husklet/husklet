@@ -130,16 +130,47 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'terminal']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
-  assert.ok(protocolCoverage.unavailable.events.includes('volumes'));
-  assert.ok(protocolCoverage.unavailable.events.includes('keyboard'));
+  assert.ok(protocolCoverage.unavailable.events.includes('extensions'));
+  assert.ok(protocolCoverage.unavailable.events.includes('globalKeyboard'));
   const api = workspace({ call() { throw new Error('not called'); } });
   assert.equal(api.renameWorkspace, undefined);
   assert.equal(typeof api.containers.processes, 'function');
-  assert.throws(() => api.subscribe('volumes'), /does not publish/);
+  assert.equal(typeof api.volumes.create, 'function');
+  assert.equal(typeof api.networks.connect, 'function');
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(api.terminal.switchOccupant, undefined);
+});
+
+test('volume and network facades preserve safe request shapes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const operations = [
+    api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache'),
+    api.networks.list(), api.networks.inspect('private'), api.networks.create('private'),
+    api.networks.remove('private'), api.networks.connect('private', 'c1'), api.networks.disconnect('private', 'c1'),
+    api.subscribe('volumes'), api.subscribe('networks'),
+  ];
+  const calls = [];
+  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  assert.deepEqual(calls.map(({ call }) => call), [
+    'volume_list', 'volume_inspect', 'volume_create', 'volume_remove', 'network_list', 'network_inspect',
+    'network_create', 'network_remove', 'network_connect', 'network_disconnect', 'event_subscribe', 'event_subscribe',
+  ]);
+  assert.deepEqual(calls[8].with, { reference: 'private', container: 'c1' });
+  assert.deepEqual(calls[9].with, { reference: 'private', container: 'c1' });
+  const replies = [
+    { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local' } },
+    { reply: 'volume', with: { name: 'cache', driver: 'local' } }, { reply: 'done' },
+    { reply: 'networks', with: [] }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } },
+    { reply: 'identity', with: 'n1' }, ...Array(5).fill({ reply: 'done' }),
+  ];
+  for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
+  await Promise.all(operations);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('deep container methods and subscriptions use exact protocol request shapes', async () => {

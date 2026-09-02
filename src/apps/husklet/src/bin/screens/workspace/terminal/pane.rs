@@ -140,6 +140,27 @@ impl PaneChooser {
 
     pub(crate) fn terminal(window: &Rc<TermWin>) {
         let Some(current) = Self::selected(window) else { return };
+        Self::terminal_at(window, &current, true);
+    }
+
+    /// Restores every pane occupied by one extension without changing which
+    /// unrelated pane has focus. Lifecycle removal is window-wide, not a
+    /// chooser action on the currently selected leaf.
+    pub(crate) fn withdraw(window: &Rc<TermWin>, extension: &str) {
+        let held: Vec<_> = Panes::all(window)
+            .into_iter()
+            .filter(|pane| {
+                Slots::new(window)
+                    .surface(&pane.content)
+                    .is_some_and(|(_, held, _)| held == extension)
+            })
+            .collect();
+        for pane in held {
+            Self::terminal_at(window, &pane, false);
+        }
+    }
+
+    fn terminal_at(window: &Rc<TermWin>, current: &Occupancy, focus: bool) {
         if current.occupant != hl_extension::port::Occupant::Surface {
             return;
         }
@@ -155,14 +176,16 @@ impl PaneChooser {
         Surface::retire(window, &current.content);
         Slots::new(window).release(&current.content);
         if PaneSwap::replace(&current.content, terminal.upcast_ref()) {
-            terminal.grab_focus();
+            if focus {
+                terminal.grab_focus();
+            }
             return;
         }
         if let Some((extension, provider)) = identity {
             Slots::new(window).enrol(&current.content, current.slot.clone(), extension.clone(), provider);
             Surface::restore(window, &extension, &current.content);
         }
-        window.displaced.borrow_mut().insert(current.slot, terminal);
+        window.displaced.borrow_mut().insert(current.slot.clone(), terminal);
     }
 }
 

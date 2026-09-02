@@ -9,7 +9,7 @@ use hl_rpc::{CapabilityKey, RelativePath};
 use crate::capability::Capability;
 use crate::port::{
     ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageSummary, PaneText,
-    ProcessList, TabSummary, TerminalTopology, WorkspaceConfiguration, WorkspaceState,
+    NetworkSummary, ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
 };
 
 /// A call from an extension.
@@ -98,6 +98,16 @@ pub enum Request {
     ImagePull {
         reference: String,
     },
+    VolumeList,
+    VolumeInspect { name: String },
+    VolumeCreate { name: String },
+    VolumeRemove { name: String },
+    NetworkList,
+    NetworkInspect { reference: String },
+    NetworkCreate { name: String },
+    NetworkRemove { reference: String },
+    NetworkConnect { reference: String, container: String },
+    NetworkDisconnect { reference: String, container: String },
     TerminalTabs,
     TerminalTopology,
     TerminalOpenTab {
@@ -194,6 +204,13 @@ impl Request {
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList => Capability::ImageRead,
             Self::ImagePull { .. } => Capability::ImageWrite,
+            Self::VolumeList | Self::VolumeInspect { .. } => Capability::VolumeRead,
+            Self::VolumeCreate { .. } | Self::VolumeRemove { .. } => Capability::VolumeWrite,
+            Self::NetworkList | Self::NetworkInspect { .. } => Capability::NetworkRead,
+            Self::NetworkCreate { .. }
+            | Self::NetworkRemove { .. }
+            | Self::NetworkConnect { .. }
+            | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::TerminalOpenTab { .. }
             | Self::TerminalSplit { .. }
@@ -298,6 +315,10 @@ pub enum Reply {
     Execution(ExecutionSummary),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
+    Volumes(Vec<VolumeSummary>),
+    Volume(VolumeSummary),
+    Networks(Vec<NetworkSummary>),
+    Network(NetworkSummary),
     Tabs(Vec<TabSummary>),
     Topology(TerminalTopology),
     Text(PaneText),

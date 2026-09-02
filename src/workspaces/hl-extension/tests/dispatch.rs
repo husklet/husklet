@@ -37,6 +37,35 @@ impl Ledger {
 struct Host {
     ledger: Ledger,
 }
+impl hl_extension::port::VolumeStore for Host {
+    fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
+        self.ledger.note("volumes.list");
+        Ok(vec![hl_extension::port::VolumeSummary { name: "cache".into(), driver: "local".into() }])
+    }
+    fn inspect(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
+        self.ledger.note("volumes.inspect");
+        Ok(hl_extension::port::VolumeSummary { name: name.into(), driver: "local".into() })
+    }
+    fn create(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
+        self.ledger.note("volumes.create");
+        Ok(hl_extension::port::VolumeSummary { name: name.into(), driver: "local".into() })
+    }
+    fn remove(&self, _name: &str) -> Result<(), HostError> { self.ledger.note("volumes.remove"); Ok(()) }
+}
+impl hl_extension::port::NetworkStore for Host {
+    fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
+        self.ledger.note("networks.list");
+        Ok(vec![hl_extension::port::NetworkSummary { id: "n1".into(), name: "private".into(), driver: "bridge".into(), scope: "local".into() }])
+    }
+    fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
+        self.ledger.note("networks.inspect");
+        Ok(hl_extension::port::NetworkSummary { id: "n1".into(), name: reference.into(), driver: "bridge".into(), scope: "local".into() })
+    }
+    fn create(&self, _name: &str) -> Result<String, HostError> { self.ledger.note("networks.create"); Ok("n1".into()) }
+    fn remove(&self, _reference: &str) -> Result<(), HostError> { self.ledger.note("networks.remove"); Ok(()) }
+    fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { self.ledger.note("networks.connect"); Ok(()) }
+    fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { self.ledger.note("networks.disconnect"); Ok(()) }
+}
 
 impl Host {
     fn new() -> Self {
@@ -320,6 +349,8 @@ fn services(host: &Host) -> Services<'_> {
         containers: host,
         control: host,
         images: host,
+        volumes: host,
+        networks: host,
         terminal: host,
         files: host,
     }
@@ -702,6 +733,22 @@ fn container_exec_returns_the_real_execution_identity() {
         .expect("exec starts");
     assert_eq!(reply, Reply::Identity("e1".into()));
     assert_eq!(host.ledger.reached(), vec!["containers.exec"]);
+}
+
+#[test]
+fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
+    let host = Host::new();
+    let mut read = session(&[Capability::VolumeRead, Capability::NetworkRead], &[]);
+    assert!(matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values[0].name == "cache"));
+    assert!(matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "n1"));
+    assert!(matches!(read.dispatch(&Request::VolumeCreate { name: "unsafe".into() }, &services(&host)), Err(Failure::Denied { .. })));
+
+    let mut write = session(&[Capability::VolumeWrite, Capability::NetworkWrite], &[]);
+    assert!(matches!(write.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)), Ok(Reply::Volume(value)) if value.name == "cache"));
+    assert_eq!(write.dispatch(&Request::NetworkCreate { name: "private".into() }, &services(&host)), Ok(Reply::Identity("n1".into())));
+    assert_eq!(write.dispatch(&Request::NetworkConnect { reference: "private".into(), container: "c1".into() }, &services(&host)), Ok(Reply::Done));
+    assert_eq!(write.dispatch(&Request::NetworkDisconnect { reference: "private".into(), container: "c1".into() }, &services(&host)), Ok(Reply::Done));
+    assert!(matches!(write.dispatch(&Request::NetworkList, &services(&host)), Err(Failure::Denied { .. })));
 }
 
 #[test]

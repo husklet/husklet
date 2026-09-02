@@ -60,8 +60,55 @@ pub enum Event {
         id: EventId,
         rows: Vec<u64>,
     },
+    Scroll {
+        node: NodeId,
+        id: EventId,
+        dx: f64,
+        dy: f64,
+    },
+    Close {
+        node: NodeId,
+        id: EventId,
+    },
+    Context {
+        node: NodeId,
+        id: EventId,
+        x: f64,
+        y: f64,
+    },
+    Key {
+        node: NodeId,
+        id: EventId,
+        key: String,
+        keycode: u32,
+        modifiers: u32,
+        pressed: bool,
+    },
+    Focus {
+        node: NodeId,
+        id: EventId,
+        focused: bool,
+    },
+    Pointer {
+        node: NodeId,
+        id: EventId,
+        phase: PointerPhase,
+        x: Option<f64>,
+        y: Option<f64>,
+        button: u32,
+        modifiers: u32,
+    },
     /// The host needs a window of rows it does not have cached.
     Rows(RowRequest),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PointerPhase {
+    Enter,
+    Motion,
+    Leave,
+    Press,
+    Release,
 }
 
 /// Sink for interaction reported by a renderer.

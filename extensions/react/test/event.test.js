@@ -87,6 +87,29 @@ test('a handler runs when the host reports its event', async () => {
   stage.close();
 });
 
+test('bounded keyboard, focus and pointer details reach their React handlers', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const seen = [];
+  render(h(Button, {
+    label: 'Input target',
+    onKey: (event) => seen.push(event),
+    onFocus: (event) => seen.push(event),
+    onPointer: (event) => seen.push(event),
+  }), session, { title: 'Events' });
+  await until(() => stage.calls.length >= 2);
+  await stage.push({ interaction: 'key', trigger: 'Key', node: 1, id: '1:Key', key: 'a', keycode: 38, modifiers: 4, pressed: true });
+  await stage.push({ interaction: 'focus', trigger: 'Focus', node: 1, id: '1:Focus', focused: true });
+  await stage.push({ interaction: 'pointer', trigger: 'Pointer', node: 1, id: '1:Pointer', phase: 'motion', x: 2, y: 3, button: 0, modifiers: 0 });
+  await until(() => seen.length === 3);
+  assert.deepEqual(seen.map(({ trigger }) => trigger), ['Key', 'Focus', 'Pointer']);
+  assert.equal(seen[0].key, 'a');
+  assert.equal(seen[1].focused, true);
+  assert.deepEqual([seen[2].x, seen[2].y], [2, 3]);
+  session.close();
+  stage.close();
+});
+
 test('a re-render rebinds the callback without a patch', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });

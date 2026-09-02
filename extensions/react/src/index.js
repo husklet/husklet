@@ -9,7 +9,7 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'terminal']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -81,6 +81,20 @@ export function workspace(session) {
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+    },
+    volumes: {
+      list: async () => expect(await session.call('volume_list'), 'volumes'),
+      inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
+      create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
+      remove: (name) => done('volume_remove', { name }),
+    },
+    networks: {
+      list: async () => expect(await session.call('network_list'), 'networks'),
+      inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
+      create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
+      remove: (reference) => done('network_remove', { reference }),
+      connect: (reference, container) => done('network_connect', { reference, container }),
+      disconnect: (reference, container) => done('network_disconnect', { reference, container }),
     },
     terminal: {
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
@@ -170,12 +184,15 @@ function interpret(payload) {
     // Externally tagged: {"Invoke":{"node":2,"id":"2:Invoke"}}
     const [trigger, inner] = Object.entries(body)[0] ?? [];
     if (!inner || typeof inner !== 'object' || typeof inner.id !== 'string') return null;
-    return { trigger, node: inner.node, id: inner.id, value: inner.value ?? null };
+    return { ...inner, trigger, value: inner.value ?? null };
   }
   if (typeof body !== 'object' || typeof body.id !== 'string') return null;
-  const trigger = body.trigger ?? named;
+  const legacy = typeof body.interaction === 'string'
+    ? `${body.interaction[0].toUpperCase()}${body.interaction.slice(1)}`
+    : undefined;
+  const trigger = body.trigger ?? named ?? legacy;
   if (trigger === undefined) return null;
-  return { trigger, node: body.node, id: body.id, value: body.value ?? null };
+  return { ...body, trigger, value: body.value ?? null };
 }
 
 /** Every prop and handler name a component accepts, for tooling and tests. */
@@ -190,15 +207,17 @@ export const protocolCoverage = Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
     images: ['list', 'pull'],
+    volumes: ['list', 'inspect', 'create', 'remove'],
+    networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
-    interfaceEvents: ['invoke', 'submit', 'change', 'select'],
+    interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,
   }),
   unavailable: Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: [],
     terminal: ['switchOccupant'],
-    events: ['volumes', 'networks', 'extensions', 'keyboard', 'focus', 'pointer', 'drag', 'drop'],
+    events: ['extensions', 'globalKeyboard', 'globalFocus', 'globalPointer', 'drag', 'drop'],
   }),
 });

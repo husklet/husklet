@@ -180,6 +180,8 @@ impl Supply for Workspace {
             containers: extensions.containers(),
             control: extensions.control(),
             images: extensions.images(),
+            volumes: extensions.volumes(),
+            networks: extensions.networks(),
             terminal,
             files: extensions.files(),
         };
