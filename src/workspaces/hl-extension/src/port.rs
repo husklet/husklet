@@ -587,7 +587,7 @@ pub trait ExtensionStore {
     fn acquisition_status(&self, _job: &str) -> Result<ExtensionAcquisitionStatus, HostError> {
         Err(HostError::Unsupported("extension acquisition is unavailable".into()))
     }
-    fn acquisition_cancel(&self, _job: &str) -> Result<(), HostError> {
+    fn acquisition_cancel(&self, _job: &str, _revision: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension acquisition is unavailable".into()))
     }
     fn install(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {

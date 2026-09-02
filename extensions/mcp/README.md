@@ -94,8 +94,10 @@ reveals the resolved digest, the installed digest observed for that consent
 revision, manifest identity, and requested grants, and only a
 second confirmed install or update echoes that observed revision and commits the
 caller-selected grant; a changed candidate or installed generation therefore
-makes stale consent fail. Cancellation
-is also explicit and confirmed; no MCP call performs an unobservable blocking pull.
+makes stale consent fail. Cancellation is also explicit, confirmed, and bound to
+the observed acquisition revision, so it cannot discard a candidate that became
+ready after the client last inspected the job; no MCP call performs an
+unobservable blocking pull.
 `husklet_extension_wait` follows the host's credit-controlled extension topics,
 returning either the newest bounded inventory snapshot or acquisition job/revision
 metadata. Acquisition notifications never carry manifest contents; clients fetch

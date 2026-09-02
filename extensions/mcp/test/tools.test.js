@@ -170,12 +170,15 @@ test('extension acquisition is asynchronous, digest-observable, grant-bounded, a
   assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: 1, granted: ['made-up'], confirm: true }).success, false);
   assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: 1, granted: ['container-attach'], confirm: true }).success, true);
   assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: Number.MAX_SAFE_INTEGER + 1, granted: [], confirm: true }).success, false);
+  assert.equal(byName('husklet_extension_acquisition_cancel').inputSchema.safeParse({ job: 'j', confirm: true }).success, false);
+  assert.equal(byName('husklet_extension_acquisition_cancel').inputSchema.safeParse({ job: 'j', revision: -1, confirm: true }).success, false);
+  assert.equal(byName('husklet_extension_acquisition_cancel').inputSchema.safeParse({ job: 'j', revision: Number.MAX_SAFE_INTEGER + 1, confirm: true }).success, false);
   await byName('husklet_extension_acquire').run({ reference: 'example:1', confirm: true });
   await byName('husklet_extension_acquisition').run({ job: 'j' });
-  await byName('husklet_extension_acquisition_cancel').run({ job: 'j', confirm: true });
+  await byName('husklet_extension_acquisition_cancel').run({ job: 'j', revision: 4, confirm: true });
   await byName('husklet_extension_install').run({ job: 'j', revision: 4, granted: ['interface', 'container-attach'], confirm: true });
   await byName('husklet_extension_update').run({ job: 'j', revision: 4, granted: ['interface'], confirm: true });
-  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j'], ['extensions.install', 'j', 4, ['interface', 'container-attach']], ['extensions.update', 'j', 4, ['interface']]]);
+  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j', 4], ['extensions.install', 'j', 4, ['interface', 'container-attach']], ['extensions.update', 'j', 4, ['interface']]]);
 });
 
 test('extension wait filters acquisition jobs and disposes its credit-controlled watcher', async () => {

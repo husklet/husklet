@@ -329,7 +329,7 @@ export interface WorkspaceApi {
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
-    cancelAcquisition(job: string): Promise<void>;
+    cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
   };

@@ -495,9 +495,9 @@ impl Session {
                 acquisition_job(job)?;
                 Ok(Reply::ExtensionAcquisition(port.acquisition_status(job)?))
             }
-            Request::ExtensionAcquisitionCancel { job } => {
+            Request::ExtensionAcquisitionCancel { job, revision } => {
                 acquisition_job(job)?;
-                port.acquisition_cancel(job)
+                port.acquisition_cancel(job, *revision)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }

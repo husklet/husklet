@@ -77,6 +77,7 @@ pub enum Request {
     },
     ExtensionAcquisitionCancel {
         job: String,
+        revision: u64,
     },
     ExtensionInstall {
         job: String,

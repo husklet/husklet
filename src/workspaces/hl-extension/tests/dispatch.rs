@@ -5,7 +5,7 @@
 //! decorative: if the protocol had reached for a service directly, none of this
 //! could be written.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
@@ -38,6 +38,7 @@ impl Ledger {
 
 struct Host {
     ledger: Ledger,
+    cancelled_revision: Cell<Option<u64>>,
 }
 impl hl_extension::port::VolumeStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
@@ -110,6 +111,7 @@ impl Host {
     fn new() -> Self {
         Self {
             ledger: Ledger::default(),
+            cancelled_revision: Cell::new(None),
         }
     }
 
@@ -688,8 +690,9 @@ impl ExtensionStore for Host {
             error: None,
         })
     }
-    fn acquisition_cancel(&self, _job: &str) -> Result<(), HostError> {
+    fn acquisition_cancel(&self, _job: &str, revision: u64) -> Result<(), HostError> {
         self.ledger.note("extensions.acquisition_cancel");
+        self.cancelled_revision.set(Some(revision));
         Ok(())
     }
     fn install(&self, job: &str, _revision: u64, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
@@ -845,7 +848,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionInstall,
         ),
         (
-            Request::ExtensionAcquisitionCancel { job: "job-1".into() },
+            Request::ExtensionAcquisitionCancel { job: "job-1".into(), revision: 7 },
             Capability::ExtensionInstall,
         ),
         (
@@ -1148,6 +1151,25 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
         )
         .is_err());
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn extension_acquisition_cancellation_preserves_the_observed_revision() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ExtensionInstall], &[]);
+    assert_eq!(
+        session
+            .dispatch(
+                &Request::ExtensionAcquisitionCancel {
+                    job: "job-1".into(),
+                    revision: 41,
+                },
+                &services(&host),
+            )
+            .unwrap(),
+        Reply::Done
+    );
+    assert_eq!(host.cancelled_revision.get(), Some(41));
 }
 
 #[test]

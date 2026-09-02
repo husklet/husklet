@@ -105,8 +105,8 @@ impl ExtensionStore for ExtensionManagement {
         Ok(acquisition_status(job.wire(), snapshot))
     }
 
-    fn acquisition_cancel(&self, job: &str) -> Result<(), HostError> {
-        self.acquisitions.cancel(AcquisitionJob::parse(job)?)
+    fn acquisition_cancel(&self, job: &str, revision: u64) -> Result<(), HostError> {
+        self.acquisitions.cancel(AcquisitionJob::parse(job)?, revision)
     }
 
     fn install(&self, job: &str, revision: u64, granted: &Grant) -> Result<ExtensionSummary, HostError> {
