@@ -123,7 +123,7 @@ export function tools(api) {
     define('husklet_extension_update', 'Consent and atomically replace an installed extension with the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.update(job, revision, granted)),
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
-    define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
+    define('husklet_container_processes', 'Read a bounded timestamped initial-process snapshot; PIDs are snapshot-local and reusable.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
     define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
     define('husklet_execution_list', 'List the bounded durable execution catalogue for this workspace.', empty, () => api.containers.executions()),
     define('husklet_execution_logs', 'Replay bounded captured output for one execution.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr })),

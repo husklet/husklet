@@ -252,21 +252,25 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
       onOpenExecution ? h(Button, { label: 'Inspect execution', onInvoke: () => onOpenExecution(execution.id) }) : null) : null);
 }
 
-function Processes({ api, resource }) {
-  const [processes, setProcesses] = useState([]);
+export function Processes({ api, resource }) {
+  const [snapshots, setSnapshots] = useState([]);
   const [error, setError] = useState(null);
   const load = useCallback(async () => {
     try {
       const groups = await Promise.all((resource.data ?? []).map(async (container) => ({ container, rows: await api.containers.processes(container.id) })));
-      setProcesses(groups.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id))));
+      setSnapshots(groups);
       setError(null);
     } catch (cause) { setError(cause); }
   }, [api, resource.data]);
   useEffect(() => { void load(); }, [load]);
+  const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
+  const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
   const view = bounded(processes);
   return h(Page, { title: 'Processes', subtitle: 'A bounded snapshot across all visible containers.' },
     h(Toolbar, { loading: resource.loading, onRefresh: load }), h(ErrorText, { error }),
     h(InventoryEmpty, { resource: { loading: resource.loading, error }, records: view.records, label: 'No running processes', detail: 'Start a container to see its process snapshot here.' }),
+    h(Text, { label: 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
+    observed > 0 ? h(Text, { label: `Observed ${new Date(observed).toISOString()}`, color: 'text-dim' }) : null,
     ...view.records.map((process, index) => {
       const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
       const command = process.cells.CMD ?? process.cells.Command ?? process.cells.COMMAND ?? process.values.at(-1) ?? 'Process';
@@ -275,7 +279,9 @@ function Processes({ api, resource }) {
         h(CardHeader, { label: command, detail: process.container }),
         h(CardContent, {}, h(Row, { gap: 2 }, h(Badge, { label: `PID ${pid}` }), h(Text, { label: detail, color: 'text-dim' }))));
     }),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted }),
+    snapshots.some(({ rows }) => rows.truncated)
+      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
 }
 
 export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {

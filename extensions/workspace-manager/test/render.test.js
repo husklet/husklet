@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Containers, Executions, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
+import { Containers, Executions, Images, Networks, Processes, Volumes, WorkspaceManager } from '../src/app.js';
 import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from '../src/model.js';
 import { host } from './host.js';
 
@@ -34,6 +34,21 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled(); await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
   }
+});
+
+test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
+  const processApi = { containers: { processes: async () => ({
+    titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
+    processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
+    scope: 'initial', pid_identity: 'snapshot', truncated: true,
+  }) } };
+  const stage = host();
+  stage.render(h(Processes, { api: processApi, resource: { data: [{ id: 'c1', name: 'api' }], loading: false } }));
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'Initial processes only; PIDs identify this snapshot and may be reused.'));
+  assert.ok(labelled(stage, 'Observed 2023-11-14T22:13:20.000Z'));
+  assert.ok(labelled(stage, 'The host process snapshot was truncated at its safety limit.'));
+  assert.ok(labelled(stage, '/usr/bin/server'));
 });
 
 test('execution observation is scoped to its page and replaces inventory without polling', async () => {

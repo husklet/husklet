@@ -58,6 +58,10 @@ targets one existing execution ID under `ContainerControl` and accepts only a
 Execution output replay reports stdout and stderr truncation independently and
 sets `eof` only when the process was already complete before replay; an empty
 running response is therefore not presented as end-of-stream.
+Container process inspection is a timestamped, bounded snapshot of the initial
+process only. Its PID is explicitly snapshot-local and may be reused; the host
+does not expose argv or environment values, and does not claim child-process,
+CPU, or memory coverage that its current daemon sampler cannot provide.
 
 Container creation accepts bounded entrypoint/argv, environment, working directory,
 user, labels, named-volume mounts, one workspace-local network, TCP/UDP exposure,

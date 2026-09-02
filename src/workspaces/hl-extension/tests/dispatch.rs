@@ -140,6 +140,10 @@ impl ContainerInventory for Host {
         Ok(ProcessList {
             titles: vec!["PID".into(), "CMD".into()],
             processes: vec![vec!["7".into(), "server".into()]],
+            observed_at_ms: 1_700_000_000_000,
+            scope: hl_extension::port::ProcessScope::Initial,
+            pid_identity: hl_extension::port::ProcessPidIdentity::Snapshot,
+            truncated: false,
         })
     }
 
@@ -1254,7 +1258,11 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
     let processes = session
         .dispatch(&Request::ContainerProcesses { id: "c1".into() }, &services(&host))
         .expect("process table");
-    assert!(matches!(processes, Reply::Processes(table) if table.titles == ["PID", "CMD"]));
+    assert!(matches!(processes, Reply::Processes(table)
+        if table.titles == ["PID", "CMD"] && table.observed_at_ms == 1_700_000_000_000
+            && table.scope == hl_extension::port::ProcessScope::Initial
+            && table.pid_identity == hl_extension::port::ProcessPidIdentity::Snapshot
+            && !table.truncated));
 
     let logs = session
         .dispatch(

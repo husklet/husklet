@@ -221,6 +221,18 @@ test('container execution inspection is a strict bounded read through the typed 
   assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
 });
 
+test('process inspection exposes its finite initial-process scope and snapshot PID identity', async () => {
+  const { api, calls } = fake();
+  const snapshot = { titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
+    processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
+    scope: 'initial', pid_identity: 'snapshot', truncated: false };
+  api.containers.processes = async (...args) => { calls.push(['containers.processes', ...args]); return snapshot; };
+  const processTool = tools(api).find(({ name }) => name === 'husklet_container_processes');
+  const result = await processTool.run({ id: 'c1' });
+  assert.deepEqual(JSON.parse(result.content[0].text), snapshot);
+  assert.deepEqual(calls, [['containers.processes', 'c1']]);
+});
+
 test('execution wait is a strict bounded read and preserves the timeout', async () => {
   const { api, calls } = fake();
   const wait = tools(api).find(({ name }) => name === 'husklet_execution_wait');

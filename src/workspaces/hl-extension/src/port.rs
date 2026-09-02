@@ -52,6 +52,33 @@ pub struct ContainerSummary {
 pub struct ProcessList {
     pub titles: Vec<String>,
     pub processes: Vec<Vec<String>>,
+    /// Host wall-clock time at which this point-in-time view was produced.
+    #[serde(default)]
+    pub observed_at_ms: u64,
+    /// This host currently exposes only the container's initial process, not a
+    /// complete namespace process tree.
+    #[serde(default)]
+    pub scope: ProcessScope,
+    /// PIDs identify rows only within this snapshot and may be reused later.
+    #[serde(default)]
+    pub pid_identity: ProcessPidIdentity,
+    /// Rows, columns, or cell bytes were omitted to preserve the wire bound.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessScope {
+    #[default]
+    Initial,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessPidIdentity {
+    #[default]
+    Snapshot,
 }
 
 /// Bounded captured output from a container's initial process.
@@ -1007,6 +1034,17 @@ mod tests {
         assert!(!output.eof);
         assert!(!output.stdout_truncated);
         assert!(!output.stderr_truncated);
+    }
+
+    #[test]
+    fn legacy_process_rows_decode_as_an_incomplete_snapshot_scoped_view() {
+        let processes: super::ProcessList = serde_json::from_value(serde_json::json!({
+            "titles": ["PID"], "processes": [["1"]]
+        })).expect("legacy process rows");
+        assert_eq!(processes.scope, super::ProcessScope::Initial);
+        assert_eq!(processes.pid_identity, super::ProcessPidIdentity::Snapshot);
+        assert_eq!(processes.observed_at_ms, 0);
+        assert!(!processes.truncated);
     }
 
     #[test]
