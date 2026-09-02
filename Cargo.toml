@@ -11,6 +11,7 @@ members = [
 # Test runs drop scratch directories beside the crates; the member globs would
 # otherwise pick them up and fail every cargo command with a missing manifest.
 exclude = [
+    "src/apps/storybook",
     "src/containers/.cache",
 ]
 # `hl-gui-gtk` is the only member of the default set that needs a system library:
@@ -21,7 +22,6 @@ exclude = [
 # depends on nothing; libadwaita is not used anywhere in the workspace.
 default-members = [
     "src/apps/extension",
-    "src/apps/storybook",
     "src/workspaces/hl-gui",
     "src/workspaces/hl-gui-gtk",
     "src/workspaces/hl-extension",
