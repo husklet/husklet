@@ -90,9 +90,11 @@ Installed extensions can be listed and inspected under `ExtensionRead`.
 Enable, disable, and record removal each require literal `confirm: true` and the
 host's `ExtensionControl` grant. Acquisition uses the separate
 `ExtensionInstall` authority: a confirmed start returns a bounded job, status
-reveals the resolved digest, manifest identity, and requested grants, and only a
+reveals the resolved digest, the installed digest observed for that consent
+revision, manifest identity, and requested grants, and only a
 second confirmed install or update echoes that observed revision and commits the
-caller-selected grant; a changed candidate therefore makes stale consent fail. Cancellation
+caller-selected grant; a changed candidate or installed generation therefore
+makes stale consent fail. Cancellation
 is also explicit and confirmed; no MCP call performs an unobservable blocking pull.
 `husklet_extension_wait` follows the host's credit-controlled extension topics,
 returning either the newest bounded inventory snapshot or acquisition job/revision

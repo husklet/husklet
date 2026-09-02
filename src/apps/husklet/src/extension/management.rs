@@ -170,6 +170,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 version: candidate.version,
                 image_digest: candidate.digest,
                 requested: candidate.requested,
+                installed_image_digest: candidate.installed_digest,
             };
             ("ready", None, Some(candidate), None)
         }
@@ -240,6 +241,29 @@ mod tests {
         assert_eq!(
             (progress.status.as_str(), progress.current, progress.total),
             ("downloading layer", Some(25), Some(100))
+        );
+    }
+
+    #[test]
+    fn ready_status_exposes_the_installed_generation_that_consent_is_bound_to() {
+        let status = acquisition_status(
+            "9".into(),
+            AcquisitionSnapshot {
+                reference: "registry.example/team/tool:2".into(),
+                revision: 7,
+                state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                    reference: "registry.example/team/tool:2".into(),
+                    digest: "sha256:new".into(),
+                    name: "sample".into(),
+                    version: "2".into(),
+                    requested: Grant::new([hl_extension::Capability::Interface]),
+                    installed_digest: Some("sha256:old".into()),
+                }),
+            },
+        );
+        assert_eq!(
+            status.candidate.unwrap().installed_image_digest.as_deref(),
+            Some("sha256:old")
         );
     }
 

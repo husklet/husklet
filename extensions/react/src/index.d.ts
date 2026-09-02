@@ -4864,7 +4864,7 @@ export type ExtensionCapability =
   | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
   | 'extension-control' | 'extension-install' | 'filesystem-read'
   | 'filesystem-write' | 'interface';
-export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[] }
+export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[]; installed_image_digest: string | null }
 export interface ExtensionAcquisitionJob { job: string }
 export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }
 export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; progress: ExtensionAcquisitionProgress | null; candidate: ExtensionCandidate | null; error: string | null }

@@ -540,6 +540,8 @@ pub struct ExtensionCandidate {
     pub version: String,
     pub image_digest: String,
     pub requested: crate::Grant,
+    #[serde(default)]
+    pub installed_image_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]

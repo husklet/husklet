@@ -685,7 +685,7 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'extension_list') return { reply: 'extensions', with: [{ name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' }] };
       if (name === 'extension_disable') return { reply: 'done' };
       if (name === 'extension_acquisition_start') return { reply: 'extension_acquisition_job', with: { job: 'job-live' } };
-      if (name === 'extension_acquisition_status') return { reply: 'extension_acquisition', with: { job: 'job-live', reference: 'example:1', revision: 3, state: 'ready', candidate: { name: 'example', version: '1', image_digest: 'sha256:def', requested: ['interface'] }, error: null } };
+      if (name === 'extension_acquisition_status') return { reply: 'extension_acquisition', with: { job: 'job-live', reference: 'example:1', revision: 3, state: 'ready', candidate: { name: 'example', version: '1', image_digest: 'sha256:def', requested: ['interface'], installed_image_digest: 'sha256:abc' }, error: null } };
       if (name === 'extension_install') return { reply: 'extension', with: { name: 'example', image_digest: 'sha256:def', status: 'standby' } };
       if (name === 'execution_inspect') return { reply: 'execution', with: {
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,

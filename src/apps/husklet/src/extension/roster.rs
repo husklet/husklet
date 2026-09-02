@@ -184,6 +184,18 @@ impl<S: Storage> Roster<S> {
             .map_err(Refusal::Policy)
     }
 
+    /// Prepares only while the installed generation still matches the one
+    /// shown with the consent prompt.
+    pub fn prepare_update_if_digest(
+        &self,
+        manifest: &Manifest,
+        digest: &str,
+        installed_digest: &str,
+    ) -> Result<Update, Refusal> {
+        self.require_digest(&manifest.name, installed_digest)?;
+        self.prepare_update(manifest, digest)
+    }
+
     /// Durably replaces a consented record. Saving is the replacement callback,
     /// so either both in-memory policy and durable authority advance or neither
     /// does; the old host remains mounted until the caller refreshes afterward.
