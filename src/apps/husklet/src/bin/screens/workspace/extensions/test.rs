@@ -1340,6 +1340,10 @@ mod ports {
 /// than about a presented window or a running workspace.
 mod panes {
     use std::cell::RefCell;
+    #[cfg(feature = "mcp-e2e")]
+    use std::io::{Read as _, Write as _};
+    #[cfg(feature = "mcp-e2e")]
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
@@ -1382,6 +1386,55 @@ mod panes {
             Slots::new(&self.window).hold(&terminal, slot.clone());
             self.page.append(&PaneChrome::wrap(&self.window, &terminal));
             (terminal, slot)
+        }
+
+        /// A registered terminal backed by a real raw PTY. The returned slave
+        /// is the guest side: socket input arrives there, while its output is
+        /// rendered by VTE and becomes readable through the same socket.
+        #[cfg(feature = "mcp-e2e")]
+        #[allow(unsafe_code)]
+        fn shell_with_pty(&self) -> (vte4::Terminal, String, OwnedFd) {
+            let mut master = -1;
+            let mut slave = -1;
+            // SAFETY: openpty initializes both descriptors; ownership is
+            // adopted exactly once immediately below.
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &raw mut master,
+                        &raw mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null(),
+                        std::ptr::null(),
+                    )
+                },
+                0
+            );
+            // SAFETY: successful openpty returned two unique live descriptors.
+            let master = unsafe { OwnedFd::from_raw_fd(master) };
+            let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+            let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+            // SAFETY: the live slave initializes attributes.
+            assert_eq!(
+                unsafe { libc::tcgetattr(slave.as_raw_fd(), attributes.as_mut_ptr()) },
+                0
+            );
+            // SAFETY: successful tcgetattr initialized attributes.
+            let mut attributes = unsafe { attributes.assume_init() };
+            // SAFETY: attributes is initialized and exclusively borrowed.
+            unsafe { libc::cfmakeraw(&raw mut attributes) };
+            // SAFETY: the slave and attributes remain live for this call.
+            assert_eq!(
+                unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &raw const attributes) },
+                0
+            );
+            let pty = vte4::Pty::foreign_sync(master, gtk::gio::Cancellable::NONE).expect("foreign PTY");
+            let terminal = vte4::Terminal::new();
+            terminal.set_pty(Some(&pty));
+            let slot = Window::slot(&self.window);
+            Slots::new(&self.window).hold(&terminal, slot.clone());
+            self.page.append(&PaneChrome::wrap(&self.window, &terminal));
+            (terminal, slot, slave)
         }
 
         /// Another terminal pane, beside an existing one.
@@ -1498,6 +1551,17 @@ mod panes {
         ));
         view.select_name("Extensions");
         let bench = Bench::new();
+        let (_terminal, terminal_slot, slave) = bench.shell_with_pty();
+        let mut guest_side = std::fs::File::from(slave);
+        guest_side.write_all(b"agent-ready\r\n").expect("seed guest output");
+        let guest = std::thread::spawn(move || {
+            let expected = b"agent-status\n";
+            let mut received = vec![0_u8; expected.len()];
+            guest_side.read_exact(&mut received).expect("read MCP terminal input");
+            assert_eq!(received, expected, "MCP input reached the guest verbatim");
+            let answer = b"agent-received:agent-status\r\n";
+            guest_side.write_all(answer).expect("write guest response");
+        });
         let gallery = Gallery::new();
         gallery.enrol_native(view.semantic_registry());
         Window::exhibit(&bench.window, gallery);
@@ -1511,7 +1575,13 @@ mod panes {
             let (stream, _) = listener.accept().expect("MCP session connects");
             let authority = Authority::new(
                 ExtensionName::new("mcp-e2e").unwrap(),
-                Grant::new([Capability::PaneSemanticRead, Capability::PaneSemanticControl]),
+                Grant::new([
+                    Capability::TerminalRead,
+                    Capability::TerminalOutput,
+                    Capability::TerminalControl,
+                    Capability::PaneSemanticRead,
+                    Capability::PaneSemanticControl,
+                ]),
                 Vec::new(),
             );
             let unused = Unused;
@@ -1551,6 +1621,7 @@ mod panes {
         let mut child = Command::new("node")
             .arg(script)
             .arg(&socket)
+            .arg(&terminal_slot)
             .current_dir(root.join("extensions"))
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1569,7 +1640,9 @@ mod panes {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Settings</label>"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("agent-received:agent-status"));
         assert_eq!(view.shown().as_deref(), Some("Settings"));
+        guest.join().expect("guest PTY responder");
         served.join().expect("conversation thread");
     }
 
