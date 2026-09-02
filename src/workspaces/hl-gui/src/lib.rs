@@ -32,7 +32,7 @@ mod size;
 mod style;
 
 pub use builder::Surface;
-pub use component::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion};
+pub use component::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TimelineEvent};
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
     Version,
@@ -68,3 +68,6 @@ pub const MEMORY_MAP_REGION_LIMIT: usize = 128;
 
 /// Maximum number of decoded instructions retained by a [`Tag::DisassemblyView`].
 pub const DISASSEMBLY_INSTRUCTION_LIMIT: usize = 256;
+
+/// Maximum number of chronological events retained by a [`Tag::TimelineView`].
+pub const TIMELINE_EVENT_LIMIT: usize = 256;

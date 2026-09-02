@@ -19,6 +19,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::FlameGraph => flame_graph().upcast(),
         Tag::MemoryMap => memory_map().upcast(),
         Tag::DisassemblyView => memory_map().upcast(),
+        Tag::TimelineView => memory_map().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -367,6 +368,51 @@ pub(crate) fn instructions(widget: &gtk::Widget, value: &str) -> bool {
                 1 => 47,
                 2 => 10,
                 _ => 24,
+            });
+            label.set_hexpand(index == 3);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+/// Replaces a chronology with four selectable native columns.
+pub(crate) fn timeline(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for line in value.lines().take(hl_gui::TIMELINE_EVENT_LIMIT) {
+        let columns = line.splitn(4, '\t').collect::<Vec<_>>();
+        if columns.len() != 4 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(text);
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            if index == 0 {
+                label.add_css_class("monospace");
+            }
+            label.set_width_chars(match index {
+                0 => 14,
+                1 => 12,
+                2 => 24,
+                _ => 32,
             });
             label.set_hexpand(index == 3);
             row.append(&label);

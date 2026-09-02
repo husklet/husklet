@@ -98,11 +98,37 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     flame_graph_is_bounded_selectable_and_proportional();
     memory_map_is_bounded_selectable_and_columnar();
     disassembly_is_bounded_selectable_and_columnar();
+    timeline_is_bounded_selectable_and_columnar();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn timeline_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let timeline = session.producer.create(Tag::TimelineView);
+    session.producer.append(NodeId::ROOT, timeline);
+    let value = (0..300)
+        .map(|index| format!("{index}\truntime\tevent-{index}\tdetail-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(timeline, Prop::Value, PropValue::text(value));
+    session.flush().expect("timeline renders");
+    let widget = session.tagged(Tag::TimelineView).expect("timeline widget");
+    let timestamps = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timestamps.len(),
+        256,
+        "the adapter independently caps native event rows"
+    );
+    assert!(timestamps.iter().all(gtk::Label::is_selectable));
+    assert_eq!(timestamps[0].text(), "0");
 }
 
 fn disassembly_is_bounded_selectable_and_columnar() {
@@ -930,6 +956,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::FlameGraph => Aspect::Value,
         Tag::MemoryMap => Aspect::Value,
         Tag::DisassemblyView => Aspect::Value,
+        Tag::TimelineView => Aspect::Value,
         _ => structural(tag),
     }
 }

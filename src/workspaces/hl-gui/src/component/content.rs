@@ -93,6 +93,39 @@ impl Instruction {
     }
 }
 
+/// One timestamped event in a developer chronology.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimelineEvent {
+    timestamp_ms: i64,
+    category: String,
+    label: String,
+    detail: String,
+}
+
+impl TimelineEvent {
+    /// Makes a readable event; blank labels are omitted and wire separators are neutralized.
+    #[must_use]
+    pub fn new(
+        timestamp_ms: i64,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Option<Self> {
+        fn clean(value: String) -> String {
+            value.replace(['\t', '\n', '\r'], " ")
+        }
+        let category = clean(category.into());
+        let label = clean(label.into());
+        let detail = clean(detail.into());
+        (!label.trim().is_empty()).then_some(Self {
+            timestamp_ms,
+            category,
+            label,
+            detail,
+        })
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -394,6 +427,23 @@ impl Element {
         Self::new(Tag::DisassemblyView).value(value)
     }
 
+    /// A bounded chronological event view.
+    #[must_use]
+    pub fn timeline_view(events: impl IntoIterator<Item = TimelineEvent>) -> Self {
+        let value = events
+            .into_iter()
+            .take(crate::TIMELINE_EVENT_LIMIT)
+            .map(|event| {
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    event.timestamp_ms, event.category, event.label, event.detail
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::TimelineView).value(value)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -403,7 +453,7 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion};
+    use super::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TimelineEvent};
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -544,5 +594,29 @@ mod tests {
             "the instruction ceiling is a fixed contract"
         );
         assert!(value.starts_with("0000000000000000\t48 89 e5\tmov\trbp  rsp"));
+    }
+
+    #[test]
+    fn timeline_rejects_blank_events_and_has_an_independent_ceiling() {
+        assert!(TimelineEvent::new(0, "runtime", " ", "ignored").is_none());
+        let events =
+            (0..300).filter_map(|index| TimelineEvent::new(index, "runtime", format!("event\t{index}"), "detail"));
+        let element = Element::timeline_view(events);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("timeline value");
+        assert_eq!(value.lines().count(), 256, "the event ceiling is a fixed contract");
+        assert!(value.starts_with("0\truntime\tevent 0\tdetail"));
     }
 }

@@ -22,6 +22,7 @@ import { FileBrowserStory } from '../src/file-browser.js';
 import { ProfileInspectionStory, boundedFrames, FRAME_LIMIT } from '../src/profile-inspection.js';
 import { MemoryInspectionStory, boundedRegions, REGION_LIMIT } from '../src/memory-inspection.js';
 import { DisassemblyInspectionStory, boundedInstructions, INSTRUCTION_LIMIT } from '../src/disassembly-inspection.js';
+import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/timeline-inspection.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -70,6 +71,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['profile inspection', h(ProfileInspectionStory)],
     ['memory inspection', h(MemoryInspectionStory)],
     ['disassembly inspection', h(DisassemblyInspectionStory)],
+    ['timeline view', h(TimelineInspectionStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -79,6 +81,12 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('timeline view rejects blank events and enforces its hard ceiling', () => {
+  const events = Array.from({ length: TIMELINE_LIMIT + 5 }, (_, index) => ({ timestampMs: index, category: 'runtime', label: `event-${index}`, detail: 'observed' }));
+  events.splice(1, 0, { timestampMs: 1, category: 'runtime', label: '', detail: 'blank' });
+  const value = boundedEvents(events); assert.equal(value.split('\n').length, TIMELINE_LIMIT); assert(!value.includes('blank')); assert(value.startsWith('0\truntime\tevent-0\tobserved'));
 });
 
 test('disassembly inspection rejects invalid instructions and enforces its hard ceiling', () => {

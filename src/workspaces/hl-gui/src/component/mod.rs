@@ -9,7 +9,7 @@
 
 mod content;
 
-pub use content::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion};
+pub use content::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TimelineEvent};
 mod control;
 mod structure;
 

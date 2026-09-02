@@ -166,6 +166,7 @@ export const {
   FlameGraph,
   MemoryMap,
   DisassemblyView,
+  TimelineView,
   DiffViewer,
   DiffLine,
   StackTrace,

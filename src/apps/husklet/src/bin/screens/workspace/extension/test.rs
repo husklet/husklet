@@ -138,12 +138,30 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         flame_graph_projects_profile_frames_into_semantics();
         memory_map_projects_exact_regions_into_semantics();
         disassembly_projects_exact_instructions_into_semantics();
+        timeline_projects_exact_events_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn timeline_projects_exact_events_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::timeline_view([
+        hl_gui::TimelineEvent::new(1700000000123, "deploy", "release started", "v2").expect("event"),
+        hl_gui::TimelineEvent::new(1700000001456, "health", "ready", "3 replicas").expect("event"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let timeline = &tree.root.children[0];
+    assert_eq!(timeline.role, "TimelineView");
+    assert_eq!(
+        timeline.value.as_deref(),
+        Some("1700000000123\tdeploy\trelease started\tv2\n1700000001456\thealth\tready\t3 replicas")
+    );
+    assert!(timeline.actions.is_empty());
 }
 
 fn disassembly_projects_exact_instructions_into_semantics() {

@@ -410,6 +410,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::FlameGraph
         | Tag::MemoryMap
         | Tag::DisassemblyView
+        | Tag::TimelineView
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",

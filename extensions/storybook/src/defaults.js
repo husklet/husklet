@@ -75,6 +75,7 @@ const BY_TAG = {
   FlameGraph: { value: '120\tcompiler::parse\n74\tcompiler::check\n31\tcompiler::emit' },
   MemoryMap: { value: '0000000000400000-0000000000410000\tr-xp\t65536\t/bin/app' },
   DisassemblyView: { value: '0000000000401000\t55\tpush\trbp\n0000000000401001\t48 89 e5\tmov\trbp, rsp' },
+  TimelineView: { value: '1700000000123\tdeploy\trelease started\tv2\n1700000001456\thealth\tready\t3 replicas' },
   Badge: { label: '3' },
   Chip: { label: 'tag', variant: 'outline' },
   Toast: { label: 'Saved', tone: 'positive' },
