@@ -1392,8 +1392,8 @@ mod panes {
     #[cfg(feature = "mcp-e2e")]
     pub(super) fn mcp_socket_changes_native_ui() {
         use hl_extension::port::{
-            ContainerControl, ContainerInventory, Entry, ImageStore, NetworkStore, VolumeStore, WorkspaceControl,
-            WorkspaceFiles, WorkspaceInventory,
+            ContainerControl, ContainerInventory, Entry, ExtensionStore, ImageStore, NetworkStore, VolumeStore,
+            WorkspaceControl, WorkspaceFiles, WorkspaceInventory,
         };
         use hl_extension::{Authority, Capability, Grant, RelativePath, Services, WorkspaceInfo};
         use std::process::Command;
@@ -1437,6 +1437,7 @@ mod panes {
             }
         }
         impl WorkspaceControl for Unused {}
+        impl ExtensionStore for Unused {}
         impl WorkspaceFiles for Unused {
             fn list(&self, _: &RelativePath) -> Result<Vec<Entry>, HostError> {
                 unreachable!()
@@ -1497,6 +1498,7 @@ mod panes {
                 networks: &unused,
                 terminal: &relay,
                 files: &unused,
+                extensions: &unused,
             };
             let mut conversation =
                 hl::extension::Conversation::new(stream, authority, "dev", hl::extension::Queue::new())
