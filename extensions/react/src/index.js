@@ -152,8 +152,8 @@ export function workspace(session) {
         return expect(await session.call('container_create', { spec }), 'identity');
       },
       start: (id) => done('container_start', { id }),
-      stop: (id) => done('container_stop', { id }),
-      remove: (id) => done('container_remove', { id }),
+      stop: (id) => done('container_stop', { id: immutableIdentity(id, [32, 64], 'container') }),
+      remove: (id) => done('container_remove', { id: immutableIdentity(id, [32, 64], 'container') }),
       pause: (id) => done('container_pause', { id }),
       unpause: (id) => done('container_unpause', { id }),
       restart: (id) => done('container_restart', { id }),

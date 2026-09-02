@@ -50,16 +50,19 @@ try {
     const terminationCalls = [];
     const termination = tools({ containers: {
       stop: async (id) => terminationCalls.push(['stop', id]),
+      remove: async (id) => terminationCalls.push(['remove', id]),
       kill: async (id, signal) => terminationCalls.push(['kill', id, signal]),
     } });
     const stop = termination.find(({ name }) => name === 'husklet_container_stop');
+    const remove = termination.find(({ name }) => name === 'husklet_container_remove');
     const kill = termination.find(({ name }) => name === 'husklet_container_kill');
     if (stop.inputSchema.safeParse({ id: 'packed' }).success) process.exit(1);
     if (kill.inputSchema.safeParse({ id: 'packed', signal: 'SIGKILL' }).success) process.exit(1);
-    await stop.run({ id: 'packed', confirm: true });
     const immutable = 'a'.repeat(64);
+    await stop.run({ id: immutable, confirm: true });
+    await remove.run({ id: immutable, confirm: true });
     await kill.run({ id: immutable, signal: 'SIGKILL', confirm: true });
-    if (JSON.stringify(terminationCalls) !== JSON.stringify([['stop', 'packed'], ['kill', immutable, 'SIGKILL']])) process.exit(1);
+    if (JSON.stringify(terminationCalls) !== JSON.stringify([['stop', immutable], ['remove', immutable], ['kill', immutable, 'SIGKILL']])) process.exit(1);
     if (!tools({ terminal: { panes: async () => ({ panes: [], truncated: false }) } }).some(({ name }) => name === 'husklet_pane_list')) process.exit(1);
     const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     if (!xml.startsWith('<pane slot="packed"')) process.exit(1);

@@ -190,7 +190,7 @@ function containerActions(item, busy, act) {
     h(Button, { key: 'pause', label: item.state === 'paused' ? 'Resume' : 'Pause', enabled: !blocked && (running || item.state === 'paused'), onInvoke: () => act(item.state === 'paused' ? 'unpause' : 'pause', item.id) }),
     h(ConfirmAction, {
       key: 'stop', label: 'Stop', confirmLabel: 'Confirm stop',
-      question: `Stop ${item.name || shortId(item.id)}?`, enabled: !blocked && running,
+      question: `Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && running,
       onConfirm: () => act('stop', item.id),
     }),
   ];
@@ -234,7 +234,7 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
             : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
-      label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)}?`,
+      label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`,
       onConfirm: () => act('kill', container.id, 'SIGKILL'),
     })),
     logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }),

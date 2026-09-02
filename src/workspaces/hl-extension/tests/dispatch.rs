@@ -841,9 +841,9 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::ContainerStart { id: "c1".into() },
             Capability::ContainerControl,
         ),
-        (Request::ContainerStop { id: "c1".into() }, Capability::ContainerControl),
+        (Request::ContainerStop { id: "c".repeat(64) }, Capability::ContainerControl),
         (
-            Request::ContainerRemove { id: "c1".into() },
+            Request::ContainerRemove { id: "c".repeat(64) },
             Capability::ContainerControl,
         ),
         (
@@ -1162,6 +1162,8 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
+        Request::ContainerStop { id: "friendly-name".into() },
+        Request::ContainerRemove { id: "a".repeat(12) },
         Request::ContainerKill { id: "1".into(), signal: "SIGTERM".into() },
         Request::ContainerKill { id: "friendly-name".into(), signal: "SIGTERM".into() },
         Request::ContainerKill { id: "a".repeat(12), signal: "SIGTERM".into() },
@@ -1172,9 +1174,11 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     }
     assert!(host.ledger.reached().is_empty());
 
+    session.dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host)).unwrap();
+    session.dispatch(&Request::ContainerRemove { id: "a".repeat(64) }, &services(&host)).unwrap();
     session.dispatch(&Request::ContainerKill { id: "a".repeat(64), signal: "SIGTERM".into() }, &services(&host)).unwrap();
     session.dispatch(&Request::ExecutionKill { id: "b".repeat(32), signal: "SIGTERM".into() }, &services(&host)).unwrap();
-    assert_eq!(host.ledger.reached(), ["containers.kill", "executions.kill"]);
+    assert_eq!(host.ledger.reached(), ["containers.stop", "containers.remove", "containers.kill", "executions.kill"]);
 }
 
 #[test]

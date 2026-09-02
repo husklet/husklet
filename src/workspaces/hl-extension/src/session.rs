@@ -305,8 +305,14 @@ impl Session {
                 Ok(Reply::Identity(port.create_spec(spec)?))
             }
             Request::ContainerStart { id } => port.start(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerStop { id } => port.stop(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerRemove { id } => port.remove(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerStop { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.stop(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ContainerRemove { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.remove(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ContainerPause { id } => port.pause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerUnpause { id } => port.unpause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),

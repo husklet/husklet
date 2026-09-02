@@ -401,11 +401,13 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const containerId = 'a'.repeat(64);
   const executionId = 'b'.repeat(32);
   assert.throws(() => api.containers.signalExecution('7', 'SIGTERM'), /complete immutable ID/);
+  assert.throws(() => api.containers.stop('friendly-name'), /complete immutable ID/);
+  assert.throws(() => api.containers.remove('abc123'), /complete immutable ID/);
   assert.throws(() => api.containers.kill('friendly-name', 'SIGTERM'), /complete immutable ID/);
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
     api.containers.execution('e1'), api.containers.executions(), api.containers.executionLogs('e1', { stdout: true, stderr: false }), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.pause('c1'), api.containers.unpause('c1'),
-    api.containers.restart('c1'), api.containers.kill(containerId, 'SIGTERM'), api.containers.signalExecution(executionId, 'SIGHUP'), api.containers.removeExecution('e1'),
+    api.containers.restart('c1'), api.containers.stop(containerId), api.containers.remove(containerId), api.containers.kill(containerId, 'SIGTERM'), api.containers.signalExecution(executionId, 'SIGHUP'), api.containers.removeExecution('e1'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
@@ -421,6 +423,8 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_pause', with: { id: 'c1' } },
     { call: 'container_unpause', with: { id: 'c1' } },
     { call: 'container_restart', with: { id: 'c1' } },
+    { call: 'container_stop', with: { id: containerId } },
+    { call: 'container_remove', with: { id: containerId } },
     { call: 'container_kill', with: { id: containerId, signal: 'SIGTERM' } },
     { call: 'execution_kill', with: { id: executionId, signal: 'SIGHUP' } },
     { call: 'execution_remove', with: { id: 'e1' } },
@@ -436,7 +440,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'executions', with: { executions: [], truncated: false } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } },
     { reply: 'execution', with: { id: 'e1', running: false, exit_code: 0 } },
-    ...Array(6).fill({ reply: 'done' }),
+    ...Array(8).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
     { reply: 'done' },
   ];
@@ -453,7 +457,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { eof: results[4].eof, stdout: results[4].stdout_truncated, stderr: results[4].stderr_truncated },
     { eof: true, stdout: false, stderr: false },
   );
-  assert.equal(results[12], 'e2');
+  assert.equal(results[14], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

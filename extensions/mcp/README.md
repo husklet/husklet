@@ -54,9 +54,10 @@ without blocking the native UI.
 
 Execution inspection and execution signaling use distinct typed calls: signaling
 targets one complete immutable execution ID under `ContainerControl` and accepts
-only a 1..=32 byte signal name. Container signaling likewise requires the complete
-32- or 64-hex identity returned by inventory. Names, prefixes, and snapshot PIDs
-are refused before the socket call. It does not signal the owning container or parse a shell.
+only a 1..=32 byte signal name. Container stop, removal, and signaling likewise
+require the complete 32- or 64-hex identity returned by inventory or inspection.
+Names, prefixes, and snapshot PIDs are refused before the socket call. Execution
+signaling does not signal the owning container or parse a shell.
 Execution output replay reports stdout and stderr truncation independently and
 sets `eof` only when the process was already complete before replay; an empty
 running response is therefore not presented as end-of-stream.

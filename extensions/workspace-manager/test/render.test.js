@@ -259,6 +259,7 @@ test('volume inspection exposes loading, retry, empty and bounded typed details'
 
 test('container stop and kill cannot call the API before final confirmation', async () => {
   const calls = [];
+  const immutable = 'a'.repeat(64);
   const controlled = {
     containers: {
       inspect: async (id) => ({ id, name: 'api', image: 'alpine', state: 'running', created: 0 }),
@@ -268,7 +269,7 @@ test('container stop and kill cannot call the API before final confirmation', as
     },
   };
   const resource = {
-    data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running' }],
     loading: false, error: null, reload: async () => {},
   };
   const stage = host();
@@ -276,22 +277,24 @@ test('container stop and kill cannot call the API before final confirmation', as
 
   invoke(stage, 'Stop');
   assert.deepEqual(calls, [], 'opening stop confirmation performs no operation');
+  assert.ok(labelled(stage, `Stop api with immutable ID ${immutable}?`));
   assert.equal(isDestructive(stage, 'Confirm stop'), true);
   invoke(stage, 'Cancel');
   assert.deepEqual(calls, [], 'cancelling stop is safe');
   invoke(stage, 'Stop');
   invoke(stage, 'Confirm stop');
   await settled();
-  assert.deepEqual(calls, [['stop', 'container-one']]);
+  assert.deepEqual(calls, [['stop', immutable]]);
 
   invoke(stage, 'Details');
   await settled(); await settled();
   invoke(stage, 'Kill');
-  assert.deepEqual(calls, [['stop', 'container-one']], 'opening kill confirmation performs no operation');
+  assert.deepEqual(calls, [['stop', immutable]], 'opening kill confirmation performs no operation');
+  assert.ok(labelled(stage, `Force-kill api with immutable ID ${immutable}?`));
   assert.equal(isDestructive(stage, 'Confirm kill'), true);
   invoke(stage, 'Confirm kill');
   await settled();
-  assert.deepEqual(calls.at(-1), ['kill', 'container-one', 'SIGKILL']);
+  assert.deepEqual(calls.at(-1), ['kill', immutable, 'SIGKILL']);
 });
 
 test('container creation retains exact identity and retries only start after a partial failure', async () => {

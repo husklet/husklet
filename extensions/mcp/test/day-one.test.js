@@ -19,6 +19,7 @@ const configuration = (image) => ({
 });
 
 test('day-one agent drives exact framed host requests and confirmed cleanup through spawned MCP', async (context) => {
+  const containerId = 'a'.repeat(64);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-day-one-'));
   const socketPath = path.join(scratch, 'host.sock');
   const original = configuration('alpine:3.20');
@@ -57,7 +58,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
         });
         else if (call === 'workspace_inspect') answer(frame, 'workspace_configuration', original);
         else if (call === 'workspace_update') answer(frame, 'workspace_configuration', argument.configuration);
-        else if (call === 'container_create') answer(frame, 'identity', { id: 'container-day-one' });
+        else if (call === 'container_create') answer(frame, 'identity', { id: containerId });
         else if (call === 'container_start' || call === 'container_stop' || call === 'container_remove'
           || call === 'terminal_write_pane' || call === 'pane_semantic_action'
           || call === 'event_subscribe' || call === 'event_unsubscribe') {
@@ -129,7 +130,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   ]);
   assert.equal(credits.some(({ payload }) => payload === 1), true);
   assert.deepEqual(calls.find(({ call }) => call === 'container_exec').with, {
-    id: 'container-day-one', command: ['/usr/bin/worker', '--once'], user: null, working_directory: null,
+    id: containerId, command: ['/usr/bin/worker', '--once'], user: null, working_directory: null,
   });
   assert.deepEqual(calls.find(({ call }) => call === 'container_create').with.spec, {
     image: 'alpine:3.21', name: 'day-one', entrypoint: null,
