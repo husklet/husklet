@@ -91,6 +91,8 @@ const BACKEND_SHAPE_PRODUCT_V11_EXTRA: &[&str] = &[
     "first_finalize_caller", "first_finalize_actor", "first_finalize_slot_pid",
     "duplicate_finalize_caller", "duplicate_finalize_actor", "duplicate_finalize_slot_pid",
 ];
+const BACKEND_SHAPE_PRODUCT_V12_EXTRA: &[&str] =
+    &["duplicate_slot_first_caller", "duplicate_slot_first_actor"];
 
 fn backend_shape_product_field(name: &str, version: u64) -> bool {
     if BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
@@ -115,6 +117,9 @@ fn backend_shape_product_field(name: &str, version: u64) -> bool {
         return true;
     }
     if version >= 11 && BACKEND_SHAPE_PRODUCT_V11_EXTRA.contains(&name) {
+        return true;
+    }
+    if version >= 12 && BACKEND_SHAPE_PRODUCT_V12_EXTRA.contains(&name) {
         return true;
     }
     let Some(suffix) = name.strip_prefix("executed_form") else {
@@ -761,21 +766,30 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             }
         }
     }
-    if !matches!(fields["version"], 4 | 5 | 6 | 7 | 9 | 10 | 11) {
+    if version >= 12 {
+        for name in BACKEND_SHAPE_PRODUCT_V12_EXTRA {
+            if !fields.contains_key(name) {
+                return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+            }
+        }
+    }
+    if !matches!(fields["version"], 4 | 5 | 6 | 7 | 9 | 10 | 11 | 12) {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
     if fields["available"] != 1 {
-        if version >= 11 {
+        if version >= 12 {
             return Err(format!(
                 "backend-shape product diagnostic is unavailable: lifecycle_settled={} missing_claims={} \
                  duplicate_finalize={} reserved={} live={} claimed={} first_finalize_caller={} \
                  first_finalize_actor={} first_finalize_slot_pid={} duplicate_finalize_caller={} \
-                 duplicate_finalize_actor={} duplicate_finalize_slot_pid={}",
+                 duplicate_finalize_actor={} duplicate_finalize_slot_pid={} duplicate_slot_first_caller={} \
+                 duplicate_slot_first_actor={}",
                 fields["lifecycle_settled"], fields["missing_claims"], fields["duplicate_finalize"],
                 fields["reserved"], fields["live"], fields["claimed"], fields["first_finalize_caller"],
                 fields["first_finalize_actor"], fields["first_finalize_slot_pid"],
                 fields["duplicate_finalize_caller"], fields["duplicate_finalize_actor"],
-                fields["duplicate_finalize_slot_pid"]
+                fields["duplicate_finalize_slot_pid"], fields["duplicate_slot_first_caller"],
+                fields["duplicate_slot_first_actor"]
             )
             .into());
         }
@@ -1347,10 +1361,10 @@ mod tests {
     }
 
     #[test]
-    fn product_v11_unavailable_record_names_the_incomplete_lifecycle_component_and_finalizers() {
+    fn product_v12_unavailable_record_names_the_duplicate_slots_first_finalizer() {
         let mut product = PRODUCT_SHAPE_ON
             .trim_end()
-            .replace("version=4 available=1", "version=11 available=0");
+            .replace("version=4 available=1", "version=12 available=0");
         for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA
             .iter()
             .chain(BACKEND_SHAPE_PRODUCT_V6_EXTRA)
@@ -1364,16 +1378,17 @@ mod tests {
         product.push_str(
             " lifecycle_settled=1 missing_claims=0 duplicate_finalize=1 reserved=0 live=0 claimed=0 \
              first_finalize_caller=1 first_finalize_actor=41 first_finalize_slot_pid=41 \
-             duplicate_finalize_caller=2 duplicate_finalize_actor=42 duplicate_finalize_slot_pid=41\n",
+             duplicate_finalize_caller=2 duplicate_finalize_actor=42 duplicate_finalize_slot_pid=43 \
+             duplicate_slot_first_caller=1 duplicate_slot_first_actor=43\n",
         );
         let error = backend_shape_product(product.as_bytes(), true).unwrap_err().to_string();
         assert!(error.contains(
-            "first_finalize_caller=1 first_finalize_actor=41 first_finalize_slot_pid=41 \
-             duplicate_finalize_caller=2 duplicate_finalize_actor=42 duplicate_finalize_slot_pid=41"
+            "duplicate_finalize_caller=2 duplicate_finalize_actor=42 duplicate_finalize_slot_pid=43 \
+             duplicate_slot_first_caller=1 duplicate_slot_first_actor=43"
         ), "{error}");
-        let omitted = product.replace(" duplicate_finalize_caller=2", "");
+        let omitted = product.replace(" duplicate_slot_first_caller=1", "");
         assert!(backend_shape_product(omitted.as_bytes(), true)
-            .unwrap_err().to_string().contains("omitted field \"duplicate_finalize_caller\""));
+            .unwrap_err().to_string().contains("omitted field \"duplicate_slot_first_caller\""));
     }
 
     #[test]
