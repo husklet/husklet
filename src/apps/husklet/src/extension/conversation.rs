@@ -311,6 +311,23 @@ impl Conversation {
                 snapshots.push(Snapshot::Extensions(extensions));
             }
         }
+        if self.session.may_emit(Topic::ExtensionAcquisitions) {
+            if let Some(batch) = self.drain_extension_events() {
+                for (index, invalidation) in batch.acquisitions.into_iter().enumerate() {
+                    snapshots.push(Snapshot::ExtensionAcquisitions(
+                        hl_extension::ExtensionAcquisitionChange {
+                            job: invalidation.job,
+                            revision: invalidation.snapshot.revision,
+                            state: invalidation.snapshot.state.wire_state().into(),
+                            // The native source coalesces every job to its latest
+                            // revision. A capacity eviction is visible on the
+                            // first surviving invalidation rather than hidden.
+                            coalesced: if index == 0 { batch.dropped } else { 0 },
+                        },
+                    ));
+                }
+            }
+        }
         if self.session.may_emit(Topic::WorkspaceEvents) {
             if let Some(batch) = self.events.as_ref().and_then(super::host::Events::drain) {
                 snapshots.push(Snapshot::WorkspaceEvents(batch));
@@ -822,6 +839,7 @@ mod tests {
             Grant::new([
                 Capability::ContainerRead,
                 Capability::ExtensionRead,
+                Capability::ExtensionInstall,
                 Capability::Interface,
             ]),
             Vec::new(),
@@ -859,6 +877,39 @@ mod tests {
             conversation.drain_extension_events().is_none(),
             "the adapter drains rather than polls history"
         );
+    }
+
+    #[test]
+    fn native_acquisition_invalidations_cross_the_credit_controlled_event_channel() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::ExtensionAcquisitions);
+        let events = super::super::management_events::ExtensionEvents::default();
+        let job = super::super::acquisition::AcquisitionJob::parse("7").expect("job");
+        events.acquisition(
+            job,
+            super::super::acquisition::AcquisitionSnapshot {
+                reference: "registry/tool:1".into(),
+                revision: 3,
+                state: super::super::acquisition::AcquisitionState::ReadingManifest,
+            },
+        );
+        conversation.with_extension_events(events);
+        let ledger = Arc::new(Ledger::default());
+        let host = Host { ledger };
+
+        conversation.observe(&services(&host)).expect("native event observed");
+        let frame = wire.receive().expect("acquisition event");
+        let snapshot: Snapshot = serde_json::from_slice(&frame.payload).expect("typed snapshot");
+        assert!(matches!(
+            snapshot,
+            Snapshot::ExtensionAcquisitions(change)
+                if change.job == "7" && change.revision == 3 && change.state == "reading-manifest"
+        ));
     }
 
     /// Reads the welcome and answers it with a version.

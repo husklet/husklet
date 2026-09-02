@@ -80,6 +80,20 @@ impl AcquisitionState {
             Self::Installed | Self::Updated | Self::Failed(_) | Self::Cancelled
         )
     }
+
+    pub(crate) const fn wire_state(&self) -> &'static str {
+        match self {
+            Self::Inspecting => "inspecting",
+            Self::Pulling { .. } => "pulling",
+            Self::ReadingManifest => "reading-manifest",
+            Self::Ready(_) => "ready",
+            Self::Committing => "committing",
+            Self::Installed => "installed",
+            Self::Updated => "updated",
+            Self::Failed(_) => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 struct Job {
