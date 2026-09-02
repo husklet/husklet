@@ -528,7 +528,10 @@ static void translit_external_absolute_generation_reset(void) {}
 static void translit_ret_ibtc_reset(void) {}
 static void translit_ret_ibtc_drop_target(uint64_t target) { (void)target; }
 static void translit_cache_rewind_in_place(void) { jit_cache_rewind_in_place(); }
-static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu) { (void)cpu; }
+static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu, void *code) {
+    (void)cpu;
+    (void)code;
+}
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 /* The fall-through byte fixture and unsupported-opcode census exercise the

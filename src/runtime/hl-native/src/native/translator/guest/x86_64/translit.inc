@@ -1803,9 +1803,14 @@ enum {
     TL_INDIRECT_IBTC_MISS = 5,
 };
 
-static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu) {
+static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_consumed);
+
+// A mapped-target redispatch jumps around the loop-top fill seam. Repair the typed direct-CALL miss
+// here, while the dispatcher still holds the exact mapped descriptor it is about to execute. Without
+// this, a target evicted by an IBTC collision remains a miss forever even though its block is live.
+static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu, void *code) {
     if (cpu->jcc_ibtc_miss == TL_DIRECT_CALL_IBTC_MISS) {
-        cpu->jcc_ibtc_miss = 0;
+        translit_jcc_ibtc_fill(cpu, code, 0);
         translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH, 1);
     }
 }
@@ -4620,6 +4625,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(scenario - 25));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
+    if (scenario == 220) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(123));
         int status = 0;
         if (waitpid(child, &status, 0) != child) return 99;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -8142,6 +8156,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     uint64_t invalid_before = __atomic_load_n(&translit_direct_call_ibtc_invalid_refusal, __ATOMIC_RELAXED);
     uint64_t emitted_before = __atomic_load_n(&translit_direct_call_ibtc_emitted, __ATOMIC_RELAXED);
     uint64_t collision_before = __atomic_load_n(&translit_direct_call_ibtc_collision, __ATOMIC_RELAXED);
+    uint64_t fast_before = __atomic_load_n(&translit_direct_call_ibtc_fast_redispatch, __ATOMIC_RELAXED);
     uint64_t jcc_emitted_before = __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED);
     uint64_t jcc_collision_before = __atomic_load_n(&translit_jcc_ibtc_collision, __ATOMIC_RELAXED);
     int result = 162;
@@ -8218,6 +8233,26 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
     if (target_block == NULL || target_block->host_entry_off == 0) goto done_call_ibtc;
+
+    if (scenario == 123) {
+        translit_jcc_ibtc_fast_redispatch(&cpu, target_block);
+        if (cpu.jcc_ibtc_miss != 0 ||
+            __atomic_load_n(&translit_direct_call_ibtc_fill_count, __ATOMIC_RELAXED) != fill_before + 1 ||
+            __atomic_load_n(&translit_direct_call_ibtc_fast_redispatch, __ATOMIC_RELAXED) != fast_before + 1)
+            goto done_call_ibtc;
+        cpu = (struct cpu){0};
+        cpu.rip = source;
+        cpu.r[4] = stack;
+        cpu.ibtc_base = (uint64_t)g_ibtc;
+        run_block(context, &cpu, source_block);
+        memcpy(&return_word, (void *)(uintptr_t)(stack - 8), sizeof return_word);
+        result = cpu.r[0] == 42 && cpu.rip == target + 5 && cpu.r[4] == stack - 8 &&
+                         return_word == source + 5 && cpu.jcc_ibtc_miss == 0 &&
+                         __atomic_load_n(&translit_direct_call_ibtc_hit, __ATOMIC_RELAXED) == hit_before + 1
+                     ? 0
+                     : 179;
+        goto done_call_ibtc;
+    }
 
     if (scenario == 115 || scenario == 116) {
         if (scenario == 115) target_block->generation--;
