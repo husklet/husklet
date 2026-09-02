@@ -400,9 +400,13 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   await next();
   const terminal = workspace(stage.session).terminal;
   const topology = terminal.topology();
+  const spawning = terminal.spawn('s1', ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_spawn', with: { slot: 's1', command: ['printf', '%s\n', 'ready'] },
+  });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_write_pane', with: { slot: 's1', contents: [...new TextEncoder().encode('echo hello\n')] },
   });
@@ -413,8 +417,12 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
-  await Promise.all([writing, resizing]);
+  await Promise.all([spawning, writing, resizing]);
+  assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
+  assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
+  assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
   assert.throws(() => terminal.writeInput('s1', new Uint8Array(65_537)), /65536 byte limit/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
   stage.session.close(); stage.host.destroy(); stage.server.close();

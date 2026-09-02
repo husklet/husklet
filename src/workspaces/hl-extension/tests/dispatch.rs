@@ -991,6 +991,37 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
 }
 
 #[test]
+fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalControl], &[]);
+    for command in [
+        Vec::new(),
+        vec![String::new()],
+        vec!["x".repeat(hl_extension::port::TERMINAL_COMMAND_ARGUMENT_BYTES + 1)],
+        vec!["ok".into(), "contains\0nul".into()],
+        vec!["x".repeat(513); hl_extension::port::TERMINAL_COMMAND_ARGUMENTS],
+        vec!["x".into(); hl_extension::port::TERMINAL_COMMAND_ARGUMENTS + 1],
+    ] {
+        assert!(matches!(
+            session.dispatch(&Request::TerminalSpawn { slot: "s1".into(), command }, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+    assert_eq!(
+        session.dispatch(
+            &Request::TerminalSpawn {
+                slot: "s1".into(),
+                command: vec!["printf".into(), "%s\\n".into(), "ready".into()],
+            },
+            &services(&host),
+        ),
+        Ok(Reply::Done)
+    );
+    assert_eq!(host.ledger.reached(), ["terminal.spawn"]);
+}
+
+#[test]
 fn execution_signals_are_bounded_before_the_container_port_is_reached() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);

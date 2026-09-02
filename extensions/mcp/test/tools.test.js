@@ -15,7 +15,7 @@ function fake() {
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {},
   }};
@@ -73,14 +73,25 @@ test('live MCP transport carries workspace configuration and host authority fail
   await server.close();
 });
 
-test('schemas are strict, controls map exactly, and no terminal shell shortcut exists', async () => {
+test('schemas are strict, controls map exactly, and terminal spawn accepts argv rather than shell text', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
-  assert(!listed.some(({ name }) => /spawn|shell/.test(name)));
+  assert(!listed.some(({ name }) => /shell/.test(name)));
+  const spawn = listed.find(({ name }) => name === 'husklet_terminal_spawn');
+  assert(spawn);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: 'echo unsafe' }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: [] }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: [''] }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['x'.repeat(4097)] }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['x'.repeat(513), ...Array(63).fill('x'.repeat(512))] }).success, false);
+  await spawn.run({ slot: 'pane-1', command: ['printf', '%s\n', 'ready'] });
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
-  assert.deepEqual(calls, [['containers.start', 'abc']]);
+  assert.deepEqual(calls, [
+    ['terminal.spawn', 'pane-1', ['printf', '%s\n', 'ready']],
+    ['containers.start', 'abc'],
+  ]);
 });
 
 test('container termination requires confirmation before host authority is called', async () => {
@@ -483,6 +494,7 @@ test('a real MCP client lists strict tools and calls through the React session c
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: ['invoke'], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
+      if (name === 'terminal_spawn') return { reply: 'done' };
       if (name === 'terminal_write_pane') return { reply: 'done' };
       if (name === 'event_subscribe') {
         queueMicrotask(() => { for (const listener of events) listener({ snapshot: 'pane_changes', of: {
@@ -511,6 +523,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
   assert(listed.tools.some(({ name }) => name === 'husklet_terminal_write_bytes'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_terminal_spawn'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
   const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
@@ -538,6 +551,9 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(JSON.parse(volumes.content[0].text), [{ name: 'cache', driver: 'local' }]);
   const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
   assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
+  await client.callTool({ name: 'husklet_terminal_spawn', arguments: {
+    slot: 'pane-live', command: ['printf', '%s\n', 'ready'],
+  } });
   await client.callTool({ name: 'husklet_terminal_write_bytes', arguments: {
     slot: 'pane-live', input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
   } });
@@ -562,6 +578,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],
+    ['terminal_spawn', { slot: 'pane-live', command: ['printf', '%s\n', 'ready'] }],
     ['terminal_write_pane', { slot: 'pane-live', contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],

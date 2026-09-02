@@ -167,7 +167,16 @@ export function workspace(session) {
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
       split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
-      spawn: (slot, command) => done('terminal_spawn', { slot, command }),
+      spawn: (slot, command) => {
+        if (!Array.isArray(command) || command.length === 0 || command.length > 64
+          || command.some((argument) => typeof argument !== 'string'
+            || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
+          || command[0].length === 0
+          || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) {
+          throw new RangeError('terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+        }
+        return done('terminal_spawn', { slot, command: [...command] });
+      },
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
       semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
       act: (slot, action) => {

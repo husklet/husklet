@@ -220,6 +220,12 @@ pub struct PaneSemanticAction {
 
 /// The maximum bytes one terminal-input call may inject.
 pub const PANE_INPUT_BYTES: usize = 64 * 1024;
+/// Maximum argv entries accepted when replacing one terminal pane process.
+pub const TERMINAL_COMMAND_ARGUMENTS: usize = 64;
+/// Maximum UTF-8 bytes in one terminal command argument.
+pub const TERMINAL_COMMAND_ARGUMENT_BYTES: usize = 4096;
+/// Maximum aggregate UTF-8 bytes in a terminal command argv.
+pub const TERMINAL_COMMAND_BYTES: usize = 32 * 1024;
 
 /// The maximum rows or columns one explicit PTY grid may request.
 pub const PANE_GRID_EDGE: u16 = 1000;

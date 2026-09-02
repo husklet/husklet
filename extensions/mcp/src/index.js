@@ -17,6 +17,7 @@ const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
+  if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
   const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
 });
@@ -122,6 +123,7 @@ export function tools(api) {
     define('husklet_terminal_write_bytes', 'Write up to 65536 arbitrary bytes from canonical padded base64, including control and non-UTF8 bytes.', terminalBytes, async ({ slot: value, input_base64: encoded }) => { await api.terminal.writeInput(value, decodeTerminalBytes(encoded)); return { done: true }; }),
     define('husklet_terminal_open', 'Open a terminal tab.', z.object({ title: z.string().max(256).optional() }).strict(), ({ title }) => api.terminal.openTab(title ?? null)),
     define('husklet_terminal_split', 'Split a pane beside or below the selected pane.', z.object({ slot: id, division: z.enum(['beside', 'below']) }).strict(), ({ slot: value, division }) => api.terminal.split(value, division)),
+    define('husklet_terminal_spawn', 'Replace one terminal pane process with a bounded exact argv vector; no shell parsing.', z.object({ slot: id, command }).strict(), async ({ slot: value, command: argv }) => { await api.terminal.spawn(value, argv); return { done: true }; }),
     define('husklet_terminal_focus', 'Focus one pane.', slot, async ({ slot: value }) => { await api.terminal.focus(value); return { done: true }; }),
     define('husklet_terminal_resize', 'Request a bounded terminal grid size.', z.object({ slot: id, columns: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }).strict(), async ({ slot: value, columns, rows }) => { await api.terminal.resizeGrid(value, columns, rows); return { done: true }; }),
     define('husklet_terminal_ratio', 'Set the pane share of its split.', z.object({ slot: id, ratio: z.number().min(0.05).max(0.95) }).strict(), async ({ slot: value, ratio }) => { await api.terminal.ratio(value, ratio); return { done: true }; }),

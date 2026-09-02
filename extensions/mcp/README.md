@@ -36,8 +36,11 @@ Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,
 and actions; other tools use JSON. Container execution state is available as a
 read-only inspection tool under the host's `ContainerRead` grant. Container exec
-accepts only a bounded argv vector under `ContainerControl`; terminal process
-spawning remains absent, so this package provides no unrestricted shell shortcut.
+accepts only a bounded argv vector under `ContainerControl`. The
+`husklet_terminal_spawn` tool replaces one discovered terminal pane's process
+under `TerminalControl` with an exact 1..=64 element argv vector (4096 bytes per
+argument, 32768 bytes total). It never parses shell command text and does not
+grant access to a pane the socket authority cannot already control.
 Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.

@@ -437,6 +437,18 @@ impl Session {
             Request::TerminalOpenTab { title } => Ok(Reply::Identity(port.open_tab(title)?)),
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {
+                if command.is_empty()
+                    || command.len() > crate::port::TERMINAL_COMMAND_ARGUMENTS
+                    || command[0].is_empty()
+                    || command.iter().any(|argument| {
+                        argument.len() > crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES || argument.contains('\0')
+                    })
+                    || command.iter().map(String::len).sum::<usize>() > crate::port::TERMINAL_COMMAND_BYTES
+                {
+                    return Err(Failure::Conflict {
+                        detail: "terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate".into(),
+                    });
+                }
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::TerminalWritePane { slot, contents } => {
