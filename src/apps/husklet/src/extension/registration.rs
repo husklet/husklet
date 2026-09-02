@@ -223,10 +223,9 @@ fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancella
     // The container is removed whatever the read did: one left behind for every
     // image a person looked at and did not install is a leak nobody would
     // connect to this screen.
-    let _ = bridge.wait(tokio::time::timeout(
-        CLEANUP_BOUND,
-        client.containers().remove(&created.id, true, true),
-    ));
+    let _ = bridge.wait(async {
+        tokio::time::timeout(CLEANUP_BOUND, client.containers().remove(&created.id, true, true)).await
+    });
     archive
 }
 
