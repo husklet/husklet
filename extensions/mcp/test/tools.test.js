@@ -299,6 +299,7 @@ test('execution removal requires literal confirmation', async () => {
 test('terminal layout tools use the host wire vocabulary and bounded destructive controls', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
+  const open = listed.find(({ name }) => name === 'husklet_terminal_open');
   const split = listed.find(({ name }) => name === 'husklet_terminal_split');
   const resize = listed.find(({ name }) => name === 'husklet_terminal_resize');
   const ratio = listed.find(({ name }) => name === 'husklet_terminal_ratio');
@@ -308,11 +309,13 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
   assert.equal(resize.inputSchema.safeParse({ slot: 'pane-1', columns: 0, rows: 24 }).success, false);
   assert.equal(ratio.inputSchema.safeParse({ slot: 'pane-1', ratio: 0.99 }).success, false);
   assert.equal(close.inputSchema.safeParse({ slot: 'pane-1' }).success, false);
+  await open.run({});
   await split.run({ slot: 'pane-1', division: 'below' });
   await resize.run({ slot: 'pane-1', columns: 120, rows: 40 });
   await ratio.run({ slot: 'pane-1', ratio: 0.6 });
   await close.run({ slot: 'pane-1', confirm: true });
   assert.deepEqual(calls, [
+    ['terminal.openTab', 'Terminal'],
     ['terminal.split', 'pane-1', 'below'],
     ['terminal.resizeGrid', 'pane-1', 120, 40],
     ['terminal.ratio', 'pane-1', 0.6],
