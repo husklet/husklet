@@ -8,6 +8,41 @@ use hl_rpc::{Coding, Frame};
 use crate::port::{ContainerSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
 use crate::request::Topic;
 
+/// Window-level activity visible to an extension holding `workspace-events`.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum WorkspaceEvent {
+    Key {
+        key: String,
+        modifiers: Vec<String>,
+        pressed: bool,
+    },
+    Focus {
+        active: bool,
+    },
+    Pointer {
+        phase: PointerPhase,
+        x: f64,
+        y: f64,
+        button: Option<u32>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerPhase {
+    Move,
+    Enter,
+    Leave,
+}
+
+/// A bounded observation batch. `dropped` makes overload visible to consumers.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceEventBatch {
+    pub events: Vec<WorkspaceEvent>,
+    pub dropped: u64,
+}
+
 /// Which channel each followed topic is delivered on.
 pub type Subscriptions = hl_rpc::Subscriptions<Topic>;
 
@@ -23,7 +58,7 @@ pub type Subscriptions = hl_rpc::Subscriptions<Topic>;
 /// listing has no such dependency: whatever was superseded, the survivor is
 /// still the truth, and `Message::superseded` tells the receiver how much it
 /// skipped.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "snapshot", content = "of", rename_all = "snake_case")]
 pub enum Snapshot {
     Containers(Vec<ContainerSummary>),
@@ -31,6 +66,7 @@ pub enum Snapshot {
     Volumes(Vec<VolumeSummary>),
     Networks(Vec<NetworkSummary>),
     Terminal(Vec<TabSummary>),
+    WorkspaceEvents(WorkspaceEventBatch),
 }
 
 impl Snapshot {
@@ -45,6 +81,7 @@ impl Snapshot {
             Self::Volumes(_) => Topic::Volumes,
             Self::Networks(_) => Topic::Networks,
             Self::Terminal(_) => Topic::Terminal,
+            Self::WorkspaceEvents(_) => Topic::WorkspaceEvents,
         }
     }
 

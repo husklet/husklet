@@ -13,6 +13,7 @@
 //! toolkit type appears below, which is what lets the whole lifecycle be
 //! exercised over a socket pair with no display and no container daemon.
 
+use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -82,6 +83,95 @@ pub enum Order {
     PaneProvider(hl_extension::PaneSelection),
     /// Start the stopped extension again.
     Retry,
+}
+
+/// A non-blocking, bounded bridge from a workspace window to its extension.
+#[derive(Clone, Default)]
+pub struct Events {
+    inner: Arc<Mutex<EventQueue>>,
+}
+
+#[derive(Default)]
+struct EventQueue {
+    pending: VecDeque<hl_extension::WorkspaceEvent>,
+    dropped: u64,
+}
+
+impl Events {
+    pub const LIMIT: usize = 64;
+
+    /// Records activity without ever waiting for the GTK main loop.
+    pub fn observe(&self, event: hl_extension::WorkspaceEvent) {
+        let Ok(mut queue) = self.inner.try_lock() else { return };
+        if matches!(
+            event,
+            hl_extension::WorkspaceEvent::Pointer {
+                phase: hl_extension::PointerPhase::Move,
+                ..
+            }
+        ) && matches!(
+            queue.pending.back(),
+            Some(hl_extension::WorkspaceEvent::Pointer {
+                phase: hl_extension::PointerPhase::Move,
+                ..
+            })
+        ) {
+            queue.pending.pop_back();
+        } else if queue.pending.len() == Self::LIMIT {
+            queue.pending.pop_front();
+            queue.dropped = queue.dropped.saturating_add(1);
+        }
+        queue.pending.push_back(event);
+    }
+
+    pub(crate) fn drain(&self) -> Option<hl_extension::WorkspaceEventBatch> {
+        let Ok(mut queue) = self.inner.try_lock() else {
+            return None;
+        };
+        if queue.pending.is_empty() && queue.dropped == 0 {
+            return None;
+        }
+        Some(hl_extension::WorkspaceEventBatch {
+            events: queue.pending.drain(..).collect(),
+            dropped: std::mem::take(&mut queue.dropped),
+        })
+    }
+}
+
+#[cfg(test)]
+mod event_buffer_tests {
+    use super::Events;
+    use hl_extension::{PointerPhase, WorkspaceEvent};
+
+    fn motion(x: f64) -> WorkspaceEvent {
+        WorkspaceEvent::Pointer {
+            phase: PointerPhase::Move,
+            x,
+            y: 1.0,
+            button: None,
+        }
+    }
+
+    #[test]
+    fn pointer_motion_is_coalesced_before_it_reaches_the_wire() {
+        let events = Events::default();
+        events.observe(motion(1.0));
+        events.observe(motion(2.0));
+        let batch = events.drain().unwrap();
+        assert_eq!(batch.events, vec![motion(2.0)]);
+        assert_eq!(batch.dropped, 0);
+    }
+
+    #[test]
+    fn overload_is_bounded_and_reported() {
+        let events = Events::default();
+        for index in 0..Events::LIMIT + 7 {
+            events.observe(WorkspaceEvent::Focus { active: index % 2 == 0 });
+        }
+        let batch = events.drain().unwrap();
+        assert_eq!(batch.events.len(), Events::LIMIT);
+        assert_eq!(batch.dropped, 7);
+    }
 }
 
 /// Where the hosted extension stands.

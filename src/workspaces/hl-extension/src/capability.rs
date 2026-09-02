@@ -16,6 +16,8 @@ pub enum Capability {
     WorkspaceRead,
     /// Creating, changing, starting, stopping, or deleting workspaces.
     WorkspaceControl,
+    /// Observing keyboard, focus, and pointer activity across the workspace window.
+    WorkspaceEvents,
     ContainerRead,
     ContainerControl,
     ImageRead,
@@ -42,6 +44,7 @@ impl Capability {
         match self {
             Self::WorkspaceRead => "workspace-read",
             Self::WorkspaceControl => "workspace-control",
+            Self::WorkspaceEvents => "workspace-events",
             Self::ContainerRead => "container-read",
             Self::ContainerControl => "container-control",
             Self::ImageRead => "image-read",
@@ -79,13 +82,17 @@ impl Capability {
     /// install prompt has to say so plainly rather than imply a sandbox.
     #[must_use]
     pub const fn executes(self) -> bool {
-        matches!(self, Self::WorkspaceControl | Self::ContainerControl | Self::TerminalControl)
+        matches!(
+            self,
+            Self::WorkspaceControl | Self::ContainerControl | Self::TerminalControl
+        )
     }
 
     /// Every permission this domain declares.
     pub const ALL: &'static [Self] = &[
         Self::WorkspaceRead,
         Self::WorkspaceControl,
+        Self::WorkspaceEvents,
         Self::ContainerRead,
         Self::ContainerControl,
         Self::ImageRead,

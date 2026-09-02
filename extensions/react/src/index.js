@@ -9,7 +9,7 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -212,12 +212,13 @@ export const protocolCoverage = Object.freeze({
     terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
+    workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,
   }),
   unavailable: Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: [],
     terminal: ['switchOccupant'],
-    events: ['extensions', 'globalKeyboard', 'globalFocus', 'globalPointer', 'drag', 'drop'],
+    events: ['extensions', 'drag', 'drop'],
   }),
 });

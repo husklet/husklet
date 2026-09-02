@@ -32,9 +32,15 @@ impl super::Host {
         workspace: &WorkspaceConfig,
         name: &ExtensionName,
         terminal: Arc<dyn TerminalSurface + Send + Sync>,
+        events: super::Events,
         audience: super::Audience,
     ) -> Self {
-        Self::open(Workspace::extension(workspace, name).through(terminal), audience)
+        Self::open(
+            Workspace::extension(workspace, name)
+                .through(terminal)
+                .observing(events),
+            audience,
+        )
     }
 }
 
@@ -47,6 +53,7 @@ pub struct Workspace {
     /// Where terminal calls are sent. `None` when no window offered one, in
     /// which case an extension asking is told so plainly.
     terminal: Option<Arc<dyn TerminalSurface + Send + Sync>>,
+    events: super::Events,
 }
 
 impl Workspace {
@@ -57,6 +64,7 @@ impl Workspace {
             config: workspace.clone(),
             wanted: None,
             terminal: None,
+            events: super::Events::default(),
         }
     }
 
@@ -71,6 +79,7 @@ impl Workspace {
             config: workspace.clone(),
             wanted: Some(name.clone()),
             terminal: None,
+            events: super::Events::default(),
         }
     }
 
@@ -78,6 +87,12 @@ impl Workspace {
     #[must_use]
     pub fn through(mut self, terminal: Arc<dyn TerminalSurface + Send + Sync>) -> Self {
         self.terminal = Some(terminal);
+        self
+    }
+
+    #[must_use]
+    pub fn observing(mut self, events: super::Events) -> Self {
+        self.events = events;
         self
     }
 
@@ -195,6 +210,7 @@ impl Supply for Workspace {
     /// Returns why the conversation ended early, including the failure to bind
     /// the ports it is served against.
     fn attend(&self, _plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
+        conversation.with_events(self.events.clone());
         let extensions = Extensions::open(&self.config).map_err(|error| error.to_string())?;
         let console = Console;
         let terminal: &dyn TerminalSurface = self.terminal.as_deref().unwrap_or(&console);

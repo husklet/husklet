@@ -153,7 +153,7 @@ export const vocabulary: { props: string[]; handlers: string[] };
 export const SOCKET: string;
 export const PROTOCOL: number;
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal';
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
@@ -205,12 +205,18 @@ export type LayoutNode =
 export interface TabTopology { id: string; title: string; root: LayoutNode }
 export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
 export interface FileEntry { path: string; directory: boolean; size: number }
+export type WorkspaceEvent =
+  | { event: 'key'; key: string; modifiers: string[]; pressed: boolean }
+  | { event: 'focus'; active: boolean }
+  | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
+export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'images'; of: ImageSummary[] }
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
-  | { snapshot: 'terminal'; of: TabSummary[] };
+  | { snapshot: 'terminal'; of: TabSummary[] }
+  | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';

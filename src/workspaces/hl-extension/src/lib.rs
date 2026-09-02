@@ -38,7 +38,7 @@ pub use manifest::{
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
-pub use subscription::{Snapshot, Subscriptions};
+pub use subscription::{PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch};
 
 /// The host's opening frame, carrying this domain's grant.
 pub type Welcome = hl_rpc::Welcome<Capability>;

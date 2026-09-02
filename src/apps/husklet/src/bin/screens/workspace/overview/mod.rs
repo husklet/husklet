@@ -84,6 +84,7 @@ impl<'a> Overview<'a> {
         name: &hl_extension::ExtensionName,
         providers: &[hl_extension::PaneProvider],
         terminal: &std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync>,
+        events: hl::extension::Events,
         gallery: &Gallery,
         faulted: Rc<dyn Fn(u32)>,
     ) -> gtk::Widget {
@@ -98,6 +99,7 @@ impl<'a> Overview<'a> {
             workspace,
             name,
             std::sync::Arc::clone(terminal),
+            events,
             Box::new(move |report| {
                 let delivery = match report {
                     Report::Frame(frame) => Delivery::Frame(frame),
@@ -155,6 +157,7 @@ impl<'a> Overview<'a> {
         // only a weak route back, so lifecycle callbacks cannot form a cycle.
         let shelf_anchor = Rc::new(RefCell::new(std::rc::Weak::<Shelf>::new()));
         let anchored = Rc::clone(&shelf_anchor);
+        let observed = window.map(Rc::downgrade);
         // Each extension holds a port of its own, because a pane that draws an
         // interface has to name whose interface it draws and one shared port
         // could not say.
@@ -173,7 +176,11 @@ impl<'a> Overview<'a> {
                     shelf.fault(&name, restarts);
                 }
             });
-            Self::surface(&held, &entry.name, providers, &port, &shown, faulted)
+            let events = observed
+                .as_ref()
+                .and_then(std::rc::Weak::upgrade)
+                .map_or_else(hl::extension::Events::default, |window| window.observer());
+            Self::surface(&held, &entry.name, providers, &port, events, &shown, faulted)
         });
         let gallery_for_withdrawal = gallery.clone();
         let window = window.map(Rc::downgrade);

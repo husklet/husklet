@@ -257,6 +257,7 @@ pub enum Topic {
     Networks,
     Terminal,
     Extensions,
+    WorkspaceEvents,
 }
 
 impl Topic {
@@ -271,6 +272,7 @@ impl Topic {
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
             Self::Extensions => Capability::WorkspaceRead,
+            Self::WorkspaceEvents => Capability::WorkspaceEvents,
         }
     }
 
@@ -281,6 +283,7 @@ impl Topic {
         Self::Networks,
         Self::Terminal,
         Self::Extensions,
+        Self::WorkspaceEvents,
     ];
 }
 
@@ -371,6 +374,10 @@ mod tests {
 
     #[test]
     fn reading_and_writing_calls_require_different_capabilities() {
+        assert_eq!(
+            Request::EventSubscribe { topic: Topic::WorkspaceEvents }.capability(),
+            Capability::WorkspaceEvents
+        );
         assert_eq!(Request::ContainerList.capability(), Capability::ContainerRead);
         assert_eq!(
             Request::ContainerStop { id: "a".into() }.capability(),
