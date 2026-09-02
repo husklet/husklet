@@ -1840,7 +1840,6 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t jcc_ibtc_suppressed;
     _Atomic uint64_t jcc_ibtc_invalid_refusals;
     _Atomic uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
-    _Atomic uint64_t jcc_taken_ibtc_misses;
     _Atomic uint64_t indirect_ibtc_misses;
     _Atomic uint64_t jcc_invalid_reason[HL_BACKEND_JCC_INVALID_REASON_COUNT];
     _Atomic uint64_t jcc_invalid_site_unique;
@@ -2089,8 +2088,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "jcc_ibtc_enabled=%d jcc_ibtc_emitted=%llu jcc_ibtc_hits=%llu "
                              "jcc_ibtc_misses=%llu jcc_ibtc_irq=%llu jcc_ibtc_fills=%llu "
                              "jcc_ibtc_suppressed=%llu jcc_ibtc_invalid_refusals=%llu "
-                             "shared_jcc_call_indirect_ibtc_misses=%llu jcc_taken_ibtc_misses=%llu "
-                             "indirect_ibtc_misses=%llu "
+                             "jcc_taken_ibtc_misses=%llu indirect_ibtc_misses=%llu "
                              "jcc_late_candidate=%llu jcc_late_eligible=%llu jcc_late_invalid=%llu "
                              "jcc_late_target_absent=%llu jcc_late_page_generation=%llu "
                              "jcc_late_displacement=%llu jcc_late_other=%llu "
@@ -2145,8 +2143,6 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_invalid_refusals,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_misses,
-                                                                     memory_order_relaxed),
-                             (unsigned long long)atomic_load_explicit(&census->jcc_taken_ibtc_misses,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->indirect_ibtc_misses,
                                                                      memory_order_relaxed),
@@ -2588,10 +2584,10 @@ static void hl_backend_tree_jcc_ibtc_add(enum hl_backend_jcc_ibtc_counter kind, 
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
 }
 
-static uintptr_t hl_backend_tree_typed_ibtc_miss_counter_address(int indirect) {
+static uintptr_t hl_backend_tree_indirect_ibtc_miss_counter_address(void) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census == NULL) return 0;
-    return (uintptr_t)(indirect ? &census->indirect_ibtc_misses : &census->jcc_taken_ibtc_misses);
+    return (uintptr_t)&census->indirect_ibtc_misses;
 }
 
 static void hl_backend_tree_jcc_invalid(unsigned reason, uint64_t source, uint64_t target) {

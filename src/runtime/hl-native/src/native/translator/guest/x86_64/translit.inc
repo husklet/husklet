@@ -2156,14 +2156,7 @@ static int translit_jcc_ibtc_stub_init(void) {
         hl_x64_patch_rel32(&a, not_jcc, a.cursor);
     }
 #if !defined(HL_NATIVE_TEST_HOOKS)
-    uintptr_t pure_jcc_miss = hl_backend_tree_typed_ibtc_miss_counter_address(0);
-    if (pure_jcc_miss != 0) {
-        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_JCC_IBTC_MISS);
-        uint8_t *not_pure_jcc = hl_x64_jcc_rel32(&a, 5);
-        hl_x64_atomic_inc_abs(&a, pure_jcc_miss);
-        hl_x64_patch_rel32(&a, not_pure_jcc, a.cursor);
-    }
-    uintptr_t indirect_miss = hl_backend_tree_typed_ibtc_miss_counter_address(1);
+    uintptr_t indirect_miss = hl_backend_tree_indirect_ibtc_miss_counter_address();
     if (indirect_miss != 0) {
         hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_INDIRECT_IBTC_MISS);
         uint8_t *not_indirect = hl_x64_jcc_rel32(&a, 5);

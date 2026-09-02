@@ -1208,7 +1208,6 @@ mod tests {
             "jcc_ibtc_fills",
             "jcc_ibtc_suppressed",
             "jcc_ibtc_invalid_refusals",
-            "shared_jcc_call_indirect_ibtc_misses",
             "jcc_taken_ibtc_misses",
             "indirect_ibtc_misses",
             "jcc_late_candidate",
@@ -1300,11 +1299,7 @@ mod tests {
         assert_eq!(on["jcc_ibtc_suppressed"], 0);
         assert_eq!(on["jcc_ibtc_invalid_refusals"], 0);
         assert_eq!(on["jcc_late_candidate"], on["jcc_ibtc_misses"]);
-        assert_eq!(on["shared_jcc_call_indirect_ibtc_misses"], on["jcc_ibtc_misses"]);
-        assert_eq!(
-            on["shared_jcc_call_indirect_ibtc_misses"],
-            on["jcc_taken_ibtc_misses"] + on["direct_call_ibtc_misses"] + on["indirect_ibtc_misses"]
-        );
+        assert_eq!(on["jcc_taken_ibtc_misses"], on["jcc_ibtc_misses"]);
         assert!(on["jcc_ibtc_irq"] <= on["jcc_ibtc_misses"]);
         assert_eq!(
             on["jcc_late_candidate"],
@@ -1345,7 +1340,7 @@ mod tests {
         assert_eq!(off["jcc_ibtc_suppressed"], 2);
         assert_eq!(off["jcc_ibtc_invalid_refusals"], 0);
         assert_eq!(off["jcc_late_candidate"], off["jcc_ibtc_misses"]);
-        assert_eq!(off["shared_jcc_call_indirect_ibtc_misses"], off["jcc_ibtc_misses"]);
+        assert_eq!(off["jcc_taken_ibtc_misses"], off["jcc_ibtc_misses"]);
     }
 
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
