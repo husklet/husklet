@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { workspace } from '@husklet/react';
 import { result } from './bounds.js';
 import { paneTools } from './panes.js';
-export { semanticXml } from './panes.js';
+export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
 const path = z.string().min(1).max(4096);

@@ -25,7 +25,7 @@ export function semanticXml(tree) {
     output += text; used += size; return true;
   };
   const attr = (value) => escape(String(value).slice(0, TEXT_LIMIT));
-  const text = (value) => escape(String(value).slice(0, TEXT_LIMIT));
+const text = (value) => escape(String(value).slice(0, TEXT_LIMIT));
   const node = (entry, depth, reserve) => {
     if (!entry || typeof entry !== 'object' || nodes >= NODE_LIMIT || depth >= DEPTH_LIMIT) { cut = true; return; }
     nodes += 1;
@@ -52,6 +52,70 @@ export function semanticXml(tree) {
   return output;
 }
 
+const paneSchema = z.object({
+  slot: z.string().min(1).max(256),
+  lines: z.number().int().min(1).max(500).default(200),
+}).strict();
+
+function leaves(topology) {
+  const found = [];
+  const walk = (node, tab) => {
+    if (!node || typeof node !== 'object') return;
+    if (node.kind === 'pane' && node.pane) found.push({ ...node, tab });
+    if (node.kind === 'split') { walk(node.first, tab); walk(node.second, tab); }
+  };
+  for (const tab of Array.isArray(topology?.tabs) ? topology.tabs : []) walk(tab.root, tab);
+  return found;
+}
+
+const metadata = (value) => value == null ? '' : escape(SECRET.test(String(value)) ? '[redacted]' : String(value).slice(0, TEXT_LIMIT));
+
+/** One bounded XML document for either terminal text or a semantic surface. */
+export async function paneXml(terminal, slot, lines = 200) {
+  const topology = await terminal.topology();
+  const leaf = leaves(topology).find(({ pane }) => pane.slot === slot);
+  if (!leaf) {
+    try {
+      const semantic = semanticXml(await terminal.semantics(slot));
+      const open = `<husklet-pane slot="${escape(slot)}" occupant="native">`;
+      const close = '</husklet-pane>';
+      if (bytes(open) + bytes(semantic) + bytes(close) <= XML_LIMIT) return `${open}${semantic}${close}`;
+      return `${open}<truncated/></husklet-pane>`;
+    } catch (cause) {
+      throw new Error(`pane ${JSON.stringify(slot)} is absent from topology and exposes no native semantics: ${cause?.message ?? cause}`, { cause });
+    }
+  }
+  const occupant = leaf.pane.occupant;
+  const open = `<husklet-pane slot="${escape(slot)}" occupant="${escape(occupant)}">`;
+  const close = '</husklet-pane>';
+  if (occupant === 'surface') {
+    const semantic = semanticXml(await terminal.semantics(slot));
+    if (bytes(open) + bytes(semantic) + bytes(close) <= XML_LIMIT) return `${open}${semantic}${close}`;
+    return `${open}<truncated/></husklet-pane>`;
+  }
+  if (occupant !== 'terminal') throw new TypeError(`pane ${JSON.stringify(slot)} has unsupported occupant ${JSON.stringify(occupant)}`);
+  const screen = await terminal.read(slot, lines);
+  let output = open;
+  let used = bytes(open);
+  let cut = false;
+  const append = (fragment, reserve = bytes(close)) => {
+    const size = bytes(fragment);
+    if (used + size + reserve > XML_LIMIT) { cut = true; return false; }
+    output += fragment; used += size; return true;
+  };
+  const active = topology?.active_tab === leaf.tab?.id;
+  append(`<terminal tab="${escape(leaf.tab?.id ?? '')}" title="${escape(String(leaf.tab?.title ?? '').slice(0, TEXT_LIMIT))}" active="${active}" focused="${leaf.focused === true}" columns="${escape(leaf.grid?.columns ?? '')}" rows="${escape(leaf.grid?.rows ?? '')}" cwd="${metadata(leaf.pane.working_directory)}" command="${metadata(leaf.pane.command)}" truncated="${screen?.truncated === true}">`, bytes('</terminal>') + bytes(close));
+  let index = 0;
+  for (const line of Array.isArray(screen?.lines) ? screen.lines.slice(0, 500) : []) {
+    if (!append(`<line index="${index}">${escape(String(line).slice(0, 4096))}</line>`, bytes('</terminal>') + bytes(close) + 14)) break;
+    index += 1;
+  }
+  if (cut || (screen?.lines?.length ?? 0) > 500) append('<truncated/>', bytes('</terminal>') + bytes(close));
+  append('</terminal>', bytes(close));
+  append(close, 0);
+  return output;
+}
+
 const xmlResult = (tree) => ({ content: [{ type: 'text', text: semanticXml(tree) }] });
 
 export const semanticAction = z.object({
@@ -64,12 +128,15 @@ export const semanticAction = z.object({
 
 export function paneTools(terminal) {
   if (typeof terminal?.semantics !== 'function' || typeof terminal?.act !== 'function') return [];
-  return [
+  const tools = [
+    ['husklet_pane_read', 'Read any pane as one bounded occupant-aware XML document.', paneSchema,
+      async ({ slot, lines }) => ({ content: [{ type: 'text', text: await paneXml(terminal, slot, lines) }] }), true],
     ['husklet_pane_snapshot', 'Read the bounded semantic tree exposed by a pane.', z.object({ slot: z.string().min(1).max(256) }).strict(),
       async ({ slot }) => xmlResult(await terminal.semantics(slot)), true],
     ['husklet_pane_action', 'Act on a semantic node from a matching tree revision.', semanticAction,
       async ({ slot, ...action }) => { await terminal.act(slot, action); return { done: true }; }],
-  ].map(([name, description, inputSchema, run, formatted = false]) => ({
+  ];
+  return tools.map(([name, description, inputSchema, run, formatted = false]) => ({
     name, description, inputSchema,
     run: async (input) => formatted ? run(input) : result(await run(input)),
   }));

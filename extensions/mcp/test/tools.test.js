@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer, semanticXml, tools } from '../src/index.js';
+import { createServer, paneXml, semanticXml, tools } from '../src/index.js';
 
 function fake() {
   const calls = [];
@@ -24,6 +24,45 @@ test('schemas are strict, controls map exactly, and no shell shortcut exists', a
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
   assert.deepEqual(calls, [['containers.start', 'abc']]);
+});
+
+test('unified pane XML packs terminal metadata and escaped bounded screen lines', async () => {
+  const terminal = {
+    topology: async () => ({ active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Shell & work', root: {
+      kind: 'pane', focused: true, grid: { columns: 120, rows: 40 },
+      pane: { slot: 'term-1', occupant: 'terminal', working_directory: '/work<&>', command: 'bash', provider: null },
+    } }] }),
+    read: async () => ({ slot: 'term-1', lines: ['one < two', 'token output remains screen data'], truncated: false }),
+    semantics: async () => { throw new Error('not semantic'); },
+  };
+  const xml = await paneXml(terminal, 'term-1', 20);
+  assert.match(xml, /^<husklet-pane slot="term-1" occupant="terminal"><terminal /);
+  assert.match(xml, /active="true" focused="true" columns="120" rows="40"/);
+  assert.match(xml, /title="Shell &amp; work"/);
+  assert.match(xml, /<line index="0">one &lt; two<\/line>/);
+  assert.match(xml, /token output remains screen data/);
+  assert(new TextEncoder().encode(xml).byteLength <= 64 * 1024);
+  assert.match(xml, /<\/terminal><\/husklet-pane>$/);
+});
+
+test('unified pane XML selects surface semantics and gives a clear absent error', async () => {
+  const terminal = {
+    topology: async () => ({ active_tab: null, tabs: [{ id: 't', title: 'UI', root: {
+      kind: 'pane', focused: false, grid: null,
+      pane: { slot: 'surface-1', occupant: 'surface', working_directory: null, command: null, provider: { extension: 'demo', provider: 'main' } },
+    } }] }),
+    semantics: async (slot) => {
+      if (slot === 'missing') throw new Error('no semantic pane');
+      return { slot, revision: 2, truncated: false, root: {
+        id: 1, role: 'password_entry', label: 'API token', value: 'never leak', disabled: false, actions: [], children: [],
+      } };
+    },
+  };
+  const xml = await paneXml(terminal, 'surface-1');
+  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
+  assert(!xml.includes('never leak'));
+  assert.match(xml, /\[redacted\]/);
+  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from topology and exposes no native semantics/);
 });
 
 test('results redact secrets and remain bounded', async () => {
@@ -109,6 +148,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
@@ -119,6 +159,37 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['workspace_info', undefined],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],
+  ]);
+  await client.close();
+  await server.close();
+});
+
+test('real MCP transport returns packed XML for terminal and surface occupants', async () => {
+  const calls = [];
+  const pane = (slot, occupant) => ({ kind: 'pane', focused: slot === 'term', grid: occupant === 'terminal' ? { columns: 80, rows: 24 } : null,
+    pane: { slot, occupant, working_directory: occupant === 'terminal' ? '/tmp' : null, command: occupant === 'terminal' ? 'sh' : null, provider: null } });
+  const session = { call: async (name, argument) => {
+    calls.push([name, argument]);
+    if (name === 'terminal_topology') return { reply: 'topology', with: { active_tab: 'tab', tabs: [{ id: 'tab', title: 'Packed', root: {
+      kind: 'split', division: 'beside', ratio_per_mille: 500, first: pane('term', 'terminal'), second: pane('surface', 'surface'),
+    } }] } };
+    if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: argument.slot, lines: ['hello & goodbye'], truncated: false } };
+    if (name === 'pane_semantic_read') return { reply: 'semantics', with: { slot: argument.slot, revision: 9, truncated: false,
+      root: { id: 1, role: 'button', label: 'Deploy <now>', value: null, disabled: false, actions: ['invoke'], children: [] } } };
+    throw new Error(`unexpected call ${name}`);
+  } };
+  const server = createServer(session);
+  const client = new Client({ name: 'packed-consumer', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const terminal = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'term', lines: 25 } });
+  const surface = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'surface' } });
+  assert.match(terminal.content[0].text, /occupant="terminal".*hello &amp; goodbye/s);
+  assert.match(surface.content[0].text, /occupant="surface".*Deploy &lt;now&gt;/s);
+  assert.equal((terminal.content[0].text.match(/<husklet-pane /g) ?? []).length, 1);
+  assert.equal((surface.content[0].text.match(/<husklet-pane /g) ?? []).length, 1);
+  assert.deepEqual(calls.map(([name]) => name), [
+    'terminal_topology', 'terminal_read_pane', 'terminal_topology', 'pane_semantic_read',
   ]);
   await client.close();
   await server.close();

@@ -13,3 +13,8 @@ export interface ToolDefinition {
 export function tools(api: ReturnType<typeof import('@husklet/react').workspace>): ToolDefinition[];
 export function createServer(session: Session): McpServer;
 export function semanticXml(tree: PaneSemanticTree): string;
+export function paneXml(
+  terminal: ReturnType<typeof import('@husklet/react').workspace>['terminal'],
+  slot: string,
+  lines?: number,
+): Promise<string>;
