@@ -38,3 +38,9 @@ docker build -t husklet/storybook .    # FROM husklet/react:latest
 
 The host starts the image, mounts a socket at `HUSKLET_EXTENSION_SOCKET`, and
 reads the manifest off the image label; `src/main.js` connects and renders.
+## Large DataTable story
+
+The DataTable preview is backed by 100,000 logical records through Husklet's
+bounded Source window protocol. Its controls change producer-side sorting,
+filtering, and ready/loading/empty/error states. Scrolling or resizing requests
+another window; no story creates one React node per record.
