@@ -120,7 +120,7 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
-test('coverage names deep-control protocol gaps without exposing fake methods', () => {
+test('coverage names delivered snapshots and leaves unsupported topics unavailable', () => {
   assert.deepEqual(protocolCoverage.available.workspace, [
     'info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart',
   ]);
@@ -129,15 +129,57 @@ test('coverage names deep-control protocol gaps without exposing fake methods', 
   assert.ok(protocolCoverage.available.terminal.includes('read'));
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
-  assert.ok(protocolCoverage.unavailable.containers.includes('processes'));
+  assert.ok(protocolCoverage.available.containers.includes('processes'));
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'terminal']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
-  assert.ok(protocolCoverage.unavailable.events.includes('hostSnapshots'));
+  assert.ok(protocolCoverage.unavailable.events.includes('volumes'));
   assert.ok(protocolCoverage.unavailable.events.includes('keyboard'));
   const api = workspace({ call() { throw new Error('not called'); } });
   assert.equal(api.renameWorkspace, undefined);
-  assert.equal(api.containers.processes, undefined);
+  assert.equal(typeof api.containers.processes, 'function');
+  assert.throws(() => api.subscribe('volumes'), /does not publish/);
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(api.terminal.switchOccupant, undefined);
+});
+
+test('deep container methods and subscriptions use exact protocol request shapes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const operations = [
+    api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
+    api.containers.execution('e1'), api.containers.pause('c1'), api.containers.unpause('c1'),
+    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'),
+    api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
+    api.subscribe('containers'), api.unsubscribe('containers'),
+  ];
+  const calls = [];
+  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  assert.deepEqual(calls, [
+    { call: 'container_processes', with: { id: 'c1' } },
+    { call: 'container_logs', with: { id: 'c1', stdout: true, stderr: false } },
+    { call: 'execution_inspect', with: { id: 'e1' } },
+    { call: 'container_pause', with: { id: 'c1' } },
+    { call: 'container_unpause', with: { id: 'c1' } },
+    { call: 'container_restart', with: { id: 'c1' } },
+    { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
+    { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
+    { call: 'event_subscribe', with: { topic: 'containers' } },
+    { call: 'event_unsubscribe', with: { topic: 'containers' } },
+  ]);
+  const replies = [
+    { reply: 'processes', with: { titles: [], processes: [] } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
+    { reply: 'execution', with: { id: 'e1' } },
+    ...Array(4).fill({ reply: 'done' }),
+    { reply: 'identity', with: 'e2' },
+    { reply: 'done' }, { reply: 'done' },
+  ];
+  for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
+  const results = await Promise.all(operations);
+  assert.equal(results[7], 'e2');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('terminal topology, bounded input and grid resize use exact typed calls', async () => {

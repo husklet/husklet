@@ -49,7 +49,16 @@ await host.update('backend', { ...configuration, memory_mb: 4096 });
 await host.start('backend');
 const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);
+const processes = await host.containers.processes(containers[0].id);
+const output = await host.containers.logs(containers[0].id, { stderr: false });
 ```
+
+Container reads include bounded logs, process tables, and execution inspection;
+the explicit control grant covers pause, unpause, restart, kill, and detached
+`exec`. The host currently publishes changed full snapshots for `containers`,
+`images`, and `terminal`. Start and stop those bounded, credit-controlled feeds
+with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
+through `connect({ onEvent })` or `session.onEvent()`.
 
 Terminal control is pane-addressed and promise-based as well. `terminal.read`
 returns at most 2,000 lines, `terminal.writeInput` accepts at most 65,536 raw
@@ -62,7 +71,7 @@ version really supports. Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
 delete the workspace hosting it. The `unavailable` section names remaining
-areas such as host-published snapshots, terminal input and keyboard events;
+areas such as volume, network and extension snapshots, plus keyboard events;
 those names deliberately are not callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send, not a promise that
 global workspace snapshots are published.
@@ -96,3 +105,8 @@ exported by name from the package root.
 ## Tests
 
 `npm test` — plain `node --test`, no framework.
+
+`npm run pack:check` — checks the exact npm tarball allowlist, installs it into
+a temporary consumer, imports its runtime entry, type-checks a consumer, and
+statically verifies the multi-architecture/non-root base-image contract. A real
+container build still requires Docker or another OCI builder.

@@ -1,0 +1,28 @@
+name = "workspace-manager"
+display_name = "Workspace resources"
+version = "0.1.0"
+protocol = 1
+
+# Process inspection and execution are container authorities in the host. Image
+# pulls are separate from image reads. Volumes and networks deliberately request
+# no authority until their host APIs exist.
+capabilities = ["container-read", "container-control", "image-read", "image-write", "interface"]
+
+[interface]
+tab_title = "Resources"
+icon = "utilities-system-monitor-symbolic"
+
+[[pane_providers]]
+id = "containers"
+title = "Containers"
+icon = "package-x-generic-symbolic"
+
+[[pane_providers]]
+id = "processes"
+title = "Processes"
+icon = "system-run-symbolic"
+
+[[pane_providers]]
+id = "images"
+title = "Images"
+icon = "drive-harddisk-symbolic"

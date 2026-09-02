@@ -3,20 +3,38 @@
   "version": "0.1.0",
   "description": "Render a Husklet workspace interface with React.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/husklet/husklet.git",
+    "directory": "extensions/react"
+  },
+  "homepage": "https://github.com/husklet/husklet#readme",
+  "bugs": "https://github.com/husklet/husklet/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./catalogue": "./src/catalogue.json"
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./catalogue": "./src/catalogue.json",
+    "./package.json": "./package.json"
   },
+  "sideEffects": false,
   "files": [
     "src",
-    "catalogue.json",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test 'test/*.test.js'",
+    "pack:check": "node tools/package-smoke.js",
     "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
     "types": "npm run catalogue && node tools/types.js"
   },
@@ -30,6 +48,7 @@
     "react": "^18.3.1"
   },
   "devDependencies": {
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "typescript": "^5.9.2"
   }
 }

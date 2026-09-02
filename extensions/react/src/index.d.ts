@@ -4058,6 +4058,12 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ProcessList { titles: string[]; processes: string[][] }
+export interface ContainerOutput { stdout: number[]; stderr: number[]; truncated: boolean }
+export interface ExecutionSummary {
+  id: string; container_id: string; running: boolean; exit_code: number; pid: number;
+  command: string[]; user: string;
+}
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
 export interface PaneSummary {
   slot: string;
@@ -4077,6 +4083,10 @@ export interface TerminalTopology { active_tab: string | null; tabs: TabTopology
 export interface FileEntry { path: string; directory: boolean; size: number }
 export interface VolumeSummary { name: string; driver: string; size: number }
 export interface NetworkSummary { name: string; driver: string; scope: string }
+export type SnapshotEvent =
+  | { snapshot: 'containers'; of: ContainerSummary[] }
+  | { snapshot: 'images'; of: ImageSummary[] }
+  | { snapshot: 'terminal'; of: TabSummary[] };
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
@@ -4089,7 +4099,7 @@ export interface ConnectOptions {
   timeout?: number;
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
-  onEvent?: (event: unknown, channel: number) => void;
+  onEvent?: (event: SnapshotEvent, channel: number) => void;
 }
 
 export class Session {
@@ -4098,7 +4108,7 @@ export class Session {
   readonly granted: readonly string[];
   call(method: string, params?: unknown): Promise<unknown>;
   answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: unknown, channel: number) => void): () => boolean;
+  onEvent(listener: (event: SnapshotEvent, channel: number) => void): () => boolean;
   close(): void;
 }
 
@@ -4117,10 +4127,18 @@ export interface WorkspaceApi {
   containers: {
     list(): Promise<ContainerSummary[]>;
     inspect(id: string): Promise<ContainerSummary>;
+    processes(id: string): Promise<ProcessList>;
+    logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
+    execution(id: string): Promise<ExecutionSummary>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;
     remove(id: string): Promise<void>;
+    pause(id: string): Promise<void>;
+    unpause(id: string): Promise<void>;
+    restart(id: string): Promise<void>;
+    kill(id: string, signal: string): Promise<void>;
+    exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
   };
   images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
   terminal: {
@@ -4141,6 +4159,8 @@ export interface WorkspaceApi {
     read(path: string): Promise<number[]>;
     write(path: string, contents: Iterable<number>): Promise<void>;
   };
+  subscribe(topic: 'containers' | 'images' | 'terminal'): Promise<void>;
+  unsubscribe(topic: 'containers' | 'images' | 'terminal'): Promise<void>;
 }
 
 export function workspace(session: Session): WorkspaceApi;
@@ -4148,17 +4168,18 @@ export function workspace(session: Session): WorkspaceApi;
 export const protocolCoverage: Readonly<{
   available: Readonly<{
     workspace: readonly ('info' | 'list' | 'inspect' | 'create' | 'update' | 'delete' | 'start' | 'stop' | 'restart')[];
-    containers: readonly ('list' | 'inspect' | 'create' | 'start' | 'stop' | 'remove')[];
+    containers: readonly ('list' | 'inspect' | 'processes' | 'logs' | 'execution' | 'create' | 'start' | 'stop' | 'remove' | 'pause' | 'unpause' | 'restart' | 'kill' | 'exec')[];
     images: readonly ('list' | 'pull')[];
     terminal: readonly ('tabs' | 'topology' | 'openTab' | 'split' | 'spawn' | 'read' | 'writeInput' | 'resizeGrid' | 'close' | 'focus' | 'ratio')[];
     files: readonly ('list' | 'read' | 'write')[];
     interfaceEvents: readonly ('invoke' | 'submit' | 'change' | 'select')[];
+    snapshotTopics: readonly ('containers' | 'images' | 'terminal')[];
   }>;
   unavailable: Readonly<{
     workspace: readonly ('renameWhileUpdating' | 'mutateWhileRunning' | 'controlHostingWorkspace')[];
-    containers: readonly ('processes' | 'exec' | 'logs' | 'pause' | 'unpause' | 'restart' | 'kill')[];
+    containers: readonly never[];
     terminal: readonly 'switchOccupant'[];
-    events: readonly ('hostSnapshots' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];
+    events: readonly ('volumes' | 'networks' | 'extensions' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];
   }>;
 }>;
 

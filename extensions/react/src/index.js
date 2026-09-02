@@ -9,6 +9,7 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'terminal']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -41,6 +42,10 @@ export function workspace(session) {
     return reply.with;
   };
   const done = async (name, argument) => expect(await session.call(name, argument), 'done');
+  const subscription = (call, topic) => {
+    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    return done(call, { topic });
+  };
   return {
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
@@ -54,10 +59,24 @@ export function workspace(session) {
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
       inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
+      processes: async (id) => expect(await session.call('container_processes', { id }), 'processes'),
+      logs: async (id, { stdout = true, stderr = true } = {}) => expect(
+        await session.call('container_logs', { id, stdout, stderr }), 'logs',
+      ),
+      execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
       create: async (image, name) => expect(await session.call('container_create', { image, name }), 'identity'),
       start: (id) => done('container_start', { id }),
       stop: (id) => done('container_stop', { id }),
       remove: (id) => done('container_remove', { id }),
+      pause: (id) => done('container_pause', { id }),
+      unpause: (id) => done('container_unpause', { id }),
+      restart: (id) => done('container_restart', { id }),
+      kill: (id, signal) => done('container_kill', { id, signal }),
+      exec: async (id, { command, user, workingDirectory } = {}) => expect(
+        await session.call('container_exec', {
+          id, command, user: user ?? null, working_directory: workingDirectory ?? null,
+        }), 'identity',
+      ),
     },
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
@@ -90,6 +109,8 @@ export function workspace(session) {
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
     },
+    subscribe: (topic) => subscription('event_subscribe', topic),
+    unsubscribe: (topic) => subscription('event_unsubscribe', topic),
   };
 }
 
@@ -167,16 +188,17 @@ export const vocabulary = {
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'create', 'start', 'stop', 'remove'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
     images: ['list', 'pull'],
     terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select'],
+    snapshotTopics: SNAPSHOT_TOPICS,
   }),
   unavailable: Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
-    containers: ['processes', 'exec', 'logs', 'pause', 'unpause', 'restart', 'kill'],
+    containers: [],
     terminal: ['switchOccupant'],
-    events: ['hostSnapshots', 'keyboard', 'focus', 'pointer', 'drag', 'drop'],
+    events: ['volumes', 'networks', 'extensions', 'keyboard', 'focus', 'pointer', 'drag', 'drop'],
   }),
 });
