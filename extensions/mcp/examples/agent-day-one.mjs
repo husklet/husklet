@@ -45,7 +45,11 @@ export async function runAgentDayOne(client, {
       name: workspaceName, configuration: updatedConfiguration, confirm: true,
     });
     configurationChanged = true;
-    container = await json(client, 'husklet_container_create', { image, name: containerName });
+    container = await json(client, 'husklet_container_create', {
+      image, name: containerName, command,
+      labels: [['husklet.agent-workflow', 'day-one']],
+      memory_mb: 512, cpus: 1, pids_limit: 128,
+    });
     await call(client, 'husklet_container_start', { id: container.id });
     const execution = await json(client, 'husklet_container_exec', { id: container.id, command });
     const processes = await json(client, 'husklet_container_processes', { id: container.id });

@@ -126,7 +126,18 @@ export function workspace(session) {
       ),
       execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
       signalExecution: (id, signal) => done('execution_kill', { id, signal }),
-      create: async (image, name) => expect(await session.call('container_create', { image, name }), 'identity'),
+      create: async (configuration, legacyName) => {
+        const spec = typeof configuration === 'string' ? {
+          image: configuration, name: legacyName, entrypoint: null, command: [], environment: [],
+          working_directory: null, user: null, labels: [], mounts: [], network: null, ports: [],
+          memory_mb: null, cpus: null, pids_limit: null,
+        } : {
+          entrypoint: null, command: [], environment: [], working_directory: null, user: null,
+          labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null,
+          pids_limit: null, ...configuration,
+        };
+        return expect(await session.call('container_create', { spec }), 'identity');
+      },
       start: (id) => done('container_start', { id }),
       stop: (id) => done('container_stop', { id }),
       remove: (id) => done('container_remove', { id }),

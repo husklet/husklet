@@ -49,6 +49,11 @@ Execution inspection and execution signaling use distinct typed calls: signaling
 targets one existing execution ID under `ContainerControl` and accepts only a
 1..=32 byte signal name. It does not signal the owning container or parse a shell.
 
+Container creation accepts bounded entrypoint/argv, environment, working directory,
+user, labels, named-volume mounts, one workspace-local network, TCP/UDP exposure,
+and memory/CPU/PID limits. Host bind paths are deliberately absent. Published ports
+bind `127.0.0.1` only, and creation never pulls an image or starts the container.
+
 Workspace creation and update carry the complete typed configuration: identity,
 architecture, storage, resources, environment, mounts, Docker access, terminal,
 VPN, scrollback, and execution lifetime. Every collection and string is bounded.

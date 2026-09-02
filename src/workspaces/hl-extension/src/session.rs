@@ -259,12 +259,26 @@ impl Session {
     }
 
     fn control(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        if let Request::ContainerCreate { spec } = request {
+            if spec.mounts.iter().any(|mount| mount.read_only) {
+                self.peer.authority().permit(Capability::VolumeRead)?;
+            }
+            if spec.mounts.iter().any(|mount| !mount.read_only) {
+                self.peer.authority().permit(Capability::VolumeWrite)?;
+            }
+            if spec.network.is_some() || spec.ports.iter().any(|port| port.host.is_some()) {
+                self.peer.authority().permit(Capability::NetworkWrite)?;
+            }
+        }
         let port = self
             .peer
             .authority()
             .port(Capability::ContainerControl, services.control)?;
         match request {
-            Request::ContainerCreate { image, name } => Ok(Reply::Identity(port.create(image, name)?)),
+            Request::ContainerCreate { spec } => {
+                validate_container_create(spec)?;
+                Ok(Reply::Identity(port.create_spec(spec)?))
+            }
             Request::ContainerStart { id } => port.start(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerStop { id } => port.stop(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerRemove { id } => port.remove(id).map(|()| Reply::Done).map_err(Failure::from),
@@ -659,6 +673,60 @@ fn bounded_signal(signal: &str) -> Result<(), Failure> {
     Err(Failure::Conflict {
         detail: "signal must contain 1..=32 bytes".into(),
     })
+}
+
+fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<(), Failure> {
+    use std::collections::BTreeSet;
+
+    let identifier = |value: &str, limit: usize| {
+        !value.is_empty() && value.len() <= limit && value.trim() == value
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+    };
+    let argv = |values: &[String], empty: bool| {
+        (empty || !values.is_empty()) && values.len() <= crate::port::TERMINAL_COMMAND_ARGUMENTS
+            && (values.is_empty() || !values[0].is_empty())
+            && values.iter().all(|value| value.len() <= crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES
+                && !value.contains('\0'))
+            && values.iter().map(String::len).sum::<usize>() <= crate::port::TERMINAL_COMMAND_BYTES
+    };
+    let absolute = |value: &str| {
+        value.starts_with('/') && value.len() <= 4096 && !value.contains('\0')
+            && !value.split('/').any(|part| matches!(part, "." | ".."))
+    };
+    let unique = |values: &[(String, String)]| values.iter().map(|(key, _)| key).collect::<BTreeSet<_>>().len() == values.len();
+    let environment_name = |value: &str| {
+        value.len() <= 256 && value.as_bytes().first().is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    };
+    let valid = identifier(&spec.name, 128)
+        && !spec.image.is_empty() && spec.image.len() <= 512 && spec.image.trim() == spec.image
+        && !spec.image.chars().any(char::is_whitespace)
+        && spec.entrypoint.as_ref().is_none_or(|values| argv(values, false))
+        && argv(&spec.command, true)
+        && spec.entrypoint.as_ref().into_iter().flatten().chain(spec.command.iter())
+            .map(String::len).sum::<usize>() <= crate::port::TERMINAL_COMMAND_BYTES
+        && spec.environment.len() <= 256 && unique(&spec.environment)
+        && spec.environment.iter().all(|(name, value)| environment_name(name) && value.len() <= 8192 && !value.contains('\0'))
+        && spec.working_directory.as_deref().is_none_or(absolute)
+        && spec.user.as_ref().is_none_or(|value| !value.is_empty() && value.len() <= 256 && !value.contains('\0'))
+        && spec.labels.len() <= 128 && unique(&spec.labels)
+        && spec.labels.iter().all(|(name, value)| !name.is_empty() && name.len() <= 256 && !name.contains('\0')
+            && value.len() <= 4096 && !value.contains('\0'))
+        && spec.mounts.len() <= 64
+        && spec.mounts.iter().all(|mount| identifier(&mount.volume, 128) && absolute(&mount.target))
+        && spec.network.as_ref().is_none_or(|network| identifier(network, 256))
+        && spec.ports.len() <= 64
+        && spec.ports.iter().all(|port| port.container != 0 && port.host != Some(0)
+            && matches!(port.protocol.as_str(), "tcp" | "udp"))
+        && spec.ports.iter().map(|port| (port.container, &port.protocol)).collect::<BTreeSet<_>>().len() == spec.ports.len()
+        && spec.memory_mb.is_none_or(|value| (1..=1_048_576).contains(&value))
+        && spec.cpus.is_none_or(|value| (1..=256).contains(&value))
+        && spec.pids_limit.is_none_or(|value| (1..=1_000_000).contains(&value));
+    if valid {
+        Ok(())
+    } else {
+        Err(Failure::Conflict { detail: "container creation specification is invalid or exceeds its bound".into() })
+    }
 }
 
 fn acquisition_reference(reference: &str) -> Result<(), Failure> {

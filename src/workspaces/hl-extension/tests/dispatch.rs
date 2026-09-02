@@ -172,6 +172,11 @@ impl ContainerControl for Host {
         Ok(format!("id-{name}"))
     }
 
+    fn create_spec(&self, spec: &hl_extension::port::ContainerCreateSpec) -> Result<String, HostError> {
+        self.ledger.note("containers.create_spec");
+        Ok(format!("id-{}", spec.name))
+    }
+
     fn start(&self, _id: &str) -> Result<(), HostError> {
         self.ledger.note("containers.start");
         Ok(())
@@ -755,8 +760,12 @@ fn calls() -> Vec<(Request, Capability)> {
         (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
         (
             Request::ContainerCreate {
-                image: "alpine".into(),
-                name: "x".into(),
+                spec: hl_extension::port::ContainerCreateSpec {
+                    image: "alpine".into(), name: "x".into(), entrypoint: None,
+                    command: Vec::new(), environment: Vec::new(), working_directory: None,
+                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
+                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                },
             },
             Capability::ContainerControl,
         ),
@@ -1019,6 +1028,44 @@ fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
         Ok(Reply::Done)
     );
     assert_eq!(host.ledger.reached(), ["terminal.spawn"]);
+}
+
+#[test]
+fn configured_container_creation_is_bounded_before_control_authority() {
+    use hl_extension::port::{ContainerCreateSpec, ContainerPort, ContainerVolumeMount};
+    let host = Host::new();
+    let mut authorized = session(&[
+        Capability::ContainerControl, Capability::VolumeRead, Capability::NetworkWrite,
+    ], &[]);
+    let spec = ContainerCreateSpec {
+        image: "alpine:3.20".into(), name: "worker".into(), entrypoint: Some(vec!["/init".into()]),
+        command: vec!["serve".into()], environment: vec![("MODE".into(), "agent".into())],
+        working_directory: Some("/work".into()), user: Some("1000".into()),
+        labels: vec![("owner".into(), "agent".into())],
+        mounts: vec![ContainerVolumeMount { volume: "cache".into(), target: "/cache".into(), read_only: true }],
+        network: Some("private".into()),
+        ports: vec![ContainerPort { container: 8080, host: Some(18080), protocol: "tcp".into() }],
+        memory_mb: Some(512), cpus: Some(2), pids_limit: Some(128),
+    };
+    assert_eq!(
+        authorized.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
+        Ok(Reply::Identity("id-worker".into()))
+    );
+    assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
+
+    let mut insufficient = session(&[Capability::ContainerControl], &[]);
+    assert!(matches!(
+        insufficient.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+
+    let mut escaped = spec;
+    escaped.mounts[0].target = "/work/../host".into();
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: escaped }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    assert_eq!(host.ledger.reached(), ["containers.create_spec"], "invalid mounts never reach control");
 }
 
 #[test]

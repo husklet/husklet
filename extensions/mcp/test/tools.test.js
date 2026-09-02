@@ -179,14 +179,22 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: '../host', read_only: false }] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', ports: [{ container: 80, host: 0, protocol: 'tcp' }] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
-  await create.run({ image: 'alpine:3.20', name: 'worker-1' });
+  const spec = create.inputSchema.parse({
+    image: 'alpine:3.20', name: 'worker-1', entrypoint: ['/usr/bin/env'], command: ['worker', '--once'],
+    environment: [['MODE', 'agent']], working_directory: '/work', user: '1000', labels: [['owner', 'agent']],
+    mounts: [{ volume: 'cache', target: '/cache', read_only: false }], network: 'private',
+    ports: [{ container: 8080, host: 18080, protocol: 'tcp' }], memory_mb: 512, cpus: 2, pids_limit: 128,
+  });
+  await create.run(spec);
   await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' });
   assert.deepEqual(calls, [
-    ['containers.create', 'alpine:3.20', 'worker-1'],
+    ['containers.create', spec],
     ['containers.exec', 'c1', { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
   ]);
 });

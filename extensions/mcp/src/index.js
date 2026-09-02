@@ -21,6 +21,37 @@ const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, 
   const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
 });
+const optionalCommand = z.array(z.string().max(4096)).max(64);
+const containerCreate = z.object({
+  image: imageReference,
+  name: containerName,
+  entrypoint: command.nullable().default(null),
+  command: optionalCommand.default([]),
+  environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(8192)])).max(256).default([]),
+  working_directory: z.string().min(1).max(4096).startsWith('/').nullable().default(null),
+  user: z.string().min(1).max(256).nullable().default(null),
+  labels: z.array(z.tuple([z.string().min(1).max(256), z.string().max(4096)])).max(128).default([]),
+  mounts: z.array(z.object({ volume: containerName, target: z.string().min(1).max(4096).startsWith('/'), read_only: z.boolean().default(false) }).strict()).max(64).default([]),
+  network: containerName.nullable().default(null),
+  ports: z.array(z.object({ container: z.number().int().min(1).max(65535), host: z.number().int().min(1).max(65535).nullable().default(null), protocol: z.enum(['tcp', 'udp']) }).strict()).max(64).default([]),
+  memory_mb: z.number().int().min(1).max(1_048_576).nullable().default(null),
+  cpus: z.number().int().min(1).max(256).nullable().default(null),
+  pids_limit: z.number().int().min(1).max(1_000_000).nullable().default(null),
+}).strict().superRefine((spec, context) => {
+  const issue = (message) => context.addIssue({ code: z.ZodIssueCode.custom, message });
+  const argv = [...(spec.entrypoint ?? []), ...spec.command];
+  if (spec.command.length > 0 && spec.command[0].length === 0) issue('command executable must not be empty');
+  if (argv.some((argument) => argument.includes('\0'))
+    || argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) issue('entrypoint and command must be NUL-free and at most 32768 bytes');
+  const normalized = (value) => !value.split('/').some((part) => part === '.' || part === '..');
+  if (spec.working_directory != null && !normalized(spec.working_directory)) issue('working_directory must be normalized');
+  if (spec.mounts.some(({ target }) => !normalized(target))) issue('mount targets must be normalized');
+  if (spec.user?.includes('\0') || spec.environment.some(([, value]) => value.includes('\0'))
+    || spec.labels.some(([name, value]) => name.includes('\0') || value.includes('\0'))) issue('text fields cannot contain NUL');
+  const unique = (pairs) => new Set(pairs.map(([name]) => name)).size === pairs.length;
+  if (!unique(spec.environment) || !unique(spec.labels)) issue('environment and label names must be unique');
+  if (new Set(spec.ports.map(({ container, protocol }) => `${container}/${protocol}`)).size !== spec.ports.length) issue('container ports must be unique');
+});
 const nullable = (schema) => schema.nullable();
 const absolutePath = z.string().min(1).max(4096).startsWith('/');
 const workspaceConfiguration = z.object({
@@ -95,7 +126,7 @@ export function tools(api) {
     define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
     define('husklet_execution_signal', 'Signal one execution without signaling its owning container.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
-    define('husklet_container_create', 'Create a container from an image already present in this workspace; this never pulls an image.', z.object({ image: imageReference, name: containerName }).strict(), ({ image, name }) => api.containers.create(image, name)),
+    define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, (spec) => api.containers.create(spec)),
     define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: z.string().min(1).max(256).optional(), working_directory: z.string().min(1).max(4096).startsWith('/').optional() }).strict(), ({ id: value, command: argv, user, working_directory: workingDirectory }) => api.containers.exec(value, { command: argv, user, workingDirectory })),
     ...['start', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_stop', 'Stop one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),

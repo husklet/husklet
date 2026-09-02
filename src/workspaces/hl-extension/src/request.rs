@@ -99,10 +99,7 @@ pub enum Request {
         id: String,
         signal: String,
     },
-    ContainerCreate {
-        image: String,
-        name: String,
-    },
+    ContainerCreate { spec: crate::port::ContainerCreateSpec },
     ContainerStart {
         id: String,
     },
@@ -535,8 +532,12 @@ mod tests {
         );
         assert_eq!(
             Request::ContainerCreate {
-                image: "alpine:3.20".into(),
-                name: "worker".into(),
+                spec: crate::port::ContainerCreateSpec {
+                    image: "alpine:3.20".into(), name: "worker".into(), entrypoint: None,
+                    command: Vec::new(), environment: Vec::new(), working_directory: None,
+                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
+                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                },
             }
             .capability(),
             Capability::ContainerControl

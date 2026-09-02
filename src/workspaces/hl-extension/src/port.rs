@@ -63,6 +63,39 @@ pub struct ContainerOutput {
     pub truncated: bool,
 }
 
+/// Bounded container creation authority with no host bind-mount path.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerCreateSpec {
+    pub image: String,
+    pub name: String,
+    pub entrypoint: Option<Vec<String>>,
+    pub command: Vec<String>,
+    pub environment: Vec<(String, String)>,
+    pub working_directory: Option<String>,
+    pub user: Option<String>,
+    pub labels: Vec<(String, String)>,
+    pub mounts: Vec<ContainerVolumeMount>,
+    pub network: Option<String>,
+    pub ports: Vec<ContainerPort>,
+    pub memory_mb: Option<u32>,
+    pub cpus: Option<u16>,
+    pub pids_limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerVolumeMount {
+    pub volume: String,
+    pub target: String,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerPort {
+    pub container: u16,
+    pub host: Option<u16>,
+    pub protocol: String,
+}
+
 /// State of one additional process created through the container exec API.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExecutionSummary {
@@ -508,6 +541,18 @@ pub trait ContainerControl {
     /// # Errors
     /// Returns a host failure.
     fn create(&self, image: &str, name: &str) -> Result<String, HostError>;
+
+    fn create_spec(&self, spec: &ContainerCreateSpec) -> Result<String, HostError> {
+        if spec.entrypoint.is_none() && spec.command.is_empty() && spec.environment.is_empty()
+            && spec.working_directory.is_none() && spec.user.is_none() && spec.labels.is_empty()
+            && spec.mounts.is_empty() && spec.network.is_none() && spec.ports.is_empty()
+            && spec.memory_mb.is_none() && spec.cpus.is_none() && spec.pids_limit.is_none()
+        {
+            self.create(&spec.image, &spec.name)
+        } else {
+            Err(HostError::Unsupported("configured container creation is unavailable".into()))
+        }
+    }
 
     /// # Errors
     /// Returns a host failure.
