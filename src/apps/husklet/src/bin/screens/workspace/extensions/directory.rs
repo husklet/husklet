@@ -7,13 +7,13 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate};
 use hl_extension::{Grant, Summary, Update};
 
-use super::{moment, Inspection, Shelf};
+use super::{moment, Inspection, PendingInspection, Shelf};
 
 /// Style class on the field an image reference is typed into.
 pub const REFERENCE: &str = "hl-extension-reference";
@@ -27,6 +27,7 @@ pub const DECLINE: &str = "hl-extension-decline";
 pub const NOTICE: &str = "hl-extension-notice";
 /// Style class on the image acquisition progress view.
 pub const PROGRESS: &str = "hl-extension-progress";
+pub const CANCEL_ACQUISITION: &str = "hl-extension-cancel-acquisition";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
 pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
@@ -54,9 +55,10 @@ pub struct Catalogue {
     proposal: gtk::Box,
     notice: gtk::Label,
     progress: gtk::ProgressBar,
+    cancel: gtk::Button,
     /// The inspection in flight, if any. One at a time, because the field it
     /// was started from is the same field a second one would read.
-    pending: RefCell<Option<Receiver<Acquisition>>>,
+    pending: RefCell<Option<PendingInspection>>,
     /// What the last inspection found, waiting for an answer.
     candidate: RefCell<Option<Proposal>>,
 }
@@ -75,6 +77,9 @@ impl Catalogue {
         progress.add_css_class(PROGRESS);
         progress.set_show_text(true);
         progress.set_visible(false);
+        let cancel = gtk::Button::with_label("Cancel download");
+        cancel.add_css_class(CANCEL_ACQUISITION);
+        cancel.set_visible(false);
         let page = Rc::new(Self {
             widget,
             shelf: Rc::clone(shelf),
@@ -85,6 +90,7 @@ impl Catalogue {
             proposal,
             notice,
             progress,
+            cancel,
             pending: RefCell::new(None),
             candidate: RefCell::new(None),
         });
@@ -135,7 +141,19 @@ impl Catalogue {
         self.reference.set_sensitive(false);
         self.inspect.set_sensitive(false);
         self.inspect.set_label("Reading…");
+        self.cancel.set_label("Cancel download");
+        self.cancel.set_sensitive(true);
+        self.cancel.set_visible(true);
         *self.pending.borrow_mut() = Some((self.inspection)(&reference));
+    }
+
+    pub fn cancel(&self) {
+        let pending = self.pending.borrow();
+        let Some(pending) = pending.as_ref() else { return };
+        pending.cancellation.cancel();
+        self.cancel.set_label("Cancelling…");
+        self.cancel.set_sensitive(false);
+        self.say("cancelling image acquisition");
     }
 
     /// Looks once for an inspection that has come back.
@@ -146,6 +164,16 @@ impl Catalogue {
         let Some(event) = self.received() else {
             return false;
         };
+        if self
+            .pending
+            .borrow()
+            .as_ref()
+            .is_some_and(|pending| pending.cancellation.is_cancelled())
+            && !matches!(event, Acquisition::Cancelled)
+        {
+            self.cancelled();
+            return true;
+        }
         match event {
             Acquisition::Inspecting => self.stage("checking local images"),
             Acquisition::Pulling {
@@ -158,6 +186,7 @@ impl Catalogue {
             Acquisition::Ready(candidate) => {
                 *self.pending.borrow_mut() = None;
                 self.progress.set_visible(false);
+                self.cancel.set_visible(false);
                 self.reference.set_sensitive(true);
                 self.inspect.set_sensitive(true);
                 self.inspect.set_label("Read another image");
@@ -185,13 +214,27 @@ impl Catalogue {
             Acquisition::Failed(reason) => {
                 *self.pending.borrow_mut() = None;
                 self.progress.set_visible(false);
+                self.cancel.set_visible(false);
                 self.reference.set_sensitive(true);
                 self.inspect.set_sensitive(true);
                 self.inspect.set_label("Retry");
                 self.say(&reason);
             }
+            Acquisition::Cancelled => {
+                self.cancelled();
+            }
         }
         true
+    }
+
+    fn cancelled(&self) {
+        *self.pending.borrow_mut() = None;
+        self.progress.set_visible(false);
+        self.cancel.set_visible(false);
+        self.reference.set_sensitive(true);
+        self.inspect.set_sensitive(true);
+        self.inspect.set_label("Retry");
+        self.say("image acquisition cancelled; nothing was installed");
     }
 
     /// Records the grant for the candidate on screen.
@@ -354,7 +397,7 @@ impl Catalogue {
     fn received(&self) -> Option<Acquisition> {
         let pending = self.pending.borrow();
         let waiting = pending.as_ref()?;
-        match waiting.try_recv() {
+        match waiting.events.try_recv() {
             Ok(answer) => Some(answer),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(Acquisition::Failed("the image was never read".to_owned())),
@@ -407,6 +450,9 @@ impl Catalogue {
         self.inspect.connect_clicked(move |_| page.inspect());
         self.widget.append(&self.inspect);
         self.widget.append(&self.progress);
+        let page = Rc::clone(self);
+        self.cancel.connect_clicked(move |_| page.cancel());
+        self.widget.append(&self.cancel);
         self.widget.append(&self.proposal);
         self.widget.append(&self.notice);
         self.tick();

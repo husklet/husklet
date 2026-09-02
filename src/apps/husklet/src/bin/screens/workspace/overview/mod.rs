@@ -11,7 +11,7 @@ pub(crate) use process::*;
 pub(crate) use resources::*;
 
 use poll::{spawn_overview_poller, Data, OverviewPoller};
-use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, Shelf, Surfaces};
+use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, PendingInspection, Shelf, Surfaces};
 use table::Table;
 
 /// Native operational pages retained only until the management extension is
@@ -219,12 +219,17 @@ impl<'a> Overview<'a> {
         let held = workspace.clone();
         Rc::new(move |reference: &str| {
             let (answered, answer) = std::sync::mpsc::channel();
+            let cancellation = hl::extension::Cancellation::default();
+            let worker_cancellation = cancellation.clone();
             let workspace = held.clone();
             let reference = reference.to_owned();
             std::thread::spawn(move || {
-                hl::extension::Candidate::acquire(&workspace, &reference, &answered);
+                hl::extension::Candidate::acquire_cancellable(&workspace, &reference, &answered, &worker_cancellation);
             });
-            answer
+            PendingInspection {
+                events: answer,
+                cancellation,
+            }
         })
     }
 

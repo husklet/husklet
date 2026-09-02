@@ -17,7 +17,7 @@ use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wi
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{directory, settings, Catalogue, Cleanup, Inspection, Shared, Shelf, Surfaces};
+use super::{directory, settings, Catalogue, Cleanup, Inspection, PendingInspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -46,6 +46,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
         remote_image_progress_precedes_the_consent_prompt();
+        cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
@@ -107,7 +108,7 @@ impl Fixture {
         });
         let shelf = Shelf::with_cleanup(&view, &roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}), cleanup);
         shelf.install();
-        let inspection: Inspection = Rc::new(|_| std::sync::mpsc::channel().1);
+        let inspection: Inspection = Rc::new(|_| PendingInspection::detached(std::sync::mpsc::channel().1));
         let catalogue = Catalogue::new(&shelf, inspection);
         view.page(Page::Extensions.title())
             .and_downcast::<gtk::Box>()
@@ -468,7 +469,7 @@ fn catalogue(fixture: &Fixture, answer: Result<Candidate, String>) -> Rc<Catalog
             };
             let _ = answered.send(event);
         }
-        answer
+        PendingInspection::detached(answer)
     });
     Catalogue::new(&fixture.shelf, inspection)
 }
@@ -697,7 +698,7 @@ fn remote_image_progress_precedes_the_consent_prompt() {
                 sent.send(event).expect("catalogue is listening");
             }
         }
-        received
+        PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
     typed(&page, "team/tool:latest");
@@ -718,6 +719,56 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     );
 }
 
+fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
+    let fixture = Fixture::new(&[]);
+    let sender = Arc::new(Mutex::new(None));
+    let held_sender = Arc::clone(&sender);
+    let cancellation = Arc::new(Mutex::new(None));
+    let held_cancellation = Arc::clone(&cancellation);
+    let inspection: Inspection = Rc::new(move |_| {
+        let (sent, events) = std::sync::mpsc::channel();
+        held_sender.lock().expect("sender").replace(sent);
+        let token = hl::extension::Cancellation::default();
+        held_cancellation.lock().expect("cancellation").replace(token.clone());
+        PendingInspection {
+            events,
+            cancellation: token,
+        }
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    typed(&page, "team/tool:latest");
+    page.inspect();
+    page.cancel();
+
+    assert!(
+        cancellation
+            .lock()
+            .expect("cancellation")
+            .as_ref()
+            .is_some_and(hl::extension::Cancellation::is_cancelled),
+        "the UI reaches the worker's cancellation authority"
+    );
+    sender
+        .lock()
+        .expect("sender")
+        .as_ref()
+        .expect("pending sender")
+        .send(Acquisition::Ready(candidate()))
+        .expect("late worker result");
+    assert!(page.poll());
+    assert!(fixture.roster.borrow().entries().is_empty());
+    assert!(page.notice().contains("nothing was installed"));
+    page.consent();
+    assert!(
+        fixture.roster.borrow().entries().is_empty(),
+        "late readiness cannot install"
+    );
+    assert!(
+        inspect_action(&page).is_sensitive(),
+        "retry is offered after acknowledgement"
+    );
+}
+
 fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     let fixture = Fixture::new(&[]);
     let attempts = Arc::new(Mutex::new(Vec::new()));
@@ -732,7 +783,7 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
         if let Some(answer) = answers.lock().expect("answers").pop() {
             sent.send(answer).expect("catalogue is listening");
         }
-        received
+        PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
     typed(&page, "team/tool:latest");
