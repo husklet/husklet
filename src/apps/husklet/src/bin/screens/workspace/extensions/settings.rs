@@ -324,6 +324,9 @@ fn removal(
     let notice_path = format!("extensions/installed/{}/notice", entry.name);
     semantics.set_destructive(&confirm_path);
     semantics.set_disabled(&confirm_path, true);
+    let remove_path = format!("extensions/installed/{}/Remove", entry.name);
+    let cancel_path = format!("extensions/installed/{}/Cancel removal", entry.name);
+    semantics.set_disabled(&cancel_path, true);
 
     {
         let remove = remove.clone();
@@ -332,6 +335,8 @@ fn removal(
         let refusal = refusal.clone();
         let semantics = semantics.clone();
         let confirm_path = confirm_path.clone();
+        let remove_path = remove_path.clone();
+        let cancel_path = cancel_path.clone();
         let notice_path = notice_path.clone();
         remove.clone().connect_clicked(move |_| {
             let prompt = "Remove this extension, its saved grant, and its managed sidecar?";
@@ -340,7 +345,9 @@ fn removal(
             remove.set_visible(false);
             confirm.set_visible(true);
             cancel.set_visible(true);
+            semantics.set_disabled(&remove_path, true);
             semantics.set_disabled(&confirm_path, false);
+            semantics.set_disabled(&cancel_path, false);
             semantics.update(&notice_path, super::super::semantic::Value::Public(prompt), false);
         });
     }
@@ -351,13 +358,17 @@ fn removal(
         let refusal = refusal.clone();
         let semantics = semantics.clone();
         let confirm_path = confirm_path.clone();
+        let remove_path = remove_path.clone();
+        let cancel_path = cancel_path.clone();
         let notice_path = notice_path.clone();
         cancel.clone().connect_clicked(move |_| {
             refusal.set_visible(false);
             remove.set_visible(true);
             confirm.set_visible(false);
             cancel.set_visible(false);
+            semantics.set_disabled(&remove_path, false);
             semantics.set_disabled(&confirm_path, true);
+            semantics.set_disabled(&cancel_path, true);
             semantics.update(
                 &notice_path,
                 super::super::semantic::Value::Public("Removal cancelled; nothing changed"),
@@ -374,16 +385,22 @@ fn removal(
         let standing = standing.clone();
         let semantics = semantics.clone();
         let confirm_path = confirm_path.clone();
+        let cancel_path = cancel_path.clone();
         let status_path = status_path.clone();
         let notice_path = notice_path.clone();
         confirm.clone().connect_clicked(move |_| {
             semantics.set_disabled(&confirm_path, true);
+            semantics.set_disabled(&cancel_path, true);
             let entry = match shelf.quiesce(&name) {
                 Ok(entry) => entry,
                 Err(fault) => {
                     let failure = fault.to_string();
                     refusal.set_text(&failure);
                     refusal.set_visible(true);
+                    confirm.set_label("Retry removal");
+                    semantics.set_label(&confirm_path, "Retry removal");
+                    semantics.set_disabled(&confirm_path, false);
+                    semantics.set_disabled(&cancel_path, false);
                     semantics.update(
                         &notice_path,
                         super::super::semantic::Value::Public(&failure),
@@ -417,6 +434,8 @@ fn removal(
             let refusal = refusal.clone();
             let standing = standing.clone();
             let semantics = semantics.clone();
+            let confirm_path = confirm_path.clone();
+            let cancel_path = cancel_path.clone();
             let status_path = status_path.clone();
             let notice_path = notice_path.clone();
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || match answer.try_recv() {
@@ -432,6 +451,9 @@ fn removal(
                         confirm.set_label("Retry removal");
                         confirm.set_sensitive(true);
                         cancel.set_sensitive(true);
+                        semantics.set_label(&confirm_path, "Retry removal");
+                        semantics.set_disabled(&confirm_path, false);
+                        semantics.set_disabled(&cancel_path, false);
                         semantics.update(
                             &status_path,
                             super::super::semantic::Value::Public("disabled · record cleanup failed"),
@@ -457,6 +479,9 @@ fn removal(
                     confirm.set_label("Retry removal");
                     confirm.set_sensitive(true);
                     cancel.set_sensitive(true);
+                    semantics.set_label(&confirm_path, "Retry removal");
+                    semantics.set_disabled(&confirm_path, false);
+                    semantics.set_disabled(&cancel_path, false);
                     semantics.update(
                         &status_path,
                         super::super::semantic::Value::Public("disabled · removal failed"),
@@ -477,6 +502,9 @@ fn removal(
                     confirm.set_label("Retry removal");
                     confirm.set_sensitive(true);
                     cancel.set_sensitive(true);
+                    semantics.set_label(&confirm_path, "Retry removal");
+                    semantics.set_disabled(&confirm_path, false);
+                    semantics.set_disabled(&cancel_path, false);
                     semantics.update(
                         &status_path,
                         super::super::semantic::Value::Public("disabled · removal failed"),

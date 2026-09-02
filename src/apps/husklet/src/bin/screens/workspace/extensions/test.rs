@@ -572,6 +572,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         }),
         Err(Refusal::Disabled(id)) if id == confirm.id
     ));
+    let cancel = removal
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Cancel removal"))
+        .unwrap();
+    assert!(cancel.disabled, "hidden cancellation is not actionable");
     fixture
         .view
         .semantic_action(&Action {
@@ -589,6 +596,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .find(|node| node.label.as_deref() == Some("Confirm removal"))
         .unwrap();
     assert!(!confirm.disabled);
+    let remove = asking
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Remove"))
+        .unwrap();
+    assert!(remove.disabled, "the hidden first-step action cannot bypass confirmation state");
     fixture
         .view
         .semantic_action(&Action {
@@ -694,6 +708,24 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
                 .as_deref()
                 .is_some_and(|value| value.contains("foreign container"))
     }));
+    let retry = failed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Retry removal"))
+        .expect("the visible retry has the same accessible name");
+    assert!(!retry.disabled);
+    assert!(retry.destructive);
+    fixture
+        .view
+        .semantic_action(&super::super::semantic::Action {
+            revision: failed.revision,
+            node: retry.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        })
+        .expect("semantic retry invokes the visible cleanup authority");
+    assert!(until_gui(|| attempts.load(Ordering::Acquire) == 2));
     assert!(
         fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE).is_some(),
         "the same confirmed action becomes an explicit cleanup retry"
