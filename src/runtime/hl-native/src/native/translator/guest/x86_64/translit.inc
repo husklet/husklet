@@ -180,9 +180,6 @@ static _Atomic uint64_t translit_direct_jmp_ibtc_fill_count;
 static _Atomic uint64_t translit_direct_jmp_ibtc_collision;
 static _Atomic uint64_t translit_direct_jmp_ibtc_suppressed;
 static _Atomic uint64_t translit_direct_jmp_ibtc_invalid_refusal;
-#if defined(HL_NATIVE_TEST_HOOKS)
-static _Atomic uint64_t translit_direct_jmp_inline_hit;
-#endif
 static _Atomic uint64_t translit_fallthrough_ibtc_fs_transaction_hits;
 static _Atomic uint64_t translit_fallthrough_ibtc_normal_to_fs_hits;
 static _Atomic uint64_t translit_direct_call_ibtc_emitted;
@@ -2448,17 +2445,6 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_jmp_ibtc(hl_x64_asm *a
     hl_x64_pand(a, 4, 3);
     hl_x64_pand(a, 0, 4);                     // hit only while irq == 0
 
-    uintptr_t hit_counter = translit_direct_jmp_ibtc_dynamic_counter(TL_DIRECT_JMP_IBTC_COUNT_HIT);
-    if (hit_counter != 0) {
-        hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 0);
-        hl_x64_test_reg(a, HL_X64_RAX);
-        uint8_t *not_hit = hl_x64_jcc_rel32(a, 4);
-        hl_x64_atomic_inc_abs(a, hit_counter);
-#if defined(HL_NATIVE_TEST_HOOKS)
-        hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_direct_jmp_inline_hit);
-#endif
-        hl_x64_patch_rel32(a, not_hit, a->cursor);
-    }
     hl_x64_movdqa_xmm(a, 3, 0);
     translit_helper_lea(a, HL_X64_RAX, translit_direct_jmp_ibtc_stub_entry, 1);
     hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX);
@@ -7156,7 +7142,6 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     const uint64_t fill_before = __atomic_load_n(&translit_direct_jmp_ibtc_fill_count, __ATOMIC_RELAXED);
     const uint64_t collision_before = __atomic_load_n(&translit_direct_jmp_ibtc_collision, __ATOMIC_RELAXED);
     const uint64_t invalid_before = __atomic_load_n(&translit_direct_jmp_ibtc_invalid_refusal, __ATOMIC_RELAXED);
-    const uint64_t inline_hit_before = __atomic_load_n(&translit_direct_jmp_inline_hit, __ATOMIC_RELAXED);
     int result = 154;
 
     if (scenario == 111) {
@@ -7410,9 +7395,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     if (scenario == 109) {
         result = cpu.r[0] == 42 && cpu.rip == target + 5 && cpu.reason == R_BRANCH &&
                          translit_flags_in(&cpu) == expected_flags &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before + 1 &&
-                         __atomic_load_n(&translit_direct_jmp_inline_hit, __ATOMIC_RELAXED) ==
-                             inline_hit_before + 1
+                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before
                      ? 0
                      : 168;
         for (unsigned reg = 1; result == 0 && reg < 16; reg++) {
