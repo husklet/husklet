@@ -167,7 +167,8 @@ export type ExtensionCapability =
   | 'filesystem-write' | 'interface';
 export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[] }
 export interface ExtensionAcquisitionJob { job: string }
-export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; candidate: ExtensionCandidate | null; error: string | null }
+export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }
+export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; progress: ExtensionAcquisitionProgress | null; candidate: ExtensionCandidate | null; error: string | null }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
 export interface WorkspaceMount { host: string; container: string; read_only: boolean }
 export interface WorkspaceTerminal {

@@ -553,6 +553,7 @@ impl ExtensionStore for Host {
             reference: "registry/example:1".into(),
             revision: 7,
             state: "ready".into(),
+            progress: None,
             candidate: None,
             error: None,
         })

@@ -1,10 +1,10 @@
 //! Bounded, asynchronous image acquisition awaiting explicit user consent.
 
 use std::collections::BTreeMap;
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 
-use hl_extension::port::HostError;
 use hl_extension::Grant;
+use hl_extension::port::HostError;
 
 use super::{Acquisition, Cancellation, Candidate, Roster};
 use crate::config::WorkspaceConfig;
@@ -14,6 +14,21 @@ type Acquire = dyn Fn(&WorkspaceConfig, &str, &mpsc::Sender<Acquisition>, &Cance
 /// Opaque identity of one bounded acquisition job.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct AcquisitionJob(u64);
+
+impl AcquisitionJob {
+    pub(crate) fn parse(value: &str) -> Result<Self, HostError> {
+        let id = value
+            .parse::<u64>()
+            .map_err(|_| HostError::Conflict("invalid extension acquisition job".into()))?;
+        (id != 0)
+            .then_some(Self(id))
+            .ok_or_else(|| HostError::Conflict("invalid extension acquisition job".into()))
+    }
+
+    pub(crate) fn wire(self) -> String {
+        self.0.to_string()
+    }
+}
 
 /// Consent-relevant fields observed from one exact image digest.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,6 +43,7 @@ pub(crate) struct AcquisitionCandidate {
 /// A revisioned snapshot suitable for polling across a socket boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AcquisitionSnapshot {
+    pub reference: String,
     pub revision: u64,
     pub state: AcquisitionState,
 }
@@ -148,6 +164,7 @@ impl ExtensionAcquisitions {
                 id,
                 Job {
                     snapshot: AcquisitionSnapshot {
+                        reference: reference.to_owned(),
                         revision: 1,
                         state: AcquisitionState::Inspecting,
                     },
@@ -472,9 +489,11 @@ mod tests {
             }
         });
         assert!(service.start("").is_err());
-        assert!(service
-            .start(&"x".repeat(ExtensionAcquisitions::REFERENCE_LIMIT + 1))
-            .is_err());
+        assert!(
+            service
+                .start(&"x".repeat(ExtensionAcquisitions::REFERENCE_LIMIT + 1))
+                .is_err()
+        );
         let jobs: Vec<_> = (0..ExtensionAcquisitions::ACTIVE_LIMIT)
             .map(|index| service.start(&format!("sample:{index}")).unwrap())
             .collect();

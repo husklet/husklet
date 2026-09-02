@@ -372,11 +372,21 @@ pub struct ExtensionCandidate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionAcquisitionProgress {
+    pub status: String,
+    pub id: Option<String>,
+    pub current: Option<u64>,
+    pub total: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionAcquisitionStatus {
     pub job: String,
     pub reference: String,
     pub revision: u64,
     pub state: String,
+    #[serde(default)]
+    pub progress: Option<ExtensionAcquisitionProgress>,
     pub candidate: Option<ExtensionCandidate>,
     pub error: Option<String>,
 }
@@ -741,7 +751,7 @@ pub trait WorkspaceFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{pane_lines, Division, LayoutNode, Occupant, PaneSummary, PANE_LINES};
+    use super::{Division, LayoutNode, Occupant, PANE_LINES, PaneSummary, pane_lines};
 
     #[test]
     fn a_pane_read_is_bounded_however_it_is_asked_for() {
