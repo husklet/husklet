@@ -20,6 +20,7 @@ use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
+use hl_extension::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActionKind, SemanticNode};
 use hl_gui::{Event, Frame, Renderer, SourceMutation, Tree};
 use hl_gui_gtk::Surface;
 
@@ -80,8 +81,9 @@ impl Interface {
     }
 
     /// Puts the page on the main loop. The tick ends with the widget.
-    pub fn install(self) {
+    pub fn install(self) -> Rc<RefCell<Self>> {
         let interface = Rc::new(RefCell::new(self));
+        let installed = Rc::clone(&interface);
         glib::timeout_add_local(TICK, move || {
             let mut page = interface.borrow_mut();
             if page.page.upgrade().is_none() {
@@ -90,6 +92,123 @@ impl Interface {
             page.tick();
             glib::ControlFlow::Continue
         });
+        installed
+    }
+
+    pub fn semantics(&self, slot: &str) -> Result<PaneSemanticTree, HostError> {
+        let mut count = 0;
+        let mut truncated = false;
+        let root = self.semantic_node(hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
+        Ok(PaneSemanticTree {
+            slot: slot.to_owned(),
+            revision: self.tree.sequence(),
+            root,
+            truncated,
+        })
+    }
+
+    fn semantic_node(
+        &self,
+        id: hl_gui::NodeId,
+        depth: usize,
+        count: &mut usize,
+        truncated: &mut bool,
+    ) -> Result<SemanticNode, HostError> {
+        if depth >= hl_extension::port::SEMANTIC_DEPTH_LIMIT || *count >= hl_extension::port::SEMANTIC_NODE_LIMIT {
+            *truncated = true;
+            return Err(HostError::Conflict("semantic tree exceeds its bounded shape".into()));
+        }
+        *count += 1;
+        let node = self
+            .tree
+            .node(id)
+            .ok_or_else(|| HostError::Absent(format!("semantic node {}", id.raw())))?;
+        let secret = node.flag(hl_gui::Prop::Secret, false);
+        let clip = |value: &str| {
+            value
+                .chars()
+                .take(hl_extension::port::SEMANTIC_TEXT_LIMIT)
+                .collect::<String>()
+        };
+        let actions = node
+            .handlers
+            .keys()
+            .filter_map(|trigger| match trigger {
+                hl_gui::Trigger::Invoke => Some(SemanticActionKind::Invoke),
+                hl_gui::Trigger::Change => Some(SemanticActionKind::Change),
+                hl_gui::Trigger::Submit => Some(SemanticActionKind::Submit),
+                hl_gui::Trigger::Focus => Some(SemanticActionKind::Focus),
+                hl_gui::Trigger::Toggle => Some(SemanticActionKind::Toggle),
+                hl_gui::Trigger::Expand => Some(SemanticActionKind::Expand),
+                _ => None,
+            })
+            .collect();
+        let mut children = Vec::new();
+        for child in &node.children {
+            if depth + 1 >= hl_extension::port::SEMANTIC_DEPTH_LIMIT
+                || *count >= hl_extension::port::SEMANTIC_NODE_LIMIT
+            {
+                *truncated = true;
+                break;
+            }
+            children.push(self.semantic_node(*child, depth + 1, count, truncated)?);
+        }
+        Ok(SemanticNode {
+            id: id.raw(),
+            role: node.tag.as_str().to_owned(),
+            label: node.text(hl_gui::Prop::Label).map(clip),
+            value: node
+                .text(hl_gui::Prop::Value)
+                .map(|value| if secret { "[redacted]".to_owned() } else { clip(value) }),
+            disabled: !node.flag(hl_gui::Prop::Enabled, true),
+            actions,
+            children,
+        })
+    }
+
+    pub fn semantic_action(&self, action: &PaneSemanticAction) -> Result<(), HostError> {
+        if action.revision != self.tree.sequence() {
+            return Err(HostError::Conflict(format!(
+                "stale semantic revision {}; current is {}",
+                action.revision,
+                self.tree.sequence()
+            )));
+        }
+        let node_id = hl_gui::NodeId::new(action.node);
+        let trigger = match action.action {
+            SemanticActionKind::Invoke => hl_gui::Trigger::Invoke,
+            SemanticActionKind::Change => hl_gui::Trigger::Change,
+            SemanticActionKind::Submit => hl_gui::Trigger::Submit,
+            SemanticActionKind::Focus => hl_gui::Trigger::Focus,
+            SemanticActionKind::Toggle => hl_gui::Trigger::Toggle,
+            SemanticActionKind::Expand => hl_gui::Trigger::Expand,
+        };
+        let id = self
+            .tree
+            .handler(node_id, trigger)
+            .cloned()
+            .ok_or_else(|| HostError::Conflict("node does not declare that action".into()))?;
+        let event = match action.action {
+            SemanticActionKind::Invoke => Event::Invoke { node: node_id, id },
+            SemanticActionKind::Submit => Event::Submit { node: node_id, id },
+            SemanticActionKind::Focus => Event::Focus {
+                node: node_id,
+                id,
+                focused: action.value.as_deref() != Some("false"),
+            },
+            SemanticActionKind::Change => Event::Change {
+                node: node_id,
+                id,
+                value: hl_gui::PropValue::text(action.value.clone().unwrap_or_default()),
+            },
+            SemanticActionKind::Toggle | SemanticActionKind::Expand => Event::Change {
+                node: node_id,
+                id,
+                value: hl_gui::PropValue::Flag(action.value.as_deref() != Some("false")),
+            },
+        };
+        self.sink.accept(Signal::Interaction(event));
+        Ok(())
     }
 
     /// One turn: apply what is queued, then hand back what the surface says.

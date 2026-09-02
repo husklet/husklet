@@ -24,6 +24,8 @@ struct Exhibit {
     home: glib::WeakRef<gtk::Box>,
     providers: Vec<hl_extension::PaneProvider>,
     selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
+    semantics: Option<Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>>,
+    action: Option<Rc<dyn Fn(&hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
 }
 
 /// One choice shown by a terminal pane, tied to the extension that owns it.
@@ -65,8 +67,50 @@ impl Gallery {
             home: home.downgrade(),
             providers: providers.to_vec(),
             selected,
+            semantics: None,
+            action: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
+    }
+
+    pub fn enrol_semantics(
+        &self,
+        extension: &str,
+        semantics: Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>,
+        action: Rc<dyn Fn(&hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>,
+    ) {
+        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+            exhibit.semantics = Some(semantics);
+            exhibit.action = Some(action);
+        }
+    }
+
+    pub fn semantics(
+        &self,
+        extension: &str,
+        slot: &str,
+    ) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError> {
+        let held = self.0.borrow();
+        let endpoint = held
+            .get(extension)
+            .and_then(|entry| entry.semantics.clone())
+            .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
+        drop(held);
+        endpoint(slot)
+    }
+
+    pub fn semantic_action(
+        &self,
+        extension: &str,
+        action: &hl_extension::PaneSemanticAction,
+    ) -> Result<(), hl_extension::HostError> {
+        let held = self.0.borrow();
+        let endpoint = held
+            .get(extension)
+            .and_then(|entry| entry.action.clone())
+            .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
+        drop(held);
+        endpoint(action)
     }
 
     /// Stops advertising an extension whose lifecycle page is being removed.

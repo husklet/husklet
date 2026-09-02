@@ -239,3 +239,25 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
+
+test('pane semantics and actions preserve revision and node identity', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const tree = api.terminal.semantics('pane-7');
+  const read = (await next()).payload;
+  assert.deepEqual(read, { call: 'pane_semantic_read', with: { slot: 'pane-7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'semantics', with: { slot: 'pane-7', revision: 9, truncated: false,
+      root: { id: 0, role: 'Column', label: null, value: null, disabled: false, actions: [], children: [] } },
+  } }));
+  assert.equal((await tree).revision, 9);
+  const acted = api.terminal.act('pane-7', { revision: 9, node: 4, action: 'invoke' });
+  assert.deepEqual((await next()).payload, { call: 'pane_semantic_action', with: {
+    slot: 'pane-7', action: { revision: 9, node: 4, action: 'invoke' },
+  } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await acted;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});

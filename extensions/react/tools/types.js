@@ -198,6 +198,10 @@ export interface PaneSummary {
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
 export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
+export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
+export interface PaneSemanticTree { slot: string; revision: number; root: SemanticNode; truncated: boolean }
+export interface PaneSemanticAction { revision: number; node: number; action: SemanticActionKind; value?: string | null }
 export interface GridSize { columns: number; rows: number }
 export type LayoutNode =
   | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
@@ -292,6 +296,8 @@ export interface WorkspaceApi {
     split(slot: string, division: Division): Promise<string>;
     spawn(slot: string, command: string[]): Promise<void>;
     read(slot: string, lines?: number): Promise<PaneText>;
+    semantics(slot: string): Promise<PaneSemanticTree>;
+    act(slot: string, action: PaneSemanticAction): Promise<void>;
     writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;

@@ -8,8 +8,8 @@ use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageSummary, PaneText,
-    NetworkSummary, ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageSummary, NetworkSummary,
+    PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
 };
 
 /// A call from an extension.
@@ -99,15 +99,33 @@ pub enum Request {
         reference: String,
     },
     VolumeList,
-    VolumeInspect { name: String },
-    VolumeCreate { name: String },
-    VolumeRemove { name: String },
+    VolumeInspect {
+        name: String,
+    },
+    VolumeCreate {
+        name: String,
+    },
+    VolumeRemove {
+        name: String,
+    },
     NetworkList,
-    NetworkInspect { reference: String },
-    NetworkCreate { name: String },
-    NetworkRemove { reference: String },
-    NetworkConnect { reference: String, container: String },
-    NetworkDisconnect { reference: String, container: String },
+    NetworkInspect {
+        reference: String,
+    },
+    NetworkCreate {
+        name: String,
+    },
+    NetworkRemove {
+        reference: String,
+    },
+    NetworkConnect {
+        reference: String,
+        container: String,
+    },
+    NetworkDisconnect {
+        reference: String,
+        container: String,
+    },
     TerminalTabs,
     TerminalTopology,
     TerminalOpenTab {
@@ -124,6 +142,13 @@ pub enum Request {
     TerminalReadPane {
         slot: String,
         lines: Option<usize>,
+    },
+    PaneSemanticRead {
+        slot: String,
+    },
+    PaneSemanticAction {
+        slot: String,
+        action: crate::port::PaneSemanticAction,
     },
     TerminalWritePane {
         slot: String,
@@ -224,6 +249,8 @@ impl Request {
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
+            Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
+            Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
@@ -325,6 +352,7 @@ pub enum Reply {
     Tabs(Vec<TabSummary>),
     Topology(TerminalTopology),
     Text(PaneText),
+    Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
     Contents(Vec<u8>),
     Identity(String),
@@ -375,7 +403,27 @@ mod tests {
     #[test]
     fn reading_and_writing_calls_require_different_capabilities() {
         assert_eq!(
-            Request::EventSubscribe { topic: Topic::WorkspaceEvents }.capability(),
+            Request::PaneSemanticRead { slot: "7".into() }.capability(),
+            Capability::PaneSemanticRead
+        );
+        assert_eq!(
+            Request::PaneSemanticAction {
+                slot: "7".into(),
+                action: crate::port::PaneSemanticAction {
+                    revision: 1,
+                    node: 2,
+                    action: crate::port::SemanticActionKind::Invoke,
+                    value: None,
+                },
+            }
+            .capability(),
+            Capability::PaneSemanticControl
+        );
+        assert_eq!(
+            Request::EventSubscribe {
+                topic: Topic::WorkspaceEvents
+            }
+            .capability(),
             Capability::WorkspaceEvents
         );
         assert_eq!(Request::ContainerList.capability(), Capability::ContainerRead);

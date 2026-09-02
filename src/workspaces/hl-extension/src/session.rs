@@ -9,8 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface, VolumeStore,
-    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface,
+    VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -114,9 +114,16 @@ impl Session {
             | Request::ContainerKill { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList | Request::ImagePull { .. } => self.images(request, services),
-            Request::VolumeList | Request::VolumeInspect { .. } | Request::VolumeCreate { .. } | Request::VolumeRemove { .. } => self.volumes(request, services),
-            Request::NetworkList | Request::NetworkInspect { .. } | Request::NetworkCreate { .. }
-            | Request::NetworkRemove { .. } | Request::NetworkConnect { .. } | Request::NetworkDisconnect { .. } => self.networks(request, services),
+            Request::VolumeList
+            | Request::VolumeInspect { .. }
+            | Request::VolumeCreate { .. }
+            | Request::VolumeRemove { .. } => self.volumes(request, services),
+            Request::NetworkList
+            | Request::NetworkInspect { .. }
+            | Request::NetworkCreate { .. }
+            | Request::NetworkRemove { .. }
+            | Request::NetworkConnect { .. }
+            | Request::NetworkDisconnect { .. } => self.networks(request, services),
             Request::TerminalTabs
             | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
@@ -128,6 +135,31 @@ impl Session {
             | Request::TerminalClosePane { .. }
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRatio { .. } => self.terminal(request, services),
+            Request::PaneSemanticRead { slot } => {
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::PaneSemanticRead, services.terminal)?;
+                Ok(Reply::Semantics(port.semantics(slot)?))
+            }
+            Request::PaneSemanticAction { slot, action } => {
+                if action
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| value.len() > crate::port::SEMANTIC_ACTION_VALUE_LIMIT)
+                {
+                    return Err(Failure::Conflict {
+                        detail: "pane semantic action value exceeds 4096 bytes".into(),
+                    });
+                }
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::PaneSemanticControl, services.terminal)?;
+                port.semantic_action(slot, action)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             Request::FilesystemList { .. } | Request::FilesystemRead { .. } | Request::FilesystemWrite { .. } => {
                 self.files(request, services)
             }
@@ -223,8 +255,14 @@ impl Session {
             Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
             Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
             Request::NetworkRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
-            Request::NetworkConnect { reference, container } => port.connect(reference, container).map(|()| Reply::Done).map_err(Failure::from),
-            Request::NetworkDisconnect { reference, container } => port.disconnect(reference, container).map(|()| Reply::Done).map_err(Failure::from),
+            Request::NetworkConnect { reference, container } => port
+                .connect(reference, container)
+                .map(|()| Reply::Done)
+                .map_err(Failure::from),
+            Request::NetworkDisconnect { reference, container } => port
+                .disconnect(reference, container)
+                .map(|()| Reply::Done)
+                .map_err(Failure::from),
             _ => unreachable!(),
         }
     }

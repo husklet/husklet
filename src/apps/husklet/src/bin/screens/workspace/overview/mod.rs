@@ -121,12 +121,27 @@ impl<'a> Overview<'a> {
             Signal::Retry => host.accept(Order::Retry),
         });
         let (widget, page) = screens::workspace::extension::Interface::with_faults(deliveries, sink, faulted);
-        page.install();
+        let page = page.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_hexpand(true);
         holder.set_vexpand(true);
         holder.append(&widget);
         gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
+        let weak = Rc::downgrade(&page);
+        let semantics = Rc::new(move |slot: &str| {
+            weak.upgrade()
+                .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
+                .borrow()
+                .semantics(slot)
+        });
+        let weak = Rc::downgrade(&page);
+        let action = Rc::new(move |request: &hl_extension::PaneSemanticAction| {
+            weak.upgrade()
+                .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
+                .borrow()
+                .semantic_action(request)
+        });
+        gallery.enrol_semantics(name.as_str(), semantics, action);
         holder.upcast()
     }
 

@@ -32,6 +32,8 @@ pub enum Capability {
     /// `TerminalRead`: listing panes and reading what was typed into a shell
     /// are different kinds of access.
     TerminalOutput,
+    PaneSemanticRead,
+    PaneSemanticControl,
     FilesystemRead,
     FilesystemWrite,
     Interface,
@@ -56,6 +58,8 @@ impl Capability {
             Self::TerminalRead => "terminal-read",
             Self::TerminalControl => "terminal-control",
             Self::TerminalOutput => "terminal-output",
+            Self::PaneSemanticRead => "pane-semantic-read",
+            Self::PaneSemanticControl => "pane-semantic-control",
             Self::FilesystemRead => "filesystem-read",
             Self::FilesystemWrite => "filesystem-write",
             Self::Interface => "interface",
@@ -74,6 +78,7 @@ impl Capability {
                 | Self::VolumeWrite
                 | Self::NetworkWrite
                 | Self::TerminalControl
+                | Self::PaneSemanticControl
                 | Self::FilesystemWrite
         )
     }
@@ -104,6 +109,8 @@ impl Capability {
         Self::TerminalRead,
         Self::TerminalControl,
         Self::TerminalOutput,
+        Self::PaneSemanticRead,
+        Self::PaneSemanticControl,
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::Interface,

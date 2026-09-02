@@ -103,6 +103,13 @@ export function workspace(session) {
       split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
       spawn: (slot, command) => done('terminal_spawn', { slot, command }),
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+      semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+      act: (slot, action) => {
+        if (action?.value != null && new TextEncoder().encode(action.value).byteLength > 4096) {
+          throw new RangeError('pane semantic action value exceeds 4096 bytes');
+        }
+        return done('pane_semantic_action', { slot, action });
+      },
       writeInput: (slot, input) => {
         const contents = typeof input === 'string' ? new TextEncoder().encode(input) : Uint8Array.from(input);
         if (contents.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
@@ -209,7 +216,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
+    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     workspaceEvents: ['key', 'focus', 'pointer'],
