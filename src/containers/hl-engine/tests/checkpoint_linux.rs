@@ -2738,20 +2738,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             output.clone(),
         ]
         .concat();
-        let chained = diagnostic_text
-            .lines()
-            .filter(|line| line.starts_with("[diag] backend-shape "))
-            .filter_map(|line| {
-                line.split_whitespace()
-                    .find_map(|field| field.strip_prefix("e_jt_chained="))
-                    .and_then(|value| value.parse::<u64>().ok())
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            chained.len() == 3 && chained.iter().all(|count| *count > 0),
-            "each capture/restore process must execute a newly chained JCC: {chained:?}\n{diagnostic_text}"
-        );
-        let mixed = diagnostic_text
+        let shapes = diagnostic_text
             .lines()
             .filter(|line| line.starts_with("[diag] backend-shape "))
             .map(|line| {
@@ -2763,6 +2750,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
                 };
                 (
                     field("translated_entries="),
+                    field("e_jt_chained="),
                     field("mixed_sse_executed="),
                     field("mixed_sse_executed_transitions="),
                     field("mixed_sse_disabled_boundaries="),
@@ -2770,15 +2758,23 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             })
             .collect::<Vec<_>>();
         assert!(
-            mixed.len() == 3
-                && mixed
+            shapes.len() == 3 && shapes.iter().all(|(translated, ..)| *translated > 0),
+            "each capture/restore generation must execute translated bodies: {shapes:?}\n{diagnostic_text}"
+        );
+        if isa == GuestIsa::X86_64 {
+            assert!(
+                shapes.iter().all(|(_, chained, ..)| *chained > 0),
+                "each x86 capture/restore process must execute a newly chained JCC: {shapes:?}\n{diagnostic_text}"
+            );
+            assert!(
+                shapes
                     .iter()
-                    .all(|(translated, descriptors, transitions, boundaries)| *translated > 0
-                        && *descriptors > 0
+                    .all(|(_, _, descriptors, transitions, boundaries)| *descriptors > 0
                         && *transitions >= *descriptors
                         && *boundaries == 0),
-            "each capture/restore generation must execute translated mixed bodies in its own fork-shared census: {mixed:?}\n{diagnostic_text}"
-        );
+                "each x86 capture/restore generation must execute translated mixed bodies in its own fork-shared census: {shapes:?}\n{diagnostic_text}"
+            );
+        }
     }
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");
     assert_eq!(output.matches("SLEEP-READY ").count(), 1, "{output}");
