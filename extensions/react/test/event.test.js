@@ -106,8 +106,17 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   await stage.push({ slot: 'surface-2', event: 'Invoke', id: '1:Invoke', node: 1 });
   await until(() => secondInvoked === 1);
   assert.equal(firstInvoked, 0, 'an addressed event never fans out to the other root');
-  first.close();
-  second.close();
+  const closing = first.close();
+  assert.equal(first.close(), closing, 'closing is idempotent even while withdrawal is in flight');
+  await closing;
+  assert.deepEqual(
+    stage.calls.filter((call) => call.call === 'interface_withdraw'),
+    [{ call: 'interface_withdraw', with: { slot: 'surface-1' } }],
+  );
+  await stage.push({ slot: 'surface-2', event: 'Invoke', id: '1:Invoke', node: 1 });
+  await until(() => secondInvoked === 2);
+  assert.equal(firstInvoked, 0, 'withdrawing one root leaves its sibling live');
+  await second.close();
   session.close();
   stage.close();
 });
@@ -119,7 +128,21 @@ test('the client refuses a thirty-third live root before opening it', async () =
   assert.throws(() => render(h(Button, { label: 'overflow' }), session), /surface limit of 32/);
   await Promise.all(roots.map((root) => root.ready));
   assert.equal(stage.calls.filter((call) => call.call === 'interface_open_tab').length, 32);
-  for (const root of roots) root.close();
+  await Promise.all(roots.map((root) => root.close()));
+  session.close();
+  stage.close();
+});
+
+test('closing before the open reply withdraws after readiness without rendering', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const root = render(h(Button, { label: 'Short lived' }), session);
+  const closing = root.close();
+  await closing;
+  assert.deepEqual(stage.calls, [
+    { call: 'interface_open_tab', with: { title: 'Extension' } },
+    { call: 'interface_withdraw', with: { slot: 'surface-1' } },
+  ]);
   session.close();
   stage.close();
 });

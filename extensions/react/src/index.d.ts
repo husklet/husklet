@@ -4184,7 +4184,7 @@ export class Session {
   call(method: string, params?: unknown): Promise<unknown>;
   answer(channel: number, window: unknown): void;
   onEvent(listener: (event: SnapshotEvent, channel: number) => void): () => boolean;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export function connect(options?: ConnectOptions): Promise<Session>;

@@ -220,6 +220,7 @@ export function render(element, session, { title = 'Extension', split = null } =
   let slot = null;
   let closed = false;
   let failed = null;
+  let withdrawal = null;
   const transmit = (frame) => {
     if (closed || failed) return;
     if (slot === null) {
@@ -274,11 +275,21 @@ export function render(element, session, { title = 'Extension', split = null } =
       if (reply?.reply !== 'done') throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
     },
     close() {
-      if (closed) return;
+      if (closed) return withdrawal ?? Promise.resolve();
       closed = true;
       reconciler.updateContainer(null, container, null, null);
       registry.handles.delete(handle);
       if (slot !== null) registry.slots.delete(slot);
+      withdrawal = ready.then(async (owned) => {
+        const reply = await session.call('interface_withdraw', { slot: owned });
+        if (reply?.reply !== 'done') {
+          throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
+        }
+      });
+      // Fire-and-forget callers retain the old ergonomics without creating an
+      // unhandled rejection; callers that care await the returned promise.
+      void withdrawal.catch(() => {});
+      return withdrawal;
     },
   });
   return handle;
