@@ -35,6 +35,11 @@ pub use sink::{Signal, Sink};
 /// pages, so one extension does not set the application's rhythm.
 const TICK: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Maximum retained widgets in each independently addressed surface.
+/// Semantic snapshots use a smaller projection bound; this is the lifetime
+/// allocation ceiling protecting the toolkit itself.
+const TREE_NODE_LIMIT: usize = 256;
+
 /// The extension page: a frozen-capable banner above a rendered surface.
 pub struct Interface {
     /// Held weakly so a page removed from the shell stops ticking. The shell
@@ -379,13 +384,21 @@ impl Interface {
     /// Applies one frame. A rejected frame means the producer and the tree no
     /// longer agree, which the user sees as the extension having stopped.
     fn draw(&mut self, frame: &Frame) {
-        match self.tree.apply(frame, &mut self.surface) {
+        match self
+            .tree
+            .preflight(frame, TREE_NODE_LIMIT)
+            .map_err(|fault| fault.to_string())
+            .and_then(|()| {
+                self.tree
+                    .apply(frame, &mut self.surface)
+                    .map_err(|fault| fault.to_string())
+            }) {
             Ok(()) => {
                 (self.ready)();
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }
-            Err(fault) => self.banner.show(&fault.to_string()),
+            Err(fault) => self.banner.show(&fault),
         }
     }
 
@@ -394,13 +407,21 @@ impl Interface {
         // before terminal/lifecycle withdrawal retired that slot; accepting it
         // here must not recreate an unmounted renderer with no owning pane.
         let Some(pane) = self.panes.get_mut(slot) else { return };
-        match pane.tree.apply(frame, &mut pane.surface) {
+        match pane
+            .tree
+            .preflight(frame, TREE_NODE_LIMIT)
+            .map_err(|fault| fault.to_string())
+            .and_then(|()| {
+                pane.tree
+                    .apply(frame, &mut pane.surface)
+                    .map_err(|fault| fault.to_string())
+            }) {
             Ok(()) => {
                 (self.ready)();
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }
-            Err(fault) => self.banner.show(&fault.to_string()),
+            Err(fault) => self.banner.show(&fault),
         }
     }
 

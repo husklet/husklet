@@ -123,6 +123,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         retained_pane_actions_keep_their_slot();
         retiring_a_pane_discards_its_queued_interaction();
         retired_panes_ignore_late_frames_until_explicitly_remounted();
+        oversized_tree_growth_is_atomic_isolated_and_remountable();
         semantics_are_redacted_and_actions_reject_stale_revisions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
@@ -201,6 +202,77 @@ fn retired_panes_ignore_late_frames_until_explicitly_remounted() {
         widget
             .downcast_ref::<gtk::Label>()
             .is_some_and(|label| label.text().as_str() == "Replacement generation")
+    }));
+}
+
+fn oversized_tree_growth_is_atomic_isolated_and_remountable() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::text("last valid interface"));
+    fixture.page.tick();
+    let valid_sequence = fixture.page.tree.sequence();
+    let valid_nodes = fixture.page.tree.len();
+
+    let mut oversized = Element::column();
+    for index in 0..=super::TREE_NODE_LIMIT {
+        oversized = oversized.child(Element::text(format!("node {index}")));
+    }
+    fixture.describe(&oversized);
+    fixture.page.tick();
+    assert_eq!(
+        fixture.page.tree.sequence(),
+        valid_sequence,
+        "rejected growth consumes no sequence"
+    );
+    assert_eq!(
+        fixture.page.tree.len(),
+        valid_nodes,
+        "rejected growth mutates no retained nodes"
+    );
+    assert!(
+        fixture.widgets().iter().any(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text().as_str() == "last valid interface")
+        }),
+        "the last valid GTK interface remains visible"
+    );
+    assert!(fixture.page.banner().is_visible());
+    assert!(fixture.page.banner().text().contains("above the limit"));
+
+    let mut healthy = Fixture::new();
+    healthy.describe(&Element::text("independent extension"));
+    healthy.page.tick();
+    assert_eq!(
+        healthy.page.tree.sequence(),
+        1,
+        "another extension owns an independent tree budget"
+    );
+
+    let slot = "bounded-pane";
+    let _rejected = fixture.page.pane(slot);
+    let mut large = Reconciliation::new();
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: slot.into(),
+            frame: large.reconcile(&oversized),
+        })
+        .expect("oversized pane frame queued");
+    fixture.page.tick();
+    fixture.page.retire(slot);
+    let replacement = fixture.page.pane(slot);
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: slot.into(),
+            frame: Reconciliation::new().reconcile(&Element::text("recovered pane")),
+        })
+        .expect("fresh pane frame queued");
+    fixture.page.tick();
+    assert!(descendants(&replacement).iter().any(|widget| {
+        widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().as_str() == "recovered pane")
     }));
 }
 

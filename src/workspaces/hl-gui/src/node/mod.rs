@@ -92,6 +92,7 @@ pub enum TreeError {
     Cycle { parent: NodeId, child: NodeId },
     RemoveRoot,
     StaleSequence { expected: u64, received: u64 },
+    NodeLimit { limit: usize, received: usize },
 }
 
 impl std::fmt::Display for TreeError {
@@ -123,6 +124,12 @@ impl std::fmt::Display for TreeError {
             Self::StaleSequence { expected, received } => {
                 write!(formatter, "expected frame {expected}, received {received}")
             }
+            Self::NodeLimit { limit, received } => {
+                write!(
+                    formatter,
+                    "interface tree has {received} nodes, above the limit of {limit}"
+                )
+            }
         }
     }
 }
@@ -131,7 +138,7 @@ impl std::error::Error for TreeError {}
 
 /// The authoritative retained tree. Validates every patch, then forwards it to
 /// a renderer that can assume the mutation is already legal.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Tree {
     nodes: BTreeMap<NodeId, Node>,
     parents: BTreeMap<NodeId, NodeId>,
@@ -184,6 +191,34 @@ impl Tree {
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.sequence
+    }
+
+    /// Validates a complete frame and its resulting retained size without
+    /// mutating this tree or calling a renderer.
+    ///
+    /// This is the atomic admission pass for resource bounds: removals and
+    /// creations are interpreted in their real order on a private snapshot,
+    /// so a refused frame leaves the last valid tree and UI untouched.
+    pub fn preflight(&self, frame: &Frame, node_limit: usize) -> Result<(), TreeError> {
+        let expected = self.sequence.saturating_add(1);
+        if frame.sequence != expected {
+            return Err(TreeError::StaleSequence {
+                expected,
+                received: frame.sequence,
+            });
+        }
+        let mut candidate = self.clone();
+        for patch in &frame.patches {
+            candidate.validate(patch)?;
+            candidate.commit(patch);
+            if candidate.len() > node_limit {
+                return Err(TreeError::NodeLimit {
+                    limit: node_limit,
+                    received: candidate.len(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Resolves the handler identity a triggered node declared, if any.

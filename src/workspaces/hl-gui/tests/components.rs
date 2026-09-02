@@ -43,6 +43,45 @@ fn tree_with(patches: Vec<Patch>) -> (Tree, Trace) {
 }
 
 #[test]
+fn bounded_frame_preflight_preserves_the_last_valid_tree_and_sequence() {
+    let first = NodeId::new(1);
+    let (tree, trace) = tree_with(vec![
+        Patch::Create {
+            id: first,
+            tag: Tag::Text,
+        },
+        Patch::Insert {
+            parent: NodeId::ROOT,
+            child: first,
+            before: None,
+        },
+    ]);
+    let second = NodeId::new(2);
+    let growth = Frame {
+        sequence: 2,
+        patches: vec![
+            Patch::Create {
+                id: second,
+                tag: Tag::Text,
+            },
+            Patch::Insert {
+                parent: NodeId::ROOT,
+                child: second,
+                before: None,
+            },
+        ],
+    };
+
+    assert_eq!(
+        tree.preflight(&growth, 2),
+        Err(TreeError::NodeLimit { limit: 2, received: 3 })
+    );
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree.sequence(), 1);
+    assert_eq!(trace.applied.len(), 2, "preflight calls no renderer");
+}
+
+#[test]
 fn a_composed_surface_applies_as_one_frame() {
     let mut surface = Surface::new();
     let card = surface.create(Tag::Card);
