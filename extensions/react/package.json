@@ -33,7 +33,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test 'test/*.test.js'",
+    "test": "node --test 'test/*.test.js' && node tools/package-smoke.js",
     "pack:check": "node tools/package-smoke.js",
     "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
     "types": "npm run catalogue && node tools/types.js"
