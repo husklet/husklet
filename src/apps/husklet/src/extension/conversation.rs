@@ -299,6 +299,11 @@ impl Conversation {
                 snapshots.push(Snapshot::Containers(containers));
             }
         }
+        if self.session.may_emit(Topic::Executions) {
+            if let Ok(executions) = services.containers.executions() {
+                snapshots.push(Snapshot::Executions(executions));
+            }
+        }
         if self.session.may_emit(Topic::Images) {
             if let Ok(images) = services.images.list() {
                 snapshots.push(Snapshot::Images(images));
@@ -710,6 +715,17 @@ mod tests {
             self.ledger.note("containers.inspect");
             Err(HostError::Absent(id.to_owned()))
         }
+
+        fn executions(&self) -> Result<hl_extension::port::ExecutionList, HostError> {
+            self.ledger.note("executions.list");
+            Ok(hl_extension::port::ExecutionList {
+                executions: vec![hl_extension::port::ExecutionSummary {
+                    id: "e1".into(), container_id: "c1".into(), running: false,
+                    exit_code: 7, pid: 42, command: vec!["worker".into()], user: "root".into(),
+                }],
+                truncated: false,
+            })
+        }
     }
 
     impl ContainerControl for Host {
@@ -1085,6 +1101,21 @@ mod tests {
         );
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn execution_observation_is_subscriber_driven_and_delivers_bounded_identity_state() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let host = Host { ledger: Arc::clone(&ledger) };
+        conversation.observe(&services(&host)).expect("idle observation");
+        assert!(!ledger.reached().contains(&"executions.list"));
+        conversation.session.follow(hl_extension::Topic::Executions);
+        conversation.observe(&services(&host)).expect("subscribed observation");
+        let event = Wire::new(theirs).receive().expect("execution snapshot");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e1" && !list.executions[0].running));
     }
 
     #[test]

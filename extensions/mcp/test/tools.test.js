@@ -478,6 +478,22 @@ test('pane wait returns only bounded invalidation metadata and releases its subs
   assert(!answer.content[0].text.includes('value'));
 });
 
+test('execution change wait filters immutable identity and returns subscription credit', async () => {
+  const { api } = fake();
+  let listener; let disposed = 0;
+  api.watchExecutions = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_execution_change_wait');
+  const pending = wait.run({ id: 'e2', running: false, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener({ executions: [{ id: 'e1', running: false }], truncated: false });
+  listener({ executions: [{ id: 'e2', running: true }], truncated: false });
+  listener({ executions: [{ id: 'e2', running: false, exit_code: 9 }], truncated: true });
+  assert.deepEqual(JSON.parse((await pending).content[0].text), {
+    changed: true, execution: { id: 'e2', running: false, exit_code: 9 }, truncated: true,
+  });
+  assert.equal(disposed, 1);
+});
+
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
   const hostile = `&<>"'`;
   assert.equal(semanticXml({ slot: hostile, revision: 3, truncated: false, root: {

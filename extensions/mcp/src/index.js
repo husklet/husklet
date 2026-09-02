@@ -195,6 +195,25 @@ export function tools(api) {
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
+  if (typeof api.watchExecutions === 'function') definitions.push(define(
+    'husklet_execution_change_wait',
+    'Wait for a bounded execution catalogue change matching one immutable exec identity.',
+    z.object({ id, running: z.boolean().optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ id: wanted, running, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      api.watchExecutions((catalogue) => {
+        const execution = catalogue.executions.find(({ id: candidate }) => candidate === wanted);
+        if (execution && (running == null || execution.running === running)) {
+          finish({ changed: true, execution, truncated: catalogue.truncated });
+        }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
   if (typeof api.watchExtensions === 'function' && typeof api.watchExtensionAcquisitions === 'function') definitions.push(define(
     'husklet_extension_wait',
     'Wait for a bounded installed-extension snapshot or acquisition revision invalidation without polling.',

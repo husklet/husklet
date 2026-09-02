@@ -14,7 +14,7 @@ const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -237,6 +237,12 @@ export function workspace(session) {
     });
     try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('pane-changes'); };
+  };
+  api.watchExecutions = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('execution listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'executions') listener(event.of); });
+    try { await api.subscribe('executions'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('executions'); };
   };
   api.watchExtensions = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('extension listener must be a function');

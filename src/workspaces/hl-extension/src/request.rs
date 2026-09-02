@@ -373,6 +373,7 @@ impl Request {
 #[serde(rename_all = "kebab-case")]
 pub enum Topic {
     Containers,
+    Executions,
     Images,
     Volumes,
     Networks,
@@ -391,6 +392,7 @@ impl Topic {
     pub const fn capability(self) -> Capability {
         match self {
             Self::Containers => Capability::ContainerRead,
+            Self::Executions => Capability::ContainerRead,
             Self::Images => Capability::ImageRead,
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
@@ -405,6 +407,7 @@ impl Topic {
 
     pub const ALL: &'static [Self] = &[
         Self::Containers,
+        Self::Executions,
         Self::Images,
         Self::Volumes,
         Self::Networks,

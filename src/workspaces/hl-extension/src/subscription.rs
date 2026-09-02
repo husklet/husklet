@@ -5,7 +5,7 @@
 
 use hl_rpc::{Coding, Frame};
 
-use crate::port::{ContainerSummary, ExtensionSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
+use crate::port::{ContainerSummary, ExecutionList, ExtensionSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
 use crate::request::Topic;
 
 /// What produced a pane notification. Contents remain behind their separate
@@ -114,6 +114,7 @@ pub type Subscriptions = hl_rpc::Subscriptions<Topic>;
 #[serde(tag = "snapshot", content = "of", rename_all = "snake_case")]
 pub enum Snapshot {
     Containers(Vec<ContainerSummary>),
+    Executions(ExecutionList),
     Images(Vec<ImageSummary>),
     Volumes(Vec<VolumeSummary>),
     Networks(Vec<NetworkSummary>),
@@ -133,6 +134,7 @@ impl Snapshot {
     pub const fn topic(&self) -> Topic {
         match self {
             Self::Containers(_) => Topic::Containers,
+            Self::Executions(_) => Topic::Executions,
             Self::Images(_) => Topic::Images,
             Self::Volumes(_) => Topic::Volumes,
             Self::Networks(_) => Topic::Networks,

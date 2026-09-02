@@ -172,7 +172,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
@@ -224,6 +224,21 @@ test('workspace lifecycle watcher uses its WorkspaceRead-gated exact topic', asy
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-lifecycle' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('execution watcher uses exact topic and returns credit after delivery', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = [];
+  const opening = api.watchExecutions((value) => seen.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'executions' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  const catalogue = { executions: [{ id: 'e1', running: false }], truncated: false };
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'executions', of: catalogue } }));
+  assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [catalogue]);
+  const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'executions' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
