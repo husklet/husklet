@@ -324,8 +324,13 @@ test('container execution preserves argv and exposes the exact inspectable ident
   assert.deepEqual(calls, []);
 
   change(stage, 'Command argv JSON', '["sh","-lc","printf hello world"]');
+  change(stage, 'Run as user (optional)', '1000:1000');
+  change(stage, 'Working directory (optional)', '/workspace with spaces');
   invoke(stage, 'Execute'); await settled(); await settled();
-  assert.deepEqual(calls, [['exec', 'container-one', { command: ['sh', '-lc', 'printf hello world'] }]]);
+  assert.deepEqual(calls, [['exec', 'container-one', {
+    command: ['sh', '-lc', 'printf hello world'], user: '1000:1000', workingDirectory: '/workspace with spaces',
+  }]]);
+  assert.ok(labelled(stage, 'Runs without an interactive terminal. Inspect the resulting record for status and captured stdout/stderr.'));
   assert.ok(labelled(stage, 'Execution execution-exact-42 created.'));
   invoke(stage, 'Inspect execution'); await settled();
   assert.deepEqual(opened, ['execution-exact-42']);

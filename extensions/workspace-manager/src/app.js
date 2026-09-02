@@ -197,20 +197,27 @@ function containerActions(item, busy, act) {
 }
 
 function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
-  const [command, setCommand] = useState('');
+  const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
   const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
   const [logs, setLogs] = useState(null);
   const run = async () => {
     setExecution({ state: 'loading', id: '', error: null });
     try {
       let argv;
-      try { argv = JSON.parse(command); }
+      try { argv = JSON.parse(command.argv); }
       catch { throw new Error('Command must be valid JSON, such as ["sh","-lc","printf hello"].'); }
       if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64
         || argv.some((argument) => typeof argument !== 'string' || argument.length > 4_096)) {
         throw new Error('Command must be a JSON array of 1–64 strings, each at most 4096 characters.');
       }
-      const id = await api.containers.exec(container.id, { command: argv });
+      if (command.user.length > 4_096 || command.workingDirectory.length > 4_096) {
+        throw new Error('User and working directory must each be at most 4096 characters.');
+      }
+      const id = await api.containers.exec(container.id, {
+        command: argv,
+        ...(command.user.trim() ? { user: command.user.trim() } : {}),
+        ...(command.workingDirectory.trim() ? { workingDirectory: command.workingDirectory.trim() } : {}),
+      });
       setExecution({ state: 'ready', id, error: null });
     } catch (error) { setExecution({ state: 'error', id: '', error }); }
   };
@@ -226,16 +233,23 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
             ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
             : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
-    h(Text, { label: 'Enter an argument array so spaces and quoting remain exact, for example ["sh","-lc","printf hello"].', color: 'text-dim', wrap: true }),
-    h(Row, { gap: 1, wrap: true }, h(Entry, { value: command, placeholder: 'Command argv JSON', enabled: execution.state !== 'loading', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: execution.state === 'loading' ? 'Executing…' : 'Execute', enabled: execution.state !== 'loading' && command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
+    h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
       label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)}?`,
       onConfirm: () => act('kill', container.id, 'SIGKILL'),
     })),
+    logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }),
+    h(Separator), h(Heading, { label: 'Captured execution', scale: 'caption' }),
+    h(Text, { label: 'Runs without an interactive terminal. Inspect the resulting record for status and captured stdout/stderr.', color: 'text-dim', wrap: true }),
+    h(Text, { label: 'Enter an argument array so spaces and quoting remain exact, for example ["sh","-lc","printf hello"].', color: 'text-dim', wrap: true }),
+    h(Row, { gap: 1, wrap: true },
+      h(Entry, { value: command.argv, placeholder: 'Command argv JSON', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, argv: String(event.value ?? '') })) }),
+      h(Entry, { value: command.user, placeholder: 'Run as user (optional)', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, user: String(event.value ?? '') })) }),
+      h(Entry, { value: command.workingDirectory, placeholder: 'Working directory (optional)', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) })),
+    h(Row, { gap: 1, wrap: true }, h(Button, { label: execution.state === 'loading' ? 'Executing…' : 'Execute', enabled: execution.state !== 'loading' && command.argv.trim().length > 0, onInvoke: run })),
     execution.state === 'error' ? h(Text, { label: execution.error?.message ?? String(execution.error), color: 'danger', wrap: true }) : null,
     execution.state === 'ready' ? h(Row, { gap: 1, wrap: true, align: 'center' },
       h(Text, { label: `Execution ${execution.id} created.`, color: 'positive', wrap: true }),
-      onOpenExecution ? h(Button, { label: 'Inspect execution', onInvoke: () => onOpenExecution(execution.id) }) : null) : null,
-    logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }));
+      onOpenExecution ? h(Button, { label: 'Inspect execution', onInvoke: () => onOpenExecution(execution.id) }) : null) : null);
 }
 
 function Processes({ api, resource }) {

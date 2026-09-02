@@ -121,13 +121,16 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       && request.with.mutation.Length?.source === 202);
     assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
     peer.write(encode({ channel: 29, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON', '["sh","-lc","printf hello world"]') }));
-    await until(() => requests.some((request) => request.call === 'interface_render_at'
-      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === '["sh","-lc","printf hello world"]')));
+    peer.write(encode({ channel: 32, kind: KIND.event, payload: changeInvocation(requests, 'Run as user (optional)', '1000:1000') }));
+    peer.write(encode({ channel: 33, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/work tree') }));
+    await until(() => ['["sh","-lc","printf hello world"]', '1000:1000', '/work tree'].every((value) =>
+      requests.some((request) => request.call === 'interface_render_at'
+        && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === value))));
     peer.write(encode({ channel: 30, kind: KIND.event, payload: invocation(requests, 'Execute') }));
     await until(() => calls.includes('container_exec') && requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Execution execution-over-socket created.')));
     assert.deepEqual(requests.find((request) => request.call === 'container_exec').with, {
-      id: 'c1', command: ['sh', '-lc', 'printf hello world'], user: null, working_directory: null,
+      id: 'c1', command: ['sh', '-lc', 'printf hello world'], user: '1000:1000', working_directory: '/work tree',
     });
     peer.write(encode({ channel: 31, kind: KIND.event, payload: invocation(requests, 'Inspect execution') }));
     await until(() => requests.some((request) => request.call === 'execution_inspect'
