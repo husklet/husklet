@@ -3370,15 +3370,18 @@ static void stw_after_fork(void) {
 #endif
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS) && defined(G_STW_CPU_SLOT)
-/* Exercise the x86 bound-dispatch slot independently of the thread-local copy.
-   The signal/unbound entry point intentionally remains stw_dispatch_safepoint(),
-   whose only source is g_my_stw_slot. */
-static int stw_cpu_slot_lifecycle_test(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* Exercise the shared translated-execution lifecycle through the slot binding
+   each frontend actually uses: x86 binds it in cpu, while aarch64 uses TLS. */
+static int stw_translated_lifecycle_test(void) {
+#ifdef G_STW_CPU_SLOT
     struct cpu cpu = { .stw_slot = -1 };
+#else
+    struct cpu cpu = { 0 };
+#endif
     int saved_threaded = g_threaded;
     stw_register(&cpu);
-    int slot = cpu.stw_slot;
+    int slot = STW_SLOT(&cpu);
     if (slot < 0 || g_my_stw_slot != slot || g_stw_threads[slot].cpu != &cpu) return 30;
 
     /* A single-thread dispatcher has no peer to quiesce and must not publish
@@ -3392,10 +3395,12 @@ static int stw_cpu_slot_lifecycle_test(void) {
     stw_after_translated(&cpu);
     if (atomic_load_explicit(&g_stw_threads[slot].exec_gen, memory_order_relaxed) != UINT64_C(123)) return 38;
 
-    /* Once threading authority is published, the full handshake remains. A
-       bound dispatcher must not consult TLS: make the two sources disagree. */
+    /* Once threading authority is published, the full handshake remains. */
     g_threaded = 1;
+#ifdef G_STW_CPU_SLOT
+    /* The x86 bound dispatcher must not accidentally consult TLS. */
     g_my_stw_slot = -1;
+#endif
     if (!stw_before_translated(&cpu, epoch) ||
         !atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed))
         return 31;
@@ -3409,18 +3414,27 @@ static int stw_cpu_slot_lifecycle_test(void) {
         atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed))
         return 36;
 
-    /* The unbound/async entry point retains TLS and therefore ignores cpu.stw_slot. */
+    /* The unbound/async entry point retains TLS. On x86, prove that source is
+       independent of the bound cpu slot; aarch64 deliberately uses the TLS slot. */
     stw_dispatch_safepoint();
+#ifdef G_STW_CPU_SLOT
     if (g_my_stw_slot != -1 || cpu.stw_slot != slot) return 33;
-
     g_my_stw_slot = slot;
+#else
+    if (g_my_stw_slot != slot) return 33;
+#endif
     stw_after_fork();
-    if (cpu.stw_slot != 0 || g_my_stw_slot != 0 || g_stw_threads[0].cpu != &cpu) return 34;
+    if (g_my_stw_slot != 0 || g_stw_threads[0].cpu != &cpu) return 34;
+#ifdef G_STW_CPU_SLOT
+    if (cpu.stw_slot != 0) return 34;
+#endif
     stw_unregister(&cpu);
     g_threaded = saved_threaded;
-    if (cpu.stw_slot != -1 || g_my_stw_slot != -1 ||
-        atomic_load_explicit(&g_stw_threads[0].used, memory_order_relaxed))
+    if (g_my_stw_slot != -1 || atomic_load_explicit(&g_stw_threads[0].used, memory_order_relaxed))
         return 35;
+#ifdef G_STW_CPU_SLOT
+    if (cpu.stw_slot != -1) return 35;
+#endif
     return 0;
 }
 #endif

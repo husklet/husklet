@@ -329,10 +329,15 @@ pub(crate) fn backend_tree_census_test(isa: u32, scenario: u32) -> Result<(), i3
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
-pub(crate) fn stw_cpu_slot_lifecycle_test() -> i32 {
-    // SAFETY: the native hook owns its private zeroed CPU fixture and restores the STW registry
-    // before returning; it accepts and returns only scalars.
-    unsafe { (test_api().x86_64_stw_cpu_slot_lifecycle)() }
+pub(crate) fn stw_translated_lifecycle_test() -> [i32; 2] {
+    // SAFETY: each native hook owns its private zeroed CPU fixture and restores
+    // the STW registry before returning; both accept and return only scalars.
+    unsafe {
+        [
+            (test_api().aarch64_stw_translated_lifecycle)(),
+            (test_api().x86_64_stw_cpu_slot_lifecycle)(),
+        ]
+    }
 }
 
 #[cfg(feature = "native-test-hooks")]

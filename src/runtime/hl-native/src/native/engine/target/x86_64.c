@@ -1948,7 +1948,7 @@ HL_API int hl_x86_64_dispatch_profile_test(void) {
 }
 
 HL_API int hl_x86_64_stw_cpu_slot_lifecycle_test(void) {
-    return stw_cpu_slot_lifecycle_test();
+    return stw_translated_lifecycle_test();
 }
 
 /* See hl_linux_imported_path_guard_probe (linux_abi/syscall/fs.c): the pathname operand a handler

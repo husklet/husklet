@@ -395,10 +395,10 @@ mod tests {
 
     const STATUS_NOT_SUPPORTED: i32 = 3;
 
-    #[cfg(all(feature = "native-test-hooks", target_arch = "x86_64"))]
+    #[cfg(feature = "native-test-hooks")]
     #[test]
-    fn bound_x86_dispatch_slot_tracks_register_unregister_and_fork_survivor() {
-        assert_eq!(stw_cpu_slot_lifecycle_test(), 0);
+    fn translated_lifecycle_uses_each_frontends_slot_binding() {
+        assert_eq!(stw_translated_lifecycle_test(), [0, 0]);
     }
 
     #[cfg(feature = "native-test-hooks")]

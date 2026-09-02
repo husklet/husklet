@@ -1092,6 +1092,10 @@ HL_API int hl_aarch64_dispatch_profile_test(void) {
     return result == 0 ? dispatch_interrupt_race_test() : result;
 }
 
+HL_API int hl_aarch64_stw_translated_lifecycle_test(void) {
+    return stw_translated_lifecycle_test();
+}
+
 /*
  * Host x18 is reserved by Darwin and cleared asynchronously between arbitrary
  * instructions, so emitted code may never keep a live value there. The two
