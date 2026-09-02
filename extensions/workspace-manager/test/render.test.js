@@ -42,4 +42,11 @@ test('volume and network panels render bounded real inventories and controls', (
   const labels = (frame) => frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
   for (const label of ['Volumes', 'cache', 'Create', 'Inspect', 'Remove']) assert.ok(labels(volumeFrame).includes(label), label);
   for (const label of ['Networks', 'private', 'Connect', 'Disconnect', 'Remove']) assert.ok(labels(networkFrame).includes(label), label);
+  const destructive = (frame, label) => {
+    const id = frame.patches.find((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value.Text === label).SetProp.id;
+    return frame.patches.some((patch) => 'SetProp' in patch && patch.SetProp.id === id && patch.SetProp.prop === 'Destructive' && patch.SetProp.value.Flag === true);
+  };
+  assert.equal(destructive(volumeFrame, 'Remove'), true);
+  assert.equal(destructive(networkFrame, 'Disconnect'), true);
+  assert.equal(destructive(networkFrame, 'Remove'), true);
 });

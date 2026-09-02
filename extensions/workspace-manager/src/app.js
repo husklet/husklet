@@ -104,7 +104,7 @@ function containerActions(item, busy, act) {
   return [
     h(Button, { key: 'start', label: running ? 'Restart' : 'Start', enabled: !blocked, onInvoke: () => act(running ? 'restart' : 'start', item.id) }),
     h(Button, { key: 'pause', label: item.state === 'paused' ? 'Resume' : 'Pause', enabled: !blocked && (running || item.state === 'paused'), onInvoke: () => act(item.state === 'paused' ? 'unpause' : 'pause', item.id) }),
-    h(Button, { key: 'stop', label: 'Stop', enabled: !blocked && running, tone: 'danger', onInvoke: () => act('stop', item.id) }),
+    h(Button, { key: 'stop', label: 'Stop', enabled: !blocked && running, tone: 'danger', destructive: true, onInvoke: () => act('stop', item.id) }),
   ];
 }
 
@@ -118,7 +118,7 @@ function ContainerDetail({ api, container, act }) {
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
   return h(CardContent, { gap: 2 },
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
-    h(Row, { gap: 1 }, h(Entry, { value: command, placeholder: 'Command and arguments', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: 'Execute', enabled: command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(Button, { label: 'Kill', tone: 'danger', onInvoke: () => act('kill', container.id, 'SIGKILL') })),
+    h(Row, { gap: 1 }, h(Entry, { value: command, placeholder: 'Command and arguments', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: 'Execute', enabled: command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(Button, { label: 'Kill', tone: 'danger', destructive: true, onInvoke: () => act('kill', container.id, 'SIGKILL') })),
     logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }));
 }
 
@@ -174,13 +174,13 @@ export function Images({ api, resource }) {
   return h(Page, { title: 'Images', subtitle: 'Images available to this workspace.' },
     h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: busy === 'pull' ? 'Pulling…' : 'Pull', enabled: !busy && reference.trim().length > 0, onInvoke: pull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
     h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
-      ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', tone: 'danger', onInvoke: prune }), h(Button, { label: 'Cancel', onInvoke: () => setConfirm('') }))
+      ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', tone: 'danger', destructive: true, onInvoke: prune }), h(Button, { label: 'Cancel', onInvoke: () => setConfirm('') }))
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
     h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
       h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }), detail?.id === item.id ? h(Text, { label: `${detail.os}/${detail.architecture} · ${detail.user || 'default user'} · ${detail.working_directory || '/'}`, color: 'text-dim', wrap: true }) : null),
       h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
-        ? h(React.Fragment, {}, h(Text, { label: 'Remove this local image?', color: 'warning' }), h(Button, { label: 'Confirm remove', tone: 'danger', onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', onInvoke: () => setConfirm('') }))
+        ? h(React.Fragment, {}, h(Text, { label: 'Remove this local image?', color: 'warning' }), h(Button, { label: 'Confirm remove', tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
     h(Omitted, { count: view.omitted }));
 }
@@ -197,7 +197,7 @@ export function Volumes({ api, resource }) {
     h(ErrorText, { error: resource.error }),
     ...view.records.map((volume) => h(Card, { key: volume.name, variant: detail?.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(volume) }), h(Button, { label: 'Remove', tone: 'danger', onInvoke: () => remove(volume) })),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(volume) }), h(Button, { label: 'Remove', tone: 'danger', destructive: true, onInvoke: () => remove(volume) })),
       detail?.name === volume.name ? h(CardContent, {}, h(Text, { label: `Driver ${detail.driver}`, color: 'text-dim' })) : null)),
     h(Omitted, { count: view.omitted }));
 }
@@ -217,7 +217,7 @@ export function Networks({ api, resource }) {
     h(ErrorText, { error: resource.error }),
     ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: detail?.id === network.id ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(Button, { label: 'Disconnect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'disconnect') }), h(Button, { label: 'Remove', tone: 'danger', onInvoke: () => remove(network) })),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(Button, { label: 'Disconnect', enabled: container.trim().length > 0, destructive: true, onInvoke: () => attach(network, 'disconnect') }), h(Button, { label: 'Remove', tone: 'danger', destructive: true, onInvoke: () => remove(network) })),
       detail?.id === network.id ? h(CardContent, {}, h(Text, { label: `${detail.id} · ${detail.driver} · ${detail.scope}`, color: 'text-dim', wrap: true })) : null)),
     h(Omitted, { count: view.omitted }));
 }
