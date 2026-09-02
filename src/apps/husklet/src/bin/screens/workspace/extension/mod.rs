@@ -252,6 +252,12 @@ impl Interface {
         pane.surface.widget().clone().upcast()
     }
 
+    /// Retires one independently addressed renderer and drops any interaction
+    /// it had queued before its terminal pane disappeared.
+    pub fn retire(&mut self, slot: &str) {
+        self.panes.remove(slot);
+    }
+
     /// One turn: apply what is queued, then hand back what the surface says.
     ///
     /// Returns how many deliveries were applied, which is at most [`DRAIN`].

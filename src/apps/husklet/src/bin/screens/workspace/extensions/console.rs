@@ -303,7 +303,11 @@ impl Console {
     /// Closes one pane. The last pane of a tab takes the tab with it, which is
     /// what closing that pane by hand already does.
     fn close(window: &Rc<TermWin>, slot: &str) -> Result<(), HostError> {
+        let owner = Self::surface_owner(window, slot).ok();
         if Panes::close(window, slot) {
+            if let (Some(owner), Some(gallery)) = (owner, Window::gallery(window)) {
+                gallery.retire(&owner, slot);
+            }
             return Ok(());
         }
         Err(absent(slot))

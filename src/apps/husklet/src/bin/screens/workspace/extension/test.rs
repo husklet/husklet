@@ -96,12 +96,45 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_structured_fault_reaches_lifecycle_on_the_toolkit_tick();
         a_rendered_button_reaches_the_sink();
         retained_pane_actions_keep_their_slot();
+        retiring_a_pane_discards_its_queued_interaction();
         semantics_are_redacted_and_actions_reject_stale_revisions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn retiring_a_pane_discards_its_queued_interaction() {
+    let mut fixture = Fixture::new();
+    let pane = fixture.page.pane("pane-gone");
+    let frame = Reconciliation::new().reconcile(&panel("Gone"));
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-gone".into(),
+            frame,
+        })
+        .expect("the page is listening");
+    fixture.page.tick();
+    let button = descendants(&pane)
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .expect("retained pane button");
+    button.emit_clicked();
+    fixture.page.retire("pane-gone");
+    fixture.page.tick();
+    assert!(fixture.recorded.borrow().is_empty(), "a retired pane cannot leak its queued event");
+}
+
+fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut found = vec![widget.clone()];
+    let mut index = 0;
+    while index < found.len() {
+        found.extend(offspring(&found[index]));
+        index += 1;
+    }
+    found
 }
 
 fn retained_pane_actions_keep_their_slot() {

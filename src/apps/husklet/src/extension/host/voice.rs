@@ -97,7 +97,9 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     if let (Some(slot), Some(object)) = (slot, value.as_object_mut()) {
         object.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
     }
-    serde_json::to_vec(&value).ok()
+    serde_json::to_vec(&value)
+        .ok()
+        .filter(|payload| payload.len() <= Frame::PAYLOAD_LIMIT)
 }
 
 /// The shape every interaction is sent in.
@@ -185,7 +187,7 @@ impl Voice {
 
 #[cfg(test)]
 mod tests {
-    use super::carriage;
+    use super::{carriage, Frame};
 
     #[test]
     fn an_addressed_interaction_carries_its_surface_slot() {
@@ -215,5 +217,56 @@ mod tests {
         .expect("encoded");
         let value: serde_json::Value = serde_json::from_slice(&payload).expect("json");
         assert!(value.get("slot").is_none());
+    }
+
+    #[test]
+    fn keyboard_focus_and_pointer_keep_bounded_slot_and_node_identity() {
+        let events = [
+            hl_gui::Event::Key {
+                node: hl_gui::NodeId::new(4),
+                id: hl_gui::EventId::new("editor-key"),
+                key: "Enter".into(),
+                keycode: 36,
+                modifiers: 1,
+                pressed: true,
+            },
+            hl_gui::Event::Focus {
+                node: hl_gui::NodeId::new(5),
+                id: hl_gui::EventId::new("editor-focus"),
+                focused: true,
+            },
+            hl_gui::Event::Pointer {
+                node: hl_gui::NodeId::new(6),
+                id: hl_gui::EventId::new("editor-pointer"),
+                phase: hl_gui::PointerPhase::Press,
+                x: Some(12.0),
+                y: Some(8.0),
+                button: 1,
+                modifiers: 0,
+            },
+        ];
+        for (event, interaction, node, id) in [
+            (&events[0], "key", 4, "editor-key"),
+            (&events[1], "focus", 5, "editor-focus"),
+            (&events[2], "pointer", 6, "editor-pointer"),
+        ] {
+            let payload = carriage(event, Some("pane-stable")).expect("bounded event");
+            assert!(payload.len() <= Frame::PAYLOAD_LIMIT);
+            let value: serde_json::Value = serde_json::from_slice(&payload).expect("json");
+            assert_eq!(value["interaction"], interaction);
+            assert_eq!(value["slot"], "pane-stable");
+            assert_eq!(value["node"], node);
+            assert_eq!(value["id"], id);
+        }
+
+        let oversized = hl_gui::Event::Key {
+            node: hl_gui::NodeId::ROOT,
+            id: hl_gui::EventId::new("oversized"),
+            key: "x".repeat(Frame::PAYLOAD_LIMIT + 1),
+            keycode: 0,
+            modifiers: 0,
+            pressed: true,
+        };
+        assert!(carriage(&oversized, Some("pane-stable")).is_none());
     }
 }

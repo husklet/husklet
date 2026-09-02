@@ -146,6 +146,15 @@ impl<'a> Overview<'a> {
             }),
         );
         let weak = Rc::downgrade(&page);
+        gallery.enrol_retirement(
+            name.as_str(),
+            Rc::new(move |slot| {
+                if let Some(page) = weak.upgrade() {
+                    page.borrow_mut().retire(slot);
+                }
+            }),
+        );
+        let weak = Rc::downgrade(&page);
         let semantics = Rc::new(move |slot: &str| {
             weak.upgrade()
                 .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
