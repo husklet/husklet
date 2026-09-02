@@ -476,9 +476,6 @@ static int interp_backend_shape_rel32_reachable(int source_resolved, uintptr_t s
                                                 uintptr_t source_hi, uintptr_t target);
 static void interp_backend_family_completed(const struct cpu *cpu, const struct insn *insn, int step);
 #endif
-static int interp_progress_redispatch(int enabled, int first, int kind, int step, uint64_t pc,
-                                      const struct cpu *cpu);
-
 #include "interp/execution.c"
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -603,19 +600,10 @@ static unsigned interp_backend_shape_edge_family(unsigned terminator) {
 
 // Every interpreted guest control transfer ends the block. Transliterated taken JCCs may cross one
 // already-published same-page edge after doing their own spill/IRQ poll; every other transfer returns here.
-static int interp_progress_redispatch(int enabled, int first, int kind, int step, uint64_t pc,
-                                      const struct cpu *cpu) {
-    // A descriptor beginning at a TL_NO instruction cannot translate, but its successfully completed
-    // successor may.  Same-PC STEP_NEXT is deliberately not progress: redispatching it would select this
-    // exact descriptor forever.  A pending reason belongs to the instruction and must not be overwritten.
-    return enabled && first && kind == TL_NO && step == STEP_NEXT && cpu->rip != pc && cpu->reason == 0;
-}
-
-static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu, int split_unsupported) {
+static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
     g_dispatch_census_interp_steps = 0;
     g_dispatch_census_interp_stop = HL_BACKEND_SHAPE_S_OTHER;
     int census_steps = hl_backend_tree_steps_enabled();
-    int first = 1;
     for (;;) {
         uint64_t pc = cpu->rip; // a fault below reports precisely this PC
         struct insn insn;
@@ -631,7 +619,6 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu, int spl
 #endif
             return;
         }
-        int kind = first ? translit_classify(&insn) : TL_NO;
         int step = interp_step(cpu, &insn, pc, pc + (uint64_t)insn.len);
         if (census_steps && step != STEP_END) {
             g_dispatch_census_interp_steps++;
@@ -645,10 +632,6 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu, int spl
         // a service which may still fail or trap, so only the in-interpreter committed path is counted.
         if (g_prof) translit_unsupported_record_completed(&insn, pc, step != STEP_END);
 #endif
-        if (interp_progress_redispatch(split_unsupported, first, kind, step, pc, cpu)) {
-            cpu->reason = R_BRANCH;
-            return;
-        }
         if (step == STEP_END) {
             if (census_steps)
                 g_dispatch_census_interp_stop = interp_backend_shape_stop(cpu, &insn, pc + (uint64_t)insn.len);
@@ -664,7 +647,6 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu, int spl
 #endif
             return;
         }
-        first = 0;
     }
 }
 
@@ -831,7 +813,7 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         g_backend_shape_interp_stop_form = 0;
         g_backend_shape_open = 2;
 #endif
-        interp_execute(context, cpu, block->host_entry_off == 0 && image_ok && translit_enabled());
+        interp_execute(context, cpu);
 #if !defined(HL_NATIVE_TEST_HOOKS)
         if (cpu->reason == R_BRANCH) interp_executed_form_complete(cpu, R_BRANCH);
 #endif
