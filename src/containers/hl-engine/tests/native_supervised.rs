@@ -22,9 +22,13 @@ use tempfile::TempDir;
 #[cfg(target_arch = "aarch64")]
 const HOST_ISA: GuestIsa = GuestIsa::Aarch64;
 #[cfg(target_arch = "aarch64")]
+const HOST_ISA_NAME: &str = "aarch64";
+#[cfg(target_arch = "aarch64")]
 const HOST_CC: &str = "cc";
 #[cfg(target_arch = "x86_64")]
 const HOST_ISA: GuestIsa = GuestIsa::X86_64;
+#[cfg(target_arch = "x86_64")]
+const HOST_ISA_NAME: &str = "x86_64";
 #[cfg(target_arch = "x86_64")]
 const HOST_CC: &str = "x86_64-linux-gnu-gcc";
 
@@ -357,7 +361,7 @@ fn run_diagnostics(executable: &Path, argument: &str, refusal: Option<&str>, rec
     }
     plan.arguments.push(argument.as_bytes().to_vec());
     let engine = Engine::with_streams(
-        GuestIsa::X86_64,
+        HOST_ISA,
         plan,
         StandardStreams::default().with_output(output.clone()),
     )
@@ -381,6 +385,11 @@ fn diagnostics_receipt_proves_success_signal_and_pre_exec_absence() {
     assert_eq!(status, Some(23));
     let receipts = std::fs::read(&receipt).unwrap();
     assert_eq!(receipts.iter().filter(|byte| **byte == b'\n').count(), 1);
+    assert!(
+        String::from_utf8_lossy(&receipts).contains(&format!(" isa={HOST_ISA_NAME} ")),
+        "receipt={}",
+        String::from_utf8_lossy(&receipts)
+    );
     assert!(
         receipts.ends_with(b" status=23 signal=0\n"),
         "receipt={}",

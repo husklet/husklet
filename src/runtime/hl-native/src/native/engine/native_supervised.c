@@ -35,8 +35,10 @@ static int hl_native_supervised_selected(const hl_options *options) {
 
 #if defined(__aarch64__)
 #define HL_NATIVE_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#define HL_NATIVE_ISA_NAME "aarch64"
 #else
 #define HL_NATIVE_AUDIT_ARCH AUDIT_ARCH_X86_64
+#define HL_NATIVE_ISA_NAME "x86_64"
 #endif
 
 static int hl_native_supervised_available(void) { return 1; }
@@ -1530,7 +1532,8 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
     if (reap_diagnostics || reap_receipt_path != NULL) {
         char reap_receipt[128];
         snprintf(reap_receipt, sizeof(reap_receipt),
-                 "reaped=1 isa=x86_64 leader=%ld status=%d signal=%d\n", (long)child, result, *guest_signal);
+                 "reaped=1 isa=%s leader=%ld status=%d signal=%d\n",
+                 HL_NATIVE_ISA_NAME, (long)child, result, *guest_signal);
         if (reap_diagnostics) fprintf(stderr, "[hl-native-supervised]\t%s", reap_receipt);
         if (reap_receipt_path != NULL) (void)hl_native_supervised_write_text(reap_receipt_path, reap_receipt);
     }
