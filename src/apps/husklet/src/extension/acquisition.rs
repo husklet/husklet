@@ -1,11 +1,12 @@
 //! Bounded, asynchronous image acquisition awaiting explicit user consent.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 
-use hl_extension::Grant;
 use hl_extension::port::HostError;
+use hl_extension::Grant;
 
+use super::management_events::ExtensionEvents;
 use super::{Acquisition, Cancellation, Candidate, Roster};
 use crate::config::WorkspaceConfig;
 
@@ -27,6 +28,11 @@ impl AcquisitionJob {
 
     pub(crate) fn wire(self) -> String {
         self.0.to_string()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn test(value: u64) -> Self {
+        Self(value)
     }
 }
 
@@ -96,6 +102,7 @@ pub(crate) struct ExtensionAcquisitions {
     workspace: WorkspaceConfig,
     registry: Arc<Mutex<Registry>>,
     acquire: Arc<Acquire>,
+    events: ExtensionEvents,
 }
 
 impl ExtensionAcquisitions {
@@ -106,14 +113,22 @@ impl ExtensionAcquisitions {
     // The socket trait lands separately; keep the production constructor ready
     // without pretending the current protocol already routes these jobs.
     #[allow(dead_code)]
-    pub(crate) fn new(workspace: &WorkspaceConfig) -> Self {
-        Self::with_acquirer(workspace, |workspace, reference, progress, cancellation| {
+    pub(crate) fn new(workspace: &WorkspaceConfig, events: ExtensionEvents) -> Self {
+        Self::with_acquirer_and_events(workspace, events, |workspace, reference, progress, cancellation| {
             Candidate::acquire_cancellable(workspace, reference, progress, cancellation);
         })
     }
 
     fn with_acquirer(
         workspace: &WorkspaceConfig,
+        acquire: impl Fn(&WorkspaceConfig, &str, &mpsc::Sender<Acquisition>, &Cancellation) + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_acquirer_and_events(workspace, ExtensionEvents::default(), acquire)
+    }
+
+    fn with_acquirer_and_events(
+        workspace: &WorkspaceConfig,
+        events: ExtensionEvents,
         acquire: impl Fn(&WorkspaceConfig, &str, &mpsc::Sender<Acquisition>, &Cancellation) + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -123,6 +138,7 @@ impl ExtensionAcquisitions {
                 jobs: BTreeMap::new(),
             })),
             acquire: Arc::new(acquire),
+            events,
         }
     }
 
@@ -174,6 +190,8 @@ impl ExtensionAcquisitions {
             );
             id
         };
+        self.events
+            .acquisition(job, self.status(job).expect("new jobs are retained"));
 
         let (send, receive) = mpsc::channel();
         let acquire = Arc::clone(&self.acquire);
@@ -182,6 +200,7 @@ impl ExtensionAcquisitions {
         let worker_cancel = cancellation.clone();
         std::thread::spawn(move || acquire(&workspace, &reference, &send, &worker_cancel));
         let registry = Arc::clone(&self.registry);
+        let events = self.events.clone();
         std::thread::spawn(move || {
             while let Ok(event) = receive.recv() {
                 let mut registry = registry.lock().unwrap_or_else(PoisonError::into_inner);
@@ -195,6 +214,8 @@ impl ExtensionAcquisitions {
                 current.candidate = candidate;
                 current.snapshot.revision = current.snapshot.revision.saturating_add(1);
                 current.snapshot.state = state;
+                let changed = current.snapshot.clone();
+                events.acquisition(job, changed);
                 if current.snapshot.state.terminal() || matches!(current.snapshot.state, AcquisitionState::Ready(_)) {
                     break;
                 }
@@ -226,6 +247,8 @@ impl ExtensionAcquisitions {
         current.cancellation.cancel();
         current.snapshot.revision = current.snapshot.revision.saturating_add(1);
         current.snapshot.state = AcquisitionState::Cancelled;
+        let snapshot = current.snapshot.clone();
+        self.events.acquisition(job, snapshot);
         Ok(())
     }
 
@@ -270,6 +293,8 @@ impl ExtensionAcquisitions {
             .expect("ready snapshots retain their exact candidate");
         current.snapshot.revision = current.snapshot.revision.saturating_add(1);
         current.snapshot.state = AcquisitionState::Committing;
+        let snapshot = current.snapshot.clone();
+        self.events.acquisition(job, snapshot);
         Ok(candidate)
     }
 
@@ -285,11 +310,15 @@ impl ExtensionAcquisitions {
             Ok(()) => {
                 current.snapshot.revision = current.snapshot.revision.saturating_add(1);
                 current.snapshot.state = success;
+                let snapshot = current.snapshot.clone();
+                self.events.acquisition(job, snapshot);
                 Ok(())
             }
             Err(error) => {
                 current.snapshot.revision = current.snapshot.revision.saturating_add(1);
                 current.snapshot.state = AcquisitionState::Failed(error.to_string());
+                let snapshot = current.snapshot.clone();
+                self.events.acquisition(job, snapshot);
                 Err(error)
             }
         }
@@ -489,11 +518,9 @@ mod tests {
             }
         });
         assert!(service.start("").is_err());
-        assert!(
-            service
-                .start(&"x".repeat(ExtensionAcquisitions::REFERENCE_LIMIT + 1))
-                .is_err()
-        );
+        assert!(service
+            .start(&"x".repeat(ExtensionAcquisitions::REFERENCE_LIMIT + 1))
+            .is_err());
         let jobs: Vec<_> = (0..ExtensionAcquisitions::ACTIVE_LIMIT)
             .map(|index| service.start(&format!("sample:{index}")).unwrap())
             .collect();

@@ -146,6 +146,7 @@ pub struct Conversation {
     workspace: String,
     settle: Duration,
     observed: std::collections::BTreeMap<Topic, Snapshot>,
+    extension_events: Option<super::management_events::ExtensionEvents>,
     pane_observed: std::collections::BTreeMap<String, (PaneChangeKind, u64, u64)>,
     pane_generation: u64,
     pane_next: Instant,
@@ -183,6 +184,7 @@ impl Conversation {
             workspace: workspace.into(),
             settle: Self::SETTLE,
             observed: std::collections::BTreeMap::new(),
+            extension_events: None,
             pane_observed: std::collections::BTreeMap::new(),
             pane_generation: 0,
             pane_next: Instant::now(),
@@ -193,6 +195,18 @@ impl Conversation {
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
         self.events = Some(events);
+    }
+
+    /// Composes the native producer now; the protocol adapter drains it once
+    /// the Extensions snapshot variant is available.
+    pub(crate) fn with_extension_events(&mut self, events: super::management_events::ExtensionEvents) {
+        self.extension_events = Some(events);
+    }
+
+    pub(crate) fn drain_extension_events(&self) -> Option<super::management_events::ExtensionEventBatch> {
+        self.extension_events
+            .as_ref()
+            .and_then(super::management_events::ExtensionEvents::drain)
     }
 
     /// Shortens or lengthens the handshake window.
@@ -825,6 +839,26 @@ mod tests {
             conversation.serve(&services(&host))
         });
         (theirs, served)
+    }
+
+    #[test]
+    fn conversation_drains_the_composed_native_extension_source() {
+        let (_theirs, ours) = UnixStream::pair().expect("socket pair");
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let events = super::super::management_events::ExtensionEvents::default();
+        events.inventory(vec![hl_extension::port::ExtensionSummary {
+            name: "workspace-manager".into(),
+            image_digest: "sha256:observed".into(),
+            status: "duty".into(),
+        }]);
+        conversation.with_extension_events(events);
+
+        let batch = conversation.drain_extension_events().expect("native extension change");
+        assert_eq!(batch.inventory.expect("inventory")[0].name, "workspace-manager");
+        assert!(
+            conversation.drain_extension_events().is_none(),
+            "the adapter drains rather than polls history"
+        );
     }
 
     /// Reads the welcome and answers it with a version.
