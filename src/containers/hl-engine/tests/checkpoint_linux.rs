@@ -2652,6 +2652,36 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     wait_for_exact_process_reap(executable);
     timings.observe("capture_wait_reap", capture_wait);
 
+    // A translated checkpoint is not useful if only its happy restore path works. Fail after the
+    // restored process tree has been forked, require the launch to report the rollback, then restore
+    // the same committed image successfully below. This also proves a failed attempt did not consume
+    // or corrupt the source generation.
+    if translit {
+        let failed_sink = Arc::new(Store::default());
+        let mut failed_plan = daily_dev_phase_plan(isa, executable, directory.path(), true, false, true);
+        failed_plan
+            .options
+            .set("HL_CKPT_TEST_FAIL_AFTER_FORK", "1", true)
+            .unwrap();
+        let failed_restore = Engine::with_checkpoint(
+            isa,
+            failed_plan,
+            StandardStreams::default(),
+            failed_sink,
+            first.clone(),
+        )
+        .unwrap();
+        failed_restore.start().unwrap();
+        assert!(
+            failed_restore.wait().is_err(),
+            "translated injected post-fork restore failure reported success"
+        );
+        assert!(
+            first.0.lock().unwrap().contains_key("MANIFEST"),
+            "failed translated restore consumed the committed source generation"
+        );
+    }
+
     std::fs::write(directory.path().join("cycle1"), []).unwrap();
     let restore1_ready = Instant::now();
     let second = Arc::new(Store::default());

@@ -68,8 +68,15 @@ static void *helper(void *opaque) {
     int stack_result = sigaltstack(NULL, &restored);
     if (mask_result != 0 || !sigismember(&observed, SIGUSR2) || pending_result != 0 ||
         !sigismember(&pending, SIGUSR2) || stack_result != 0 || restored.ss_sp != alternate.ss_sp ||
-        restored.ss_size != alternate.ss_size || restored.ss_flags != 0)
+        restored.ss_size != alternate.ss_size || restored.ss_flags != 0) {
+        dprintf(STDOUT_FILENO,
+                "HELPER-STATE mask_result=%d masked=%d pending_result=%d pending=%d stack_result=%d "
+                "sp=%p expected_sp=%p size=%zu expected_size=%zu flags=%d\n",
+                mask_result, sigismember(&observed, SIGUSR2), pending_result, sigismember(&pending, SIGUSR2),
+                stack_result, restored.ss_sp, alternate.ss_sp, restored.ss_size, alternate.ss_size,
+                restored.ss_flags);
         return helper_fail(context, 5);
+    }
     if (pthread_sigmask(SIG_UNBLOCK, &blocked, NULL) != 0) return helper_fail(context, 6);
     for (int attempt = 0; attempt < 1000 && helper_delivered != 1; ++attempt)
         usleep(1000);
