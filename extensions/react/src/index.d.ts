@@ -4471,7 +4471,10 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
 export interface ProcessList { titles: string[]; processes: string[][] }
-export interface ContainerOutput { stdout: number[]; stderr: number[]; truncated: boolean }
+export interface ContainerOutput {
+  stdout: number[]; stderr: number[]; truncated: boolean;
+  stdout_truncated: boolean; stderr_truncated: boolean; eof: boolean;
+}
 export interface ContainerCreateSpec {
   image: string;
   name: string;

@@ -61,6 +61,16 @@ pub struct ContainerOutput {
     pub stderr: Vec<u8>,
     /// At least one stream was shortened to the protocol limit.
     pub truncated: bool,
+    /// Standard output was shortened independently of standard error.
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    /// Standard error was shortened independently of standard output.
+    #[serde(default)]
+    pub stderr_truncated: bool,
+    /// The process was already complete when this replay began, so no later
+    /// bytes can appear. False is conservative for older hosts.
+    #[serde(default)]
+    pub eof: bool,
 }
 
 /// Bounded container creation authority with no host bind-mount path.
@@ -987,6 +997,16 @@ mod tests {
         assert_eq!(bounded.lines.last().map(String::as_str), Some("new"));
         assert_eq!((bounded.cursor_column, bounded.cursor_row), (4, 2));
         assert!(bounded.lines.iter().map(|line| line.len() + 1).sum::<usize>() <= PANE_TEXT_BYTES);
+    }
+
+    #[test]
+    fn legacy_output_decodes_without_claiming_eof_or_per_stream_completeness() {
+        let output: super::ContainerOutput = serde_json::from_value(serde_json::json!({
+            "stdout": [], "stderr": [], "truncated": false
+        })).expect("legacy output");
+        assert!(!output.eof);
+        assert!(!output.stdout_truncated);
+        assert!(!output.stderr_truncated);
     }
 
     #[test]

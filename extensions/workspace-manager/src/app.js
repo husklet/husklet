@@ -264,7 +264,9 @@ export function Executions({ api, resource, executionDetails, truncated = false 
       const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
       const text = (bytes) => logText(bytes).slice(-LOG_VIEW_CHARACTER_LIMIT);
       setOutput((current) => ({ revision: (current?.revision ?? 0) + 1,
-        stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }), truncated: value.truncated }));
+        stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }),
+        truncated: value.truncated, stdoutTruncated: value.stdout_truncated, stderrTruncated: value.stderr_truncated,
+        eof: value.eof }));
     } finally { setBusy(''); }
   };
   const wait = async (id) => {
@@ -288,9 +290,14 @@ export function Executions({ api, resource, executionDetails, truncated = false 
               ? h(EmptyState, { label: 'No execution details', detail: 'The host returned no inspectable fields.' })
               : h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } }),
         selected === item.id && output ? h(Column, { gap: 1 },
-          h(Heading, { label: 'Standard output', scale: 'caption' }), h(LogView, { key: `stdout-${output.revision}`, value: output.stdout || 'No stdout captured.', monospace: true }),
-          h(Heading, { label: 'Standard error', scale: 'caption' }), h(LogView, { key: `stderr-${output.revision}`, value: output.stderr || 'No stderr captured.', monospace: true }),
-          output.truncated ? h(Text, { label: 'Host output was truncated to its configured bound.', color: 'warning' }) : null) : null),
+          h(Heading, { label: 'Standard output', scale: 'caption' }), h(LogView, { key: `stdout-${output.revision}`, value: output.stdout || (output.eof ? 'No stdout captured (EOF).' : 'No stdout captured yet; execution is still running.'), monospace: true }),
+          output.stdoutTruncated ? h(Text, { label: 'Standard output was truncated to its configured bound.', color: 'warning' }) : null,
+          h(Heading, { label: 'Standard error', scale: 'caption' }), h(LogView, { key: `stderr-${output.revision}`, value: output.stderr || (output.eof ? 'No stderr captured (EOF).' : 'No stderr captured yet; execution is still running.'), monospace: true }),
+          output.stderrTruncated ? h(Text, { label: 'Standard error was truncated to its configured bound.', color: 'warning' }) : null,
+          output.eof ? h(Text, { label: 'Captured output is complete (EOF).', color: 'text-dim' })
+            : h(Text, { label: 'Execution is still running; later output may appear.', color: 'text-dim' }),
+          output.truncated && !output.stdoutTruncated && !output.stderrTruncated
+            ? h(Text, { label: 'Host output was truncated to its configured bound.', color: 'warning' }) : null) : null),
       h(CardActions, { gap: 1 },
         h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
         h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),

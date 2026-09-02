@@ -149,6 +149,9 @@ impl ContainerInventory for Host {
             stdout: b"ready\n".to_vec(),
             stderr: Vec::new(),
             truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            eof: false,
         })
     }
 
@@ -170,7 +173,14 @@ impl ContainerInventory for Host {
     }
     fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
         self.ledger.note("executions.logs");
-        Ok(ContainerOutput { stdout: b"exec out\n".to_vec(), stderr: b"exec err\n".to_vec(), truncated: false })
+        Ok(ContainerOutput {
+            stdout: b"exec out\n".to_vec(),
+            stderr: b"exec err\n".to_vec(),
+            truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            eof: true,
+        })
     }
 
     fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
@@ -1256,12 +1266,19 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
             &services(&host),
         )
         .expect("logs");
-    assert!(matches!(logs, Reply::Logs(output) if output.stdout == b"ready\n" && !output.truncated));
+    assert!(matches!(logs, Reply::Logs(output)
+        if output.stdout == b"ready\n" && !output.truncated && !output.eof
+            && !output.stdout_truncated && !output.stderr_truncated));
 
     let execution = session
         .dispatch(&Request::ExecutionInspect { id: "e1".into() }, &services(&host))
         .expect("execution");
     assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
+
+    let output = session.dispatch(
+        &Request::ExecutionLogs { id: "e1".into(), stdout: true, stderr: true }, &services(&host),
+    ).expect("execution output");
+    assert!(matches!(output, Reply::Logs(output) if output.eof && !output.truncated));
 
     let waited = session.dispatch(
         &Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, &services(&host),

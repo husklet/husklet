@@ -55,6 +55,9 @@ without blocking the native UI.
 Execution inspection and execution signaling use distinct typed calls: signaling
 targets one existing execution ID under `ContainerControl` and accepts only a
 1..=32 byte signal name. It does not signal the owning container or parse a shell.
+Execution output replay reports stdout and stderr truncation independently and
+sets `eof` only when the process was already complete before replay; an empty
+running response is therefore not presented as end-of-stream.
 
 Container creation accepts bounded entrypoint/argv, environment, working directory,
 user, labels, named-volume mounts, one workspace-local network, TCP/UDP exposure,

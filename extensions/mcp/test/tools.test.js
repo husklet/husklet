@@ -233,13 +233,17 @@ test('execution wait is a strict bounded read and preserves the timeout', async 
 
 test('execution catalogue and output are finite strict reads', async () => {
   const { api, calls } = fake();
+  const output = { stdout: [111], stderr: [], truncated: true, stdout_truncated: true,
+    stderr_truncated: false, eof: false };
+  api.containers.executionLogs = async (...args) => { calls.push(['containers.executionLogs', ...args]); return output; };
   const listed = tools(api);
   const list = listed.find(({ name }) => name === 'husklet_execution_list');
   const logs = listed.find(({ name }) => name === 'husklet_execution_logs');
   assert.equal(logs.inputSchema.safeParse({ id: 'e1', stdout: false, stderr: false }).success, false);
   assert.equal(logs.inputSchema.safeParse({ id: 'e1', extra: true }).success, false);
   await list.run({});
-  await logs.run({ id: 'e1', stdout: true, stderr: false });
+  const result = await logs.run({ id: 'e1', stdout: true, stderr: false });
+  assert.deepEqual(JSON.parse(result.content[0].text), output);
   assert.deepEqual(calls, [['containers.executions'], ['containers.executionLogs', 'e1', { stdout: true, stderr: false }]]);
 });
 

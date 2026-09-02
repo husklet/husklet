@@ -349,7 +349,8 @@ test('execution details, separate bounded streams, wait and retry are operationa
   const item = { id: 'e1', container_id: 'c1', running: true, exit_code: 0, pid: 77, command: ['sleep', '5'], user: 'root' };
   const controlled = { containers: {
     execution: async () => { inspectAttempts += 1; if (inspectAttempts === 1) throw new Error('execution moved'); return item; },
-    executionLogs: async () => ({ stdout: Array(5_000).fill(111), stderr: [98, 97, 100], truncated: true }),
+    executionLogs: async () => ({ stdout: Array(5_000).fill(111), stderr: [98, 97, 100], truncated: true,
+      stdout_truncated: true, stderr_truncated: false, eof: false }),
     waitExecution: async (...args) => { calls.push(['wait', ...args]); return { ...item, running: false, exit_code: 0 }; },
     removeExecution: async () => {},
   } };
@@ -363,7 +364,9 @@ test('execution details, separate bounded streams, wait and retry are operationa
   assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
   invoke(stage, 'Load output'); await settled(); await settled();
   assert.ok(labelled(stage, 'Standard output')); assert.ok(labelled(stage, 'Standard error'));
-  assert.ok(labelled(stage, 'Host output was truncated to its configured bound.'));
+  assert.ok(labelled(stage, 'Standard output was truncated to its configured bound.'));
+  assert.ok(!labelled(stage, 'Standard error was truncated to its configured bound.'));
+  assert.ok(labelled(stage, 'Execution is still running; later output may appear.'));
   const values = stage.frames.flatMap((frame) => frame.patches).filter((patch) => patch.SetProp?.prop === 'Value'
     && typeof patch.SetProp.value?.Text === 'string').map((patch) => patch.SetProp.value.Text);
   assert.ok(values.every((value) => [...value].length <= 4096), 'no LogView patch exceeds its retention bound');
@@ -375,12 +378,16 @@ test('finished execution cleanup requires explicit destructive confirmation', as
   const calls = [];
   const item = { id: 'e2', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' };
   const controlled = { containers: {
-    execution: async () => item, executionLogs: async () => ({ stdout: [], stderr: [], truncated: false }),
+    execution: async () => item, executionLogs: async () => ({ stdout: [], stderr: [], truncated: false,
+      stdout_truncated: false, stderr_truncated: false, eof: true }),
     waitExecution: async () => item, removeExecution: async (...args) => calls.push(args),
   } };
   const resource = { data: [item], loading: false, error: null, reload: async () => {} };
   const stage = host();
   stage.render(h(Executions, { api: controlled, resource }));
+  invoke(stage, 'Details'); await settled(); await settled();
+  invoke(stage, 'Load output'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Captured output is complete (EOF).'));
   invoke(stage, 'Remove record');
   assert.deepEqual(calls, []);
   assert.equal(isDestructive(stage, 'Confirm removal'), true);

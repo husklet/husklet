@@ -60,17 +60,22 @@ impl ContainerInventory for ContainerCatalog {
 
     fn logs(&self, id: &str, stdout: bool, stderr: bool) -> Result<ContainerOutput, HostError> {
         let client = self.bridge.client();
+        // Inspect first: a stopped process has stable output. If it stops after
+        // this observation we conservatively answer `eof: false` rather than
+        // claiming a replay that raced its final bytes was complete.
+        let inspection = self
+            .bridge
+            .wait(client.containers().inspect(id))
+            .map_err(|error| failure(&error))?;
         let logs = self
             .bridge
             .wait(client.containers().logs(id, stdout, stderr))
             .map_err(|error| failure(&error))?;
-        let (stdout, stdout_cut) = bounded(logs.stdout);
-        let (stderr, stderr_cut) = bounded(logs.stderr);
-        Ok(ContainerOutput {
-            stdout,
-            stderr,
-            truncated: stdout_cut || stderr_cut,
-        })
+        Ok(output(
+            logs.stdout,
+            logs.stderr,
+            inspection.state.activity.running || inspection.state.activity.restarting,
+        ))
     }
 
     fn execution(&self, id: &str) -> Result<ExecutionSummary, HostError> {
@@ -91,10 +96,13 @@ impl ContainerInventory for ContainerCatalog {
 
     fn execution_logs(&self, id: &str, stdout: bool, stderr: bool) -> Result<ContainerOutput, HostError> {
         let client = self.bridge.client();
+        let execution = self.bridge.wait(client.executions().inspect(id)).map_err(|error| failure(&error))?;
         let logs = self.bridge.wait(client.executions().logs(id)).map_err(|error| failure(&error))?;
-        let (stdout_bytes, stdout_cut) = bounded(if stdout { logs.stdout } else { Vec::new() });
-        let (stderr_bytes, stderr_cut) = bounded(if stderr { logs.stderr } else { Vec::new() });
-        Ok(ContainerOutput { stdout: stdout_bytes, stderr: stderr_bytes, truncated: stdout_cut || stderr_cut })
+        Ok(output(
+            if stdout { logs.stdout } else { Vec::new() },
+            if stderr { logs.stderr } else { Vec::new() },
+            execution.running,
+        ))
     }
 
     fn execution_wait(&self, id: &str, timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
@@ -133,6 +141,19 @@ fn bounded(bytes: Vec<u8>) -> (Vec<u8>, bool) {
         return (bytes, false);
     }
     (bytes[bytes.len() - OUTPUT_BYTES..].to_vec(), true)
+}
+
+fn output(stdout: Vec<u8>, stderr: Vec<u8>, running: bool) -> ContainerOutput {
+    let (stdout, stdout_truncated) = bounded(stdout);
+    let (stderr, stderr_truncated) = bounded(stderr);
+    ContainerOutput {
+        stdout,
+        stderr,
+        truncated: stdout_truncated || stderr_truncated,
+        stdout_truncated,
+        stderr_truncated,
+        eof: !running,
+    }
 }
 
 /// Maps a Docker list entry onto the protocol's container view.
@@ -197,7 +218,7 @@ fn civil_days(year: i64, month: i64, day: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{OUTPUT_BYTES, bounded, civil_days, epoch_seconds, inspection, summary};
+    use super::{OUTPUT_BYTES, bounded, civil_days, epoch_seconds, inspection, output, summary};
     use hl_client::model::{Container, InspectContainer};
 
     fn listing() -> Container {
@@ -294,5 +315,18 @@ mod tests {
         let (answer, truncated) = bounded(bytes);
         assert!(truncated);
         assert_eq!(answer, expected);
+    }
+
+    #[test]
+    fn output_names_each_cut_and_never_calls_a_running_empty_replay_eof() {
+        let running = output(Vec::new(), vec![b'e'; OUTPUT_BYTES + 1], true);
+        assert!(!running.stdout_truncated);
+        assert!(running.stderr_truncated);
+        assert!(running.truncated);
+        assert!(!running.eof, "empty stdout from a running process is not EOF");
+
+        let complete = output(Vec::new(), Vec::new(), false);
+        assert!(complete.eof);
+        assert!(!complete.truncated);
     }
 }

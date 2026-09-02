@@ -425,10 +425,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
   ]);
   const replies = [
     { reply: 'processes', with: { titles: [], processes: [] } },
-    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: false } },
     { reply: 'execution', with: { id: 'e1' } },
     { reply: 'executions', with: { executions: [], truncated: false } },
-    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } },
     { reply: 'execution', with: { id: 'e1', running: false, exit_code: 0 } },
     ...Array(6).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
@@ -438,6 +438,11 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
+  assert.equal(results[1].eof, false, 'empty output from a running initial process remains open');
+  assert.deepEqual(
+    { eof: results[4].eof, stdout: results[4].stdout_truncated, stderr: results[4].stderr_truncated },
+    { eof: true, stdout: false, stderr: false },
+  );
   assert.equal(results[12], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
