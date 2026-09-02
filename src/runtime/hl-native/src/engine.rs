@@ -541,6 +541,8 @@ mod tests {
         }
         // SAFETY: selector 218 is the cross-page form of the same isolated lifecycle fixture.
         assert_eq!(unsafe { hook(218) }, 0, "cross-page JCC IBTC lifecycle");
+        // SAFETY: selector 221 isolates option mutation in a child and proves launch-boundary caching.
+        assert_eq!(unsafe { hook(221) }, 0, "JCC IBTC launch-option snapshot");
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]

@@ -786,14 +786,16 @@ typedef struct translit_profile_execution_options {
     int enabled, symbolize;
 } translit_profile_execution_options;
 static translit_profile_execution_options translit_profile_options;
+static int translit_jcc_ibtc_disabled_cached;
 
-/* Launch options are immutable while an execution is live.  Snapshot the two profiling controls at
-   that boundary: helper probes and block publication are hot enough that resolving their names for
-   every translated transition costs more than disabled profiling should. */
+/* Launch options are immutable while an execution is live. Snapshot hot execution controls at that
+   boundary: helper probes, block publication and JCC refills run often enough that resolving their
+   names for every translated transition costs more than the guarded operation. */
 static void translit_profile_options_refresh(void) {
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
     size_t length = directory == NULL ? 0 : strnlen(directory, sizeof translit_profile_options.directory);
     translit_profile_options.symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
+    translit_jcc_ibtc_disabled_cached = hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
     translit_profile_options.enabled =
         (g_prof || translit_profile_options.symbolize) && length != 0 &&
         length < sizeof translit_profile_options.directory;
@@ -801,6 +803,16 @@ static void translit_profile_options_refresh(void) {
         memcpy(translit_profile_options.directory, directory, length + 1u);
     else
         translit_profile_options.directory[0] = '\0';
+}
+
+static int translit_jcc_ibtc_disabled(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    /* Lifecycle fixtures deliberately toggle this launch option after initialization. Keep those
+       mutations observable without putting the production option-table lookup back on every fill. */
+    return hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
+#else
+    return translit_jcc_ibtc_disabled_cached;
+#endif
 }
 
 static int translit_profile_publication_enabled(void) {
@@ -2526,8 +2538,7 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
     int disabled = actual_miss && (fallthrough ? 0
                                              : direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)
-                                             : direct_call || indirect ? 0
-                                                           : hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0));
+                                             : direct_call || indirect ? 0 : translit_jcc_ibtc_disabled());
     if (disabled) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_SUPPRESSED, 1);
@@ -4651,6 +4662,30 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(123));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
+    if (scenario == 221) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) {
+            (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
+            translit_profile_options_refresh();
+            int enabled = !translit_jcc_ibtc_disabled_cached;
+            int set = hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) == 0;
+            int stable_before_refresh = !translit_jcc_ibtc_disabled_cached;
+            translit_profile_options_refresh();
+            int disabled = translit_jcc_ibtc_disabled_cached;
+            (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
+            int stable_after_unset = translit_jcc_ibtc_disabled_cached;
+            translit_profile_options_refresh();
+            _exit(enabled && set && stable_before_refresh && disabled && stable_after_unset &&
+                          !translit_jcc_ibtc_disabled_cached
+                      ? 0
+                      : 180);
+        }
         int status = 0;
         if (waitpid(child, &status, 0) != child) return 99;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
