@@ -744,6 +744,26 @@ jobs:
           runtime::execution::native_eligibility_tests::arm_native_execution_is_admitted_but_every_checkpoint_role_stays_refused
           -- --exact
 
+      # Configuration alone cannot prove that the same-ISA native supervisor executed the guest: a
+      # translated fallback could produce the fixture's stdout and exit status too. This exact test
+      # requires a receipt written inside the supervisor's reap path and binds it to `isa=aarch64`,
+      # status 23 and signal 0. Require its verdict by name so a cfg change or filter drift cannot turn
+      # the native ARM execution claim into a successful zero-test invocation.
+      - name: Test ARM64 native-supervised execution receipt
+        run: |
+          set -o pipefail
+          .github/scripts/cargo-test-named.sh "ARM64 native-supervised execution receipt" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test -p hl-engine --test native_supervised --locked --offline \
+            diagnostics_receipt_proves_success_signal_and_pre_exec_absence \
+            -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/native-supervised-receipt.log"
+          verdict='test diagnostics_receipt_proves_success_signal_and_pre_exec_absence ... ok'
+          count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/native-supervised-receipt.log" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error title=ARM64 native execution receipt missing::$verdict appeared $count times, expected exactly once."
+            exit 1
+          fi
+
       # The hook suite above validates checkpoint record machinery, but it never launches a guest
       # through hl-engine's capture/restore lifecycle. Run the Linux end-to-end suite on this real
       # AArch64 host as the other half of the translated matrix: checkpoint-capable launches still refuse
