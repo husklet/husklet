@@ -403,8 +403,8 @@ jobs:
           }
 
       # The checkpoint suite above launches one engine around one guest. It cannot
-      # exercise the production loader recursively, where an AMD64 engine translates
-      # an AArch64 engine which in turn translates the final AMD64 guest. Keep the
+      # exercise the production loader recursively, where a retained AMD64 engine runs
+      # an AArch64 engine which in turn runs the final AMD64 guest. Keep the
       # manifest-bound runner in CI and require its exact receipt: merely compiling
       # `testing` or listing the backend matrix executes none of this chain.
       - name: Test the nested AMD64 to ARM64 to AMD64 engine chain
