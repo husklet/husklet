@@ -190,7 +190,11 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && !strcmp(argv[1], "open-policy")) {
         errno = 0;
+#if defined(__aarch64__)
+        int fd = (int)syscall(SYS_openat, AT_FDCWD, "/dev/null", O_RDONLY, 0);
+#else
         int fd = (int)syscall(SYS_open, "/dev/null", O_RDONLY, 0);
+#endif
         if (argc > 2 && !strcmp(argv[2], "refused")) {
             if (fd >= 0) close(fd);
             return fd == -1 && errno == ENOSYS ? 0 : 98;

@@ -36,6 +36,14 @@ fn getpid_refusal() -> String {
     format!("{}:38", libc::SYS_getpid)
 }
 
+fn open_refusal() -> String {
+    #[cfg(target_arch = "aarch64")]
+    let syscall = libc::SYS_openat;
+    #[cfg(target_arch = "x86_64")]
+    let syscall = libc::SYS_open;
+    format!("{syscall}:38")
+}
+
 fn native_overlay_directories() -> std::collections::BTreeSet<PathBuf> {
     std::fs::read_dir("/var/tmp")
         .unwrap()
@@ -691,7 +699,11 @@ fn refusal_reaches_a_fork_descendant_without_fallback() {
 fn selective_filter_skips_continued_open_but_refusal_still_traps_it() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    for (refusal, expected_open, argument) in [(None, "open=0", None), (Some("2:38"), "open=1", Some("refused"))] {
+    let refusal = open_refusal();
+    for (refusal, expected_open, argument) in [
+        (None, "open=0", None),
+        (Some(refusal.as_str()), "open=1", Some("refused")),
+    ] {
         let output = Arc::new(Output::default());
         let receipt = work.path().join(expected_open);
         std::fs::write(&receipt, b"").unwrap();
