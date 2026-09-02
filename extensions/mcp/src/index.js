@@ -52,6 +52,10 @@ const environmentValue = z.string().max(8192).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 8192,
   'environment value exceeds 8192 UTF-8 bytes',
 );
+const environmentName = z.string().min(1).max(256).refine(
+  (value) => !value.includes('=') && !value.includes('\0') && utf8Bytes(value) <= 256,
+  'environment name must exclude equals and NUL and be at most 256 UTF-8 bytes',
+);
 const containerLabelValue = z.string().max(4096).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 4096,
   'container label value exceeds 4096 UTF-8 bytes',
@@ -77,7 +81,7 @@ const containerCreate = z.object({
   name: containerName,
   entrypoint: command.nullable().default(null),
   command: optionalCommand.default([]),
-  environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), environmentValue])).max(256).default([]),
+  environment: z.array(z.tuple([environmentName, environmentValue])).max(256).default([]),
   working_directory: containerAbsolutePath.nullable().default(null),
   user: containerUser.nullable().default(null),
   labels: z.array(z.tuple([containerLabelName, containerLabelValue])).max(128).default([]),

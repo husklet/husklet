@@ -232,6 +232,10 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', user: '😀'.repeat(65) }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['VALUE', 'é'.repeat(4096)]] }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['VALUE', '😀'.repeat(2049)]] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['é'.repeat(128), 'value']] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['é'.repeat(129), 'value']] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['release-name', 'value']] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['BAD=NAME', 'value']] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', labels: [['note', 'é'.repeat(2048)]] }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', labels: [['note', '😀'.repeat(1025)]] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', labels: [['é'.repeat(128), 'note']] }).success, true);
