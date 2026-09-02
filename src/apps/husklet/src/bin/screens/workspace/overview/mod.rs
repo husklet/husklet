@@ -131,14 +131,21 @@ impl<'a> Overview<'a> {
         });
         let ready_gallery = gallery.clone();
         let ready_name = name.to_string();
-        let ready = Rc::new(move || ready_gallery.ready(&ready_name));
+        let ready_generation = Rc::new(std::cell::Cell::new(None));
+        let published_generation = Rc::clone(&ready_generation);
+        let ready = Rc::new(move || {
+            if let Some(generation) = published_generation.get() {
+                ready_gallery.ready(&ready_name, generation);
+            }
+        });
         let (widget, page) = screens::workspace::extension::Interface::with_lifecycle(deliveries, sink, faulted, ready);
-        let page = page.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_hexpand(true);
         holder.set_vexpand(true);
         holder.append(&widget);
-        gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
+        let generation = gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
+        ready_generation.set(Some(generation));
+        let page = page.install();
         let weak = Rc::downgrade(&page);
         gallery.enrol_panes(
             name.as_str(),

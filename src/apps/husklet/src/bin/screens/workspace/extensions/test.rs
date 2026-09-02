@@ -54,6 +54,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
+        stale_provider_generations_cannot_authorize_replacements();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
@@ -1478,6 +1479,8 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     let orders = Rc::clone(&host);
     let gallery = Gallery::new();
     let ready_gallery = gallery.clone();
+    let ready_generation = Rc::new(Cell::new(None));
+    let published_generation = Rc::clone(&ready_generation);
     let (widget, mut page) = Interface::with_lifecycle(
         deliveries,
         Rc::new(move |signal: Signal| match signal {
@@ -1491,21 +1494,27 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
             Signal::Retry => orders.accept(hl::extension::Order::Retry),
         }),
         Rc::new(|_| {}),
-        Rc::new(move || ready_gallery.ready("sample")),
+        Rc::new(move || {
+            if let Some(generation) = published_generation.get() {
+                ready_gallery.ready("sample", generation);
+            }
+        }),
     );
     let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
     home.append(&widget);
-    gallery.enrol(
+    let provider = hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    };
+    let generation = gallery.enrol(
         "sample",
         &widget,
         &home,
-        &[hl_extension::PaneProvider {
-            id: named("dashboard"),
-            title: "Dashboard".to_owned(),
-            icon: None,
-        }],
+        std::slice::from_ref(&provider),
         Rc::new(|_| {}),
     );
+    ready_generation.set(Some(generation));
     gallery.enrol_semantics(
         "sample",
         Rc::new(|slot: &str| {
@@ -1531,12 +1540,29 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         gallery.providers().is_empty(),
         "persisted provider is withheld before the socket's first frame"
     );
+    let replacement_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let replacement = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    replacement_home.append(&replacement);
+    let replacement_generation = gallery.enrol("sample", &replacement, &replacement_home, &[provider], Rc::new(|_| {}));
+    panes::readable(&gallery, "sample");
     assert!(
         until(|| {
             page.tick();
-            !gallery.providers().is_empty()
+            descendants(&widget.clone().upcast())
+                .iter()
+                .any(|found| found.has_css_class("hl-button"))
         }),
-        "the real Unix conversation's accepted frame publishes its provider"
+        "the old real Unix conversation's frame reaches only its old page"
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "the accepted old-generation socket frame cannot authorize the replacement"
+    );
+    gallery.ready("sample", replacement_generation);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "the replacement's frame can publish its provider"
     );
 
     let button = descendants(&widget.clone().upcast())
@@ -1554,6 +1580,52 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         heard.lock().expect("heard")
     );
     drop(host);
+}
+
+fn stale_provider_generations_cannot_authorize_replacements() {
+    let gallery = Gallery::new();
+    let provider = hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    };
+    let old_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let old = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    old_home.append(&old);
+    let old_generation = gallery.enrol(
+        "sample",
+        &old,
+        &old_home,
+        std::slice::from_ref(&provider),
+        Rc::new(|_| {}),
+    );
+    let new_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let new = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    new_home.append(&new);
+    let new_generation = gallery.enrol("sample", &new, &new_home, &[provider], Rc::new(|_| {}));
+    panes::readable(&gallery, "sample");
+
+    gallery.ready("sample", old_generation);
+    assert!(
+        gallery.providers().is_empty(),
+        "a late old-generation frame cannot authorize its replacement"
+    );
+    gallery.ready("sample", new_generation);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "only the replacement generation can become ready"
+    );
+    gallery.withdraw("sample");
+    assert!(
+        gallery.providers().is_empty(),
+        "fault or unmount withdraws chooser authority synchronously"
+    );
+    gallery.ready("sample", new_generation);
+    assert!(
+        gallery.providers().is_empty(),
+        "late frames cannot resurrect a withdrawn generation"
+    );
 }
 
 /// In-memory ports, so a conversation can be served with no container runtime
@@ -1825,7 +1897,7 @@ mod panes {
         }
     }
 
-    fn readable(gallery: &Gallery, extension: &str) {
+    pub(super) fn readable(gallery: &Gallery, extension: &str) {
         let owner = extension.to_owned();
         gallery.enrol_semantics(
             extension,
@@ -1855,7 +1927,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "sample",
             &interface,
             &home,
@@ -1885,7 +1957,7 @@ mod panes {
             "a projection without a successful frame is still starting"
         );
         assert!(!gallery.offers("sample", "dashboard"));
-        gallery.ready("sample");
+        gallery.ready("sample", generation);
         assert!(gallery.offers("sample", "dashboard"));
         assert_eq!(gallery.providers()[0].title, "Dashboard");
         assert_eq!(
@@ -2432,7 +2504,7 @@ mod panes {
         home.append(&interface);
         let selected = Rc::new(RefCell::new(None));
         let selection = Rc::clone(&selected);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2444,7 +2516,7 @@ mod panes {
             Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
         );
         readable(&gallery, "postgres");
-        gallery.ready("postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery.clone());
         let chrome = Panes::at(&bench.window, &slot).expect("pane chrome").widget;
 
@@ -2553,7 +2625,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2565,7 +2637,7 @@ mod panes {
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
-        gallery.ready("postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery);
         PaneChooser::populate(&bench.window, &chooser);
         assert_eq!(
@@ -2583,7 +2655,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2595,7 +2667,7 @@ mod panes {
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
-        gallery.ready("postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery);
         assert!(Panes::focus(&bench.window, &first_slot));
         assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
@@ -2682,9 +2754,9 @@ mod panes {
                     icon: None,
                 })
                 .collect();
-            gallery.enrol(extension, &interface, &home, &providers, Rc::new(|_| {}));
+            let generation = gallery.enrol(extension, &interface, &home, &providers, Rc::new(|_| {}));
             readable(&gallery, extension);
-            gallery.ready(extension);
+            gallery.ready(extension, generation);
             homes.push(home);
         }
         Window::exhibit(&bench.window, gallery);
@@ -2737,7 +2809,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2749,7 +2821,7 @@ mod panes {
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
-        gallery.ready("postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery.clone());
         assert!(Panes::focus(&bench.window, &first_slot));
         PaneChooser::provider(&bench.window, "postgres", "database");
@@ -2805,7 +2877,7 @@ mod panes {
         );
 
         if !remove {
-            gallery.enrol(
+            let generation = gallery.enrol(
                 "postgres",
                 &interface,
                 &home,
@@ -2817,7 +2889,7 @@ mod panes {
                 Rc::new(|_| {}),
             );
             readable(&gallery, "postgres");
-            gallery.ready("postgres");
+            gallery.ready("postgres", generation);
             PaneChooser::recover(&bench.window, "postgres");
             assert_eq!(
                 interface.parent().as_ref(),

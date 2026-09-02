@@ -8,7 +8,7 @@
 //! Anything else would be a second tree that never received the frames the
 //! first was built from.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -17,6 +17,7 @@ use gtk::prelude::*;
 
 /// One extension's interface and the page it belongs to.
 struct Exhibit {
+    generation: u64,
     /// The widget the extension's frames are applied to.
     interface: glib::WeakRef<gtk::Widget>,
     /// The holder on the workspace shell it was placed in, which is where it
@@ -52,6 +53,7 @@ pub struct Provider {
 pub struct Gallery(
     Rc<RefCell<HashMap<String, Exhibit>>>,
     Rc<RefCell<Option<super::super::semantic::Registry>>>,
+    Rc<Cell<u64>>,
 );
 
 impl Gallery {
@@ -120,8 +122,11 @@ impl Gallery {
         home: &gtk::Box,
         providers: &[hl_extension::PaneProvider],
         selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
-    ) {
+    ) -> u64 {
+        let generation = self.2.get().wrapping_add(1).max(1);
+        self.2.set(generation);
         let exhibit = Exhibit {
+            generation,
             interface: interface.as_ref().downgrade(),
             home: home.downgrade(),
             providers: providers.to_vec(),
@@ -133,12 +138,18 @@ impl Gallery {
             retire: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
+        generation
     }
 
     /// Publishes this generation's declared pane providers after its first
     /// successfully reconciled interface frame.
-    pub fn ready(&self, extension: &str) {
-        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+    pub fn ready(&self, extension: &str, generation: u64) {
+        if let Some(exhibit) = self
+            .0
+            .borrow_mut()
+            .get_mut(extension)
+            .filter(|exhibit| exhibit.generation == generation)
+        {
             exhibit.ready = true;
         }
     }
