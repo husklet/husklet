@@ -261,6 +261,7 @@ impl Overview<'_> {
         register_text(semantics, "settings/shell", "Default shell", &form.shell, false);
         register_text(semantics, "settings/scrollback", "Scrollback", &form.scrollback, false);
         register_text(semantics, "settings/vpn", "VPN or proxy", &form.features.vpn, true);
+        register_font(semantics, "settings/font-family", "Font family", &form.font);
         register_spin(semantics, "settings/cpus", "CPU cores", &form.cpus);
         register_spin(semantics, "settings/memory", "Memory MB", &form.mem);
         register_spin(semantics, "settings/font-size", "Font size", &form.font_size);
@@ -334,6 +335,41 @@ impl Overview<'_> {
         let registry = semantics.clone();
         save.connect_sensitive_notify(move |button| registry.set_disabled("settings/save", !button.is_sensitive()));
     }
+}
+
+fn register_font(
+    semantics: &screens::workspace::semantic::Registry,
+    path: &str,
+    label: &str,
+    input: &FontPicker,
+) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.value();
+    let changed = input.clone();
+    let focused = input.widget().clone();
+    semantics.register(
+        path,
+        "combobox",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => changed.set_value(value.unwrap_or_default()),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.widget().connect_font_desc_notify(move |input| {
+        let family = input
+            .font_desc()
+            .and_then(|description| description.family().map(|family| family.to_string()))
+            .unwrap_or_default();
+        registry.update(&path, Value::Public(&family), !input.is_sensitive());
+    });
 }
 
 fn register_text(
@@ -534,6 +570,7 @@ mod tests {
         if !crate::test_support::on_the_toolkit_thread(|| {
             use crate::screens::workspace::semantic::{Action, ActionKind, Registry};
             let workspace = WorkspaceConfig::new("semantic", "alpine:3.20", Arch::Amd64);
+            let expected_font = workspace.terminal_config().font_family;
             let registry = Registry::new("workspace");
             let page = Overview::new(&workspace, None).settings(&registry);
             let snapshot = registry.snapshot();
@@ -544,6 +581,7 @@ mod tests {
                 .filter_map(|node| node.label.as_deref())
                 .collect();
             assert!(labels.contains(&"Default shell"));
+            assert!(labels.contains(&"Font family"));
             assert!(labels.contains(&"CPU cores"));
             assert!(labels.contains(&"Docker socket"));
             assert!(labels.contains(&"Save changes"));
@@ -560,6 +598,13 @@ mod tests {
                 .iter()
                 .find(|node| node.label.as_deref() == Some("Default shell"))
                 .unwrap();
+            let font = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Font family"))
+                .unwrap();
+            assert_eq!(font.value.as_deref(), Some(expected_font.as_str()));
             let save = descendants(page.upcast_ref())
                 .into_iter()
                 .find_map(|widget| {
@@ -578,6 +623,26 @@ mod tests {
                     value: Some("/bin/zsh -l".to_owned()),
                 })
                 .unwrap();
+            let font_revision = registry.snapshot().revision;
+            registry
+                .act(&Action {
+                    revision: font_revision,
+                    node: font.id,
+                    action: ActionKind::Change,
+                    value: Some("Fira Code".to_owned()),
+                })
+                .unwrap();
+            let changed_font = registry.snapshot();
+            assert_eq!(
+                changed_font
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.id == font.id)
+                    .and_then(|node| node.value.as_deref()),
+                Some("Fira Code"),
+                "assistive changes and the visible font picker share one value"
+            );
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             while !save.is_sensitive() && std::time::Instant::now() < deadline {
                 gtk::glib::MainContext::default().iteration(false);
