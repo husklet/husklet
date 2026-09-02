@@ -34,6 +34,9 @@ pub struct Record {
     /// When the record was first written, in milliseconds since the epoch,
     /// supplied by the caller because this crate has no clock.
     pub installed_at: i64,
+    /// Pane-provider catalogue consented to with this exact image digest.
+    #[serde(default)]
+    pub pane_providers: Vec<crate::manifest::PaneProvider>,
 }
 
 /// Where an extension stands right now.
@@ -258,6 +261,7 @@ impl Installation {
                 granted,
                 enabled: false,
                 installed_at: at,
+                pane_providers: manifest.pane_providers.clone(),
             },
             restarts: Restarts::default(),
         });
@@ -289,6 +293,7 @@ impl Installation {
         entry.record.granted = entry.record.granted.intersect(&manifest.capabilities);
         digest.clone_into(&mut entry.record.image_digest);
         entry.record.installed_at = at;
+        entry.record.pane_providers.clone_from(&manifest.pane_providers);
         entry.restarts = Restarts::default();
         if additional.is_empty() {
             return Ok(Consent::Standing);
@@ -476,6 +481,7 @@ mod tests {
             entrypoint: None,
             activation: crate::manifest::Activation::default(),
             interface: None,
+            pane_providers: Vec::new(),
             resources: crate::manifest::Resources::default(),
             filesystem_roots: Vec::new(),
         }

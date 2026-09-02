@@ -53,6 +53,7 @@ impl<'a> Overview<'a> {
     fn surface(
         workspace: &WorkspaceConfig,
         name: &hl_extension::ExtensionName,
+        providers: &[hl_extension::PaneProvider],
         terminal: &std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync>,
         gallery: &Gallery,
     ) -> gtk::Widget {
@@ -80,6 +81,8 @@ impl<'a> Overview<'a> {
         ));
         // The page never names the host, so the sink is where the two vocabularies
         // meet: one enum for what a person did, one for what the extension said.
+        let ordered = std::rc::Rc::clone(&host);
+        let selected = std::rc::Rc::new(move |selection| ordered.accept(Order::PaneProvider(selection)));
         let sink = std::rc::Rc::new(move |signal: Signal| match signal {
             Signal::Interaction(event) => host.accept(Order::Interaction(event)),
             Signal::Retry => host.accept(Order::Retry),
@@ -90,7 +93,7 @@ impl<'a> Overview<'a> {
         holder.set_hexpand(true);
         holder.set_vexpand(true);
         holder.append(&widget);
-        gallery.enrol(name.as_str(), &widget, &holder);
+        gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
         holder.upcast()
     }
 
@@ -118,10 +121,10 @@ impl<'a> Overview<'a> {
         // Each extension holds a port of its own, because a pane that draws an
         // interface has to name whose interface it draws and one shared port
         // could not say.
-        let surfaces: Surfaces = Rc::new(move |name| {
+        let surfaces: Surfaces = Rc::new(move |entry| {
             let port: std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync> =
-                std::sync::Arc::new(carried.of(name.as_str()));
-            Self::surface(&held, name, &port, &shown)
+                std::sync::Arc::new(carried.of(entry.name.as_str()));
+            Self::surface(&held, &entry.name, &entry.pane_providers, &port, &shown)
         });
         let shelf = Shelf::new(view, &roster, surfaces);
         shelf.install();

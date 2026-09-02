@@ -16,6 +16,8 @@ pub enum HostError {
     Conflict(String),
     /// The host service failed.
     Failed(String),
+    /// The host genuinely does not implement this operation.
+    Unsupported(String),
 }
 
 impl std::fmt::Display for HostError {
@@ -24,6 +26,7 @@ impl std::fmt::Display for HostError {
             Self::Absent(detail) => write!(formatter, "not found: {detail}"),
             Self::Conflict(detail) => write!(formatter, "conflict: {detail}"),
             Self::Failed(detail) => write!(formatter, "failed: {detail}"),
+            Self::Unsupported(detail) => write!(formatter, "unsupported: {detail}"),
         }
     }
 }
@@ -38,6 +41,38 @@ pub struct ContainerSummary {
     pub image: String,
     pub state: String,
     pub created: i64,
+}
+
+/// The process table reported by a running container.
+///
+/// Columns are named explicitly because the daemon's process sampler is
+/// platform-owned; preserving its titles keeps every row unambiguous without
+/// pretending all hosts can report one fixed process schema.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProcessList {
+    pub titles: Vec<String>,
+    pub processes: Vec<Vec<String>>,
+}
+
+/// Bounded captured output from a container's initial process.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    /// At least one stream was shortened to the protocol limit.
+    pub truncated: bool,
+}
+
+/// State of one additional process created through the container exec API.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExecutionSummary {
+    pub id: String,
+    pub container_id: String,
+    pub running: bool,
+    pub exit_code: i64,
+    pub pid: i64,
+    pub command: Vec<String>,
+    pub user: String,
 }
 
 /// An image as an extension sees it.
@@ -65,6 +100,14 @@ pub struct PaneSummary {
     pub command: Option<String>,
     /// What occupies the pane: a shell, or an interface an extension draws.
     pub occupant: Occupant,
+    /// Which extension/provider owns a surface pane; absent for terminals.
+    pub provider: Option<PaneProviderIdentity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PaneProviderIdentity {
+    pub extension: String,
+    pub provider: String,
 }
 
 /// What a pane holds.
@@ -88,6 +131,49 @@ pub struct PaneText {
     pub lines: Vec<String>,
     /// Whether older lines exist that this answer does not carry.
     pub truncated: bool,
+}
+
+/// The maximum bytes one terminal-input call may inject.
+pub const PANE_INPUT_BYTES: usize = 64 * 1024;
+
+/// The maximum rows or columns one explicit PTY grid may request.
+pub const PANE_GRID_EDGE: u16 = 1000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct GridSize {
+    pub columns: u16,
+    pub rows: u16,
+}
+
+/// Nested layout of all visible terminal tabs.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TerminalTopology {
+    pub active_tab: Option<String>,
+    pub tabs: Vec<TabTopology>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TabTopology {
+    pub id: String,
+    pub title: String,
+    pub root: LayoutNode,
+}
+
+/// A leaf pane or a nested split. `ratio_per_mille` is the first child's share.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum LayoutNode {
+    Pane {
+        pane: PaneSummary,
+        grid: Option<GridSize>,
+        focused: bool,
+    },
+    Split {
+        division: Division,
+        ratio_per_mille: u16,
+        first: Box<Self>,
+        second: Box<Self>,
+    },
 }
 
 /// The greatest number of lines one pane read may answer with.
@@ -123,6 +209,43 @@ pub struct WorkspaceState {
     pub current: bool,
 }
 
+/// Complete extension-facing workspace configuration.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceConfiguration {
+    pub name: String,
+    pub image: String,
+    pub architecture: String,
+    pub storage: Option<String>,
+    pub shell: Option<String>,
+    pub cpus: Option<u32>,
+    pub memory_mb: Option<u32>,
+    pub environment: Vec<(String, String)>,
+    pub mounts: Vec<WorkspaceMount>,
+    pub docker_socket: bool,
+    pub scrollback: Option<u64>,
+    pub vpn: Option<String>,
+    pub execution_lifetime: String,
+    pub terminal: WorkspaceTerminal,
+}
+
+/// One host path exposed inside a workspace.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceMount {
+    pub host: String,
+    pub container: String,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceTerminal {
+    pub font_family: Option<String>,
+    pub font_size: Option<u16>,
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub cursor_shape: Option<String>,
+    pub cursor_blink: Option<bool>,
+}
+
 /// How a pane is divided.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -148,6 +271,37 @@ pub trait ContainerInventory {
     /// # Errors
     /// Returns `HostError::Absent` when no such container exists.
     fn inspect(&self, id: &str) -> Result<ContainerSummary, HostError>;
+
+    /// Lists the live processes in one running container.
+    ///
+    /// # Errors
+    /// Returns an absence, inactive-container conflict, unsupported sampler,
+    /// or host failure honestly as supplied by the daemon.
+    fn processes(&self, _id: &str) -> Result<ProcessList, HostError> {
+        Err(HostError::Unsupported(
+            "container process listing is unsupported by this host".into(),
+        ))
+    }
+
+    /// Reads bounded stdout and stderr captured from the initial process.
+    ///
+    /// # Errors
+    /// Returns a host failure.
+    fn logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
+        Err(HostError::Unsupported(
+            "container logs are unsupported by this host".into(),
+        ))
+    }
+
+    /// Inspects an additional process by its exec identity.
+    ///
+    /// # Errors
+    /// Returns `HostError::Absent` when no such execution exists.
+    fn execution(&self, _id: &str) -> Result<ExecutionSummary, HostError> {
+        Err(HostError::Unsupported(
+            "execution inspection is unsupported by this host".into(),
+        ))
+    }
 }
 
 /// Changing container state. Granting this is granting code execution inside
@@ -168,6 +322,48 @@ pub trait ContainerControl {
     /// # Errors
     /// Returns a host failure.
     fn remove(&self, id: &str) -> Result<(), HostError>;
+
+    /// Suspends a running container.
+    fn pause(&self, _id: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "container pause is unsupported by this host".into(),
+        ))
+    }
+
+    /// Resumes a paused container.
+    fn unpause(&self, _id: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "container unpause is unsupported by this host".into(),
+        ))
+    }
+
+    /// Stops and starts a running container.
+    fn restart(&self, _id: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "container restart is unsupported by this host".into(),
+        ))
+    }
+
+    /// Delivers a validated Linux signal to a running container.
+    fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "container signaling is unsupported by this host".into(),
+        ))
+    }
+
+    /// Starts an additional process detached from the extension connection and
+    /// returns its durable exec identity.
+    fn execute(
+        &self,
+        _id: &str,
+        _command: &[String],
+        _user: Option<&str>,
+        _working_directory: Option<&str>,
+    ) -> Result<String, HostError> {
+        Err(HostError::Unsupported(
+            "container exec is unsupported by this host".into(),
+        ))
+    }
 }
 
 /// Reading and fetching images.
@@ -187,6 +383,12 @@ pub trait TerminalSurface {
     /// Returns a host failure.
     fn tabs(&self) -> Result<Vec<TabSummary>, HostError>;
 
+    /// Nested tabs/splits and current focus. Implementations that only support
+    /// the legacy flat listing must refuse rather than synthesize a tree.
+    fn topology(&self) -> Result<TerminalTopology, HostError> {
+        Err(HostError::Unsupported("terminal topology is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn open_tab(&self, title: &str) -> Result<String, HostError>;
@@ -204,6 +406,16 @@ pub trait TerminalSurface {
     /// # Errors
     /// Returns `HostError::Absent` when no pane is open under the slot.
     fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError>;
+
+    /// Writes raw bytes into a terminal pane, without appending a newline.
+    fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
+        Err(HostError::Unsupported("terminal input is unavailable".into()))
+    }
+
+    /// Requests an exact PTY grid. A later native allocation may supersede it.
+    fn resize_grid(&self, _slot: &str, _grid: GridSize) -> Result<(), HostError> {
+        Err(HostError::Unsupported("terminal grid control is unavailable".into()))
+    }
 
     /// Closes one pane. Closing the only pane of a tab closes the tab, which is
     /// what closing that pane already does when a person does it.
@@ -241,6 +453,39 @@ pub trait WorkspaceInventory {
     fn workspaces(&self) -> Result<Vec<WorkspaceState>, HostError>;
 }
 
+/// Creating, configuring, and controlling workspace execution domains.
+pub trait WorkspaceControl {
+    fn inspect(&self, _name: &str) -> Result<WorkspaceConfiguration, HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn create(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn update(
+        &self,
+        _name: &str,
+        _configuration: &WorkspaceConfiguration,
+    ) -> Result<WorkspaceConfiguration, HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn delete(&self, _name: &str) -> Result<(), HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn start(&self, _name: &str) -> Result<(), HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn stop(&self, _name: &str) -> Result<(), HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn restart(&self, _name: &str) -> Result<(), HostError> {
+        Err(workspace_control_unavailable())
+    }
+}
+
+fn workspace_control_unavailable() -> HostError {
+    HostError::Failed("workspace control is unavailable from this host".into())
+}
+
 /// Files beneath the extension's declared roots.
 pub trait WorkspaceFiles {
     /// # Errors
@@ -258,7 +503,7 @@ pub trait WorkspaceFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{pane_lines, PANE_LINES};
+    use super::{pane_lines, Division, LayoutNode, Occupant, PaneSummary, PANE_LINES};
 
     #[test]
     fn a_pane_read_is_bounded_however_it_is_asked_for() {
@@ -266,5 +511,30 @@ mod tests {
         assert_eq!(pane_lines(Some(10)), 10);
         assert_eq!(pane_lines(Some(usize::MAX)), PANE_LINES, "a huge tail is cut to it");
         assert_eq!(pane_lines(Some(0)), 1, "a pane read answers with something");
+    }
+
+    #[test]
+    fn nested_layout_has_a_stable_tagged_wire_shape() {
+        let pane = || LayoutNode::Pane {
+            pane: PaneSummary {
+                slot: "s1".into(),
+                working_directory: None,
+                command: None,
+                occupant: Occupant::Terminal,
+                provider: None,
+            },
+            grid: None,
+            focused: true,
+        };
+        let layout = LayoutNode::Split {
+            division: Division::Beside,
+            ratio_per_mille: 500,
+            first: Box::new(pane()),
+            second: Box::new(pane()),
+        };
+        let value = serde_json::to_value(layout).expect("layout");
+        assert_eq!(value["kind"], "split");
+        assert_eq!(value["division"], "beside");
+        assert_eq!(value["first"]["kind"], "pane");
     }
 }

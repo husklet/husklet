@@ -67,26 +67,26 @@ impl<'a> Slots<'a> {
         }
         for pane in Panes::under(self.0, child) {
             // A closing tab hands any interface it held back to its own page.
-            Surface::retire(self.0, &pane.widget);
-            self.release(&pane.widget);
+            Surface::retire(self.0, &pane.content);
+            self.release(&pane.content);
         }
     }
 
     /// Register a pane holding one extension's interface.
-    pub(crate) fn enrol(&self, widget: &gtk::Widget, slot: String, extension: String) {
+    pub(crate) fn enrol(&self, widget: &gtk::Widget, slot: String, extension: String, provider: Option<String>) {
         self.0
             .surfaces
             .borrow_mut()
-            .push(SurfaceRegistration::new(widget, slot, extension));
+            .push(SurfaceRegistration::new(widget, slot, extension, provider));
     }
 
     /// The slot and the extension registered for a surface pane, if it is one
     /// (pruning dead registry entries as it scans).
-    pub(crate) fn surface(&self, widget: &gtk::Widget) -> Option<(String, String)> {
+    pub(crate) fn surface(&self, widget: &gtk::Widget) -> Option<(String, String, Option<String>)> {
         let mut found = None;
         self.0.surfaces.borrow_mut().retain(|pane| match pane.widget.upgrade() {
             Some(held) if &held == widget => {
-                found = Some((pane.slot.clone(), pane.extension.clone()));
+                found = Some((pane.slot.clone(), pane.extension.clone(), pane.provider.clone()));
                 true
             }
             Some(_) => true,

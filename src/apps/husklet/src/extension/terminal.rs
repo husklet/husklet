@@ -14,7 +14,7 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
-use hl_extension::port::{Division, HostError, PaneText, TabSummary, TerminalSurface};
+use hl_extension::port::{Division, GridSize, HostError, PaneText, TabSummary, TerminalSurface, TerminalTopology};
 
 /// How long a relayed call waits for the window to answer.
 ///
@@ -38,6 +38,8 @@ pub const CAPACITY: usize = 16;
 pub enum Request {
     /// Every tab and the panes in it.
     Tabs,
+    /// Nested tab and split topology.
+    Topology,
     /// A new tab under this title.
     OpenTab(String),
     /// A pane split off the named slot.
@@ -61,6 +63,10 @@ pub enum Request {
         /// How many lines at most, already bounded by the protocol layer.
         lines: usize,
     },
+    /// Raw bytes written to the named pane.
+    Write { slot: String, contents: Vec<u8> },
+    /// Exact PTY grid requested for the named pane.
+    ResizeGrid { slot: String, grid: GridSize },
     /// The named pane, closed.
     Close {
         /// The pane being closed.
@@ -95,6 +101,8 @@ pub enum Request {
 pub enum Answer {
     /// The tabs, for [`Request::Tabs`].
     Tabs(Vec<TabSummary>),
+    /// Nested layout, for [`Request::Topology`].
+    Topology(TerminalTopology),
     /// The identity of what was opened or split.
     Slot(String),
     /// The text one pane is showing, for [`Request::Read`].
@@ -212,6 +220,13 @@ impl TerminalSurface for Relay {
         }
     }
 
+    fn topology(&self) -> Result<TerminalTopology, HostError> {
+        match self.ask(Request::Topology)? {
+            Answer::Topology(topology) => Ok(topology),
+            other => Err(other.mismatch()),
+        }
+    }
+
     /// # Errors
     /// Returns a host failure when no window is drawing this workspace.
     fn open_tab(&self, title: &str) -> Result<String, HostError> {
@@ -246,6 +261,20 @@ impl TerminalSurface for Relay {
             Answer::Text(text) => Ok(text),
             other => Err(other.mismatch()),
         }
+    }
+
+    fn write(&self, slot: &str, contents: &[u8]) -> Result<(), HostError> {
+        self.done(Request::Write {
+            slot: slot.to_owned(),
+            contents: contents.to_vec(),
+        })
+    }
+
+    fn resize_grid(&self, slot: &str, grid: GridSize) -> Result<(), HostError> {
+        self.done(Request::ResizeGrid {
+            slot: slot.to_owned(),
+            grid,
+        })
     }
 
     /// # Errors
@@ -290,7 +319,7 @@ fn unreachable() -> HostError {
 #[cfg(test)]
 mod tests {
     use super::{Answer, Relay, Request};
-    use hl_extension::port::{Division, TerminalSurface as _};
+    use hl_extension::port::{Division, GridSize, TerminalSurface as _};
 
     #[test]
     fn a_call_carries_its_request_and_takes_back_what_the_window_answered() {
@@ -344,6 +373,37 @@ mod tests {
 
         assert_eq!(named, "pane-3");
         window.join().expect("the window thread");
+    }
+
+    #[test]
+    fn raw_input_and_grid_cross_the_thread_boundary_unchanged() {
+        let (relay, errands) = Relay::open();
+        let window = std::thread::spawn(move || {
+            let input = errands.recv().expect("input errand");
+            assert_eq!(
+                input.request(),
+                &Request::Write {
+                    slot: "shell-1".into(),
+                    contents: b"printf x".to_vec()
+                }
+            );
+            input.answer(Ok(Answer::Done));
+            let grid = errands.recv().expect("grid errand");
+            assert_eq!(
+                grid.request(),
+                &Request::ResizeGrid {
+                    slot: "shell-1".into(),
+                    grid: GridSize { columns: 120, rows: 40 }
+                }
+            );
+            grid.answer(Ok(Answer::Done));
+        });
+
+        relay.write("shell-1", b"printf x").expect("input");
+        relay
+            .resize_grid("shell-1", GridSize { columns: 120, rows: 40 })
+            .expect("grid");
+        window.join().expect("window thread");
     }
 
     #[test]

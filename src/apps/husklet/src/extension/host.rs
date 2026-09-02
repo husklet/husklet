@@ -25,11 +25,11 @@ use hl_extension::{Authority, ChannelId, Disposition, Installation, Manifest, Re
 mod voice;
 mod workspace;
 
+use super::Listener;
 use super::conversation::{Conversation, Queue};
 use super::sidecar::SidecarSpec;
-use super::Listener;
 use crate::config::WorkspaceConfig;
-use voice::{speak, Voice};
+use voice::{Voice, speak};
 
 pub use workspace::Workspace;
 
@@ -75,6 +75,8 @@ pub enum Order {
     /// Interaction reported by the surface, including a table asking for a
     /// window of rows.
     Interaction(hl_gui::Event),
+    /// A terminal pane selected one of this extension's named providers.
+    PaneProvider(hl_extension::PaneSelection),
     /// Start the stopped extension again.
     Retry,
 }
@@ -355,7 +357,7 @@ impl Hall {
         while !self.halted() {
             match self.inbox.recv_timeout(POLL) {
                 Ok(Order::Retry) => return Some(()),
-                Ok(Order::Interaction(_)) | Err(RecvTimeoutError::Timeout) => (),
+                Ok(Order::Interaction(_) | Order::PaneProvider(_)) | Err(RecvTimeoutError::Timeout) => (),
                 Err(RecvTimeoutError::Disconnected) => return None,
             }
         }
@@ -387,6 +389,7 @@ impl Hall {
             match order {
                 Order::Retry => return Some(Passage::Renewal),
                 Order::Interaction(event) => speak(voice, &event),
+                Order::PaneProvider(selection) => voice::speak_provider(voice, &selection),
             }
         }
         self.halted().then_some(Passage::Stopped)
@@ -609,8 +612,8 @@ mod tests {
         TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Capability, ExtensionName, Grant, Hello, Manifest, Record, RelativePath, Request, Resources, Services,
-        Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Capability, ExtensionName, Grant, Hello, Manifest, PROTOCOL, Record, RelativePath, Request, Resources,
+        Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::super::sidecar::Image;
@@ -770,6 +773,8 @@ mod tests {
         }
     }
 
+    impl hl_extension::port::WorkspaceControl for Ports {}
+
     impl WorkspaceFiles for Ports {
         fn list(&self, _path: &RelativePath) -> Result<Vec<Entry>, HostError> {
             Ok(Vec::new())
@@ -794,6 +799,7 @@ mod tests {
             entrypoint: None,
             activation: hl_extension::Activation::default(),
             interface: None,
+            pane_providers: Vec::new(),
             resources: Resources::default(),
             filesystem_roots: Vec::new(),
         }
@@ -807,6 +813,7 @@ mod tests {
             granted: manifest.capabilities.clone(),
             enabled: true,
             installed_at: 1,
+            pane_providers: Vec::new(),
         };
         let spec = SidecarSpec::new(
             &manifest,
@@ -893,6 +900,7 @@ mod tests {
                     image: "alpine:3.20".to_owned(),
                 },
                 workspaces: &ports,
+                workspace_control: &ports,
                 containers: &ports,
                 control: &ports,
                 images: &ports,

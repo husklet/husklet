@@ -285,9 +285,10 @@ impl PaneSnapshot {
         let tw = session.window;
         // A surface is a leaf before it is a container: the widgets under it are
         // the extension's drawing, and none of them is a pane of this window.
-        if let Some((slot, extension)) = Slots::new(tw).surface(w) {
+        if let Some((slot, extension, provider)) = Slots::new(tw).surface(w) {
             return Ok(Some(PaneNode::Surface(SurfacePane {
                 extension,
+                provider,
                 slot: Some(slot),
             })));
         }

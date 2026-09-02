@@ -12,8 +12,10 @@ use hl_extension::port::{Occupant, PaneText};
 
 /// One pane as the window holds it.
 pub(crate) struct Occupancy {
-    /// The widget that *is* the pane: a terminal, or an extension's surface.
+    /// Stable leaf chrome used by topology operations.
     pub(crate) widget: gtk::Widget,
+    /// The terminal or extension surface currently drawn inside the chrome.
+    pub(crate) content: gtk::Widget,
     /// The stable identity the layout persists it under.
     pub(crate) slot: String,
     /// What is in it.
@@ -69,7 +71,7 @@ impl Panes {
         let Some(pane) = Self::at(window, slot) else {
             return Reading::Absent;
         };
-        let Ok(terminal) = pane.widget.downcast::<vte4::Terminal>() else {
+        let Ok(terminal) = pane.content.downcast::<vte4::Terminal>() else {
             return Reading::Drawn;
         };
         let (lines, truncated) = Terminal::new(&terminal).tail(lines);
@@ -95,7 +97,7 @@ impl Panes {
         let Some(pane) = Self::at(window, slot) else {
             return false;
         };
-        pane.widget.grab_focus()
+        pane.content.grab_focus()
     }
 
     /// Sets how much of its split one pane takes.
@@ -129,7 +131,12 @@ impl Panes {
         let Some(pane) = Self::at(window, slot) else {
             return false;
         };
-        PaneSplit::insert(&pane.widget, orientation, content)
+        let content = if PaneChrome::is(content) {
+            content.clone()
+        } else {
+            PaneChrome::wrap(window, content)
+        };
+        PaneSplit::insert(&pane.widget, orientation, &content)
     }
 
     /// Which way a split divides, in the layout's own words.
@@ -143,10 +150,10 @@ impl Panes {
 
     /// Drops one pane from whichever registry holds it.
     fn forget(window: &Rc<TermWin>, pane: &Occupancy) {
-        let Some(terminal) = pane.widget.downcast_ref::<vte4::Terminal>() else {
+        let Some(terminal) = pane.content.downcast_ref::<vte4::Terminal>() else {
             // The interface goes back to its page rather than closing with the pane.
-            Surface::retire(window, &pane.widget);
-            Slots::new(window).release(&pane.widget);
+            Surface::retire(window, &pane.content);
+            Slots::new(window).release(&pane.content);
             return;
         };
         Slots::new(window).discard(terminal);
@@ -171,15 +178,21 @@ impl Panes {
     /// A surface pane is a leaf even though it has children: the widgets under
     /// it are the extension's drawing, not panes of this window.
     fn occupancy(window: &Rc<TermWin>, widget: &gtk::Widget) -> Option<Occupancy> {
-        if let Some(terminal) = widget.downcast_ref::<vte4::Terminal>() {
+        if !PaneChrome::is(widget) {
+            return None;
+        }
+        let content = PaneChrome::occupant(widget)?;
+        if let Some(terminal) = content.downcast_ref::<vte4::Terminal>() {
             return Slots::new(window).of(terminal).map(|slot| Occupancy {
                 widget: widget.clone(),
+                content,
                 slot,
                 occupant: Occupant::Terminal,
             });
         }
-        Slots::new(window).surface(widget).map(|(slot, _)| Occupancy {
+        Slots::new(window).surface(&content).map(|(slot, _, _)| Occupancy {
             widget: widget.clone(),
+            content,
             slot,
             occupant: Occupant::Surface,
         })

@@ -9,8 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ImageStore, TerminalSurface, WorkspaceFiles,
-    WorkspaceInventory,
+    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, TerminalSurface,
+    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -22,6 +22,7 @@ use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub struct Services<'a> {
     pub workspace: WorkspaceInfo,
     pub workspaces: &'a dyn WorkspaceInventory,
+    pub workspace_control: &'a dyn WorkspaceControl,
     pub containers: &'a dyn ContainerInventory,
     pub control: &'a dyn ContainerControl,
     pub images: &'a dyn ImageStore,
@@ -89,17 +90,36 @@ impl Session {
         match request {
             Request::WorkspaceInfo => Ok(Reply::Workspace(services.workspace.clone())),
             Request::WorkspaceList => self.workspaces(services),
-            Request::ContainerList | Request::ContainerInspect { .. } => self.containers(request, services),
+            Request::WorkspaceInspect { .. }
+            | Request::WorkspaceCreate { .. }
+            | Request::WorkspaceUpdate { .. }
+            | Request::WorkspaceDelete { .. }
+            | Request::WorkspaceStart { .. }
+            | Request::WorkspaceStop { .. }
+            | Request::WorkspaceRestart { .. } => self.workspace_control(request, services),
+            Request::ContainerList
+            | Request::ContainerInspect { .. }
+            | Request::ContainerProcesses { .. }
+            | Request::ContainerLogs { .. }
+            | Request::ExecutionInspect { .. } => self.containers(request, services),
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
             | Request::ContainerStop { .. }
-            | Request::ContainerRemove { .. } => self.control(request, services),
+            | Request::ContainerRemove { .. }
+            | Request::ContainerPause { .. }
+            | Request::ContainerUnpause { .. }
+            | Request::ContainerRestart { .. }
+            | Request::ContainerKill { .. }
+            | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList | Request::ImagePull { .. } => self.images(request, services),
             Request::TerminalTabs
+            | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
             | Request::TerminalSplit { .. }
             | Request::TerminalSpawn { .. }
             | Request::TerminalReadPane { .. }
+            | Request::TerminalWritePane { .. }
+            | Request::TerminalResizeGrid { .. }
             | Request::TerminalClosePane { .. }
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRatio { .. } => self.terminal(request, services),
@@ -126,10 +146,16 @@ impl Session {
             .peer
             .authority()
             .port(Capability::ContainerRead, services.containers)?;
-        if let Request::ContainerInspect { id } = request {
-            return Ok(Reply::Container(port.inspect(id)?));
+        match request {
+            Request::ContainerInspect { id } => Ok(Reply::Container(port.inspect(id)?)),
+            Request::ContainerProcesses { id } => Ok(Reply::Processes(port.processes(id)?)),
+            Request::ContainerLogs { id, stdout, stderr } => Ok(Reply::Logs(port.logs(id, *stdout, *stderr)?)),
+            Request::ExecutionInspect { id } => Ok(Reply::Execution(port.execution(id)?)),
+            Request::ContainerList => Ok(Reply::Containers(port.list()?)),
+            _ => Err(Failure::Unsupported {
+                call: "container read".into(),
+            }),
         }
-        Ok(Reply::Containers(port.list()?))
     }
 
     fn control(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
@@ -142,6 +168,21 @@ impl Session {
             Request::ContainerStart { id } => port.start(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerStop { id } => port.stop(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerRemove { id } => port.remove(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerPause { id } => port.pause(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerUnpause { id } => port.unpause(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerKill { id, signal } => port.kill(id, signal).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerExec {
+                id,
+                command,
+                user,
+                working_directory,
+            } => Ok(Reply::Identity(port.execute(
+                id,
+                command,
+                user.as_deref(),
+                working_directory.as_deref(),
+            )?)),
             _ => Err(Failure::Unsupported {
                 call: "container control".into(),
             }),
@@ -166,13 +207,38 @@ impl Session {
         Ok(Reply::Workspaces(port.workspaces()?))
     }
 
+    fn workspace_control(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        let capability = request.capability();
+        let port = self.peer.authority().port(capability, services.workspace_control)?;
+        match request {
+            Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(port.inspect(name)?)),
+            Request::WorkspaceCreate { configuration } => {
+                Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
+            }
+            Request::WorkspaceUpdate { name, configuration } => {
+                Ok(Reply::WorkspaceConfiguration(port.update(name, configuration)?))
+            }
+            Request::WorkspaceDelete { name } => port.delete(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::WorkspaceStart { name } => port.start(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::WorkspaceStop { name } => port.stop(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::WorkspaceRestart { name } => port.restart(name).map(|()| Reply::Done).map_err(Failure::from),
+            _ => Err(Failure::Unsupported {
+                call: "workspace control".into(),
+            }),
+        }
+    }
+
     fn terminal(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
-        if matches!(request, Request::TerminalTabs) {
+        if matches!(request, Request::TerminalTabs | Request::TerminalTopology) {
             let port = self
                 .peer
                 .authority()
                 .port(Capability::TerminalRead, services.terminal)?;
-            return Ok(Reply::Tabs(port.tabs()?));
+            return match request {
+                Request::TerminalTabs => Ok(Reply::Tabs(port.tabs()?)),
+                Request::TerminalTopology => Ok(Reply::Topology(port.topology()?)),
+                _ => unreachable!(),
+            };
         }
         if let Request::TerminalReadPane { slot, lines } = request {
             return self.text(slot, *lines, services);
@@ -190,6 +256,30 @@ impl Session {
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalWritePane { slot, contents } => {
+                if contents.len() > PANE_INPUT_BYTES {
+                    return Err(Failure::Conflict {
+                        detail: format!("terminal input exceeds the {PANE_INPUT_BYTES} byte limit"),
+                    });
+                }
+                port.write(slot, contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalResizeGrid { slot, columns, rows } => {
+                if *columns == 0 || *rows == 0 || *columns > PANE_GRID_EDGE || *rows > PANE_GRID_EDGE {
+                    return Err(Failure::Conflict {
+                        detail: format!("terminal grid must be within 1..={PANE_GRID_EDGE} rows and columns"),
+                    });
+                }
+                port.resize_grid(
+                    slot,
+                    GridSize {
+                        columns: *columns,
+                        rows: *rows,
+                    },
+                )
+                .map(|()| Reply::Done)
+                .map_err(Failure::from)
             }
             Request::TerminalClosePane { slot } => port.close(slot).map(|()| Reply::Done).map_err(Failure::from),
             Request::TerminalFocusPane { slot } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),

@@ -134,7 +134,7 @@ fn parse(key: &Key, bytes: &[u8]) -> Result<Record, Fault> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fault, Records, PREFIX};
+    use super::{Fault, PREFIX, Records};
     use hl_extension::{Capability, ExtensionName, Grant, Installation, Manifest, Record};
     use hl_ws::storage::{Directory, Key, Storage as _};
 
@@ -148,6 +148,7 @@ mod tests {
             entrypoint: None,
             activation: hl_extension::Activation::default(),
             interface: None,
+            pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
             filesystem_roots: Vec::new(),
         }
@@ -167,6 +168,7 @@ mod tests {
             granted: Grant::new([Capability::ContainerRead, Capability::Interface]),
             enabled: true,
             installed_at: 1_700_000_000,
+            pane_providers: Vec::new(),
         };
 
         records.save(&record).expect("saved");
@@ -186,6 +188,7 @@ mod tests {
                 granted: Grant::new([Capability::ContainerRead]),
                 enabled: false,
                 installed_at: 1,
+                pane_providers: Vec::new(),
             })
             .expect("saved");
 

@@ -19,6 +19,7 @@ pub(crate) struct TermWin {
     /// a registry of one thing that is sometimes another is a registry nobody
     /// can read.
     pub(crate) surfaces: RefCell<Vec<SurfaceRegistration>>,
+    pub(crate) displaced: RefCell<HashMap<String, vte4::Terminal>>,
     /// Where an extension's interface widget is found, so a pane can hold the
     /// one that already exists rather than starting a second of it.
     gallery: RefCell<Option<screens::workspace::extensions::Gallery>>,
@@ -52,14 +53,16 @@ pub(crate) struct SurfaceRegistration {
     /// The extension whose interface belongs in this pane, which is what a
     /// restored layout has to name.
     extension: String,
+    provider: Option<String>,
 }
 
 impl SurfaceRegistration {
-    pub(crate) fn new(widget: &gtk::Widget, slot: String, extension: String) -> Self {
+    pub(crate) fn new(widget: &gtk::Widget, slot: String, extension: String, provider: Option<String>) -> Self {
         Self {
             widget: widget.downgrade(),
             slot,
             extension,
+            provider,
         }
     }
 }
@@ -277,7 +280,7 @@ impl Window {
     /// A surface pane answers `None`: it holds no shell, and a caller asking to
     /// type into one is asking for something that is not there.
     pub(crate) fn pane(window: &Rc<TermWin>, slot: &str) -> Option<vte4::Terminal> {
-        Panes::at(window, slot)?.widget.downcast::<vte4::Terminal>().ok()
+        Panes::at(window, slot)?.content.downcast::<vte4::Terminal>().ok()
     }
 
     /// A fresh pane identity, for a pane this window is about to build.
@@ -293,6 +296,19 @@ impl Window {
     /// The gallery this window was given, if the workspace shell offered one.
     pub(crate) fn gallery(window: &Rc<TermWin>) -> Option<screens::workspace::extensions::Gallery> {
         window.gallery.borrow().clone()
+    }
+
+    pub(crate) fn tab_title(window: &Rc<TermWin>, name: &str) -> Option<String> {
+        window
+            .entries
+            .borrow()
+            .iter()
+            .find(|entry| entry.name == name)
+            .map(TabEntry::title)
+    }
+
+    pub(crate) fn active_tab(window: &Rc<TermWin>) -> Option<String> {
+        window.stack.visible_child_name().map(|name| name.to_string())
     }
 
     /// A window with no application behind it, for scenarios about panes.
@@ -323,6 +339,7 @@ impl Window {
             slot_ctr: Cell::new(0),
             panes: RefCell::new(Vec::new()),
             surfaces: RefCell::new(Vec::new()),
+            displaced: RefCell::new(HashMap::new()),
             gallery: RefCell::new(None),
             search: Search::new(),
             copymode: CopyMode::new(),
@@ -395,6 +412,7 @@ impl Window {
             slot_ctr: Cell::new(0),
             panes: RefCell::new(Vec::new()),
             surfaces: RefCell::new(Vec::new()),
+            displaced: RefCell::new(HashMap::new()),
             gallery: RefCell::new(None),
             search,
             zoom: Zoom::new(),

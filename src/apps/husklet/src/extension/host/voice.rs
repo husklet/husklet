@@ -27,6 +27,14 @@ pub(super) fn speak(voice: &Voice, event: &hl_gui::Event) {
     voice.say(&Frame::new(EVENTS, Kind::Event, payload));
 }
 
+/// Tells an extension which of its manifest-declared pane views was selected.
+pub(super) fn speak_provider(voice: &Voice, selection: &hl_extension::PaneSelection) {
+    let Ok(payload) = serde_json::to_vec(selection) else {
+        return;
+    };
+    voice.say(&Frame::new(EVENTS, Kind::Event, payload));
+}
+
 /// Encodes one interaction. `None` when it cannot be encoded, which is not
 /// worth ending a conversation over.
 fn carriage(event: &hl_gui::Event) -> Option<Vec<u8>> {

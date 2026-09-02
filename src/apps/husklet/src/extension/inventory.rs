@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use hl_client::model::{Container, InspectContainer, List};
-use hl_extension::port::{ContainerInventory, ContainerSummary, HostError};
+use hl_extension::port::{
+    ContainerInventory, ContainerOutput, ContainerSummary, ExecutionSummary, HostError, ProcessList,
+};
 
-use super::{failure, Bridge};
+use super::{Bridge, failure};
 
 /// The container reading port over the workspace's container daemon.
 pub struct ContainerCatalog {
@@ -43,6 +45,65 @@ impl ContainerInventory for ContainerCatalog {
             .map_err(|error| failure(&error))?;
         Ok(inspection(&container))
     }
+
+    fn processes(&self, id: &str) -> Result<ProcessList, HostError> {
+        let client = self.bridge.client();
+        let table = self
+            .bridge
+            .wait(client.containers().top(id))
+            .map_err(|error| failure(&error))?;
+        Ok(ProcessList {
+            titles: table.titles,
+            processes: table.processes,
+        })
+    }
+
+    fn logs(&self, id: &str, stdout: bool, stderr: bool) -> Result<ContainerOutput, HostError> {
+        let client = self.bridge.client();
+        let logs = self
+            .bridge
+            .wait(client.containers().logs(id, stdout, stderr))
+            .map_err(|error| failure(&error))?;
+        let (stdout, stdout_cut) = bounded(logs.stdout);
+        let (stderr, stderr_cut) = bounded(logs.stderr);
+        Ok(ContainerOutput {
+            stdout,
+            stderr,
+            truncated: stdout_cut || stderr_cut,
+        })
+    }
+
+    fn execution(&self, id: &str) -> Result<ExecutionSummary, HostError> {
+        let client = self.bridge.client();
+        let execution = self
+            .bridge
+            .wait(client.executions().inspect(id))
+            .map_err(|error| failure(&error))?;
+        let command = std::iter::once(execution.process.entrypoint.clone())
+            .chain(execution.process.arguments.clone())
+            .filter(|part| !part.is_empty())
+            .collect();
+        Ok(ExecutionSummary {
+            id: execution.id,
+            container_id: execution.container_id,
+            running: execution.running,
+            exit_code: execution.exit_code,
+            pid: execution.pid,
+            command,
+            user: execution.process.user,
+        })
+    }
+}
+
+/// Per-stream wire bound. The client already bounds the HTTP response; this
+/// smaller limit bounds what one extension reply retains and serializes.
+const OUTPUT_BYTES: usize = 512 * 1024;
+
+fn bounded(bytes: Vec<u8>) -> (Vec<u8>, bool) {
+    if bytes.len() <= OUTPUT_BYTES {
+        return (bytes, false);
+    }
+    (bytes[bytes.len() - OUTPUT_BYTES..].to_vec(), true)
 }
 
 /// Maps a Docker list entry onto the protocol's container view.
@@ -107,7 +168,7 @@ fn civil_days(year: i64, month: i64, day: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_days, epoch_seconds, inspection, summary};
+    use super::{OUTPUT_BYTES, bounded, civil_days, epoch_seconds, inspection, summary};
     use hl_client::model::{Container, InspectContainer};
 
     fn listing() -> Container {
@@ -195,5 +256,14 @@ mod tests {
     fn an_unreadable_instant_does_not_hide_the_container() {
         assert_eq!(epoch_seconds("not a timestamp"), None);
         assert_eq!(epoch_seconds("2023-11-14"), None);
+    }
+
+    #[test]
+    fn extension_log_answers_keep_the_newest_bounded_bytes() {
+        let bytes: Vec<u8> = (0..OUTPUT_BYTES + 7).map(|index| (index % 251) as u8).collect();
+        let expected = bytes[7..].to_vec();
+        let (answer, truncated) = bounded(bytes);
+        assert!(truncated);
+        assert_eq!(answer, expected);
     }
 }

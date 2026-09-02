@@ -22,6 +22,17 @@ struct Exhibit {
     /// The holder on the workspace shell it was placed in, which is where it
     /// goes back to when a pane holding it closes.
     home: glib::WeakRef<gtk::Box>,
+    providers: Vec<hl_extension::PaneProvider>,
+    selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
+}
+
+/// One choice shown by a terminal pane, tied to the extension that owns it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Provider {
+    pub extension: String,
+    pub id: String,
+    pub title: String,
+    pub icon: Option<String>,
 }
 
 /// Every extension's interface, by name.
@@ -41,12 +52,69 @@ impl Gallery {
 
     /// Records where one extension's interface is, replacing whatever was
     /// recorded under that name — a rebuilt page is a new interface.
-    pub fn enrol(&self, extension: &str, interface: &impl IsA<gtk::Widget>, home: &gtk::Box) {
+    pub fn enrol(
+        &self,
+        extension: &str,
+        interface: &impl IsA<gtk::Widget>,
+        home: &gtk::Box,
+        providers: &[hl_extension::PaneProvider],
+        selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
+    ) {
         let exhibit = Exhibit {
             interface: interface.as_ref().downgrade(),
             home: home.downgrade(),
+            providers: providers.to_vec(),
+            selected,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
+    }
+
+    /// Reports a provider choice to the extension that owns it.
+    pub fn select(&self, extension: &str, provider: &str) {
+        let held = self.0.borrow();
+        let Some(exhibit) = held.get(extension) else { return };
+        let Some(provider) = exhibit
+            .providers
+            .iter()
+            .find(|candidate| candidate.id.as_str() == provider)
+        else {
+            return;
+        };
+        (exhibit.selected)(hl_extension::PaneSelection {
+            pane_provider: provider.id.clone(),
+        });
+    }
+
+    /// Whether this live extension declared this provider.
+    #[must_use]
+    pub fn offers(&self, extension: &str, provider: &str) -> bool {
+        self.0.borrow().get(extension).is_some_and(|exhibit| {
+            exhibit.interface.upgrade().is_some()
+                && exhibit
+                    .providers
+                    .iter()
+                    .any(|candidate| candidate.id.as_str() == provider)
+        })
+    }
+
+    /// Every live provider in deterministic extension/manifest order.
+    #[must_use]
+    pub fn providers(&self) -> Vec<Provider> {
+        let held = self.0.borrow();
+        let mut extensions: Vec<_> = held.iter().collect();
+        extensions.sort_by_key(|(name, _)| *name);
+        extensions
+            .into_iter()
+            .filter(|(_, exhibit)| exhibit.interface.upgrade().is_some())
+            .flat_map(|(extension, exhibit)| {
+                exhibit.providers.iter().map(move |provider| Provider {
+                    extension: extension.clone(),
+                    id: provider.id.to_string(),
+                    title: provider.title.clone(),
+                    icon: provider.icon.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Takes one extension's interface out of its page, for a pane to hold.

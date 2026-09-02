@@ -28,9 +28,9 @@ impl Surface {
     pub(crate) fn of(window: &Rc<TermWin>, extension: &str) -> Option<gtk::Widget> {
         Panes::all(window).into_iter().find_map(|pane| {
             Slots::new(window)
-                .surface(&pane.widget)
-                .is_some_and(|(_, held)| held == extension)
-                .then_some(pane.widget)
+                .surface(&pane.content)
+                .is_some_and(|(_, held, _)| held == extension)
+                .then_some(pane.content)
         })
     }
 
@@ -40,7 +40,7 @@ impl Surface {
     /// moved out of its page on the workspace shell rather than built again: an
     /// extension has one interface, and a second view of it would be a second
     /// tree fed none of the frames that built the first.
-    pub(crate) fn build(window: &Rc<TermWin>, extension: &str, slot: String) -> gtk::Widget {
+    pub(crate) fn build(window: &Rc<TermWin>, extension: &str, provider: Option<&str>, slot: String) -> gtk::Widget {
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.add_css_class(SURFACE);
         holder.set_hexpand(true);
@@ -51,7 +51,7 @@ impl Surface {
             None => holder.append(&Absence::widget(extension)),
         }
         let widget: gtk::Widget = holder.upcast();
-        Slots::new(window).enrol(&widget, slot, extension.to_owned());
+        Slots::new(window).enrol(&widget, slot, extension.to_owned(), provider.map(str::to_owned));
         widget
     }
 
@@ -61,7 +61,7 @@ impl Surface {
     /// widget would be dropped with the pane, and the extension would go on
     /// describing an interface with nothing left to apply it to.
     pub(crate) fn retire(window: &Rc<TermWin>, pane: &gtk::Widget) {
-        let Some((_, extension)) = Slots::new(window).surface(pane) else {
+        let Some((_, extension, _)) = Slots::new(window).surface(pane) else {
             return;
         };
         let Some(holder) = pane.downcast_ref::<gtk::Box>() else {

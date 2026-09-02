@@ -14,6 +14,8 @@
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
     WorkspaceRead,
+    /// Creating, changing, starting, stopping, or deleting workspaces.
+    WorkspaceControl,
     ContainerRead,
     ContainerControl,
     ImageRead,
@@ -39,6 +41,7 @@ impl Capability {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceRead => "workspace-read",
+            Self::WorkspaceControl => "workspace-control",
             Self::ContainerRead => "container-read",
             Self::ContainerControl => "container-control",
             Self::ImageRead => "image-read",
@@ -62,7 +65,8 @@ impl Capability {
     pub const fn mutates(self) -> bool {
         matches!(
             self,
-            Self::ContainerControl
+            Self::WorkspaceControl
+                | Self::ContainerControl
                 | Self::ImageWrite
                 | Self::VolumeWrite
                 | Self::NetworkWrite
@@ -75,12 +79,13 @@ impl Capability {
     /// install prompt has to say so plainly rather than imply a sandbox.
     #[must_use]
     pub const fn executes(self) -> bool {
-        matches!(self, Self::ContainerControl | Self::TerminalControl)
+        matches!(self, Self::WorkspaceControl | Self::ContainerControl | Self::TerminalControl)
     }
 
     /// Every permission this domain declares.
     pub const ALL: &'static [Self] = &[
         Self::WorkspaceRead,
+        Self::WorkspaceControl,
         Self::ContainerRead,
         Self::ContainerControl,
         Self::ImageRead,
@@ -153,6 +158,7 @@ mod tests {
     #[test]
     fn execution_grants_are_identified_for_the_consent_prompt() {
         assert!(Grant::new([Capability::ContainerControl]).executes());
+        assert!(Grant::new([Capability::WorkspaceControl]).executes());
         assert!(Grant::new([Capability::TerminalControl]).executes());
         assert!(!Grant::new([Capability::ContainerRead, Capability::Interface]).executes());
     }

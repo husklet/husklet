@@ -123,12 +123,20 @@ impl<S: Read> Wire<S> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Transit {
     Closed,
+    /// A deadline-bound stream has no bytes ready yet. Any partial frame stays buffered.
+    Pending,
     Malformed(Malformed),
     Io(String),
 }
 
 impl From<std::io::Error> for Transit {
     fn from(error: std::io::Error) -> Self {
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ) {
+            return Self::Pending;
+        }
         // The message is kept rather than the error, so a `Transit` can be
         // compared, cloned, and carried across a channel like every other
         // outcome in this crate.
@@ -140,6 +148,7 @@ impl std::fmt::Display for Transit {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Closed => write!(formatter, "the peer closed the connection"),
+            Self::Pending => write!(formatter, "the connection has no frame ready"),
             Self::Malformed(reason) => write!(formatter, "the peer sent {reason}"),
             Self::Io(message) => write!(formatter, "the connection failed: {message}"),
         }
@@ -152,5 +161,45 @@ impl std::error::Error for Transit {
             Self::Malformed(reason) => Some(reason),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::io::{self, Read};
+
+    use super::{Transit, Wire};
+    use crate::{Frame, Kind};
+
+    struct TimedRead(VecDeque<io::Result<Vec<u8>>>);
+
+    impl Read for TimedRead {
+        fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+            let bytes = self.0.pop_front().expect("scripted read")?;
+            target[..bytes.len()].copy_from_slice(&bytes);
+            Ok(bytes.len())
+        }
+    }
+
+    #[test]
+    fn a_deadline_preserves_the_partial_frame_for_the_next_receive() {
+        let expected = Frame::control(Kind::Credit, b"4".to_vec());
+        let bytes = expected.encode().expect("frame");
+        let split = 5;
+        let reader = TimedRead(
+            [
+                Ok(bytes[..split].to_vec()),
+                Err(io::Error::new(io::ErrorKind::TimedOut, "tick")),
+                Ok(bytes[split..].to_vec()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let mut wire = Wire::new(reader);
+
+        assert_eq!(wire.receive(), Err(Transit::Pending));
+        assert_eq!(wire.buffered(), split);
+        assert_eq!(wire.receive(), Ok(expected));
     }
 }

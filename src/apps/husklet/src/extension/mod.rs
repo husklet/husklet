@@ -41,7 +41,7 @@ pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
 pub use registration::{Acquisition, Candidate};
-pub use roster::{described, Entry, Refusal, Roster};
+pub use roster::{Entry, Refusal, Roster, described};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
 pub use terminal::{Answer, Errand, Errands, Relay, Request};
@@ -108,6 +108,7 @@ fn status_failure(status: u16, message: &str) -> HostError {
     match status {
         404 => HostError::Absent(message.to_owned()),
         304 | 409 => HostError::Conflict(message.to_owned()),
+        501 => HostError::Unsupported(message.to_owned()),
         _ => HostError::Failed(message.to_owned()),
     }
 }
@@ -191,6 +192,10 @@ mod tests {
             HostError::Conflict("already started".to_owned())
         );
         assert!(matches!(status_failure(500, "boom"), HostError::Failed(_)));
+        assert!(matches!(
+            status_failure(501, "process sampling is unavailable"),
+            HostError::Unsupported(_)
+        ));
     }
 
     #[test]

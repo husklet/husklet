@@ -40,7 +40,7 @@ pub type Shared = Rc<RefCell<Roster<Directory>>>;
 ///
 /// A closure because the real one owns a host on a thread of its own, and a
 /// test wants a plain widget it can look at.
-pub type Surfaces = Rc<dyn Fn(&ExtensionName) -> gtk::Widget>;
+pub type Surfaces = Rc<dyn Fn(&Entry) -> gtk::Widget>;
 
 /// How an image reference is read into something a person can be asked about.
 ///
@@ -88,7 +88,7 @@ impl Shelf {
             return;
         };
         self.unmount(&entry.name);
-        view.attach(&entry.name.to_string(), &(self.surfaces)(&entry.name));
+        view.attach(&entry.name.to_string(), &(self.surfaces)(entry));
         let page = settings::Settings::page(self, entry);
         view.attach(&settings_title(&entry.name), &page);
     }

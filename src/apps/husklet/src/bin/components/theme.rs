@@ -114,6 +114,18 @@ stack.pages {{ background-color:{BG2}; }}
 .dbadge {{ font-family:'SF Mono',ui-monospace,monospace; font-size:10px; color:{FAINT}; }}
 .dmain {{ padding:16px 18px; }}
 .dashtitle {{ font-size:16px; font-weight:700; letter-spacing:-.01em; }}
+.workspace-settings {{ background-color:{BG2}; }}
+.settings-identity, .settings-card {{ background-color:{BG1}; border:1px solid {CONTROL_LINE}; border-radius:11px; padding:16px; }}
+.settings-identity-values {{ margin-top:2px; }}
+.settings-workspace-name {{ font-size:15px; font-weight:650; }}
+.settings-image {{ color:{DIM}; font-family:'SF Mono',ui-monospace,monospace; font-size:11.5px; }}
+.settings-card-description {{ color:{DIM}; font-size:11.5px; margin-bottom:2px; }}
+.settings-grid > flowboxchild {{ padding:0; min-width:300px; }}
+.settings-grid > flowboxchild:selected {{ background:transparent; }}
+.settings-apply-note {{ color:{DIM}; background-color:rgba(91,141,239,.09); border:1px solid rgba(91,141,239,.24); border-radius:9px; padding:10px 12px; }}
+.settings-apply-note image {{ color:{ACCENT}; -gtk-icon-size:15px; }}
+.settings-apply-note label {{ font-size:11.5px; }}
+.settings-save-row {{ background-color:{BG1}; border:1px solid {CONTROL_LINE}; border-radius:11px; padding:12px 14px; }}
 .kvk {{ font-size:11.5px; color:{DIM}; font-weight:600; }}
 .kvv {{ font-size:12.5px; font-family:'SF Mono',ui-monospace,monospace; color:{TXT}; }}
 /* Every table row (Processes / Containers / Images / …) is the SAME height (min-height + 0 vertical

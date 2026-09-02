@@ -4029,15 +4029,138 @@ export function acceptsChildren(tag: string): boolean;
 export const vocabulary: { props: string[]; handlers: string[] };
 
 export const SOCKET: string;
-export const PROTOCOL: string;
+export const PROTOCOL: number;
+
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'extensions';
+export type Division = 'beside' | 'below';
+export interface WorkspaceInfo { name: string; architecture: string; image: string }
+export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
+export interface WorkspaceMount { host: string; container: string; read_only: boolean }
+export interface WorkspaceTerminal {
+  font_family: string | null;
+  font_size: number | null;
+  foreground: string | null;
+  background: string | null;
+  cursor_shape: string | null;
+  cursor_blink: boolean | null;
+}
+export interface WorkspaceConfiguration extends WorkspaceInfo {
+  storage: string | null;
+  shell: string | null;
+  cpus: number | null;
+  memory_mb: number | null;
+  environment: [string, string][];
+  mounts: WorkspaceMount[];
+  docker_socket: boolean;
+  scrollback: number | null;
+  vpn: string | null;
+  execution_lifetime: 'persisted' | 'live' | 'ephemeral';
+  terminal: WorkspaceTerminal;
+}
+export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface PaneSummary {
+  slot: string;
+  working_directory: string | null;
+  command: string | null;
+  occupant: 'terminal' | 'surface';
+  provider: { extension: string; provider: string } | null;
+}
+export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
+export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface GridSize { columns: number; rows: number }
+export type LayoutNode =
+  | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
+  | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
+export interface TabTopology { id: string; title: string; root: LayoutNode }
+export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
+export interface FileEntry { path: string; directory: boolean; size: number }
+export interface VolumeSummary { name: string; driver: string; size: number }
+export interface NetworkSummary { name: string; driver: string; scope: string }
+
+export class ExtensionError extends Error {
+  readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
+  readonly capability?: string;
+}
+
+export interface ConnectOptions {
+  path?: string;
+  pendingLimit?: number;
+  timeout?: number;
+  onRows?: (request: unknown, channel: number) => void;
+  onReply?: (reply: unknown) => void;
+  onEvent?: (event: unknown, channel: number) => void;
+}
 
 export class Session {
-  static connect(path?: string, handlers?: Record<string, unknown>): Promise<Session>;
+  static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
+  readonly ready: Promise<void>;
+  readonly granted: readonly string[];
   call(method: string, params?: unknown): Promise<unknown>;
+  answer(channel: number, window: unknown): void;
+  onEvent(listener: (event: unknown, channel: number) => void): () => boolean;
   close(): void;
 }
 
-export function connect(options?: Record<string, unknown>): Promise<Session>;
+export function connect(options?: ConnectOptions): Promise<Session>;
+
+export interface WorkspaceApi {
+  info(): Promise<WorkspaceInfo>;
+  list(): Promise<WorkspaceState[]>;
+  inspect(name: string): Promise<WorkspaceConfiguration>;
+  create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  update(name: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  delete(name: string): Promise<void>;
+  start(name: string): Promise<void>;
+  stop(name: string): Promise<void>;
+  restart(name: string): Promise<void>;
+  containers: {
+    list(): Promise<ContainerSummary[]>;
+    inspect(id: string): Promise<ContainerSummary>;
+    create(image: string, name: string): Promise<string>;
+    start(id: string): Promise<void>;
+    stop(id: string): Promise<void>;
+    remove(id: string): Promise<void>;
+  };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
+  terminal: {
+    tabs(): Promise<TabSummary[]>;
+    topology(): Promise<TerminalTopology>;
+    openTab(title: string): Promise<string>;
+    split(slot: string, division: Division): Promise<string>;
+    spawn(slot: string, command: string[]): Promise<void>;
+    read(slot: string, lines?: number): Promise<PaneText>;
+    writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
+    resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
+    close(slot: string): Promise<void>;
+    focus(slot: string): Promise<void>;
+    ratio(slot: string, ratio: number): Promise<void>;
+  };
+  files: {
+    list(path: string): Promise<FileEntry[]>;
+    read(path: string): Promise<number[]>;
+    write(path: string, contents: Iterable<number>): Promise<void>;
+  };
+}
+
+export function workspace(session: Session): WorkspaceApi;
+/** Current protocol coverage. Names under `unavailable` deliberately have no methods. */
+export const protocolCoverage: Readonly<{
+  available: Readonly<{
+    workspace: readonly ('info' | 'list' | 'inspect' | 'create' | 'update' | 'delete' | 'start' | 'stop' | 'restart')[];
+    containers: readonly ('list' | 'inspect' | 'create' | 'start' | 'stop' | 'remove')[];
+    images: readonly ('list' | 'pull')[];
+    terminal: readonly ('tabs' | 'topology' | 'openTab' | 'split' | 'spawn' | 'read' | 'writeInput' | 'resizeGrid' | 'close' | 'focus' | 'ratio')[];
+    files: readonly ('list' | 'read' | 'write')[];
+    interfaceEvents: readonly ('invoke' | 'submit' | 'change' | 'select')[];
+  }>;
+  unavailable: Readonly<{
+    workspace: readonly ('renameWhileUpdating' | 'mutateWhileRunning' | 'controlHostingWorkspace')[];
+    containers: readonly ('processes' | 'exec' | 'logs' | 'pause' | 'unpause' | 'restart' | 'kill')[];
+    terminal: readonly 'switchOccupant'[];
+    events: readonly ('hostSnapshots' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];
+  }>;
+}>;
 
 export function render(
   element: ReactNode,
@@ -4046,4 +4169,3 @@ export function render(
 ): { update(next: ReactNode): void; close(): void };
 
 export function deliver(session: Session, payload: unknown): boolean;
-

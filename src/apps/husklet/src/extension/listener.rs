@@ -15,7 +15,7 @@
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -290,6 +290,7 @@ mod tests {
             entrypoint: None,
             activation: hl_extension::Activation::default(),
             interface: None,
+            pane_providers: Vec::new(),
             resources: Resources::default(),
             filesystem_roots: Vec::new(),
         }

@@ -32,6 +32,41 @@ const session = await connect();          // reads HUSKLET_EXTENSION_SOCKET
 render(<App />, session, { title: 'My Extension' });
 ```
 
+## Workspace API
+
+Host calls are promises with typed results and typed failures. Outstanding
+calls are bounded; a missing ordered reply closes the session after the timeout
+rather than risking correlation with the wrong caller.
+
+```js
+import { connect, workspace } from '@husklet/react';
+
+const session = await connect({ timeout: 10_000, pendingLimit: 32 });
+const host = workspace(session);
+const configuration = await host.inspect('backend');
+await host.stop('backend');
+await host.update('backend', { ...configuration, memory_mb: 4096 });
+await host.start('backend');
+const containers = await host.containers.list();
+await host.containers.stop(containers[0].id);
+```
+
+Terminal control is pane-addressed and promise-based as well. `terminal.read`
+returns at most 2,000 lines, `terminal.writeInput` accepts at most 65,536 raw
+bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
+through 1,000. `terminal.topology()` returns the current nested tab/split tree;
+it is an observation call, not a claimed global change stream.
+
+`protocolCoverage` is the machine-readable inventory of what this protocol
+version really supports. Workspace creation, configuration and lifecycle are
+available under the explicit `workspace-control` grant. A running workspace
+must be stopped before it is updated, and an extension cannot stop, restart or
+delete the workspace hosting it. The `unavailable` section names remaining
+areas such as host-published snapshots, terminal input and keyboard events;
+those names deliberately are not callable methods. `Session.onEvent` is
+low-level transport plumbing for events the host does send, not a promise that
+global workspace snapshots are published.
+
 ## Props
 
 One component per tag — `<Card>`, `<Button>`, `<TableCell>`, 133 of them,
