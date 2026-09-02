@@ -33,6 +33,7 @@ import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
 import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
 import { STREAMING_LOG_STORY, StreamingLogStory } from './streaming-log.js';
+import { EVENT_STREAM_STORY, EventStreamStory } from './event-stream.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
@@ -40,13 +41,13 @@ const { createElement: h, useMemo, useRef, useState } = React;
 const INTERACTION_HISTORY = 5;
 
 /** The whole playground. */
-export function Playground({ largeSource, initialStory = OPENING } = {}) {
+export function Playground({ largeSource, timelineSource, initialStory = OPENING } = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
   const [edited, setEdited] = useState(() => new Map());
 
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
-    || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY;
+    || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -61,7 +62,7 @@ export function Playground({ largeSource, initialStory = OPENING } = {}) {
     { gap: 0, grow: true, wrap: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
-    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, triggers: contract?.triggers ?? [] }),
+    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, timelineSource, triggers: contract?.triggers ?? [] }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
     h(Inspector, {
       key: 'inspector',
@@ -102,6 +103,12 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(STREAMING_LOG_STORY),
       }),
       h(ListItemButton, {
+        key: EVENT_STREAM_STORY,
+        label: EVENT_STREAM_STORY,
+        selected: selected === EVENT_STREAM_STORY,
+        onInvoke: () => onSelect(EVENT_STREAM_STORY),
+      }),
+      h(ListItemButton, {
         key: FORM_STORY,
         label: FORM_STORY,
         selected: selected === FORM_STORY,
@@ -129,7 +136,7 @@ export function Sidebar({ families, selected, onSelect }) {
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened, largeSource, triggers = [] }) {
+export function Preview({ name, opened, largeSource, timelineSource, triggers = [] }) {
   const [interactions, setInteractions] = useState([]);
   const sequence = useRef(0);
   const handlers = interactionProps(triggers, (trigger, event) => {
@@ -151,6 +158,8 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
         ? h(KeyboardAccessibilityStory)
         : name === STREAMING_LOG_STORY
         ? h(StreamingLogStory)
+        : name === EVENT_STREAM_STORY && timelineSource
+        ? h(EventStreamStory, { source: timelineSource })
         : name === NAVIGATION_STORY
         ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource

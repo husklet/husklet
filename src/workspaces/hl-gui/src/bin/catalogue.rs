@@ -360,6 +360,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::TableSortLabel
         | Tag::DataTable
         | Tag::TreeTable
+        | Tag::EventStream
         | Tag::TablePagination => "tables",
         Tag::Tree | Tag::TreeItem => "trees",
         Tag::Tabs

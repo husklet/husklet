@@ -14,7 +14,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::TableHead | Tag::TableBody | Tag::TableFooter => group().upcast(),
         Tag::TableRow => line().upcast(),
         Tag::TableCell => cell().upcast(),
-        // DataTable and TreeTable are the last table tags routed here. They
+        // DataTable, TreeTable and EventStream are the last table tags routed here. They
         // share the column view: the row protocol delivers flat rows of cells
         // with no parent or depth on the wire, so a tree model would have
         // nothing to nest by; the two differ only once the protocol carries

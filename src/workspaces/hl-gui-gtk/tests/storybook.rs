@@ -22,6 +22,7 @@ mod unix {
         "DataTable",
         "Navigation and transient UI",
         "Bounded streaming log",
+        "Virtual event timeline",
     ];
     const PATCH_LIMIT: usize = 1_200;
 
@@ -115,6 +116,16 @@ mod unix {
             let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
             assert!(!text.starts_with("old history"), "oldest history was not evicted");
             assert!(text.contains("completed operation"), "newest log batch was not retained");
+        }
+        if story == "Virtual event timeline" {
+            let view = find::<gtk::ColumnView>(&root, |_| true);
+            assert_eq!(view.columns().n_items(), 3, "timeline schema was not rendered");
+            assert!(view.model().is_some(), "timeline has no virtualized selection model");
+            assert_ne!(
+                view.accessible_role(),
+                gtk::AccessibleRole::Generic,
+                "timeline needs a native readable collection role"
+            );
         }
 
         let event = emit_representative(story, &root, &surface, &tree);
@@ -213,6 +224,10 @@ mod unix {
             }
             "Bounded streaming log" => {
                 find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Append batch")).emit_clicked();
+            }
+            "Virtual event timeline" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Acknowledge newest"))
+                    .emit_clicked();
             }
             _ => unreachable!(),
         }

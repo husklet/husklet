@@ -115,6 +115,7 @@ export const {
   TableSortLabel,
   DataTable,
   TreeTable,
+  EventStream,
   TablePagination,
   Tree,
   TreeItem,

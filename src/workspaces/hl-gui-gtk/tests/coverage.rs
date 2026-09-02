@@ -771,7 +771,13 @@ fn principal(tag: Tag) -> Aspect {
         Tag::Card | Tag::Paper | Tag::CardHeader | Tag::CardActionArea => Aspect::Label,
         Tag::CardContent | Tag::CardActions | Tag::Section | Tag::Toolbar | Tag::Sidebar => Aspect::Gap,
         Tag::CardMedia | Tag::Image | Tag::ImageListItem | Tag::Video => Aspect::Uri,
-        Tag::HeaderBar | Tag::ImageList | Tag::Tabs | Tag::List | Tag::DataTable | Tag::TreeTable => Aspect::Grow,
+        Tag::HeaderBar
+        | Tag::ImageList
+        | Tag::Tabs
+        | Tag::List
+        | Tag::DataTable
+        | Tag::TreeTable
+        | Tag::EventStream => Aspect::Grow,
         Tag::Tree | Tag::Drawer => Aspect::Grow,
         Tag::DrawerPanel => Aspect::Revealed,
         Tag::Rating => Aspect::Stars,

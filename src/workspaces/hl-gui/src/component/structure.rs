@@ -149,6 +149,12 @@ impl Element {
     pub fn data_table() -> Self {
         Self::new(Tag::DataTable)
     }
+
+    /// A chronological event history over a windowed data source.
+    #[must_use]
+    pub fn event_stream() -> Self {
+        Self::new(Tag::EventStream)
+    }
 }
 
 /// Navigation, including the parts of a stepper and an accordion.
