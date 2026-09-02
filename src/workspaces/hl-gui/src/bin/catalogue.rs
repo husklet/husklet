@@ -512,6 +512,13 @@ const PROPS: &[Entry] = &[
         note: "hides typed text, and on a password entry withholds the peek icon",
     },
     Entry {
+        prop: Prop::Destructive,
+        group: "state",
+        editor: "switch",
+        values: &["Flag"],
+        note: "marks an action as irreversible so automation requires confirmation",
+    },
+    Entry {
         prop: Prop::Monospace,
         group: "state",
         editor: "switch",
@@ -728,6 +735,7 @@ impl Entry {
             | Prop::Expanded
             | Prop::Busy
             | Prop::Secret
+            | Prop::Destructive
             | Prop::Monospace
             | Prop::Wrap
             | Prop::Ellipsize

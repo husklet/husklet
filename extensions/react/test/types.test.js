@@ -29,6 +29,7 @@ test('a component offers what it declares and nothing else', () => {
   const button = shape('Button');
   assert.match(button, /tone\?: /, 'a button is toned');
   assert.match(button, /label\?: string;/);
+  assert.match(button, /destructive\?: boolean;/, 'a dangerous action can require confirmation');
   assert.doesNotMatch(button, /schema\?/, 'a button holds no rows');
   assert.doesNotMatch(shape('Text'), /checked\?/, 'a label holds no state');
   assert.match(shape('DataTable'), /schema\?: ColumnSpec\[\];/);

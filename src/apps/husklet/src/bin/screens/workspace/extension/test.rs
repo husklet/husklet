@@ -97,6 +97,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_rendered_button_reaches_the_sink();
         retained_pane_actions_keep_their_slot();
         semantics_are_redacted_and_actions_reject_stale_revisions();
+        semantic_actions_are_safe_by_default_and_preserve_authored_danger();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
@@ -170,6 +171,23 @@ fn semantics_are_redacted_and_actions_reject_stale_revisions() {
         value: None,
     });
     assert!(matches!(stale, Err(hl_extension::HostError::Conflict(_))));
+}
+
+fn semantic_actions_are_safe_by_default_and_preserve_authored_danger() {
+    let mut fixture = Fixture::new();
+    let described = Element::column()
+        .child(Element::button("Keep", EventId::new("keep")))
+        .child(
+            Element::button("Delete", EventId::new("delete"))
+                .prop(hl_gui::Prop::Destructive, hl_gui::PropValue::Flag(true)),
+        );
+    fixture.describe(&described);
+    fixture.page.tick();
+
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let actions = &tree.root.children[0].children;
+    assert!(!actions[0].destructive, "ordinary actions remain safe by default");
+    assert!(actions[1].destructive, "authored danger reaches semantic clients");
 }
 
 fn a_structured_fault_reaches_lifecycle_on_the_toolkit_tick() {

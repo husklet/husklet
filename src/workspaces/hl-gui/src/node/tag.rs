@@ -29,6 +29,7 @@ macro_rules! detached {
 /// fact. A tag's declaration lists only what is true of *that* component;
 /// [`Tag::props`] returns these as well, so the contract stays complete.
 const EVERY: &[Prop] = &[
+    Prop::Destructive,
     Prop::Visible,
     Prop::Tooltip,
     Prop::Width,
@@ -328,7 +329,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{EVERY, Prop, Tag, Trigger};
+    use super::{Prop, Tag, Trigger, EVERY};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

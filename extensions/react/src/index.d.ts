@@ -46,6 +46,8 @@ export interface NodeProps {
 
 export interface ColumnProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -76,6 +78,8 @@ export interface ColumnProps extends NodeProps {
 
 export interface RowProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -106,6 +110,8 @@ export interface RowProps extends NodeProps {
 
 export interface GridProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -134,6 +140,8 @@ export interface GridProps extends NodeProps {
 
 export interface ScrollProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -159,6 +167,8 @@ export interface ScrollProps extends NodeProps {
 
 export interface SplitterProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -187,6 +197,8 @@ export interface SplitterProps extends NodeProps {
 
 export interface StackProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -211,6 +223,8 @@ export interface StackProps extends NodeProps {
 
 export interface OverlayProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -235,6 +249,8 @@ export interface OverlayProps extends NodeProps {
 
 export interface ContainerProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -260,6 +276,8 @@ export interface ContainerProps extends NodeProps {
 }
 
 export interface SpacerProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -283,6 +301,8 @@ export interface SpacerProps extends NodeProps {
 }
 
 export interface SeparatorProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -309,6 +329,8 @@ export interface SeparatorProps extends NodeProps {
 
 export interface CardProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -339,6 +361,8 @@ export interface CardProps extends NodeProps {
 
 export interface CardHeaderProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -371,6 +395,8 @@ export interface CardHeaderProps extends NodeProps {
 
 export interface CardContentProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -397,6 +423,8 @@ export interface CardContentProps extends NodeProps {
 
 export interface CardActionsProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -422,6 +450,8 @@ export interface CardActionsProps extends NodeProps {
 }
 
 export interface CardMediaProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -448,6 +478,8 @@ export interface CardMediaProps extends NodeProps {
 
 export interface CardActionAreaProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -486,6 +518,8 @@ export interface CardActionAreaProps extends NodeProps {
 
 export interface PaperProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -516,6 +550,8 @@ export interface PaperProps extends NodeProps {
 
 export interface SectionProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -542,6 +578,8 @@ export interface SectionProps extends NodeProps {
 
 export interface ToolbarProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -568,6 +606,8 @@ export interface ToolbarProps extends NodeProps {
 
 export interface HeaderBarProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -592,6 +632,8 @@ export interface HeaderBarProps extends NodeProps {
 
 export interface SidebarProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -617,6 +659,8 @@ export interface SidebarProps extends NodeProps {
 }
 
 export interface TextProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -654,6 +698,8 @@ export interface TextProps extends NodeProps {
 }
 
 export interface HeadingProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -691,6 +737,8 @@ export interface HeadingProps extends NodeProps {
 }
 
 export interface CodeProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -726,6 +774,8 @@ export interface CodeProps extends NodeProps {
 }
 
 export interface LinkProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -763,6 +813,8 @@ export interface LinkProps extends NodeProps {
 }
 
 export interface IconProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -792,6 +844,8 @@ export interface IconProps extends NodeProps {
 }
 
 export interface BadgeProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -823,6 +877,8 @@ export interface BadgeProps extends NodeProps {
 }
 
 export interface AvatarProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -853,6 +909,8 @@ export interface AvatarProps extends NodeProps {
 
 export interface AvatarGroupProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -879,6 +937,8 @@ export interface AvatarGroupProps extends NodeProps {
 
 export interface ChipProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -912,6 +972,8 @@ export interface ChipProps extends NodeProps {
 }
 
 export interface ImageProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -938,6 +1000,8 @@ export interface ImageProps extends NodeProps {
 
 export interface ImageListProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -965,6 +1029,8 @@ export interface ImageListProps extends NodeProps {
 }
 
 export interface ImageListItemProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -990,6 +1056,8 @@ export interface ImageListItemProps extends NodeProps {
 }
 
 export interface ProgressProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1017,6 +1085,8 @@ export interface ProgressProps extends NodeProps {
 }
 
 export interface SpinnerProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1044,6 +1114,8 @@ export interface SpinnerProps extends NodeProps {
 }
 
 export interface MeterProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1073,6 +1145,8 @@ export interface MeterProps extends NodeProps {
 }
 
 export interface SkeletonProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1097,6 +1171,8 @@ export interface SkeletonProps extends NodeProps {
 
 export interface EmptyStateProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1129,6 +1205,8 @@ export interface EmptyStateProps extends NodeProps {
 
 export interface StatProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1161,6 +1239,8 @@ export interface StatProps extends NodeProps {
 
 export interface ToastProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1195,6 +1275,8 @@ export interface ToastProps extends NodeProps {
 
 export interface BannerProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1228,6 +1310,8 @@ export interface BannerProps extends NodeProps {
 }
 
 export interface AlertTitleProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1260,6 +1344,8 @@ export interface AlertTitleProps extends NodeProps {
 
 export interface InlineMessageProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1292,6 +1378,8 @@ export interface InlineMessageProps extends NodeProps {
 
 export interface ButtonProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1331,6 +1419,8 @@ export interface ButtonProps extends NodeProps {
 
 export interface IconButtonProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1370,6 +1460,8 @@ export interface IconButtonProps extends NodeProps {
 
 export interface ToggleButtonProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1414,6 +1506,8 @@ export interface ToggleButtonProps extends NodeProps {
 
 export interface ButtonGroupProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1444,6 +1538,8 @@ export interface ButtonGroupProps extends NodeProps {
 
 export interface ToggleButtonGroupProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1474,6 +1570,8 @@ export interface ToggleButtonGroupProps extends NodeProps {
 
 export interface SplitButtonProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1502,6 +1600,8 @@ export interface SplitButtonProps extends NodeProps {
 
 export interface FabProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1537,6 +1637,8 @@ export interface FabProps extends NodeProps {
 
 export interface SpeedDialProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1567,6 +1669,8 @@ export interface SpeedDialProps extends NodeProps {
 
 export interface SpeedDialActionProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1602,6 +1706,8 @@ export interface SpeedDialActionProps extends NodeProps {
 
 export interface OverflowProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1631,6 +1737,8 @@ export interface OverflowProps extends NodeProps {
 }
 
 export interface EntryProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1669,6 +1777,8 @@ export interface EntryProps extends NodeProps {
 }
 
 export interface SearchProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1703,6 +1813,8 @@ export interface SearchProps extends NodeProps {
 }
 
 export interface NumberEntryProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1740,6 +1852,8 @@ export interface NumberEntryProps extends NodeProps {
 }
 
 export interface TextAreaProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1773,6 +1887,8 @@ export interface TextAreaProps extends NodeProps {
 }
 
 export interface PasswordEntryProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1808,6 +1924,8 @@ export interface PasswordEntryProps extends NodeProps {
 }
 
 export interface AutocompleteProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1841,6 +1959,8 @@ export interface AutocompleteProps extends NodeProps {
 
 export interface TextFieldProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1877,6 +1997,8 @@ export interface TextFieldProps extends NodeProps {
 
 export interface InputAdornmentProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1904,6 +2026,8 @@ export interface InputAdornmentProps extends NodeProps {
 }
 
 export interface SliderProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1938,6 +2062,8 @@ export interface SliderProps extends NodeProps {
 }
 
 export interface DatePickerProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1965,6 +2091,8 @@ export interface DatePickerProps extends NodeProps {
 }
 
 export interface TimePickerProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -1994,6 +2122,8 @@ export interface TimePickerProps extends NodeProps {
 }
 
 export interface ColorPickerProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2019,6 +2149,8 @@ export interface ColorPickerProps extends NodeProps {
 }
 
 export interface FilePickerProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2053,6 +2185,8 @@ export interface FilePickerProps extends NodeProps {
 }
 
 export interface RatingProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2082,6 +2216,8 @@ export interface RatingProps extends NodeProps {
 
 export interface FormControlProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2107,6 +2243,8 @@ export interface FormControlProps extends NodeProps {
 }
 
 export interface FormLabelProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2136,6 +2274,8 @@ export interface FormLabelProps extends NodeProps {
 }
 
 export interface FormHelperTextProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2168,6 +2308,8 @@ export interface FormHelperTextProps extends NodeProps {
 
 export interface FormControlLabelProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2196,6 +2338,8 @@ export interface FormControlLabelProps extends NodeProps {
 
 export interface FormGroupProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2221,6 +2365,8 @@ export interface FormGroupProps extends NodeProps {
 }
 
 export interface SwitchProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2251,6 +2397,8 @@ export interface SwitchProps extends NodeProps {
 }
 
 export interface CheckboxProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2283,6 +2431,8 @@ export interface CheckboxProps extends NodeProps {
 }
 
 export interface RadioProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2316,6 +2466,8 @@ export interface RadioProps extends NodeProps {
 
 export interface RadioGroupProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2345,6 +2497,8 @@ export interface RadioGroupProps extends NodeProps {
 }
 
 export interface SelectProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2377,6 +2531,8 @@ export interface SelectProps extends NodeProps {
 
 export interface ListProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2401,6 +2557,8 @@ export interface ListProps extends NodeProps {
 
 export interface ListRowProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2426,6 +2584,8 @@ export interface ListRowProps extends NodeProps {
 }
 
 export interface ListItemTextProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2455,6 +2615,8 @@ export interface ListItemTextProps extends NodeProps {
 }
 
 export interface ListItemIconProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2482,6 +2644,8 @@ export interface ListItemIconProps extends NodeProps {
 }
 
 export interface ListItemAvatarProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2512,6 +2676,8 @@ export interface ListItemAvatarProps extends NodeProps {
 
 export interface ListItemButtonProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2547,6 +2713,8 @@ export interface ListItemButtonProps extends NodeProps {
 
 export interface ListItemActionProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2573,6 +2741,8 @@ export interface ListItemActionProps extends NodeProps {
 
 export interface ListItemSecondaryActionProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2598,6 +2768,8 @@ export interface ListItemSecondaryActionProps extends NodeProps {
 }
 
 export interface ListSubheaderProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2630,6 +2802,8 @@ export interface ListSubheaderProps extends NodeProps {
 
 export interface TableProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2656,6 +2830,8 @@ export interface TableProps extends NodeProps {
 
 export interface TableHeadProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2682,6 +2858,8 @@ export interface TableHeadProps extends NodeProps {
 
 export interface TableBodyProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2708,6 +2886,8 @@ export interface TableBodyProps extends NodeProps {
 
 export interface TableFooterProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2734,6 +2914,8 @@ export interface TableFooterProps extends NodeProps {
 
 export interface TableRowProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2759,6 +2941,8 @@ export interface TableRowProps extends NodeProps {
 }
 
 export interface TableCellProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2792,6 +2976,8 @@ export interface TableCellProps extends NodeProps {
 }
 
 export interface TableSortLabelProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2824,6 +3010,8 @@ export interface TableSortLabelProps extends NodeProps {
 }
 
 export interface DataTableProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2857,6 +3045,8 @@ export interface DataTableProps extends NodeProps {
 }
 
 export interface TreeTableProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2891,6 +3081,8 @@ export interface TreeTableProps extends NodeProps {
 
 export interface TablePaginationProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2921,6 +3113,8 @@ export interface TablePaginationProps extends NodeProps {
 
 export interface TreeProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2945,6 +3139,8 @@ export interface TreeProps extends NodeProps {
 
 export interface TreeItemProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2974,6 +3170,8 @@ export interface TreeItemProps extends NodeProps {
 
 export interface TabsProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -2998,6 +3196,8 @@ export interface TabsProps extends NodeProps {
 
 export interface TabPageProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3024,6 +3224,8 @@ export interface TabPageProps extends NodeProps {
 
 export interface BreadcrumbProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3054,6 +3256,8 @@ export interface BreadcrumbProps extends NodeProps {
 
 export interface PaginationProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3083,6 +3287,8 @@ export interface PaginationProps extends NodeProps {
 }
 
 export interface PaginationItemProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3118,6 +3324,8 @@ export interface PaginationItemProps extends NodeProps {
 
 export interface StepperProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3148,6 +3356,8 @@ export interface StepperProps extends NodeProps {
 
 export interface StepProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3174,6 +3384,8 @@ export interface StepProps extends NodeProps {
 
 export interface StepLabelProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3204,6 +3416,8 @@ export interface StepLabelProps extends NodeProps {
 
 export interface StepContentProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3229,6 +3443,8 @@ export interface StepContentProps extends NodeProps {
 }
 
 export interface StepConnectorProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3254,6 +3470,8 @@ export interface StepConnectorProps extends NodeProps {
 }
 
 export interface StepIconProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3282,6 +3500,8 @@ export interface StepIconProps extends NodeProps {
 
 export interface NavigationRailProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3307,6 +3527,8 @@ export interface NavigationRailProps extends NodeProps {
 }
 
 export interface NavigationRailItemProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3342,6 +3564,8 @@ export interface NavigationRailItemProps extends NodeProps {
 
 export interface BottomNavigationProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3367,6 +3591,8 @@ export interface BottomNavigationProps extends NodeProps {
 }
 
 export interface BottomNavigationActionProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3402,6 +3628,8 @@ export interface BottomNavigationActionProps extends NodeProps {
 
 export interface AccordionProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3431,6 +3659,8 @@ export interface AccordionProps extends NodeProps {
 
 export interface AccordionSummaryProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3461,6 +3691,8 @@ export interface AccordionSummaryProps extends NodeProps {
 
 export interface AccordionDetailsProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3487,6 +3719,8 @@ export interface AccordionDetailsProps extends NodeProps {
 
 export interface AccordionActionsProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3513,6 +3747,8 @@ export interface AccordionActionsProps extends NodeProps {
 
 export interface ExpanderProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3542,6 +3778,8 @@ export interface ExpanderProps extends NodeProps {
 
 export interface DialogProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3563,6 +3801,8 @@ export interface DialogProps extends NodeProps {
 }
 
 export interface DialogTitleProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3595,6 +3835,8 @@ export interface DialogTitleProps extends NodeProps {
 
 export interface DialogContentProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3620,6 +3862,8 @@ export interface DialogContentProps extends NodeProps {
 }
 
 export interface DialogContentTextProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3652,6 +3896,8 @@ export interface DialogContentTextProps extends NodeProps {
 
 export interface DialogActionsProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3678,6 +3924,8 @@ export interface DialogActionsProps extends NodeProps {
 
 export interface PopoverProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3699,6 +3947,8 @@ export interface PopoverProps extends NodeProps {
 
 export interface ContextMenuProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3720,6 +3970,8 @@ export interface ContextMenuProps extends NodeProps {
 
 export interface MenuProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3746,6 +3998,8 @@ export interface MenuProps extends NodeProps {
 
 export interface MenuItemProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3781,6 +4035,8 @@ export interface MenuItemProps extends NodeProps {
 
 export interface DrawerProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3805,6 +4061,8 @@ export interface DrawerProps extends NodeProps {
 
 export interface DrawerPanelProps extends NodeProps {
   children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3832,6 +4090,8 @@ export interface DrawerPanelProps extends NodeProps {
 }
 
 export interface CodeViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3859,6 +4119,8 @@ export interface CodeViewProps extends NodeProps {
 }
 
 export interface LogViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3886,6 +4148,8 @@ export interface LogViewProps extends NodeProps {
 }
 
 export interface VideoProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
@@ -3911,6 +4175,8 @@ export interface VideoProps extends NodeProps {
 }
 
 export interface ChartProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
   /** defaults to visible when absent */
   visible?: boolean;
   /** explanation revealed by a pointer */
