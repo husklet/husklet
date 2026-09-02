@@ -7,12 +7,13 @@ import { Playground } from './app.js';
 import { LargeRecordSource } from './large-table.js';
 
 let session;
-const source = new LargeRecordSource((call, argument) => session.call(call, argument));
+let surface;
+const source = new LargeRecordSource((_call, argument) => surface.source(argument.mutation));
 session = await connect({
   onRows: (request, channel) => {
     const window = source.answer(request);
     if (window) session.answer(channel, window);
   },
 });
-render(React.createElement(Playground, { largeSource: source }), session, { title: 'Storybook' });
+surface = render(React.createElement(Playground, { largeSource: source }), session, { title: 'Storybook' });
 setTimeout(() => void source.publish(), 0);
