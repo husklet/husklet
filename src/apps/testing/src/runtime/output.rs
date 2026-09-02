@@ -371,6 +371,15 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
     Ok(())
 }
 
+pub(super) fn validate_translated_execution(stderr: &[u8]) -> Result<(), Error> {
+    let text = std::str::from_utf8(stderr).map_err(|_| "translated backend receipt is not UTF-8")?;
+    let tree = backend_tree(text)?.ok_or("translated execution emitted no backend-tree receipt")?;
+    if tree["translated_entries"] == 0 {
+        return Err("translated execution backend-tree reported zero translated entries".into());
+    }
+    Ok(())
+}
+
 fn backend_tree(stderr: &str) -> Result<Option<BTreeMap<&str, u64>>, Error> {
     let records = stderr
         .lines()
@@ -989,6 +998,19 @@ mod tests {
             digest.contains("crossings=5 translated_entries=2 interpreted_entries=3"),
             "{digest}"
         );
+    }
+
+    #[test]
+    fn translated_execution_requires_executed_translated_blocks() {
+        validate_translated_execution(census().as_bytes()).unwrap();
+        let idle = census().replacen(" translated_entries=2", " translated_entries=0", 2);
+        assert!(
+            validate_translated_execution(idle.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("zero translated entries")
+        );
+        assert!(validate_translated_execution(b"ordinary guest stderr\n").is_err());
     }
 
     #[test]

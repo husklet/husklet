@@ -1,6 +1,6 @@
-targets: [arm64]
+targets: [arm64, amd64]
 image: python:3.12-alpine
-execution: { retained_c: true, retained_c_diagnostics: true }
+execution: { translated: true, translated_diagnostics: true }
 build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-static-pie, -O2]

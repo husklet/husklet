@@ -401,6 +401,17 @@ mod tests {
     }
 
     #[test]
+    fn translated_execution_forces_translation_and_never_selects_native_supervision() {
+        let mut launch = launch();
+        launch.guest = crate::Guest::X86_64;
+        launch.execution = crate::Execution::translated(true);
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_TRANSLIT"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), None);
+        assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
+    }
+
+    #[test]
     fn native_execution_carries_the_typed_isolated_sentry_projection() {
         let source = tempfile::NamedTempFile::new().unwrap();
         let mut launch = launch();
@@ -438,6 +449,7 @@ mod tests {
         for (execution, selected) in [
             (crate::Execution::Auto, supported),
             (crate::Execution::Translit, supported),
+            (crate::Execution::translated(false), supported),
             (crate::Execution::Interpreted, false),
             (crate::Execution::native(false), false),
         ] {

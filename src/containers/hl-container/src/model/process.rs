@@ -591,6 +591,9 @@ pub enum Execution {
     Auto,
     Interpreted,
     Translit,
+    Translated {
+        diagnostics: bool,
+    },
     Native {
         diagnostics: bool,
     },
@@ -603,16 +606,27 @@ impl Execution {
         Self::Native { diagnostics }
     }
 
+    /// Selects translated execution without permitting a native-supervised fallback.
+    #[must_use]
+    pub const fn translated(diagnostics: bool) -> Self {
+        Self::Translated { diagnostics }
+    }
+
     #[must_use]
     pub const fn is_native(self) -> bool {
         matches!(self, Self::Native { .. })
     }
 
     #[must_use]
+    pub const fn is_translated(self) -> bool {
+        matches!(self, Self::Translit | Self::Translated { .. })
+    }
+
+    #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
             Self::Auto | Self::Interpreted | Self::Translit => false,
-            Self::Native { diagnostics } => diagnostics,
+            Self::Translated { diagnostics } | Self::Native { diagnostics } => diagnostics,
         }
     }
 
@@ -621,7 +635,7 @@ impl Execution {
     pub const fn translit(self, x86_64_guest: bool) -> bool {
         x86_64_guest
             && cfg!(all(target_os = "linux", target_arch = "x86_64"))
-            && matches!(self, Self::Auto | Self::Translit)
+            && matches!(self, Self::Auto | Self::Translit | Self::Translated { .. })
     }
 }
 
@@ -649,6 +663,10 @@ mod execution_tests {
         assert_eq!(
             serde_json::from_str::<Execution>(r#"{"backend":"native","diagnostics":false}"#).unwrap(),
             Execution::native(false)
+        );
+        assert_eq!(
+            serde_json::from_str::<Execution>(r#"{"backend":"translated","diagnostics":true}"#).unwrap(),
+            Execution::translated(true)
         );
     }
 

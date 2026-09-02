@@ -50,26 +50,29 @@ pub(crate) struct Execution {
     #[serde(default)]
     diagnostics: bool,
     #[serde(default)]
-    retained_c: bool,
+    translated: bool,
     #[serde(default)]
-    retained_c_diagnostics: bool,
+    translated_diagnostics: bool,
 }
 
 impl Execution {
     /// Whether the engine is asked for the counters a case can assert on.
     pub(crate) const fn emits_diagnostics(self) -> bool {
-        self.native && self.diagnostics
+        (self.native && self.diagnostics) || (self.translated && self.translated_diagnostics)
     }
 
     pub(crate) fn container(self) -> Result<hl_container::Execution, Error> {
+        if self.native && self.translated {
+            return Err("execution cannot select both native and translated backends".into());
+        }
         if self.diagnostics && !self.native {
             return Err("native diagnostics require native execution".into());
         }
-        if self.retained_c_diagnostics && !self.retained_c {
-            return Err("retained C diagnostics require retained C execution".into());
+        if self.translated_diagnostics && !self.translated {
+            return Err("translated diagnostics require translated execution".into());
         }
-        if self.retained_c {
-            return Ok(hl_container::Execution::native(self.retained_c_diagnostics));
+        if self.translated {
+            return Ok(hl_container::Execution::translated(self.translated_diagnostics));
         }
         Ok(if self.native {
             hl_container::Execution::native(self.diagnostics)
@@ -155,6 +158,23 @@ mod tests {
         assert!(enabled.diagnostics());
         let invalid: Execution = serde_yaml::from_str("diagnostics: true\n").unwrap();
         assert!(invalid.container().is_err());
+    }
+
+    #[test]
+    fn translated_selects_translation_without_native_fallback() {
+        let selection: Execution =
+            serde_yaml::from_str("translated: true\ntranslated_diagnostics: true\n").unwrap();
+        let execution = selection.container().unwrap();
+        assert!(execution.is_translated());
+        assert!(!execution.is_native());
+        assert!(execution.diagnostics());
+        assert!(selection.emits_diagnostics());
+    }
+
+    #[test]
+    fn native_and_translated_selectors_are_mutually_exclusive() {
+        let execution: Execution = serde_yaml::from_str("native: true\ntranslated: true\n").unwrap();
+        assert!(execution.container().is_err());
     }
 
     #[test]

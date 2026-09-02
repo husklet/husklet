@@ -454,6 +454,9 @@ impl<'a> CaseExecution<'a> {
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
         let mut profile_validation = output::validate_backend_tree(&logs.stderr, self.execution.diagnostics());
+        if self.execution.is_translated() {
+            profile_validation = profile_validation.and_then(|()| output::validate_translated_execution(&logs.stderr));
+        }
         if self.execution.diagnostics() {
             let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
             // Preserve a missing profile as a failure for otherwise-correct diagnostic runs, but do not let
