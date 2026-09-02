@@ -776,6 +776,7 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::Tabs
         | Tag::List
         | Tag::DataTable
+        | Tag::KeyValueTable
         | Tag::TreeTable
         | Tag::EventStream => Aspect::Grow,
         Tag::Tree | Tag::Drawer => Aspect::Grow,

@@ -114,6 +114,7 @@ export const {
   TableCell,
   TableSortLabel,
   DataTable,
+  KeyValueTable,
   TreeTable,
   EventStream,
   TablePagination,

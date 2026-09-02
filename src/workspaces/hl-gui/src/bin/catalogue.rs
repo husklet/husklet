@@ -359,6 +359,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::TableCell
         | Tag::TableSortLabel
         | Tag::DataTable
+        | Tag::KeyValueTable
         | Tag::TreeTable
         | Tag::EventStream
         | Tag::TablePagination => "tables",

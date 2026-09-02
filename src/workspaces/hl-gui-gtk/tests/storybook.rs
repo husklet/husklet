@@ -23,6 +23,7 @@ mod unix {
         "Navigation and transient UI",
         "Bounded streaming log",
         "Virtual event timeline",
+        "Bounded key/value inspector",
     ];
     const PATCH_LIMIT: usize = 1_200;
 
@@ -127,6 +128,12 @@ mod unix {
                 "timeline needs a native readable collection role"
             );
         }
+        if story == "Bounded key/value inspector" {
+            let view = find::<gtk::ColumnView>(&root, |_| true);
+            assert_eq!(view.columns().n_items(), 2, "property/value schema was not rendered");
+            assert!(view.model().is_some(), "inspector has no virtualized selection model");
+            assert_ne!(view.accessible_role(), gtk::AccessibleRole::Generic);
+        }
 
         let event = emit_representative(story, &root, &surface, &tree);
         let payload = codec::interaction(&event, Some("storybook-main"))
@@ -227,6 +234,10 @@ mod unix {
             }
             "Virtual event timeline" => {
                 find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Acknowledge newest"))
+                    .emit_clicked();
+            }
+            "Bounded key/value inspector" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Refresh metadata"))
                     .emit_clicked();
             }
             _ => unreachable!(),

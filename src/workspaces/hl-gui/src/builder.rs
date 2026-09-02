@@ -142,6 +142,13 @@ impl Surface {
         id
     }
 
+    /// A property/value inspector bound to a windowed source.
+    pub fn key_value_table(&mut self, source: SourceId) -> NodeId {
+        let id = self.create(Tag::KeyValueTable);
+        self.set(id, Prop::Source, PropValue::Source(source));
+        id
+    }
+
     /// A chronological event history bound to a windowed source.
     pub fn event_stream(&mut self, source: SourceId) -> NodeId {
         let id = self.create(Tag::EventStream);
@@ -208,5 +215,27 @@ mod tests {
             value: PropValue::Source(source),
         }));
         assert_eq!(frame.patches.len(), 2, "logical events arrive only through row windows");
+    }
+
+    #[test]
+    fn key_value_table_binds_the_windowed_source_without_rows() {
+        let mut surface = Surface::new();
+        let source = SourceId::new(8);
+        let node = surface.key_value_table(source);
+        let frame = surface.frame();
+        assert!(frame.patches.contains(&Patch::Create {
+            id: node,
+            tag: Tag::KeyValueTable,
+        }));
+        assert!(frame.patches.contains(&Patch::SetProp {
+            id: node,
+            prop: Prop::Source,
+            value: PropValue::Source(source),
+        }));
+        assert_eq!(
+            frame.patches.len(),
+            2,
+            "logical properties arrive only through row windows"
+        );
     }
 }
