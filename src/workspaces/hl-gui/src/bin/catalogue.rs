@@ -407,6 +407,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Video
         | Tag::Chart
         | Tag::Sparkline
+        | Tag::FlameGraph
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",

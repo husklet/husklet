@@ -95,11 +95,43 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     markdown_is_safe_selectable_and_structured();
     json_is_selectable_string_safe_and_depth_bounded();
     hex_view_is_selectable_and_monospaced();
+    flame_graph_is_bounded_selectable_and_proportional();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn flame_graph_is_bounded_selectable_and_proportional() {
+    let mut session = Session::new();
+    let graph = session.producer.create(Tag::FlameGraph);
+    session.producer.append(NodeId::ROOT, graph);
+    let value = (1..=80)
+        .map(|index| format!("{index}\tframe-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(graph, Prop::Value, PropValue::text(value));
+    session.flush().expect("flame graph renders");
+    let widget = session.tagged(Tag::FlameGraph).expect("flame graph widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    let bars = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::ProgressBar>().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels.len(),
+        64,
+        "the adapter independently enforces the public ceiling"
+    );
+    assert_eq!(bars.len(), 64, "one native bar is rendered for every retained frame");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert!(bars[0].fraction() < bars[63].fraction());
+    assert_eq!(bars[63].fraction(), 1.0);
 }
 
 fn hex_view_is_selectable_and_monospaced() {
@@ -844,6 +876,7 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::JsonView
         | Tag::LogView => Aspect::Value,
         Tag::Sparkline => Aspect::Value,
+        Tag::FlameGraph => Aspect::Value,
         _ => structural(tag),
     }
 }
@@ -889,8 +922,14 @@ fn json_is_selectable_string_safe_and_depth_bounded() {
     assert!(!view.is_editable());
     assert!(view.is_monospace());
     let rendered = written_text(&view);
-    assert!(rendered.contains("\"{literal},:[]\""), "punctuation inside strings is untouched");
-    assert!(rendered.contains("\n  \"items\": ["), "objects and arrays are structured");
+    assert!(
+        rendered.contains("\"{literal},:[]\""),
+        "punctuation inside strings is untouched"
+    );
+    assert!(
+        rendered.contains("\n  \"items\": ["),
+        "objects and arrays are structured"
+    );
 }
 
 /// The families whose principal property is how they arrange what they hold.
@@ -975,9 +1014,20 @@ fn stack_frames_keep_selectable_function_and_location() {
     session.producer.set(id, Prop::Value, PropValue::text("src/host.rs:42"));
     session.flush().expect("stack frame renders");
     let frame = session.tagged(Tag::StackFrame).expect("stack frame");
-    let labels = subtree(&frame).into_iter().filter_map(|w| w.downcast::<gtk::Label>().ok()).collect::<Vec<_>>();
-    assert!(labels.iter().any(|label| label.text() == "host::dispatch" && label.is_selectable()));
-    assert!(labels.iter().any(|label| label.text() == "src/host.rs:42" && label.is_selectable()));
+    let labels = subtree(&frame)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.text() == "host::dispatch" && label.is_selectable())
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.text() == "src/host.rs:42" && label.is_selectable())
+    );
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {

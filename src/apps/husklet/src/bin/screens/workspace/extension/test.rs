@@ -135,6 +135,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         hex_view_projects_binary_text_into_semantics();
         sparkline_projects_bounded_samples_into_semantics();
         file_browser_keeps_its_semantic_role();
+        flame_graph_projects_profile_frames_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
@@ -151,6 +152,23 @@ fn file_browser_keeps_its_semantic_role() {
     let browser = &tree.root.children[0];
     assert_eq!(browser.role, "FileBrowser");
     assert!(browser.actions.is_empty());
+}
+
+fn flame_graph_projects_profile_frames_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::flame_graph([
+        hl_gui::FlameFrame::new("compiler::parse", 91).expect("frame"),
+        hl_gui::FlameFrame::new("compiler::emit", 34).expect("frame"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let profile = &tree.root.children[0];
+    assert_eq!(profile.role, "FlameGraph");
+    assert_eq!(
+        profile.value.as_deref(),
+        Some("91\tcompiler::parse\n34\tcompiler::emit")
+    );
+    assert!(profile.actions.is_empty());
 }
 
 fn json_preserves_source_in_semantics() {
@@ -193,7 +211,10 @@ fn hex_view_projects_binary_text_into_semantics() {
     let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
     let binary = &tree.root.children[0];
     assert_eq!(binary.role, "HexView");
-    assert_eq!(binary.value.as_deref(), Some("00000000  7f 45 4c 46                                       |.ELF|\n"));
+    assert_eq!(
+        binary.value.as_deref(),
+        Some("00000000  7f 45 4c 46                                       |.ELF|\n")
+    );
     assert!(binary.actions.is_empty());
 }
 
@@ -227,7 +248,10 @@ fn validation_summary_is_readable_and_keeps_corrective_actions() {
     assert_eq!(summary.label.as_deref(), Some("2 problems found"));
     assert_eq!(summary.value.as_deref(), Some("Correct the highlighted fields"));
     assert_eq!(summary.children[0].label.as_deref(), Some("Review name"));
-    assert_eq!(summary.children[0].actions, vec![hl_extension::SemanticActionKind::Invoke]);
+    assert_eq!(
+        summary.children[0].actions,
+        vec![hl_extension::SemanticActionKind::Invoke]
+    );
 }
 
 fn tag_input_exposes_value_actions_and_authored_tags() {
@@ -537,11 +561,18 @@ fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
 
     let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
     let controls = &tree.root.children[0].children;
-    assert_eq!(controls.len(), 1, "hidden controls stay out of the visible semantic tree");
+    assert_eq!(
+        controls.len(),
+        1,
+        "hidden controls stay out of the visible semantic tree"
+    );
     let disabled = &controls[0];
     assert_eq!(disabled.label.as_deref(), Some("Unavailable"));
     assert!(disabled.disabled, "disabled state remains understandable");
-    assert!(disabled.actions.is_empty(), "disabled controls advertise no executable actions");
+    assert!(
+        disabled.actions.is_empty(),
+        "disabled controls advertise no executable actions"
+    );
 
     let rejected = fixture.page.semantic_action(&hl_extension::PaneSemanticAction {
         revision: tree.revision,
@@ -550,7 +581,10 @@ fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
         value: None,
     });
     assert!(matches!(rejected, Err(hl_extension::HostError::Conflict(_))));
-    assert!(fixture.recorded.borrow().is_empty(), "a rejected action never reaches the extension");
+    assert!(
+        fixture.recorded.borrow().is_empty(),
+        "a rejected action never reaches the extension"
+    );
 
     let button = fixture
         .widgets()

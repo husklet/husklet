@@ -335,6 +335,7 @@ catalogue! {
     Video: leaf, props[Uri], triggers[],
     Chart: leaf, props[Label, Tone], triggers[],
     Sparkline: leaf, props[Value, Tone], triggers[],
+    FlameGraph: leaf, props[Value, Tone], triggers[],
     DiffViewer: children, props[Gap, Orientation], triggers[],
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
     StackTrace: children, props[Gap], triggers[],
@@ -343,7 +344,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{Prop, Tag, Trigger, EVERY};
+    use super::{EVERY, Prop, Tag, Trigger};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

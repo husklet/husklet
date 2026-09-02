@@ -163,6 +163,7 @@ export const {
   Video,
   Chart,
   Sparkline,
+  FlameGraph,
   DiffViewer,
   DiffLine,
   StackTrace,

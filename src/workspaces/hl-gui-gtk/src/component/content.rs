@@ -1,7 +1,7 @@
 //! Long-form content: source text, a running log, media and plots.
 
 use gtk::prelude::*;
-use hl_gui::{Tag, LOG_VIEW_CHARACTER_LIMIT};
+use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Tag};
 
 use super::field;
 
@@ -16,6 +16,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Video => gtk::Video::new().upcast(),
         Tag::Chart => chart().upcast(),
         Tag::Sparkline => sparkline().upcast(),
+        Tag::FlameGraph => flame_graph().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -43,14 +44,34 @@ pub(crate) fn json(widget: &gtk::Widget, source: &str) -> bool {
     for character in source.chars() {
         if quoted {
             output.push(character);
-            if escaped { escaped = false; } else if character == '\\' { escaped = true; } else if character == '"' { quoted = false; }
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
             continue;
         }
         match character {
-            '"' => { quoted = true; output.push(character); }
-            '{' | '[' => { output.push(character); depth = (depth + 1).min(JSON_INDENT_LIMIT); newline(&mut output, depth); }
-            '}' | ']' => { depth = depth.saturating_sub(1); newline(&mut output, depth); output.push(character); }
-            ',' => { output.push(character); newline(&mut output, depth); }
+            '"' => {
+                quoted = true;
+                output.push(character);
+            }
+            '{' | '[' => {
+                output.push(character);
+                depth = (depth + 1).min(JSON_INDENT_LIMIT);
+                newline(&mut output, depth);
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                newline(&mut output, depth);
+                output.push(character);
+            }
+            ',' => {
+                output.push(character);
+                newline(&mut output, depth);
+            }
             ':' => output.push_str(": "),
             value if value.is_whitespace() => {}
             value => output.push(value),
@@ -245,6 +266,61 @@ fn sparkline() -> gtk::DrawingArea {
     widget.set_hexpand(true);
     widget.set_draw_func(|area, context, width, height| trend(area, context, f64::from(width), f64::from(height)));
     widget
+}
+
+fn flame_graph() -> gtk::ScrolledWindow {
+    let rows = super::axis::column(2);
+    rows.set_hexpand(true);
+    let window = gtk::ScrolledWindow::new();
+    window.set_child(Some(&rows));
+    window.set_min_content_height(160);
+    window.set_hexpand(true);
+    window
+}
+
+/// Replaces the profile projection, bounded independently of its producer.
+pub(crate) fn flames(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() { break rows; }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    let frames = value
+        .lines()
+        .filter_map(|line| {
+            let (samples, label) = line.split_once('\t')?;
+            let samples = samples.parse::<u64>().ok()?;
+            (samples > 0 && !label.trim().is_empty()).then_some((samples, label))
+        })
+        .take(hl_gui::FLAME_GRAPH_FRAME_LIMIT)
+        .collect::<Vec<_>>();
+    let maximum = frames.iter().map(|(samples, _)| *samples).max().unwrap_or(1) as f64;
+    for (samples, text) in frames {
+        let row = super::axis::row(8);
+        let label = super::axis::label();
+        label.set_text(text);
+        label.set_selectable(true);
+        label.add_css_class("monospace");
+        label.set_width_chars(24);
+        label.set_xalign(0.0);
+        let bar = gtk::ProgressBar::new();
+        bar.set_fraction(samples as f64 / maximum);
+        bar.set_text(Some(&samples.to_string()));
+        bar.set_show_text(true);
+        bar.set_hexpand(true);
+        row.append(&label);
+        row.append(&bar);
+        rows.append(&row);
+    }
+    true
 }
 
 /// Stores the bounded textual samples for drawing; retained semantics continue

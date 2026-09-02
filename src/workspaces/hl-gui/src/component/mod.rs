@@ -9,7 +9,7 @@
 
 mod content;
 
-pub use content::{HexSource, HexView};
+pub use content::{FlameFrame, HexSource, HexView};
 mod control;
 mod structure;
 

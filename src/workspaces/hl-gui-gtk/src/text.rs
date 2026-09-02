@@ -101,6 +101,9 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::Sparkline {
         return content::samples(widget, content);
     }
+    if tag == Tag::FlameGraph {
+        return content::flames(widget, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }

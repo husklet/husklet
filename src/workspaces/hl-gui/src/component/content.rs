@@ -19,6 +19,22 @@ pub enum HexSource<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HexView(String);
 
+/// One labelled frame in a sampled profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlameFrame {
+    label: String,
+    samples: u64,
+}
+
+impl FlameFrame {
+    /// Makes a visible frame. Empty labels and zero samples are omitted.
+    #[must_use]
+    pub fn new(label: impl Into<String>, samples: u64) -> Option<Self> {
+        let label = label.into().replace(['\t', '\n', '\r'], " ");
+        (!label.trim().is_empty() && samples > 0).then_some(Self { label, samples })
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -75,7 +91,9 @@ impl Element {
 
     /// A bounded list of structured stack frames.
     #[must_use]
-    pub fn stack_trace() -> Self { Self::new(Tag::StackTrace) }
+    pub fn stack_trace() -> Self {
+        Self::new(Tag::StackTrace)
+    }
 
     #[must_use]
     pub fn stack_frame(function: impl Into<String>, location: impl Into<String>) -> Self {
@@ -262,6 +280,18 @@ impl Element {
         Self::new(Tag::Sparkline).value(value)
     }
 
+    /// A bounded sampled profile rendered as labelled proportional bars.
+    #[must_use]
+    pub fn flame_graph(frames: impl IntoIterator<Item = FlameFrame>) -> Self {
+        let value = frames
+            .into_iter()
+            .take(crate::FLAME_GRAPH_FRAME_LIMIT)
+            .map(|frame| format!("{}\t{}", frame.samples, frame.label))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::FlameGraph).value(value)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -271,7 +301,7 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{HexSource, HexView};
+    use super::{FlameFrame, HexSource, HexView};
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -324,5 +354,34 @@ mod tests {
             .expect("sparkline value");
         assert_eq!(value.split(',').count(), crate::SPARKLINE_SAMPLE_LIMIT);
         assert!(!value.contains("NaN"));
+    }
+
+    #[test]
+    fn flame_graph_rejects_empty_frames_and_caps_the_wire_value() {
+        assert!(FlameFrame::new("idle", 0).is_none());
+        assert!(FlameFrame::new(" ", 1).is_none());
+        let frames = (0..100).filter_map(|index| FlameFrame::new(format!("worker\t{index}"), index + 1));
+        let element = Element::flame_graph(frames);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("flame graph value");
+        assert_eq!(
+            value.lines().count(),
+            64,
+            "the public ceiling is part of the component contract"
+        );
+        assert!(!value.contains('\t') || value.lines().all(|line| line.matches('\t').count() == 1));
+        assert!(value.contains("worker 0"));
     }
 }

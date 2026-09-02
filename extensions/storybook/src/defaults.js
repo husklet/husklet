@@ -72,6 +72,7 @@ const BY_TAG = {
   LogView: { label: 'starting…', monospace: true },
   Chart: { label: 'Load' },
   Sparkline: { value: '18,22,19,31,28,35,42,39' },
+  FlameGraph: { value: '120\tcompiler::parse\n74\tcompiler::check\n31\tcompiler::emit' },
   Badge: { label: '3' },
   Chip: { label: 'tag', variant: 'outline' },
   Toast: { label: 'Saved', tone: 'positive' },
