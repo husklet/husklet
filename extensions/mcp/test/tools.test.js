@@ -380,6 +380,7 @@ test('volume and network tools preserve typed read/control operations and confir
 
 test('unified pane XML packs terminal metadata and escaped bounded screen lines', async () => {
   const terminal = {
+    panes: async () => ({ panes: [{ slot: 'term-1', kind: 'terminal' }], truncated: false }),
     topology: async () => ({ active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Shell & work', root: {
       kind: 'pane', focused: true, grid: { columns: 120, rows: 40 },
       pane: { slot: 'term-1', occupant: 'terminal', working_directory: '/work<&>', command: 'bash', provider: null },
@@ -399,6 +400,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
 
 test('unified pane XML selects surface semantics and gives a clear topology absence error', async () => {
   const terminal = {
+    panes: async () => ({ panes: [{ slot: 'surface-1', kind: 'surface' }], truncated: false }),
     topology: async () => ({ active_tab: null, tabs: [{ id: 't', title: 'UI', root: {
       kind: 'pane', focused: false, grid: null,
       pane: { slot: 'surface-1', occupant: 'surface', working_directory: null, command: null, provider: { extension: 'demo', provider: 'main' } },
@@ -414,7 +416,19 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
   assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
-  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from terminal topology/);
+  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from pane inventory/);
+});
+
+test('unified pane XML projects arbitrary native slots and explicitly rejects unknown kinds', async () => {
+  const terminal = {
+    panes: async () => ({ panes: [{ slot: 'settings-native', kind: 'native' }], truncated: false }),
+    semantics: async (slot) => ({ slot, revision: 4, truncated: false, root: {
+      id: 1, role: 'status', label: 'Settings', value: 'Ready', disabled: false, actions: [], children: [],
+    } }),
+  };
+  assert.match(await paneXml(terminal, 'settings-native'), /occupant="native".*Settings/s);
+  terminal.panes = async () => ({ panes: [{ slot: 'shot', kind: 'screenshot' }], truncated: false });
+  await assert.rejects(() => paneXml(terminal, 'shot'), /unsupported occupant "screenshot"/);
 });
 
 test('results redact secrets and remain bounded', async () => {
@@ -697,6 +711,10 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
     pane: { slot, occupant, working_directory: occupant === 'terminal' ? '/tmp' : null, command: occupant === 'terminal' ? 'sh' : null, provider: null } });
   const session = { call: async (name, argument) => {
     calls.push([name, argument]);
+    if (name === 'pane_list') return { reply: 'panes', with: { panes: [
+      { slot: 'term', kind: 'terminal', provider: null, tab: 'tab', title: 'Packed', focused: true },
+      { slot: 'surface', kind: 'surface', provider: null, tab: 'tab', title: 'Packed', focused: false },
+    ], truncated: false } };
     if (name === 'terminal_topology') return { reply: 'topology', with: { active_tab: 'tab', tabs: [{ id: 'tab', title: 'Packed', root: {
       kind: 'split', division: 'beside', ratio_per_mille: 500, first: pane('term', 'terminal'), second: pane('surface', 'surface'),
     } }] } };
@@ -716,7 +734,7 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
   assert.equal((terminal.content[0].text.match(/<husklet-pane /g) ?? []).length, 1);
   assert.equal((surface.content[0].text.match(/<husklet-pane /g) ?? []).length, 1);
   assert.deepEqual(calls.map(([name]) => name), [
-    'terminal_topology', 'terminal_read_pane', 'terminal_topology', 'pane_semantic_read',
+    'pane_list', 'terminal_topology', 'terminal_read_pane', 'pane_list', 'pane_semantic_read',
   ]);
   await client.close();
   await server.close();
@@ -731,6 +749,10 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
   });
   const session = { call: async (name, argument) => {
     calls.push([name, argument]);
+    if (name === 'pane_list') {
+      const slots = changed ? ['right'] : ['left', 'upper', 'right', 'other-tab'];
+      return { reply: 'panes', with: { panes: slots.map((slot) => ({ slot, kind: 'terminal', provider: null, tab: null, title: null, focused: false })), truncated: false } };
+    }
     if (name === 'terminal_topology') return { reply: 'topology', with: {
       active_tab: changed ? 'tab-b' : 'tab-a',
       tabs: changed ? [{ id: 'tab-b', title: 'After', root: leaf('right', true, 132, 41) }] : [
@@ -774,7 +796,7 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
   assert.match(surviving.content[0].text, /tab="tab-b" title="After" active="true" focused="true" columns="132" rows="41"/);
   const removed = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'upper', lines: 10 } });
   assert.equal(removed.isError, true);
-  assert.match(removed.content[0].text, /absent from terminal topology/);
+  assert.match(removed.content[0].text, /absent from pane inventory/);
   assert.equal(calls.filter(([name]) => name === 'pane_semantic_read').length, 0, 'removed slots never probe stale semantics');
 
   await client.close();

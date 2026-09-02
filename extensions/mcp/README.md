@@ -98,9 +98,11 @@ terminal, extension surface, and native pane, including stable slot and provider
 identity without reading contents. It requires the host's `PaneObserve` grant.
 Use the returned slot with `husklet_pane_read`, which inspects the split topology and returns one bounded XML
 document: terminal panes include screen lines, focus, grid and tab metadata;
-extension surfaces and the native `workspace` pane include their semantic tree.
+extension surfaces and every inventoried native pane include their semantic tree.
 It uses stable slots and semantic IDs, never screenshots, coordinates, or GTK
-widget scraping. The older terminal-read and pane-snapshot tools remain for
+widget scraping. An inventoried kind without a typed projection, a surface
+without semantics, or a terminal absent from topology fails explicitly; it is
+never reported as empty text or silently substituted with a screenshot. The older terminal-read and pane-snapshot tools remain for
 consumers that need their specific typed result.
 
 Workspace filesystem controls create one directory, rename without overwriting,

@@ -347,6 +347,13 @@ impl TerminalSurface for Host {
         Ok(())
     }
     fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError> {
+        if slot == "oversized" {
+            return Ok(PaneText {
+                slot: slot.into(),
+                lines: vec!["old".repeat(hl_extension::port::PANE_TEXT_BYTES / 3), "new".into()],
+                truncated: false,
+            });
+        }
         Ok(PaneText {
             slot: slot.into(),
             lines: vec![format!("at most {lines}")],
@@ -412,6 +419,23 @@ impl TerminalSurface for Host {
     fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
         Ok("s3".into())
     }
+}
+
+#[test]
+fn terminal_screen_bytes_are_bounded_before_the_reply_is_encoded() {
+    let host = Host::new();
+    let reply = session(&[Capability::TerminalOutput], &[])
+        .dispatch(
+            &Request::TerminalReadPane {
+                slot: "oversized".into(),
+                lines: None,
+            },
+            &services(&host),
+        )
+        .expect("bounded screen");
+    let Reply::Text(text) = reply else { panic!("wrong reply") };
+    assert!(text.truncated);
+    assert_eq!(text.lines, vec!["new"]);
 }
 
 #[test]

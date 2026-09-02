@@ -122,7 +122,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     'workspace_info', 'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
     'workspace_update', 'container_create', 'container_start',
-    'container_exec', 'container_processes', 'pane_list', 'terminal_topology', 'terminal_read_pane',
+    'container_exec', 'container_processes', 'pane_list', 'pane_list', 'terminal_topology', 'terminal_read_pane',
     'event_subscribe', 'terminal_write_pane', 'event_unsubscribe', 'pane_semantic_read',
     'event_subscribe', 'pane_semantic_read', 'pane_semantic_action', 'event_unsubscribe',
     'pane_semantic_read', 'container_stop', 'container_remove', 'workspace_update',

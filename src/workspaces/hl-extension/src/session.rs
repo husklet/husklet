@@ -540,7 +540,9 @@ impl Session {
             .peer
             .authority()
             .port(Capability::TerminalOutput, services.terminal)?;
-        Ok(Reply::Text(port.read(slot, pane_lines(lines))?))
+        Ok(Reply::Text(crate::port::bounded_pane_text(
+            port.read(slot, pane_lines(lines))?,
+        )))
     }
 
     fn files(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {

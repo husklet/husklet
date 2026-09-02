@@ -371,6 +371,8 @@ pub enum LayoutNode {
 /// in memory on the drawing thread before it is sent. The cap is what stops a
 /// single call from making the host allocate whatever a runaway command printed.
 pub const PANE_LINES: usize = 2000;
+/// Maximum UTF-8 payload carried by one terminal screen reply.
+pub const PANE_TEXT_BYTES: usize = 512 * 1024;
 
 /// How many lines a pane read actually returns.
 ///
@@ -379,6 +381,25 @@ pub const PANE_LINES: usize = 2000;
 #[must_use]
 pub fn pane_lines(requested: Option<usize>) -> usize {
     requested.unwrap_or(PANE_LINES).clamp(1, PANE_LINES)
+}
+
+/// Retains the newest complete terminal lines that fit one bounded reply.
+#[must_use]
+pub fn bounded_pane_text(mut text: PaneText) -> PaneText {
+    let mut used = 0usize;
+    let mut kept = Vec::new();
+    for line in text.lines.into_iter().rev() {
+        let needed = line.len().saturating_add(1);
+        if used.saturating_add(needed) > PANE_TEXT_BYTES {
+            text.truncated = true;
+            break;
+        }
+        used += needed;
+        kept.push(line);
+    }
+    kept.reverse();
+    text.lines = kept;
+    text
 }
 
 /// A workspace as an extension sees it from the outside.
@@ -933,7 +954,10 @@ pub trait WorkspaceFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{pane_lines, Division, LayoutNode, Occupant, PaneSummary, PANE_LINES};
+    use super::{
+        bounded_pane_text, pane_lines, Division, LayoutNode, Occupant, PaneSummary, PaneText,
+        PANE_LINES, PANE_TEXT_BYTES,
+    };
 
     #[test]
     fn a_pane_read_is_bounded_however_it_is_asked_for() {
@@ -941,6 +965,19 @@ mod tests {
         assert_eq!(pane_lines(Some(10)), 10);
         assert_eq!(pane_lines(Some(usize::MAX)), PANE_LINES, "a huge tail is cut to it");
         assert_eq!(pane_lines(Some(0)), 1, "a pane read answers with something");
+    }
+
+    #[test]
+    fn terminal_text_retains_only_newest_complete_lines_within_the_wire_budget() {
+        let text = PaneText {
+            slot: "pane".into(),
+            lines: vec!["old".repeat(PANE_TEXT_BYTES / 3), "middle".repeat(PANE_TEXT_BYTES / 6), "new".into()],
+            truncated: false,
+        };
+        let bounded = bounded_pane_text(text);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.lines.last().map(String::as_str), Some("new"));
+        assert!(bounded.lines.iter().map(|line| line.len() + 1).sum::<usize>() <= PANE_TEXT_BYTES);
     }
 
     #[test]
