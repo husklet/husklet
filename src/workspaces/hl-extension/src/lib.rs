@@ -31,7 +31,7 @@ pub use hl_rpc::{
     Authority, ChannelId, Channels, Compatibility, Denial, Emission, Flags, Frame, Hello, Kind, Limits, Malformed,
     Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire, PROTOCOL,
 };
-pub use installation::{Consent, Disposition, Installation, Objection, Record, Stage, Summary};
+pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{
     Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
 };

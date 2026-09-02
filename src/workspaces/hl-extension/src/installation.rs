@@ -27,6 +27,10 @@ pub struct Record {
     pub name: ExtensionName,
     /// Digest of the image the grant was given for.
     pub image_digest: String,
+    /// Manifest version consented to for this digest. Empty only for records
+    /// written before versions were persisted.
+    #[serde(default)]
+    pub version: String,
     /// Exactly what the person agreed to, never what was asked for.
     pub granted: Grant,
     /// Whether the sidecar should be running.
@@ -79,6 +83,10 @@ pub enum Objection {
     Absence(ExtensionName),
     /// The image digest was empty, so the grant could not be tied to an image.
     Digest,
+    /// The prepared update no longer describes the installed image.
+    Changed(ExtensionName),
+    /// The explicit answer did not cover every newly requested capability.
+    Consent(Vec<Capability>),
 }
 
 impl std::fmt::Display for Objection {
@@ -87,33 +95,42 @@ impl std::fmt::Display for Objection {
             Self::Presence(name) => write!(formatter, "{name} is already installed"),
             Self::Absence(name) => write!(formatter, "{name} is not installed"),
             Self::Digest => formatter.write_str("an image digest is required to record a grant"),
+            Self::Changed(name) => write!(formatter, "{name} changed while its update was pending"),
+            Self::Consent(capabilities) => write!(formatter, "update consent is missing {capabilities:?}"),
         }
     }
 }
 
-impl std::error::Error for Objection {}
-
-/// The consent standing of an update.
+/// An inspected update that has not changed installed state or runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Consent {
-    /// The recorded grant already covers what the updated manifest asks for,
-    /// so nothing has to be put to a person.
-    Standing,
-    /// The update asks for capabilities the record does not hold. The extension
-    /// keeps the old, narrower grant until these are agreed to separately.
-    Requirement {
-        /// Exactly the capabilities that are new, in a stable order.
-        additional: Vec<Capability>,
-    },
+pub struct Update {
+    /// Installed name both records must share.
+    pub name: ExtensionName,
+    /// Digest still installed while the prompt is open.
+    pub current_digest: String,
+    /// Version still installed while the prompt is open.
+    pub current_version: String,
+    /// Digest inspected from the candidate image.
+    pub candidate_digest: String,
+    /// Version inspected from the candidate manifest.
+    pub candidate_version: String,
+    /// Capabilities the candidate newly requests, in stable order.
+    pub additional: Vec<Capability>,
+    /// Previously granted capabilities the candidate no longer requests.
+    pub removed: Vec<Capability>,
+    manifest: Manifest,
 }
 
-impl Consent {
-    /// Whether a person has to be asked before the update gets what it wants.
-    #[must_use]
-    pub const fn is_requirement(&self) -> bool {
-        matches!(self, Self::Requirement { .. })
-    }
+/// Why committing an inspected update did not replace anything.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum UpdateFailure<E> {
+    /// State or consent changed before replacement began.
+    Refused(Objection),
+    /// The host could not atomically replace the old runtime.
+    Replacement(E),
 }
+
+impl std::error::Error for Objection {}
 
 /// What a host should do with a sidecar that just stopped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,6 +275,7 @@ impl Installation {
             record: Record {
                 name: manifest.name.clone(),
                 image_digest: digest.to_owned(),
+                version: manifest.version.clone(),
                 granted,
                 enabled: false,
                 installed_at: at,
@@ -268,57 +286,83 @@ impl Installation {
         Ok(&entry.record)
     }
 
-    /// Points an existing record at a new image.
+    /// Inspects an update without changing the installed record or runtime.
     ///
-    /// The recorded grant is narrowed to what the updated manifest still asks
-    /// for and never widened. When the update asks for more, the extension
-    /// keeps running on the old grant and the caller is handed
-    /// [`Consent::Requirement`] naming exactly what is new, so the choice
-    /// reaches a person instead of being made for them.
-    ///
-    /// The restart count is cleared, because a new image has not failed yet.
+    /// Capability additions and removals are returned for an explicit prompt;
+    /// the old record remains authoritative until [`Self::commit_update`].
     ///
     /// # Errors
     /// Returns `Objection::Absence` when nothing is recorded under the
     /// manifest's name, and `Objection::Digest` when the digest is empty.
-    pub fn reinstall(&mut self, manifest: &Manifest, digest: &str, at: i64) -> Result<Consent, Objection> {
+    pub fn prepare_update(&self, manifest: &Manifest, digest: &str) -> Result<Update, Objection> {
         if digest.is_empty() {
             return Err(Objection::Digest);
         }
         let entry = self
             .entries
-            .get_mut(&manifest.name)
+            .get(&manifest.name)
             .ok_or_else(|| Objection::Absence(manifest.name.clone()))?;
-        let additional = entry.record.granted.missing(&manifest.capabilities);
-        entry.record.granted = entry.record.granted.intersect(&manifest.capabilities);
-        digest.clone_into(&mut entry.record.image_digest);
-        entry.record.installed_at = at;
-        entry.record.pane_providers.clone_from(&manifest.pane_providers);
-        entry.restarts = Restarts::default();
-        if additional.is_empty() {
-            return Ok(Consent::Standing);
-        }
-        Ok(Consent::Requirement { additional })
+        Ok(Update {
+            name: manifest.name.clone(),
+            current_digest: entry.record.image_digest.clone(),
+            current_version: entry.record.version.clone(),
+            candidate_digest: digest.to_owned(),
+            candidate_version: manifest.version.clone(),
+            additional: entry.record.granted.missing(&manifest.capabilities),
+            removed: manifest.capabilities.missing(&entry.record.granted),
+            manifest: manifest.clone(),
+        })
     }
 
-    /// Widens a record to a grant a person has just agreed to.
+    /// Commits an explicitly accepted update after its runtime replacement succeeds.
     ///
     /// This is the only widening path in the crate, and it takes the consent as
     /// an argument so that it cannot be reached except from a prompt's answer.
     /// The result is still an intersection with what the manifest asks for.
+    /// `replace` must be atomic from the host's perspective and leave the old
+    /// runtime in service on error; the record changes only after success.
     ///
     /// # Errors
-    /// Returns `Objection::Absence` when nothing is recorded under the
-    /// manifest's name.
-    pub fn consent(&mut self, manifest: &Manifest, consented: &Grant) -> Result<&Record, Objection> {
+    /// Returns a refusal when state changed or consent is incomplete, or the
+    /// replacement failure without changing the record.
+    pub fn commit_update<E>(
+        &mut self,
+        update: Update,
+        consented: &Grant,
+        at: i64,
+        replace: impl FnOnce(&Record, &Record) -> Result<(), E>,
+    ) -> Result<&Record, UpdateFailure<E>> {
         let entry = self
             .entries
-            .get_mut(&manifest.name)
-            .ok_or_else(|| Objection::Absence(manifest.name.clone()))?;
-        let agreed = manifest.capabilities.intersect(consented);
-        entry.record.granted = Grant::new(entry.record.granted.iter().chain(agreed.iter()));
+            .get_mut(&update.name)
+            .ok_or_else(|| UpdateFailure::Refused(Objection::Absence(update.name.clone())))?;
+        if entry.record.image_digest != update.current_digest {
+            return Err(UpdateFailure::Refused(Objection::Changed(update.name)));
+        }
+        let granted =
+            Grant::new(entry.record.granted.iter().chain(consented.iter())).intersect(&update.manifest.capabilities);
+        let missing = granted.missing(&update.manifest.capabilities);
+        if !missing.is_empty() {
+            return Err(UpdateFailure::Refused(Objection::Consent(missing)));
+        }
+        let next = Record {
+            name: update.name,
+            image_digest: update.candidate_digest,
+            version: update.candidate_version,
+            granted,
+            enabled: entry.record.enabled,
+            installed_at: at,
+            pane_providers: update.manifest.pane_providers,
+        };
+        replace(&entry.record, &next).map_err(UpdateFailure::Replacement)?;
+        entry.record = next;
+        entry.restarts = Restarts::default();
         Ok(&entry.record)
     }
+
+    /// Cancels a prepared update. Ownership makes cancellation explicit while
+    /// leaving both the record and runtime untouched.
+    pub fn cancel_update(&self, _update: Update) {}
 
     /// Marks a record as one whose sidecar should run. Leaves the grant and the
     /// digest untouched.

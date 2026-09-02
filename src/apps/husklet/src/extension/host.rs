@@ -812,6 +812,7 @@ mod tests {
         let record = Record {
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
+            version: "1.0.0".to_owned(),
             granted: manifest.capabilities.clone(),
             enabled: true,
             installed_at: 1,

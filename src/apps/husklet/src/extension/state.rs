@@ -165,6 +165,7 @@ mod tests {
         let record = Record {
             name: ExtensionName::new("sample").expect("name"),
             image_digest: "sha256:aaaa".to_owned(),
+            version: "1.0.0".to_owned(),
             granted: Grant::new([Capability::ContainerRead, Capability::Interface]),
             enabled: true,
             installed_at: 1_700_000_000,
@@ -185,6 +186,7 @@ mod tests {
             .save(&Record {
                 name: name.clone(),
                 image_digest: "sha256:aaaa".to_owned(),
+                version: "1.0.0".to_owned(),
                 granted: Grant::new([Capability::ContainerRead]),
                 enabled: false,
                 installed_at: 1,
