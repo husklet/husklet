@@ -77,7 +77,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
 
 #[cfg(feature = "mcp-e2e")]
 #[test]
-fn a_real_mcp_client_changes_native_ui_through_the_extension_socket() {
+fn a_real_mcp_client_discovers_native_terminal_and_rust_extension_surfaces() {
     let ran = crate::test_support::on_the_toolkit_thread(|| panes::mcp_socket_changes_native_ui());
     assert!(ran, "the explicit MCP integration target requires an X display");
 }
@@ -1628,7 +1628,51 @@ mod panes {
         });
         let gallery = Gallery::new();
         gallery.enrol_native(view.semantic_registry());
-        Window::exhibit(&bench.window, gallery);
+        let (post, deliveries) = super::super::super::extension::channel();
+        let (widget, reference) = super::super::super::extension::Interface::new(
+            deliveries,
+            Rc::new(|_: super::super::super::extension::Signal| {}),
+        );
+        let reference = reference.install();
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.append(&widget);
+        gallery.enrol("containers", &widget, &holder, &[], Rc::new(|_| {}));
+        let weak = Rc::downgrade(&reference);
+        gallery.enrol_panes(
+            "containers",
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .map(|page| page.borrow_mut().pane(slot))
+                    .unwrap_or_else(|| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast())
+            }),
+        );
+        let weak = Rc::downgrade(&reference);
+        gallery.enrol_semantics(
+            "containers",
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .ok_or_else(|| HostError::Absent("reference extension surface closed".into()))?
+                    .borrow()
+                    .semantics(slot)
+            }),
+            Rc::new(|_, _| Err(HostError::Conflict("the reference proof is read-only".into()))),
+        );
+        Window::exhibit(&bench.window, gallery.clone());
+        let surface_slot = Console::surface(&bench.window, Some("containers"), &terminal_slot, Division::Beside)
+            .expect("mount reference extension surface beside the terminal");
+        let frame = extension::Extension::new()
+            .observe(Vec::new())
+            .into_iter()
+            .find_map(|request| match request {
+                hl_extension::Request::InterfaceRender { frame } => Some(frame),
+                _ => None,
+            })
+            .expect("reference extension renders a frame");
+        post.send(super::super::super::extension::Delivery::FrameAt {
+            slot: surface_slot,
+            frame,
+        })
+        .expect("queue reference extension frame");
         let (relay, errands) = hl::extension::Relay::open();
         let console = Console::new(&bench.window, errands);
 

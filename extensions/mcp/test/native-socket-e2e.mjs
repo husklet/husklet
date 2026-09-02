@@ -22,6 +22,14 @@ if (!inventory.panes?.some((pane) => pane.slot === 'workspace' && pane.kind === 
 if (!inventory.panes?.some((pane) => pane.slot === terminalSlot && pane.kind === 'terminal')) {
   throw new Error(`real terminal absent from pane discovery: ${listed.content[0].text}`);
 }
+const surface = inventory.panes?.find((pane) => pane.kind === 'surface');
+if (!surface) throw new Error(`reference extension surface absent from pane discovery: ${listed.content[0].text}`);
+const extensionSnapshot = await client.callTool({
+  name: 'husklet_pane_snapshot', arguments: { slot: surface.slot },
+});
+if (!extensionSnapshot.content?.[0]?.text?.includes('<label>Containers</label>')) {
+  throw new Error(`reference extension semantics absent: ${extensionSnapshot.content?.[0]?.text}`);
+}
 
 const snapshot = await client.callTool({
   name: 'husklet_pane_snapshot',
@@ -66,7 +74,7 @@ while (Date.now() < deadline) {
 if (!terminalXml.includes('agent-received:agent-status')) {
   throw new Error(`real terminal pane never exposed the guest response: ${terminalXml}`);
 }
-process.stdout.write(`${xml}\n${terminalXml}`);
+process.stdout.write(`${xml}\n${extensionSnapshot.content[0].text}\n${terminalXml}`);
 
 await client.close();
 await server.close();
