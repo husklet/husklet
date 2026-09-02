@@ -75,6 +75,7 @@ impl Overview<'_> {
             .child(&main)
             .hexpand(true)
             .vexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .build()
     }
 
@@ -503,6 +504,22 @@ mod tests {
             assert_eq!(grid.min_children_per_line(), 1);
             assert_eq!(grid.max_children_per_line(), 2);
             assert_eq!(grid.observe_children().n_items(), 7);
+
+            let window = gtk::Window::builder()
+                .default_width(300)
+                .default_height(700)
+                .child(&page)
+                .build();
+            window.present();
+            while gtk::glib::MainContext::default().iteration(false) {}
+            let horizontal = page.hadjustment();
+            assert!(
+                horizontal.upper() <= horizontal.page_size() + 1.0,
+                "a narrow settings page must not require horizontal scrolling: upper={} page_size={}",
+                horizontal.upper(),
+                horizontal.page_size()
+            );
+            window.close();
             assert!(
                 widgets.iter().any(|widget| widget.has_css_class("settings-save-row")),
                 "save action is visually separated from editable cards"
