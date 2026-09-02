@@ -441,8 +441,14 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::net::UnixListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use super::{
-        removal_target, stop_target, Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+        removal_target, stop_target, Image, Sidecar, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET,
+        SOCKET_VARIABLE,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
@@ -499,6 +505,119 @@ mod tests {
         assert_eq!(stop_target("ours", Some("replacement"), "replacement-id"), None);
         assert_eq!(stop_target("ours", None, "unrelated-id"), None);
         assert_eq!(stop_target("ours", Some("ours"), ""), None);
+    }
+
+    #[test]
+    fn owned_stop_uses_real_transport_and_never_addresses_a_replacement_name() {
+        for (actual, id, expected_requests) in [
+            (Some(spec().signature()), "immutable-old-id", 2),
+            (Some("replacement-signature".to_owned()), "replacement-id", 1),
+            (None, "unrelated-id", 1),
+            (Some(spec().signature()), "", 1),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let socket = temporary.path().join("docker.sock");
+            let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+            let signature = actual.clone();
+            let id = id.to_owned();
+            let served = std::thread::spawn(move || serve_stop(listener, signature.as_deref(), &id, expected_requests));
+            let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+            Sidecar::new(bridge).stop_owned(&spec()).expect("bounded stop");
+
+            let requests = served.join().expect("mock joined");
+            assert_eq!(requests[0], "GET /v1.43/containers/extension%2Dsample/json?size=false");
+            if expected_requests == 2 {
+                assert_eq!(requests[1], "POST /v1.43/containers/immutable%2Dold%2Did/stop?t=5");
+            } else {
+                assert_eq!(requests.len(), 1, "foreign/replacement generation received a stop");
+            }
+        }
+    }
+
+    #[test]
+    fn owned_stop_bounds_an_inspection_failure_without_sending_stop() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let served = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client connected");
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .expect("read timeout");
+            let request = read_request(&mut stream).expect("inspect request");
+            respond(
+                &mut stream,
+                "500 Internal Server Error",
+                br#"{"message":"inspection failed"}"#,
+            );
+            assert!(
+                read_request(&mut stream).is_none(),
+                "failure must not fall through to stop"
+            );
+            request
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        let failure = Sidecar::new(bridge)
+            .stop_owned(&spec())
+            .expect_err("inspection failure is reported");
+
+        assert!(failure.to_string().contains("inspection failed"));
+        assert_eq!(
+            served.join().expect("mock joined"),
+            "GET /v1.43/containers/extension%2Dsample/json?size=false"
+        );
+    }
+
+    fn serve_stop(listener: UnixListener, signature: Option<&str>, id: &str, expected: usize) -> Vec<String> {
+        let (mut stream, _) = listener.accept().expect("client connected");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("read timeout");
+        let mut requests = vec![read_request(&mut stream).expect("inspect request")];
+        let labels = signature.map_or_else(
+            || "{}".to_owned(),
+            |value| format!(r#"{{"{SIGNATURE_LABEL}":"{value}"}}"#),
+        );
+        let body = format!(
+            r#"{{"Id":"{id}","Image":"sha256:image","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+        );
+        respond(&mut stream, "200 OK", body.as_bytes());
+        if expected == 2 {
+            requests.push(read_request(&mut stream).expect("stop request"));
+            respond(&mut stream, "204 No Content", &[]);
+        } else {
+            assert!(
+                read_request(&mut stream).is_none(),
+                "an unowned generation was addressed"
+            );
+        }
+        requests
+    }
+
+    fn read_request(stream: &mut std::os::unix::net::UnixStream) -> Option<String> {
+        let mut bytes = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !bytes.ends_with(b"\r\n\r\n") {
+            if stream.read(&mut byte).ok()? == 0 {
+                return None;
+            }
+            bytes.push(byte[0]);
+        }
+        let line = String::from_utf8(bytes).ok()?.lines().next()?.to_owned();
+        line.strip_suffix(" HTTP/1.1").map(str::to_owned)
+    }
+
+    fn respond(stream: &mut std::os::unix::net::UnixStream, status: &str, body: &[u8]) {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .expect("response headers");
+        stream.write_all(body).expect("response body");
+        stream.flush().expect("response flush");
     }
 
     #[test]
