@@ -9,6 +9,8 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
+/** Reference-counted host subscriptions, keyed by session and snapshot topic. */
+const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
 
 /**
@@ -17,12 +19,13 @@ const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'netwo
  * The socket path comes from `HUSKLET_EXTENSION_SOCKET`, which the host mounts
  * into the container; an extension is never asked to know where it is.
  */
-export async function connect({ path, onRows, onReply, onEvent, pendingLimit, timeout } = {}) {
+export async function connect({ path, onRows, onReply, onEvent, onEventError, pendingLimit, timeout } = {}) {
   let session;
   session = await Session.connect(path, {
     onRows,
     pendingLimit,
     timeout,
+    onEventError,
     onEvent: (payload, channel) => {
       deliver(session, payload);
       if (onEvent) onEvent(payload, channel);
@@ -32,6 +35,7 @@ export async function connect({ path, onRows, onReply, onEvent, pendingLimit, ti
     },
   });
   attached.set(session, new Set());
+  subscriptions.set(session, new Map());
   return session;
 }
 
@@ -45,6 +49,46 @@ export function workspace(session) {
   const subscription = (call, topic) => {
     if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     return done(call, { topic });
+  };
+  const states = subscriptions.get(session) ?? new Map();
+  subscriptions.set(session, states);
+  const subscribe = async (topic) => {
+    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    let state = states.get(topic);
+    if (!state) {
+      state = { references: 0, active: false, operation: Promise.resolve() };
+      states.set(topic, state);
+    }
+    state.references += 1;
+    const operation = state.operation.then(async () => {
+      if (!state.active) {
+        await subscription('event_subscribe', topic);
+        state.active = true;
+      }
+    });
+    state.operation = operation.catch(() => {});
+    try {
+      await operation;
+    } catch (error) {
+      state.references -= 1;
+      if (state.references === 0 && !state.active) states.delete(topic);
+      throw error;
+    }
+  };
+  const unsubscribe = async (topic) => {
+    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    const state = states.get(topic);
+    if (!state || state.references === 0) return;
+    state.references -= 1;
+    const operation = state.operation.then(async () => {
+      if (state.references === 0 && state.active) {
+        await subscription('event_unsubscribe', topic);
+        state.active = false;
+      }
+      if (state.references === 0 && !state.active) states.delete(topic);
+    });
+    state.operation = operation.catch(() => {});
+    await operation;
   };
   const api = {
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
@@ -133,8 +177,8 @@ export function workspace(session) {
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
     },
-    subscribe: (topic) => subscription('event_subscribe', topic),
-    unsubscribe: (topic) => subscription('event_unsubscribe', topic),
+    subscribe,
+    unsubscribe,
   };
   api.watchPaneChanges = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('pane change listener must be a function');

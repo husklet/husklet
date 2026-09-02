@@ -85,6 +85,48 @@ test('an event returns credit only after delivery', async () => {
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('a throwing event listener cannot starve healthy listeners or event credit', async () => {
+  const seen = [];
+  const errors = [];
+  const stage = await pair({ onEventError: (error) => errors.push(error.message) });
+  const next = frames(stage.host);
+  await next();
+  stage.session.onEvent(() => { throw new Error('broken observer'); });
+  stage.session.onEvent((event) => seen.push(event));
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'images', of: [] } }));
+  const credit = await next();
+  assert.deepEqual(errors, ['broken observer']);
+  assert.deepEqual(seen, [{ snapshot: 'images', of: [] }]);
+  assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, {
+    channel: 9, kind: KIND.credit, payload: 1,
+  });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('concurrent pane-change waits share their host subscription until the last disposer', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const first = api.watchPaneChanges(() => {});
+  const second = api.watchPaneChanges(() => {});
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const [stopFirst, stopSecond] = await Promise.all([first, second]);
+
+  await stopFirst();
+  const probe = stage.session.call('workspace_info');
+  assert.equal((await next()).payload.call, 'workspace_info', 'the first disposer must not unsubscribe the second wait');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: {} } }));
+  await probe;
+
+  const stopped = stopSecond();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopped;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('workspace lifecycle methods use the typed control calls', async () => {
   const stage = await pair();
   const next = frames(stage.host);
@@ -207,7 +249,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
   const calls = [];
-  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  for (let index = 0; index < operations.length - 1; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'container_processes', with: { id: 'c1' } },
     { call: 'container_logs', with: { id: 'c1', stdout: true, stderr: false } },
@@ -218,7 +260,6 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
     { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
-    { call: 'event_unsubscribe', with: { topic: 'containers' } },
   ]);
   const replies = [
     { reply: 'processes', with: { titles: [], processes: [] } },
@@ -226,9 +267,11 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'execution', with: { id: 'e1' } },
     ...Array(4).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
-    { reply: 'done' }, { reply: 'done' },
+    { reply: 'done' },
   ];
   for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
   assert.equal(results[7], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();

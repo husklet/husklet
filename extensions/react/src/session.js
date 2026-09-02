@@ -36,6 +36,7 @@ export class Session {
   #reader = new Reader();
   #onReply;
   #onRows;
+  #onEventError;
   #events = new Set();
   #pending = [];
   #limit;
@@ -45,7 +46,9 @@ export class Session {
   #greeted;
   #ready;
 
-  constructor(socket, { onReply = () => {}, onRows = () => {}, onEvent = () => {}, pendingLimit = 64, timeout = 30_000 } = {}) {
+  constructor(socket, {
+    onReply = () => {}, onRows = () => {}, onEvent = () => {}, onEventError = () => {}, pendingLimit = 64, timeout = 30_000,
+  } = {}) {
     if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1) throw new RangeError('pendingLimit must be a positive integer');
     if (!Number.isFinite(timeout) || timeout <= 0) throw new RangeError('timeout must be positive');
     this.#socket = socket;
@@ -60,6 +63,7 @@ export class Session {
     });
     this.#onReply = onReply;
     this.#onRows = onRows;
+    this.#onEventError = onEventError;
     this.#events.add(onEvent);
     socket.on('data', (chunk) => this.#receive(chunk));
     socket.on('close', () => this.#finish(new Error('extension host connection closed')));
@@ -156,10 +160,19 @@ export class Session {
       return;
     }
     if (frame.kind === KIND.event) {
-      for (const listener of this.#events) listener(frame.payload, frame.channel);
-      // Returning one credit only after delivery bounds a producer by what the
-      // consumer has actually observed. The host coalesces state while stalled.
-      this.#socket.write(encode({ channel: frame.channel, kind: KIND.credit, payload: 1 }));
+      try {
+        for (const listener of this.#events) {
+          try {
+            listener(frame.payload, frame.channel);
+          } catch (error) {
+            try { this.#onEventError(error); } catch { /* Error reporting cannot strand event credit. */ }
+          }
+        }
+      } finally {
+        // Returning one credit after attempting every listener bounds a producer
+        // without allowing one faulty observer to stall the whole event stream.
+        this.#socket.write(encode({ channel: frame.channel, kind: KIND.credit, payload: 1 }));
+      }
       return;
     }
     return this.#onReply(frame.payload);

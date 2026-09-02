@@ -4174,6 +4174,7 @@ export interface ConnectOptions {
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: SnapshotEvent, channel: number) => void;
+  onEventError?: (error: unknown) => void;
 }
 
 export class Session {
