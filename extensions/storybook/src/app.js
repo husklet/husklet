@@ -23,7 +23,7 @@ import {
   components,
 } from '@husklet/react';
 
-import { grouped, notes } from './catalogue.js';
+import { component, grouped, notes } from './catalogue.js';
 import { OPENING, defaults, spaced } from './defaults.js';
 import { amountOf, lengthValue, modeOf, rows } from './editors.js';
 
@@ -32,11 +32,12 @@ const { createElement: h, useMemo, useState } = React;
 /** The whole playground. */
 export function Playground() {
   const families = useMemo(grouped, []);
-  const properties = useMemo(rows, []);
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
 
   const opened = edited.get(selected) ?? defaults(selected);
+  const contract = component(selected);
+  const properties = rows(selected);
   const change = (name, value) => {
     const next = new Map(edited);
     next.set(selected, { ...opened, props: { ...opened.props, [name]: value } });
@@ -50,7 +51,14 @@ export function Playground() {
     h(Separator, { key: 'first', orientation: 'vertical' }),
     h(Preview, { key: 'preview', name: selected, opened }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
-    h(Inspector, { key: 'inspector', name: selected, properties, props: opened.props, onChange: change }),
+    h(Inspector, {
+      key: 'inspector',
+      name: selected,
+      properties,
+      triggers: contract.triggers,
+      props: opened.props,
+      onChange: change,
+    }),
   );
 }
 
@@ -102,7 +110,7 @@ export function present(props) {
 }
 
 /** One row per property, grouped, with the control its editor hint asks for. */
-export function Inspector({ name, properties, props, onChange }) {
+export function Inspector({ name, properties, triggers, props, onChange }) {
   const groups = [];
   let current = null;
   for (const row of properties) {
@@ -120,13 +128,21 @@ export function Inspector({ name, properties, props, onChange }) {
       Column,
       { pad: 3, gap: 2 },
       h(Heading, { key: 'title', label: `${name} properties`, scale: 'caption' }),
-      h(Text, { key: 'note', label: notes.propsPerTag, color: 'text-dim', wrap: true }),
+      h(Text, { key: 'note', label: notes.values, color: 'text-dim', wrap: true }),
       ...groups.flatMap((group) => [
         h(ListSubheader, { key: `group-${group.key}`, label: group.group }),
         ...group.rows.map((row) =>
           h(Field, { key: row.name, row, value: props[row.name], onChange }),
         ),
       ]),
+      ...(triggers.length === 0
+        ? []
+        : [
+            h(ListSubheader, { key: 'interactions', label: 'interactions' }),
+            ...triggers.map((trigger) =>
+              h(Text, { key: `trigger-${trigger}`, label: `on${trigger}`, color: 'text-dim' }),
+            ),
+          ]),
     ),
   );
 }

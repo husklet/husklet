@@ -396,8 +396,8 @@
             src = workspaceSource;
             cargoLock.lockFile = ./Cargo.lock;
             strictDeps = true;
-            # `cargo check/clippy/test --workspace --all-targets` reaches `hl-gui-gtk` and
-            # `storybook`, which resolve gtk4, vte-gtk4 and librsvg through pkg-config. This
+            # `cargo check/clippy/test --workspace --all-targets` reaches `hl-gui-gtk`, which
+            # resolves gtk4, vte-gtk4 and librsvg through pkg-config. This
             # derivation carried `buildInputs: ""`, so all three died in `gdk4-sys`'s build
             # script with "The system library `gtk4` ... was not found" and `nix flake check`
             # could not succeed on any system. The dev shell has carried the same six inputs on

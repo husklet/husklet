@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import reactCatalogue from '../../react/catalogue.json' with { type: 'json' };
 
 import { components } from '@husklet/react';
 
@@ -15,6 +16,17 @@ test('the catalogue describes the whole library', () => {
 test('every component in the catalogue is constructible', () => {
   for (const tag of tags) {
     assert.equal(components[tag.name], tag.name, `<${tag.name}> is not a component of @husklet/react`);
+  }
+});
+
+test('the checked-in catalogue matches the React binding catalogue', () => {
+  assert.deepEqual(catalogue, reactCatalogue);
+});
+
+test('every tag declares its property and interaction contract', () => {
+  for (const tag of tags) {
+    assert.ok(Array.isArray(tag.props), `<${tag.name}> has no property contract`);
+    assert.ok(Array.isArray(tag.triggers), `<${tag.name}> has no interaction contract`);
   }
 });
 

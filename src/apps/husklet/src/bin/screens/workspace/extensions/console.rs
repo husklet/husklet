@@ -11,7 +11,7 @@ use hl::extension::{Answer, Errand, Errands, Request};
 use hl_extension::port::{Division, HostError, PaneSummary, PaneText, TabSummary};
 use vte4::prelude::*;
 
-use super::super::terminal::{Adjustment, Occupancy, PaneView, Panes, Reading, Surface, Tabs, TermWin, Window};
+use super::super::terminal::{Adjustment, Occupancy, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin, Window};
 
 /// How often the window looks for errands.
 ///
@@ -143,7 +143,7 @@ impl Console {
     /// The extension is named by the port the call arrived on. A call that
     /// names none cannot be answered: the window would have to guess whose
     /// interface belongs in the pane it just made.
-    fn surface(
+    pub(super) fn surface(
         window: &Rc<TermWin>,
         origin: Option<&str>,
         slot: &str,
@@ -152,13 +152,32 @@ impl Console {
         let origin = origin.ok_or_else(|| {
             HostError::Conflict("a pane that draws an interface must be asked for by an extension".to_owned())
         })?;
+        // Resolve both ends before borrowing the extension's one interface. A
+        // missing target must leave an existing surface exactly where it was.
+        if Panes::at(window, slot).is_none() {
+            return Err(absent(slot));
+        }
+        let previous = Surface::of(window, origin);
         let held = Window::slot(window);
         let content = Surface::build(window, origin, held.clone());
         if Panes::divide(window, slot, orientation(division), &content) {
+            // One reconciliation stream owns one widget tree. Once the new
+            // half is real, collapse the old holder; `build` already moved its
+            // interface into `content`, so closing it cannot send it home.
+            if let Some(previous) = previous {
+                if let Some((old, _)) = Slots::new(window).surface(&previous) {
+                    let _ = Panes::close(window, &old);
+                }
+            }
             return Ok(held);
         }
-        // Nothing took the pane, so the interface goes back where it came from.
+        // Nothing took the pane. Give up its registration, then return the
+        // borrowed widget to the old surface rather than changing visible
+        // location on a failed request.
         Surface::discard(window, &content);
+        if let Some(previous) = previous {
+            Surface::restore(window, origin, &previous);
+        }
         Err(absent(slot))
     }
 

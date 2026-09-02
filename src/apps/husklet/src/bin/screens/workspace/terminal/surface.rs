@@ -20,6 +20,20 @@ pub(crate) const ABSENCE: &str = "hl-surface-absence";
 pub(crate) struct Surface;
 
 impl Surface {
+    /// The pane currently holding one extension's interface, if it has one.
+    ///
+    /// Looking this up before a move is what makes relocation transactional: a
+    /// failed division can put the same widget back where it started instead of
+    /// falling all the way home to the workspace page.
+    pub(crate) fn of(window: &Rc<TermWin>, extension: &str) -> Option<gtk::Widget> {
+        Panes::all(window).into_iter().find_map(|pane| {
+            Slots::new(window)
+                .surface(&pane.widget)
+                .is_some_and(|(_, held)| held == extension)
+                .then_some(pane.widget)
+        })
+    }
+
     /// Builds the pane for one extension and registers it under `slot`.
     ///
     /// The interface placed in it is the one the extension is already drawing,
@@ -66,6 +80,24 @@ impl Surface {
     pub(crate) fn discard(window: &Rc<TermWin>, pane: &gtk::Widget) {
         Self::retire(window, pane);
         Slots::new(window).release(pane);
+    }
+
+    /// Moves the recorded interface into an existing surface holder.
+    ///
+    /// Used only to roll back a division that failed after [`Self::build`] had
+    /// borrowed the interface. The holder remains registered throughout, so
+    /// its slot never disappears or changes occupant while the move is tried.
+    pub(crate) fn restore(window: &Rc<TermWin>, extension: &str, pane: &gtk::Widget) {
+        let Some(holder) = pane.downcast_ref::<gtk::Box>() else {
+            return;
+        };
+        let Some(interface) = Window::gallery(window).and_then(|gallery| gallery.lend(extension)) else {
+            return;
+        };
+        while let Some(child) = holder.first_child() {
+            holder.remove(&child);
+        }
+        holder.append(&interface);
     }
 }
 

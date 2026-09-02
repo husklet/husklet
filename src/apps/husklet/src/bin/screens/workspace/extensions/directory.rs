@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use gtk::prelude::*;
-use hl::extension::Candidate;
+use hl::extension::{Acquisition, Candidate};
 use hl_extension::{Stage, Summary};
 
 use super::{moment, Inspection, Shelf};
@@ -25,6 +25,8 @@ pub const CONSENT: &str = "hl-extension-consent";
 pub const DECLINE: &str = "hl-extension-decline";
 /// Style class on the line reporting what the page just did.
 pub const NOTICE: &str = "hl-extension-notice";
+/// Style class on the image acquisition progress view.
+pub const PROGRESS: &str = "hl-extension-progress";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
 
@@ -43,9 +45,10 @@ pub struct Catalogue {
     reference: gtk::Entry,
     proposal: gtk::Box,
     notice: gtk::Label,
+    progress: gtk::ProgressBar,
     /// The inspection in flight, if any. One at a time, because the field it
     /// was started from is the same field a second one would read.
-    pending: RefCell<Option<Receiver<Result<Candidate, String>>>>,
+    pending: RefCell<Option<Receiver<Acquisition>>>,
     /// What the last inspection found, waiting for an answer.
     candidate: RefCell<Option<Candidate>>,
 }
@@ -60,6 +63,10 @@ impl Catalogue {
         let proposal = gtk::Box::new(gtk::Orientation::Vertical, 6);
         proposal.add_css_class(PROPOSAL);
         proposal.set_visible(false);
+        let progress = gtk::ProgressBar::new();
+        progress.add_css_class(PROGRESS);
+        progress.set_show_text(true);
+        progress.set_visible(false);
         let page = Rc::new(Self {
             widget,
             shelf: Rc::clone(shelf),
@@ -68,6 +75,7 @@ impl Catalogue {
             reference: gtk::Entry::new(),
             proposal,
             notice,
+            progress,
             pending: RefCell::new(None),
             candidate: RefCell::new(None),
         });
@@ -117,14 +125,28 @@ impl Catalogue {
     /// Returns whether one was applied, which is what a test waits on instead
     /// of a clock.
     pub fn poll(self: &Rc<Self>) -> bool {
-        let taken = self.received();
-        let Some(answer) = taken else {
+        let Some(event) = self.received() else {
             return false;
         };
-        *self.pending.borrow_mut() = None;
-        match answer {
-            Ok(candidate) => self.propose(&candidate),
-            Err(reason) => self.say(&reason),
+        match event {
+            Acquisition::Inspecting => self.stage("checking local images"),
+            Acquisition::Pulling {
+                status,
+                id,
+                current,
+                total,
+            } => self.pulling(&status, id.as_deref(), current, total),
+            Acquisition::ReadingManifest => self.stage("reading extension manifest"),
+            Acquisition::Ready(candidate) => {
+                *self.pending.borrow_mut() = None;
+                self.progress.set_visible(false);
+                self.propose(&candidate);
+            }
+            Acquisition::Failed(reason) => {
+                *self.pending.borrow_mut() = None;
+                self.progress.set_visible(false);
+                self.say(&reason);
+            }
         }
         true
     }
@@ -222,14 +244,35 @@ impl Catalogue {
 
     /// Reads the pending inspection without holding its borrow across the
     /// work that follows.
-    fn received(&self) -> Option<Result<Candidate, String>> {
+    fn received(&self) -> Option<Acquisition> {
         let pending = self.pending.borrow();
         let waiting = pending.as_ref()?;
         match waiting.try_recv() {
             Ok(answer) => Some(answer),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err("the image was never read".to_owned())),
+            Err(TryRecvError::Disconnected) => Some(Acquisition::Failed("the image was never read".to_owned())),
         }
+    }
+
+    fn stage(&self, stage: &str) {
+        self.progress.set_fraction(0.0);
+        self.progress.set_text(Some(stage));
+        self.progress.set_visible(true);
+        self.say(stage);
+    }
+
+    fn pulling(&self, status: &str, id: Option<&str>, current: Option<u64>, total: Option<u64>) {
+        let said = id.map_or_else(|| status.to_owned(), |id| format!("{status} · {id}"));
+        match (current, total) {
+            (Some(current), Some(total)) if total != 0 => {
+                self.progress
+                    .set_fraction((current as f64 / total as f64).clamp(0.0, 1.0));
+            }
+            _ => self.progress.pulse(),
+        }
+        self.progress.set_text(Some(&said));
+        self.progress.set_visible(true);
+        self.say(&said);
     }
 
     /// What the page last did, in one line.
@@ -257,6 +300,7 @@ impl Catalogue {
         let page = Rc::clone(self);
         read.connect_clicked(move |_| page.inspect());
         self.widget.append(&read);
+        self.widget.append(&self.progress);
         self.widget.append(&self.proposal);
         self.widget.append(&self.notice);
         self.tick();

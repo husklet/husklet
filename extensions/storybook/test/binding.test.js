@@ -40,11 +40,12 @@ test('the binding disagrees with the catalogue in exactly the known places', () 
   assert.deepEqual(Object.fromEntries(drifted), BINDING);
 });
 
-test('the control follows the binding where they differ', () => {
-  assert.equal(editorOf({ name: 'Grow', editor: 'number' }), 'switch');
-  assert.deepEqual(value('Grow', true), { Flag: true });
-  assert.equal(editorOf({ name: 'RowHeight', editor: 'number' }), 'length');
-  assert.deepEqual(value('RowHeight', 2), { Length: { Step: 2 } });
+test('the controls follow the current binding', () => {
+  assert.deepEqual(BINDING, {});
+  assert.equal(editorOf({ name: 'Grow', editor: 'number' }), 'number');
+  assert.deepEqual(value('Grow', 1), { Number: 1 });
+  assert.equal(editorOf({ name: 'RowHeight', editor: 'number' }), 'number');
+  assert.deepEqual(value('RowHeight', 2), { Number: 2 });
 });
 
 test('an enum property takes every member the catalogue lists', () => {

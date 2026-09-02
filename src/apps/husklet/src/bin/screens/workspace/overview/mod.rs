@@ -140,7 +140,7 @@ impl<'a> Overview<'a> {
             let workspace = held.clone();
             let reference = reference.to_owned();
             std::thread::spawn(move || {
-                let _ = answered.send(hl::extension::Candidate::read(&workspace, &reference));
+                hl::extension::Candidate::acquire(&workspace, &reference, &answered);
             });
             answer
         })
