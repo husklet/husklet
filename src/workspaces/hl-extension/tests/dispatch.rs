@@ -561,11 +561,11 @@ impl ExtensionStore for Host {
         self.ledger.note("extensions.acquisition_cancel");
         Ok(())
     }
-    fn install(&self, job: &str, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
+    fn install(&self, job: &str, _revision: u64, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.install");
         ExtensionStore::inspect(self, job)
     }
-    fn update(&self, job: &str, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
+    fn update(&self, job: &str, _revision: u64, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.update");
         ExtensionStore::inspect(self, job)
     }
@@ -697,6 +697,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::ExtensionInstall {
                 job: "job-1".into(),
+                revision: 7,
                 granted: Grant::new([Capability::Interface]),
             },
             Capability::ExtensionInstall,
@@ -704,6 +705,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::ExtensionUpdate {
                 job: "job-1".into(),
+                revision: 7,
                 granted: Grant::new([Capability::Interface]),
             },
             Capability::ExtensionInstall,

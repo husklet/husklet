@@ -72,10 +72,12 @@ pub enum Request {
     },
     ExtensionInstall {
         job: String,
+        revision: u64,
         granted: crate::Grant,
     },
     ExtensionUpdate {
         job: String,
+        revision: u64,
         granted: crate::Grant,
     },
     ContainerList,

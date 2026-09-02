@@ -284,8 +284,8 @@ export interface WorkspaceApi {
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     cancelAcquisition(job: string): Promise<void>;
-    install(job: string, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
-    update(job: string, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
   };
   containers: {
     list(): Promise<ContainerSummary[]>;

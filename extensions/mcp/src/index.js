@@ -10,6 +10,7 @@ const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
 const extensionGrant = z.array(extensionCapability).max(23);
+const acquisitionRevision = z.number().int().nonnegative().safe();
 const path = z.string().min(1).max(4096);
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
@@ -65,8 +66,8 @@ export function tools(api) {
     define('husklet_extension_acquire', 'Start bounded asynchronous inspection of one image reference after explicit confirmation.', z.object({ reference: imageReference, confirm: z.literal(true) }).strict(), ({ reference }) => api.extensions.startAcquisition(reference)),
     define('husklet_extension_acquisition', 'Read bounded acquisition progress, digest, manifest identity, and requested grants.', z.object({ job: extensionJob }).strict(), ({ job }) => api.extensions.acquisition(job)),
     define('husklet_extension_acquisition_cancel', 'Cancel one acquisition after explicit confirmation.', z.object({ job: extensionJob, confirm: z.literal(true) }).strict(), async ({ job }) => { await api.extensions.cancelAcquisition(job); return { done: true }; }),
-    define('husklet_extension_install', 'Consent and atomically install a ready digest-bound candidate.', z.object({ job: extensionJob, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, granted }) => api.extensions.install(job, granted)),
-    define('husklet_extension_update', 'Consent and atomically replace an installed extension with a ready digest-bound candidate.', z.object({ job: extensionJob, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, granted }) => api.extensions.update(job, granted)),
+    define('husklet_extension_install', 'Consent and atomically install the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.install(job, revision, granted)),
+    define('husklet_extension_update', 'Consent and atomically replace an installed extension with the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.update(job, revision, granted)),
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),

@@ -111,8 +111,8 @@ export function workspace(session) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job) => done('extension_acquisition_cancel', { job }),
-      install: async (job, granted) => expect(await session.call('extension_install', { job, granted }), 'extension'),
-      update: async (job, granted) => expect(await session.call('extension_update', { job, granted }), 'extension'),
+      install: async (job, revision, granted) => expect(await session.call('extension_install', { job, revision, granted }), 'extension'),
+      update: async (job, revision, granted) => expect(await session.call('extension_update', { job, revision, granted }), 'extension'),
     },
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),

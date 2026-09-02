@@ -393,13 +393,13 @@ impl Session {
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
-            Request::ExtensionInstall { job, granted } => {
+            Request::ExtensionInstall { job, revision, granted } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(port.install(job, granted)?))
+                Ok(Reply::Extension(port.install(job, *revision, granted)?))
             }
-            Request::ExtensionUpdate { job, granted } => {
+            Request::ExtensionUpdate { job, revision, granted } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(port.update(job, granted)?))
+                Ok(Reply::Extension(port.update(job, *revision, granted)?))
             }
             _ => Err(Failure::Unsupported {
                 call: "extension management".into(),

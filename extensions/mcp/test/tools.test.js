@@ -102,15 +102,16 @@ test('extension inventory is bounded and every lifecycle mutation requires confi
 test('extension acquisition is asynchronous, digest-observable, grant-bounded, and confirmed', async () => {
   const { api, calls } = fake(); const listed = tools(api); const byName = (name) => listed.find((tool) => tool.name === name);
   for (const name of ['husklet_extension_acquire', 'husklet_extension_acquisition_cancel', 'husklet_extension_install', 'husklet_extension_update']) {
-    assert.equal(byName(name).inputSchema.safeParse(name.endsWith('acquire') ? { reference: 'example:1' } : { job: 'j', granted: [], confirm: false }).success, false);
+    assert.equal(byName(name).inputSchema.safeParse(name.endsWith('acquire') ? { reference: 'example:1' } : { job: 'j', revision: 1, granted: [], confirm: false }).success, false);
   }
-  assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', granted: ['made-up'], confirm: true }).success, false);
+  assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: 1, granted: ['made-up'], confirm: true }).success, false);
+  assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: Number.MAX_SAFE_INTEGER + 1, granted: [], confirm: true }).success, false);
   await byName('husklet_extension_acquire').run({ reference: 'example:1', confirm: true });
   await byName('husklet_extension_acquisition').run({ job: 'j' });
   await byName('husklet_extension_acquisition_cancel').run({ job: 'j', confirm: true });
-  await byName('husklet_extension_install').run({ job: 'j', granted: ['interface'], confirm: true });
-  await byName('husklet_extension_update').run({ job: 'j', granted: ['interface'], confirm: true });
-  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j'], ['extensions.install', 'j', ['interface']], ['extensions.update', 'j', ['interface']]]);
+  await byName('husklet_extension_install').run({ job: 'j', revision: 4, granted: ['interface'], confirm: true });
+  await byName('husklet_extension_update').run({ job: 'j', revision: 4, granted: ['interface'], confirm: true });
+  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j'], ['extensions.install', 'j', 4, ['interface']], ['extensions.update', 'j', 4, ['interface']]]);
 });
 
 test('container create and exec accept only bounded structured authority', async () => {
@@ -434,7 +435,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.equal(JSON.parse(acquired.content[0].text).job, 'job-live');
   const candidate = await client.callTool({ name: 'husklet_extension_acquisition', arguments: { job: 'job-live' } });
   assert.equal(JSON.parse(candidate.content[0].text).candidate.image_digest, 'sha256:def');
-  await client.callTool({ name: 'husklet_extension_install', arguments: { job: 'job-live', granted: ['interface'], confirm: true } });
+  await client.callTool({ name: 'husklet_extension_install', arguments: { job: 'job-live', revision: 3, granted: ['interface'], confirm: true } });
   const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: 'exec-live' } });
   assert.deepEqual(JSON.parse(execution.content[0].text), {
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
@@ -459,7 +460,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_disable', { name: 'manager' }],
     ['extension_acquisition_start', { reference: 'example:1' }],
     ['extension_acquisition_status', { job: 'job-live' }],
-    ['extension_install', { job: 'job-live', granted: ['interface'] }],
+    ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
     ['image_list', undefined],

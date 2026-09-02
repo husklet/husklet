@@ -33,7 +33,8 @@ Enable, disable, and record removal each require literal `confirm: true` and the
 host's `ExtensionControl` grant. Acquisition uses the separate
 `ExtensionInstall` authority: a confirmed start returns a bounded job, status
 reveals the resolved digest, manifest identity, and requested grants, and only a
-second confirmed install or update commits the caller-selected grant. Cancellation
+second confirmed install or update echoes that observed revision and commits the
+caller-selected grant; a changed candidate therefore makes stale consent fail. Cancellation
 is also explicit and confirmed; no MCP call performs an unobservable blocking pull.
 
 Volume and network inventory/inspection use the host's separate `VolumeRead`
