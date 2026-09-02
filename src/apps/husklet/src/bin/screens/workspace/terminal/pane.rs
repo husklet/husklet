@@ -39,6 +39,8 @@ impl PaneChrome {
 }
 
 impl PaneChooser {
+    const SEARCH_THRESHOLD: usize = 6;
+
     /// A chooser whose contents are rebuilt when it opens.
     ///
     /// The button exists even before an extension is installed, so tabs that
@@ -47,8 +49,8 @@ impl PaneChooser {
     /// or uninstalled providers without leaving stale actions behind.
     pub(crate) fn button(window: &Rc<TermWin>) -> gtk::MenuButton {
         let button = gtk::MenuButton::new();
-        button.set_icon_name("view-more-symbolic");
-        button.set_tooltip_text(Some("Choose pane content"));
+        button.set_icon_name("view-grid-symbolic");
+        button.set_tooltip_text(Some("Choose what this pane displays"));
         button.add_css_class("flat");
         button.set_halign(gtk::Align::End);
         button.set_valign(gtk::Align::Start);
@@ -65,21 +67,88 @@ impl PaneChooser {
     }
 
     pub(crate) fn populate(window: &Rc<TermWin>, button: &gtk::MenuButton) {
-        let choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let providers = Window::gallery(window).map_or_else(Vec::new, |gallery| gallery.providers());
+        let choices = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        choices.set_margin_top(10);
+        choices.set_margin_bottom(10);
+        choices.set_margin_start(10);
+        choices.set_margin_end(10);
+        choices.set_width_request(260);
+
+        let heading = gtk::Label::new(Some("Pane content"));
+        heading.add_css_class("heading");
+        heading.set_xalign(0.0);
+        choices.append(&heading);
+
         let terminal = gtk::Button::with_label("Terminal");
+        terminal.set_tooltip_text(Some("Show this pane's terminal"));
+        terminal.set_halign(gtk::Align::Fill);
         {
             let window = window.clone();
             terminal.connect_clicked(move |_| Self::terminal(&window));
         }
         choices.append(&terminal);
-        for provider in Window::gallery(window).map_or_else(Vec::new, |gallery| gallery.providers()) {
-            let choice = gtk::Button::with_label(&provider.title);
-            choice.set_tooltip_text(Some(&format!("{} · {}", provider.extension, provider.id)));
-            let window = window.clone();
-            let extension = provider.extension;
-            let id = provider.id;
-            choice.connect_clicked(move |_| Self::provider(&window, &extension, &id));
-            choices.append(&choice);
+
+        if providers.is_empty() {
+            let empty = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            empty.add_css_class("dim-label");
+            let title = gtk::Label::new(Some("No extension views available"));
+            title.set_xalign(0.0);
+            let detail = gtk::Label::new(Some("Install or enable an extension with pane views to show it here."));
+            detail.set_xalign(0.0);
+            detail.set_wrap(true);
+            empty.append(&title);
+            empty.append(&detail);
+            choices.append(&empty);
+        } else {
+            let search = (providers.len() >= Self::SEARCH_THRESHOLD).then(|| {
+                let search = gtk::SearchEntry::new();
+                search.set_placeholder_text(Some("Search extension views"));
+                choices.append(&search);
+                search
+            });
+
+            let mut groups: Vec<(gtk::Label, Vec<(gtk::Button, String)>)> = Vec::new();
+            let mut current_extension = None;
+            for provider in providers {
+                if current_extension.as_deref() != Some(provider.extension.as_str()) {
+                    let label = gtk::Label::new(Some(&provider.extension));
+                    label.add_css_class("caption");
+                    label.add_css_class("dim-label");
+                    label.set_xalign(0.0);
+                    choices.append(&label);
+                    groups.push((label, Vec::new()));
+                    current_extension = Some(provider.extension.clone());
+                }
+                let choice = gtk::Button::with_label(&provider.title);
+                choice.set_tooltip_text(Some(&format!("{} · {}", provider.extension, provider.id)));
+                choice.set_halign(gtk::Align::Fill);
+                let identity = format!("{}\n{} {}", provider.extension, provider.title, provider.id).to_lowercase();
+                let window = window.clone();
+                let extension = provider.extension;
+                let id = provider.id;
+                choice.connect_clicked(move |_| Self::provider(&window, &extension, &id));
+                choices.append(&choice);
+                groups
+                    .last_mut()
+                    .expect("a provider has an extension group")
+                    .1
+                    .push((choice, identity));
+            }
+            if let Some(search) = search {
+                search.connect_search_changed(move |search| {
+                    let query = search.text().to_lowercase();
+                    for (heading, choices) in &groups {
+                        let mut any = false;
+                        for (choice, identity) in choices {
+                            let visible = query.is_empty() || identity.contains(&query);
+                            choice.set_visible(visible);
+                            any |= visible;
+                        }
+                        heading.set_visible(any);
+                    }
+                });
+            }
         }
         let popover = gtk::Popover::new();
         popover.set_child(Some(&choices));
