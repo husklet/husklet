@@ -47,6 +47,7 @@ const TICK: std::time::Duration = std::time::Duration::from_millis(100);
 /// The "Extensions" page: what is installed, and how to install another.
 pub struct Catalogue {
     widget: gtk::Box,
+    viewport: gtk::ScrolledWindow,
     shelf: Rc<Shelf>,
     inspection: Inspection,
     listing: gtk::Box,
@@ -70,6 +71,12 @@ impl Catalogue {
     pub fn new(shelf: &Rc<Shelf>, inspection: Inspection) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 12);
         widget.add_css_class("dmain");
+        let viewport = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .child(&widget)
+            .build();
+        viewport.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         let notice = text("", NOTICE);
         let proposal = gtk::Box::new(gtk::Orientation::Vertical, 6);
         proposal.add_css_class(PROPOSAL);
@@ -87,6 +94,7 @@ impl Catalogue {
         );
         let page = Rc::new(Self {
             widget,
+            viewport,
             shelf: Rc::clone(shelf),
             inspection,
             listing: gtk::Box::new(gtk::Orientation::Vertical, 4),
@@ -115,6 +123,13 @@ impl Catalogue {
     #[must_use]
     pub const fn widget(&self) -> &gtk::Box {
         &self.widget
+    }
+
+    /// The bounded workspace-page viewport that keeps long catalogues usable
+    /// without making the containing window adopt their full natural height.
+    #[must_use]
+    pub const fn viewport(&self) -> &gtk::ScrolledWindow {
+        &self.viewport
     }
 
     /// Redraws the listing from what the roster now says.

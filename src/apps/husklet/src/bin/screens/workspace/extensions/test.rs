@@ -183,7 +183,7 @@ impl Fixture {
         view.page(Page::Extensions.title())
             .and_downcast::<gtk::Box>()
             .expect("extensions page")
-            .append(catalogue.widget());
+            .append(catalogue.viewport());
         Self {
             _storage: storage,
             view,
@@ -476,12 +476,21 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
     let fixture = Fixture::new(&[("alpha", false)]);
     fixture.view.select_name(Page::Extensions.title());
     let window = gtk::Window::builder()
-        .default_width(900)
-        .default_height(700)
+        .default_width(300)
+        .default_height(420)
         .child(&fixture.view.widget)
         .build();
     window.present();
     while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!((window.width(), window.height()), (300, 420));
+    assert!(
+        fixture._catalogue.viewport().vexpands(),
+        "the catalogue consumes the bounded page height"
+    );
+    assert!(
+        fixture._catalogue.viewport().vadjustment().upper() > fixture._catalogue.viewport().vadjustment().page_size(),
+        "the narrow catalogue scrolls instead of imposing its full natural height"
+    );
     let focusable: Vec<_> = descendants(fixture.view.widget.upcast_ref())
         .into_iter()
         .filter(|widget| {
@@ -499,6 +508,17 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             .all(|widget| traversed.iter().any(|focused| focused == widget)),
         "Tab reaches every visible enabled catalogue/lifecycle control"
     );
+
+    window.set_child(gtk::Widget::NONE);
+    window.close();
+    let window = gtk::Window::builder()
+        .default_width(1_200)
+        .default_height(700)
+        .child(&fixture.view.widget)
+        .build();
+    window.present();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(window.width(), 1_200, "the same live page reallocates at wide size");
 
     let initial = fixture.view.semantic_snapshot();
     let enable = initial

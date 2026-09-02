@@ -331,7 +331,7 @@ impl<'a> Overview<'a> {
             fallback.reconcile(false);
         }
         if let Some(catalogue) = &catalogue {
-            shelf.append(catalogue.widget());
+            shelf.append(catalogue.viewport());
         }
         if let Some(window) = self.window {
             Console::new(window, errands).install();
