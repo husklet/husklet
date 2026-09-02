@@ -1603,6 +1603,7 @@ dependencies = [
  "libc",
  "objc2-app-kit",
  "objc2-foundation",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",

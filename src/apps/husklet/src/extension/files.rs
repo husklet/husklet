@@ -1,11 +1,15 @@
 //! Files beneath one workspace's storage directory.
 
+use std::ffi::{CStr, CString};
+use std::fs::File;
 use std::io::{self, Write as _};
+use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hl_extension::RelativePath;
 use hl_extension::port::{Entry, HostError, WorkspaceFiles};
+use hl_extension::RelativePath;
 
 /// The workspace file port, rooted at one directory.
 ///
@@ -157,16 +161,19 @@ impl WorkspaceFiles for WorkspaceDirectory {
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
-struct Temporary(PathBuf);
+struct Temporary {
+    directory: File,
+    name: CString,
+}
 
 impl Drop for Temporary {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = rustix::fs::unlinkat(&self.directory, &self.name, rustix::fs::AtFlags::empty());
     }
 }
 
 fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
-    atomic_write_before_publish(target, contents, |_| Ok(()))
+    atomic_write_with(target, contents, || Ok(()), |_| Ok(()))
 }
 
 fn atomic_write_before_publish(
@@ -174,20 +181,43 @@ fn atomic_write_before_publish(
     contents: &[u8],
     before_publish: impl FnOnce(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
+    atomic_write_with(target, contents, || Ok(()), before_publish)
+}
+
+fn atomic_write_with(
+    target: &Path,
+    contents: &[u8],
+    before_open: impl FnOnce() -> io::Result<()>,
+    before_publish: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = target
         .parent()
         .ok_or_else(|| io::Error::other("file has no parent directory"))?;
+    let expected = std::fs::metadata(parent)?;
+    before_open()?;
+    let directory = File::open(parent)?;
+    let actual = directory.metadata()?;
+    if (expected.dev(), expected.ino()) != (actual.dev(), actual.ino()) {
+        return Err(io::Error::other("containing directory changed before publication"));
+    }
+    let target_name = c_name(target)?;
+    if symlink_at(&directory, &target_name)? {
+        return Err(io::Error::other("publication target is a symbolic link"));
+    }
     let mut opened = None;
     for _ in 0..128 {
         let sequence = TEMPORARY.fetch_add(1, Ordering::Relaxed);
-        let temporary = parent.join(format!(".husklet-write-{}-{sequence}.tmp", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        let name = CString::new(format!(".husklet-write-{}-{sequence}.tmp", std::process::id()))
+            .expect("generated temporary names contain no NUL");
+        match open_exclusive_at(&directory, &name) {
             Ok(file) => {
-                opened = Some((Temporary(temporary), file));
+                opened = Some((
+                    Temporary {
+                        directory: directory.try_clone()?,
+                        name,
+                    },
+                    file,
+                ));
                 break;
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -196,15 +226,45 @@ fn atomic_write_before_publish(
     }
     let (temporary, mut file) = opened
         .ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not reserve atomic write temporary"))?;
-    if let Ok(metadata) = std::fs::metadata(target) {
-        file.set_permissions(metadata.permissions())?;
-    }
     file.write_all(contents)?;
     file.sync_all()?;
-    before_publish(&temporary.0)?;
-    std::fs::rename(&temporary.0, target)?;
-    std::fs::File::open(parent)?.sync_all()?;
+    before_publish(&parent.join(temporary.name.to_string_lossy().as_ref()))?;
+    rename_at(&directory, &temporary.name, &target_name)?;
+    directory.sync_all()?;
     Ok(())
+}
+
+fn c_name(path: &Path) -> io::Result<CString> {
+    let name = path.file_name().ok_or_else(|| io::Error::other("file has no name"))?;
+    CString::new(name.as_bytes()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file name contains NUL"))
+}
+
+fn open_exclusive_at(directory: &File, name: &CStr) -> io::Result<File> {
+    let descriptor = rustix::fs::openat(
+        directory,
+        name,
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )?;
+    Ok(File::from(descriptor))
+}
+
+fn symlink_at(directory: &File, name: &CStr) -> io::Result<bool> {
+    match rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(status) => Ok(rustix::fs::FileType::from_raw_mode(status.st_mode) == rustix::fs::FileType::Symlink),
+        Err(rustix::io::Errno::NOENT) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn rename_at(directory: &File, from: &CStr, to: &CStr) -> io::Result<()> {
+    // Both names are interpreted relative to the same pinned directory.
+    // rename replaces, rather than follows, `to`.
+    rustix::fs::renameat(directory, from, directory, to).map_err(Into::into)
 }
 
 /// Appends already-validated components to the root.
@@ -261,8 +321,8 @@ fn described(parent: &RelativePath, entry: &std::fs::DirEntry) -> Result<Entry, 
 #[cfg(test)]
 mod tests {
     use super::WorkspaceDirectory;
-    use hl_extension::RelativePath;
     use hl_extension::port::{HostError, WorkspaceFiles};
+    use hl_extension::RelativePath;
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
@@ -392,17 +452,79 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&target).expect("old contents"), b"old bytes");
-        assert!(
-            std::fs::read_dir(temporary.path())
-                .expect("directory listing")
-                .all(|entry| {
-                    !entry
-                        .expect("entry")
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".husklet-write-")
-                })
+        assert!(std::fs::read_dir(temporary.path())
+            .expect("directory listing")
+            .all(|entry| {
+                !entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".husklet-write-")
+            }));
+    }
+
+    #[test]
+    fn replaced_parent_is_rejected_before_any_raced_path_is_written() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let parent = temporary.path().join("parent");
+        let displaced = temporary.path().join("displaced");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir_all(&parent).expect("parent");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(parent.join("state"), b"old bytes").expect("old contents");
+        std::fs::write(outside.join("state"), b"outside bytes").expect("outside contents");
+        let target = parent.join("state");
+
+        let result = super::atomic_write_with(
+            &target,
+            b"new bytes",
+            || {
+                std::fs::rename(&parent, &displaced)?;
+                std::os::unix::fs::symlink(&outside, &parent)?;
+                Ok(())
+            },
+            |_| Ok(()),
         );
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(displaced.join("state")).expect("old contents"),
+            b"old bytes"
+        );
+        assert_eq!(
+            std::fs::read(outside.join("state")).expect("outside contents"),
+            b"outside bytes"
+        );
+        assert!(std::fs::read_dir(&outside).expect("outside listing").all(|entry| {
+            !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-write-")
+        }));
+    }
+
+    #[test]
+    fn final_symlink_raced_in_before_rename_is_replaced_not_followed() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = temporary.path().join("state");
+        let outside = temporary.path().join("outside");
+        std::fs::write(&target, b"old bytes").expect("old contents");
+        std::fs::write(&outside, b"outside bytes").expect("outside contents");
+
+        super::atomic_write_before_publish(&target, b"new bytes", |_| {
+            std::fs::remove_file(&target)?;
+            std::os::unix::fs::symlink(&outside, &target)?;
+            Ok(())
+        })
+        .expect("atomic publication");
+
+        assert_eq!(std::fs::read(&target).expect("published contents"), b"new bytes");
+        assert!(!std::fs::symlink_metadata(&target)
+            .expect("published metadata")
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&outside).expect("outside contents"), b"outside bytes");
     }
 
     #[test]
