@@ -233,6 +233,13 @@ export type WorkspaceEvent =
   | { event: 'focus'; active: boolean }
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
+export interface PaneSelection { pane_provider: string; slot: string }
+export interface InterfaceEvent {
+  interaction: string; trigger: string; node: number; id: string; slot?: string;
+  value?: unknown; rows?: number[]; key?: string; keycode?: number; modifiers?: number;
+  pressed?: boolean; focused?: boolean; phase?: string; x?: number; y?: number;
+  button?: number; dx?: number; dy?: number;
+}
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'images'; of: ImageSummary[] }
@@ -243,6 +250,7 @@ export type SnapshotEvent =
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
+export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent;
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
@@ -255,7 +263,7 @@ export interface ConnectOptions {
   timeout?: number;
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
-  onEvent?: (event: SnapshotEvent, channel: number) => void;
+  onEvent?: (event: HostEvent, channel: number) => void;
   onEventError?: (error: unknown) => void;
 }
 
@@ -265,7 +273,7 @@ export class Session {
   readonly granted: readonly string[];
   call(method: string, params?: unknown): Promise<unknown>;
   answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: SnapshotEvent, channel: number) => void): () => boolean;
+  onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
   close(): Promise<void>;
 }
 

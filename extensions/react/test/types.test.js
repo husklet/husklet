@@ -69,3 +69,15 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
     'the generated render options describe tab-to-split composition',
   );
 });
+
+test('host events type the pane chooser identity as well as subscribed snapshots', () => {
+  assert.match(declarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
+  assert.match(declarations, /export interface InterfaceEvent \{/);
+  assert.match(declarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent;/);
+  assert.match(declarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
+  assert.doesNotMatch(
+    declarations,
+    /onEvent\?: \(event: SnapshotEvent/,
+    'strict consumers are incorrectly told that provider selections cannot arrive',
+  );
+});

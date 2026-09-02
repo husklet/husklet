@@ -40,7 +40,7 @@ try {
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { render, workspace, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
+    import { render, workspace, type HostEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
@@ -55,6 +55,14 @@ try {
     const mutation: InterfaceSourceMutation = { Length: { source: 1, version: 2, rows: 100_000 } };
     void surface.ready;
     void surface.source(mutation);
+    const event: HostEvent = { pane_provider: 'logs', slot: 'pane-1' };
+    if ('pane_provider' in event) {
+      const provider: string = event.pane_provider;
+      const slot: string = event.slot;
+      void provider; void slot;
+    }
+    const interaction: HostEvent = { interaction: 'focus', trigger: 'Focus', node: 1, id: '1:Focus', focused: true };
+    void interaction;
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',

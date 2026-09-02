@@ -43,6 +43,55 @@ const session = await connect();          // reads HUSKLET_EXTENSION_SOCKET
 render(<App />, session, { title: 'My Extension' });
 ```
 
+## Pane providers
+
+An extension can offer named views in the workspace pane chooser. Declare each
+choice in the image manifest alongside the required `interface` capability:
+
+```toml
+capabilities = ["interface"]
+
+[[pane_providers]]
+id = "logs"
+title = "Service logs"
+icon = "text-x-generic-symbolic"
+```
+
+Choosing that entry sends a typed `PaneSelection` carrying both the provider ID
+and the stable workspace slot that selected it. Use that event to select the
+view rendered by the extension's existing root:
+
+```jsx
+import React, { useEffect, useState } from 'react';
+import { connect, render, LogView, Text } from '@husklet/react';
+
+const listeners = new Set();
+const session = await connect({
+  onEvent(event) {
+    if ('pane_provider' in event) {
+      for (const listener of listeners) listener(event);
+    }
+  },
+});
+
+function App() {
+  const [selection, setSelection] = useState(null);
+  useEffect(() => {
+    listeners.add(setSelection);
+    return () => listeners.delete(setSelection);
+  }, []);
+  return selection?.pane_provider === 'logs'
+    ? <LogView value={`Logs selected in ${selection.slot}`} />
+    : <Text value="Choose Service logs from a pane menu" />;
+}
+
+render(<App />, session, { title: 'My Extension' });
+```
+
+The host sends only providers declared by this extension. The `slot` lets state
+and diagnostics remain pane-addressed; it is not a request to open an unrelated
+tab or split.
+
 ## Workspace API
 
 Host calls are promises with typed results and typed failures. Outstanding
