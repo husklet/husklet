@@ -2,8 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { LargeDataTableStory, LargeRecordSource, LOGICAL_ROWS, WINDOW_LIMIT, SOURCE } from '../src/large-table.js';
+import { Playground } from '../src/app.js';
+import { LargeDataTableStory, LargeRecordSource, LOGICAL_ROWS, OPERATION_HISTORY_LIMIT, WINDOW_LIMIT, SOURCE } from '../src/large-table.js';
 import { host } from './host.js';
+
+function node(patches, tag, label) {
+  let candidate = null;
+  for (const patch of patches) {
+    if ('Create' in patch && patch.Create.tag === tag) candidate = patch.Create.id;
+    if (candidate !== null && 'SetProp' in patch && patch.SetProp.id === candidate
+      && patch.SetProp.prop === 'Label' && patch.SetProp.value.Text === label) return candidate;
+  }
+  return null;
+}
 
 test('one DataTable node represents 100k rows without materializing row nodes', () => {
   const stage = host();
@@ -25,6 +36,7 @@ test('sort, filter, resize and all states remain bounded source operations', asy
   const request = { id: 4, source: SOURCE, version: 1, range: { start: 40_000, count: 10_000 }, sort: null, filter: null };
   const first = source.answer(request);
   assert.equal(first.rows.length, WINDOW_LIMIT, 'a resized viewport cannot exceed one protocol window');
+  assert(first.rows.length <= 128, 'the wire window has a fixed production bound');
   assert.equal(source.generated, WINDOW_LIMIT);
 
   await source.configure({ descending: true });
@@ -70,4 +82,36 @@ test('the story controls visibly demonstrate loading, empty, error, filter and s
   stage.surface.dispatch({ trigger: 'Invoke', node: button, id: `${button}:Invoke`, value: null });
   assert.equal(source.filter, 'needle');
   assert.equal(source.descending, true);
+});
+
+test('selection and keyboard focus produce a bounded operational detail history', () => {
+  const stage = host();
+  const source = new LargeRecordSource();
+  const first = stage.render(h(LargeDataTableStory, { source }));
+  const table = first.patches.find((patch) => patch.Create?.tag === 'DataTable').Create.id;
+
+  stage.surface.dispatch({ trigger: 'Select', node: table, id: `${table}:Select`, rows: Array.from({ length: 1_000 }, (_, index) => index + 42) });
+  for (let index = 0; index < OPERATION_HISTORY_LIMIT + 4; index += 1) {
+    stage.surface.dispatch({ trigger: 'Focus', node: table, id: `${table}:Focus`, focused: true });
+  }
+
+  const labels = stage.frames.flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value.Text);
+  assert.ok(labels.includes('Selected logical row 42'));
+  assert.ok(labels.includes(`Recent operations (${OPERATION_HISTORY_LIMIT}/${OPERATION_HISTORY_LIMIT})`));
+  const final = stage.frames.at(-1).patches.filter((patch) => patch.SetProp?.prop === 'Label');
+  assert(final.length <= OPERATION_HISTORY_LIMIT + 1, 'one event must not materialize an unbounded detail list');
+  assert(!JSON.stringify(stage.frames).includes('1041'), 'selection details must not serialize all selected rows');
+});
+
+test('the high-density operations story is selectable in the shipped playground', () => {
+  const stage = host();
+  const source = new LargeRecordSource();
+  const first = stage.render(h(Playground, { largeSource: source }));
+  const item = node(first.patches, 'ListItemButton', 'DataTable');
+  assert.ok(item);
+  const before = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke` });
+  assert.ok(node(stage.since(before), 'Heading', '100,000 logical records'));
 });
