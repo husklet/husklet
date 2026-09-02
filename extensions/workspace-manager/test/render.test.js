@@ -519,6 +519,8 @@ test('empty and host-truncated execution catalogues remain explicit', async () =
 
 test('volume and network mutations expose danger only on final confirm and cancel safely', async () => {
   const calls = [];
+  const volumeGeneration = 'd'.repeat(32);
+  const refreshedVolumeGeneration = 'e'.repeat(32);
   const networkId = 'a'.repeat(32);
   const refreshedNetworkId = 'c'.repeat(32);
   const containerId = 'b'.repeat(64);
@@ -536,16 +538,20 @@ test('volume and network mutations expose danger only on final confirm and cance
   };
 
   const volumes = host();
-  volumes.render(h(Volumes, { api: controlled, resource: resource([{ name: 'cache', driver: 'local' }]) }));
+  volumes.render(h(Volumes, { api: controlled, resource: resource([{ name: 'cache', driver: 'local', generation: volumeGeneration }]) }));
   invoke(volumes, 'Remove');
   assert.deepEqual(calls, []);
   assert.equal(isDestructive(volumes, 'Confirm remove'), true);
-  invoke(volumes, 'Cancel');
+  assert.ok(labelled(volumes, `Remove volume cache generation ${volumeGeneration}?`));
+  const staleVolumeConfirm = labelled(volumes, 'Confirm remove').SetProp.id;
+  volumes.render(h(Volumes, { api: controlled, resource: resource([{ name: 'cache', driver: 'local', generation: refreshedVolumeGeneration }]) }));
+  volumes.surface.dispatch({ trigger: 'Invoke', node: staleVolumeConfirm, id: `${staleVolumeConfirm}:Invoke`, value: null });
+  await settled();
   assert.deepEqual(calls, []);
   invoke(volumes, 'Remove');
   invoke(volumes, 'Confirm remove');
   await settled();
-  assert.deepEqual(calls, [['volume.remove', 'cache']]);
+  assert.deepEqual(calls, [['volume.remove', 'cache', refreshedVolumeGeneration]]);
 
   const networks = host();
   const initialNetworks = resource([{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }]);
@@ -576,7 +582,7 @@ test('a failed final confirmation stays visible and retryable', async () => {
     inspect: async () => ({}), create: async () => ({}),
     remove: async () => { attempts += 1; throw new Error('volume remains in use'); },
   } };
-  const resource = { data: [{ name: 'cache', driver: 'local' }], loading: false, error: null, reload: async () => {} };
+  const resource = { data: [{ name: 'cache', driver: 'local', generation: 'e'.repeat(32) }], loading: false, error: null, reload: async () => {} };
   const stage = host();
   stage.render(h(Volumes, { api: controlled, resource }));
   invoke(stage, 'Remove');

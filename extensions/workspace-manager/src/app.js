@@ -479,7 +479,14 @@ export function Volumes({ api, resource, volumeDetails }) {
   const [name, setName] = useState('');
   const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, error: null });
   const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (volume) => { await api.volumes.remove(volume.name); if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const currentVolumes = useRef(new Map());
+  currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
+  const remove = async (volume) => {
+    if (currentVolumes.current.get(volume.name) !== volume.generation) return;
+    await api.volumes.remove(volume.name, volume.generation);
+    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, error: null });
+    await resource.reload();
+  };
   const inspect = async (volume) => {
     setInspection({ name: volume.name, state: 'loading', count: 0, error: null });
     try {
@@ -492,10 +499,10 @@ export function Volumes({ api, resource, volumeDetails }) {
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(ErrorText, { error: resource.error }),
     h(InventoryEmpty, { resource, records: view.records, label: 'No volumes', detail: 'Create a named volume above when a workload needs durable storage.' }),
-    ...view.records.map((volume) => h(Card, { key: volume.name, variant: inspection.name === volume.name ? 'filled' : 'outline' },
+    ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name}?`,
+        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name} generation ${volume.generation}?`,
         onConfirm: () => remove(volume),
       })),
       inspection.name === volume.name ? h(CardContent, {},

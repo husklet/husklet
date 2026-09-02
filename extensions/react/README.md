@@ -134,6 +134,9 @@ require the complete immutable container ID.
 `attachTerminal` requires the separate `container-attach` grant, preserves argv
 boundaries, opens a non-restored GUI tab, and kills its interactive exec when that
 pane disconnects.
+Volume removal takes both its canonical name and the 32-hex `generation` returned
+by inventory or inspection. The host compares that generation atomically, so a
+removed and recreated same-name volume needs fresh consent.
 The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads

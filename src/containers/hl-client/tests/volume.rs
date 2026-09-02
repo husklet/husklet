@@ -140,6 +140,18 @@ async fn remove_encodes_force_and_preserves_conflict_status() {
         } if message == "volume is in use"
     ));
     captured.await.unwrap();
+
+    let socket = root.path().join("conditional.sock");
+    let captured = peer(&socket, "204 No Content", "");
+    Client::unix(&socket)
+        .unwrap()
+        .volumes()
+        .remove_if_generation("cache/name", "0123456789abcdef0123456789abcdef")
+        .await
+        .unwrap();
+    assert!(captured.await.unwrap().starts_with(
+        "DELETE /v1.43/volumes/cache%2Fname?generation=0123456789abcdef0123456789abcdef HTTP/1.1\r\n"
+    ));
 }
 
 #[tokio::test]

@@ -219,6 +219,7 @@ pub struct ImagePullChange {
 pub struct VolumeSummary {
     pub name: String,
     pub driver: String,
+    pub generation: String,
 }
 
 /// A workspace-local network as an extension sees it.
@@ -800,7 +801,7 @@ pub trait VolumeStore {
     fn create(&self, _name: &str) -> Result<VolumeSummary, HostError> {
         Err(HostError::Unsupported("volume creation is unavailable".into()))
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("volume removal is unavailable".into()))
     }
 }

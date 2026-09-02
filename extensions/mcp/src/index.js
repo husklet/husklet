@@ -11,6 +11,7 @@ const containerIdentity = z.string().regex(/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/, 'c
 const executionIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable execution ID is required');
 const imageDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/, 'complete immutable image sha256 digest is required');
 const networkIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable network ID is required');
+const volumeGeneration = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable volume generation is required');
 const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
@@ -145,7 +146,7 @@ export function tools(api) {
     define('husklet_volume_list', 'List bounded local volume summaries.', empty, () => api.volumes.list()),
     define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.inspect(name)),
     define('husklet_volume_create', 'Create one named local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.create(name)),
-    define('husklet_volume_remove', 'Remove one volume after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.volumes.remove(name); return { done: true }; }),
+    define('husklet_volume_remove', 'Remove one exact observed volume generation after explicit confirmation.', z.object({ name: id, generation: volumeGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.volumes.remove(name, generation); return { done: true }; }),
     define('husklet_network_list', 'List bounded local network summaries.', empty, () => api.networks.list()),
     define('husklet_network_inspect', 'Inspect one local network.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference)),
     define('husklet_network_create', 'Create one named local network.', z.object({ name: id }).strict(), ({ name }) => api.networks.create(name)),

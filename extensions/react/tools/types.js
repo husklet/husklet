@@ -211,7 +211,7 @@ export interface ExecutionSummary {
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
-export interface VolumeSummary { name: string; driver: string }
+export interface VolumeSummary { name: string; driver: string; generation: string }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
 export interface PaneSummary {
   slot: string;
@@ -323,7 +323,7 @@ export interface WorkspaceApi {
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string): Promise<void>;
     disable(name: string): Promise<void>;
-    remove(name: string): Promise<void>;
+    remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     cancelAcquisition(job: string): Promise<void>;

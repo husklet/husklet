@@ -45,6 +45,7 @@ impl hl_extension::port::VolumeStore for Host {
         Ok(vec![hl_extension::port::VolumeSummary {
             name: "cache".into(),
             driver: "local".into(),
+            generation: "a".repeat(32),
         }])
     }
     fn inspect(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
@@ -52,6 +53,7 @@ impl hl_extension::port::VolumeStore for Host {
         Ok(hl_extension::port::VolumeSummary {
             name: name.into(),
             driver: "local".into(),
+            generation: "a".repeat(32),
         })
     }
     fn create(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
@@ -59,9 +61,10 @@ impl hl_extension::port::VolumeStore for Host {
         Ok(hl_extension::port::VolumeSummary {
             name: name.into(),
             driver: "local".into(),
+            generation: "a".repeat(32),
         })
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         self.ledger.note("volumes.remove");
         Ok(())
     }
@@ -1304,6 +1307,25 @@ fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_
     session.dispatch(&Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
     session.dispatch(&Request::NetworkDisconnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
     assert_eq!(host.ledger.reached(), ["networks.remove", "networks.connect", "networks.disconnect"]);
+}
+
+#[test]
+fn volume_removal_requires_the_exact_observed_generation() {
+    let host = Host::new();
+    let mut session = session(&[Capability::VolumeWrite], &[]);
+    assert!(matches!(
+        session.dispatch(
+            &Request::VolumeRemove { name: "cache".into(), generation: "legacy-or-stale".into() },
+            &services(&host),
+        ),
+        Err(Failure::Conflict { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
+    session.dispatch(
+        &Request::VolumeRemove { name: "cache".into(), generation: "a".repeat(32) },
+        &services(&host),
+    ).unwrap();
+    assert_eq!(host.ledger.reached(), ["volumes.remove"]);
 }
 
 #[test]

@@ -4685,7 +4685,7 @@ export interface ImagePullStatus { job: string; reference: string; revision: num
 export interface ImagePullChange { job: string; revision: number; state: string; coalesced: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
-export interface VolumeSummary { name: string; driver: string }
+export interface VolumeSummary { name: string; driver: string; generation: string }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
 export interface PaneSummary {
   slot: string;
@@ -4837,7 +4837,7 @@ export interface WorkspaceApi {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
-    remove(name: string): Promise<void>;
+    remove(name: string, generation: string): Promise<void>;
   };
   networks: {
     list(): Promise<NetworkSummary[]>;

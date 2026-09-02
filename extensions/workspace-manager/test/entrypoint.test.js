@@ -66,9 +66,9 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             : name === 'image_inspect'
               ? { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
-              ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] }
+              ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }] }
             : name === 'volume_inspect'
-              ? { reply: 'volume', with: { name: 'cache', driver: 'local' } }
+              ? { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }] }
               : name === 'network_inspect'

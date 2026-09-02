@@ -352,7 +352,7 @@ test('volume and network facades preserve safe request shapes', async () => {
   assert.throws(() => api.networks.remove('private'), /complete immutable ID/);
   assert.throws(() => api.networks.connect(networkId, 'friendly'), /complete immutable ID/);
   const operations = [
-    api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache'),
+    api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache', 'a'.repeat(32)),
     api.networks.list(), api.networks.inspect('private'), api.networks.create('private'),
     api.networks.remove(networkId), api.networks.connect(networkId, containerId), api.networks.disconnect(networkId, containerId),
     api.subscribe('volumes'), api.subscribe('networks'), api.subscribe('workspace-events'),
@@ -364,6 +364,7 @@ test('volume and network facades preserve safe request shapes', async () => {
     'network_create', 'network_remove', 'network_connect', 'network_disconnect', 'event_subscribe', 'event_subscribe',
     'event_subscribe',
   ]);
+  assert.deepEqual(calls[3].with, { name: 'cache', generation: 'a'.repeat(32) });
   assert.deepEqual(calls[8].with, { reference: networkId, container: containerId });
   assert.deepEqual(calls[9].with, { reference: networkId, container: containerId });
   const replies = [

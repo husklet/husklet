@@ -196,7 +196,7 @@ export function workspace(session) {
       list: async () => expect(await session.call('volume_list'), 'volumes'),
       inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
       create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
-      remove: (name) => done('volume_remove', { name }),
+      remove: (name, generation) => done('volume_remove', { name, generation: immutableIdentity(generation, [32], 'volume generation') }),
     },
     networks: {
       list: async () => expect(await session.call('network_list'), 'networks'),

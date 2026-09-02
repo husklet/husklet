@@ -176,6 +176,7 @@ pub enum Request {
     },
     VolumeRemove {
         name: String,
+        generation: String,
     },
     NetworkList,
     NetworkInspect {

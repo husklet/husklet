@@ -383,7 +383,10 @@ impl Session {
             Request::VolumeList => Ok(Reply::Volumes(port.list()?)),
             Request::VolumeInspect { name } => Ok(Reply::Volume(port.inspect(name)?)),
             Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
-            Request::VolumeRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::VolumeRemove { name, generation } => {
+                immutable_identity(generation, &[32], "volume generation")?;
+                port.remove(name, generation).map(|()| Reply::Done).map_err(Failure::from)
+            }
             _ => unreachable!(),
         }
     }

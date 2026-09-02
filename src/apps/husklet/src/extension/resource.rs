@@ -13,7 +13,7 @@ impl Resources {
 }
 
 fn volume(value: &hl_client::model::Volume) -> VolumeSummary {
-    VolumeSummary { name: value.name.clone(), driver: value.driver.clone() }
+    VolumeSummary { name: value.name.clone(), driver: value.driver.clone(), generation: value.husklet_generation.clone() }
 }
 
 fn network(value: &hl_client::model::Network) -> NetworkSummary {
@@ -35,8 +35,8 @@ impl VolumeStore for Resources {
         self.bridge.wait(self.bridge.client().volumes().create(&request)).map(|value| volume(&value)).map_err(|error| failure(&error))
     }
 
-    fn remove(&self, name: &str) -> Result<(), HostError> {
-        self.bridge.wait(self.bridge.client().volumes().remove(name, false)).map_err(|error| failure(&error))
+    fn remove(&self, name: &str, generation: &str) -> Result<(), HostError> {
+        self.bridge.wait(self.bridge.client().volumes().remove_if_generation(name, generation)).map_err(|error| failure(&error))
     }
 }
 
