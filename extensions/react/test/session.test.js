@@ -130,7 +130,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(protocolCoverage.unavailable.events.includes('extensions'));
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
@@ -211,6 +211,29 @@ test('deep container methods and subscriptions use exact protocol request shapes
   for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   const results = await Promise.all(operations);
   assert.equal(results[7], 'e2');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('pane change observation subscribes over the live transport, filters metadata, returns credit and disposes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  let observed;
+  const watching = api.watchPaneChanges((change) => { observed = change; });
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const dispose = await watching;
+  const change = { slot: 'pane-7', kind: 'surface', revision: 12, generation: 40, coalesced: 3 };
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'pane_changes', of: change } }));
+  const credit = await next();
+  assert.deepEqual(observed, change);
+  assert.equal(credit.channel, 9);
+  assert.equal(credit.kind, KIND.credit);
+  const stopping = dispose();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

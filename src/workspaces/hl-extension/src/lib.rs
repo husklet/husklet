@@ -39,7 +39,9 @@ pub use port::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActionKi
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
-pub use subscription::{PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch};
+pub use subscription::{
+    PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch,
+};
 
 /// The host's opening frame, carrying this domain's grant.
 pub type Welcome = hl_rpc::Welcome<Capability>;

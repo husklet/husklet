@@ -36,6 +36,25 @@ export function tools(api) {
     define('husklet_file_read', 'Read one bounded workspace-relative file.', z.object({ path }).strict(), ({ path: value }) => api.files.read(value)),
     define('husklet_file_write', 'Write bounded UTF-8 contents to a workspace-relative file.', z.object({ path, contents: z.string().max(64 * 1024) }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
   ];
+  if (typeof api.watchPaneChanges === 'function') definitions.push(define(
+    'husklet_pane_wait',
+    'Wait for bounded pane-change metadata; fetch a snapshot after notification.',
+    z.object({ slot: id.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ slot: wanted, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop;
+      let settled = false;
+      const finish = (value, error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      api.watchPaneChanges((change) => {
+        if (wanted == null || change.slot === wanted) finish({ changed: true, change });
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
   return definitions.concat(paneTools(api.terminal));
 }
 

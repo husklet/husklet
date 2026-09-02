@@ -98,6 +98,26 @@ test('pane tools are capability-shaped and only appear for the real typed method
   assert.equal(action.inputSchema.safeParse({ slot: 'pane-1', revision: 7, node: 3, action: 'run' }).success, false);
 });
 
+test('pane wait returns only bounded invalidation metadata and releases its subscription', async () => {
+  const { api } = fake();
+  let listener;
+  let disposed = 0;
+  api.watchPaneChanges = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_pane_wait');
+  const pending = wait.run({ slot: 'pane-2', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener({ slot: 'pane-1', kind: 'terminal', revision: 0, generation: 1, coalesced: 0 });
+  listener({ slot: 'pane-2', kind: 'native', revision: 8, generation: 2, coalesced: 6 });
+  const answer = await pending;
+  assert.deepEqual(JSON.parse(answer.content[0].text), {
+    changed: true,
+    change: { slot: 'pane-2', kind: 'native', revision: 8, generation: 2, coalesced: 6 },
+  });
+  assert.equal(disposed, 1);
+  assert(!answer.content[0].text.includes('lines'));
+  assert(!answer.content[0].text.includes('value'));
+});
+
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
   const hostile = `&<>"'`;
   assert.equal(semanticXml({ slot: hostile, revision: 3, truncated: false, root: {
@@ -129,7 +149,9 @@ test('semantic XML escapes every XML metacharacter and remains structurally boun
 
 test('a real MCP client lists strict tools and calls through the React session contract', async () => {
   const calls = [];
+  const events = new Set();
   const session = {
+    onEvent: (listener) => { events.add(listener); return () => events.delete(listener); },
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
@@ -138,6 +160,13 @@ test('a real MCP client lists strict tools and calls through the React session c
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
+      if (name === 'event_subscribe') {
+        queueMicrotask(() => { for (const listener of events) listener({ snapshot: 'pane_changes', of: {
+          slot: 'pane-live', kind: 'surface', revision: 12, generation: 13, coalesced: 2,
+        }}); });
+        return { reply: 'done' };
+      }
+      if (name === 'event_unsubscribe') return { reply: 'done' };
       throw new Error(`unexpected call ${name}`);
     },
   };
@@ -150,15 +179,22 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
+  const waited = await client.callTool({ name: 'husklet_pane_wait', arguments: { slot: 'pane-live', timeout_ms: 1000 } });
+  assert.deepEqual(JSON.parse(waited.content[0].text).change, {
+    slot: 'pane-live', kind: 'surface', revision: 12, generation: 13, coalesced: 2,
+  });
   assert.deepEqual(calls, [
     ['workspace_info', undefined],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],
+    ['event_subscribe', { topic: 'pane-changes' }],
+    ['event_unsubscribe', { topic: 'pane-changes' }],
   ]);
   await client.close();
   await server.close();

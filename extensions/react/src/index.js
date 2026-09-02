@@ -9,7 +9,7 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -46,7 +46,7 @@ export function workspace(session) {
     if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     return done(call, { topic });
   };
-  return {
+  const api = {
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
     inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
@@ -133,6 +133,15 @@ export function workspace(session) {
     subscribe: (topic) => subscription('event_subscribe', topic),
     unsubscribe: (topic) => subscription('event_unsubscribe', topic),
   };
+  api.watchPaneChanges = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('pane change listener must be a function');
+    const off = session.onEvent((event) => {
+      if (event?.snapshot === 'pane_changes') listener(event.of);
+    });
+    try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('pane-changes'); };
+  };
+  return api;
 }
 
 /**

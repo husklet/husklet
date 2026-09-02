@@ -12,14 +12,17 @@
 //! lets the whole conversation be exercised over a socket pair with no window
 //! open, which is exactly what the tests below do.
 
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use hl_extension::port::Occupant;
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, Permission,
-    Reply, Services, Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome, Wire, PROTOCOL,
+    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
+    PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome,
+    Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -143,6 +146,10 @@ pub struct Conversation {
     workspace: String,
     settle: Duration,
     observed: std::collections::BTreeMap<Topic, Snapshot>,
+    pane_observed: std::collections::BTreeMap<String, (PaneChangeKind, u64, u64)>,
+    pane_generation: u64,
+    pane_next: Instant,
+    pane_cursor: usize,
     events: Option<super::host::Events>,
 }
 
@@ -176,6 +183,10 @@ impl Conversation {
             workspace: workspace.into(),
             settle: Self::SETTLE,
             observed: std::collections::BTreeMap::new(),
+            pane_observed: std::collections::BTreeMap::new(),
+            pane_generation: 0,
+            pane_next: Instant::now(),
+            pane_cursor: 0,
             events: None,
         })
     }
@@ -295,6 +306,87 @@ impl Conversation {
             if topic != Topic::WorkspaceEvents {
                 self.observed.insert(topic, snapshot);
             }
+        }
+        self.observe_panes(services)?;
+        Ok(())
+    }
+
+    /// Detects pane invalidations without ever putting pane contents on the
+    /// event channel. This runs on the conversation worker after its timed
+    /// receive, never from a GTK callback, and caps work to the protocol's
+    /// semantic node budget worth of panes.
+    fn observe_panes(&mut self, services: &Services<'_>) -> Result<(), Fault> {
+        if !self.session.may_emit(Topic::PaneChanges) {
+            return Ok(());
+        }
+        let Some(channel) = self.subscriptions.channel(Topic::PaneChanges) else {
+            return Ok(());
+        };
+        // A stalled consumer cannot induce GTK work. Existing queued metadata
+        // remains the invalidation until the client returns credit.
+        if self.channels.credit(channel).unwrap_or(0) == 0 || Instant::now() < self.pane_next {
+            return Ok(());
+        }
+        self.pane_next = Instant::now() + Duration::from_secs(1);
+        let Ok(tabs) = services.terminal.tabs() else {
+            return Ok(());
+        };
+        const PANE_SCAN_LIMIT: usize = 32;
+        const TEXT_LINE_LIMIT: usize = 200;
+        let topology = services.terminal.topology().ok().map(|topology| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+            hash.finish()
+        });
+        let panes: Vec<_> = tabs.into_iter().flat_map(|tab| tab.panes).take(256).collect();
+        let live: std::collections::BTreeSet<_> = panes.iter().map(|pane| pane.slot.clone()).collect();
+        let count = panes.len();
+        let start = self.pane_cursor.min(count);
+        self.pane_cursor = if count == 0 {
+            0
+        } else {
+            (start + PANE_SCAN_LIMIT) % count
+        };
+        let mut changed = Vec::new();
+        for pane in panes.into_iter().cycle().skip(start).take(PANE_SCAN_LIMIT.min(count)) {
+            let kind = match pane.occupant {
+                Occupant::Terminal => PaneChangeKind::Terminal,
+                Occupant::Surface if pane.provider.is_some() => PaneChangeKind::Surface,
+                Occupant::Surface => PaneChangeKind::Native,
+            };
+            let revision = services.terminal.semantics(&pane.slot).map_or(0, |tree| tree.revision);
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&pane).unwrap_or_default().hash(&mut hash);
+            topology.hash(&mut hash);
+            if kind == PaneChangeKind::Terminal {
+                if let Ok(text) = services.terminal.read(&pane.slot, TEXT_LINE_LIMIT) {
+                    serde_json::to_vec(&text).unwrap_or_default().hash(&mut hash);
+                }
+            }
+            let fingerprint = hash.finish();
+            let state = (kind, revision, fingerprint);
+            if self.pane_observed.get(&pane.slot) != Some(&state) {
+                changed.push((pane.slot.clone(), kind, revision));
+            }
+            self.pane_observed.insert(pane.slot, state);
+        }
+        // Removed panes also invalidate topology; retain only a bounded stable
+        // identity and no former contents.
+        for (slot, (kind, revision, _)) in &self.pane_observed {
+            if !live.contains(slot) {
+                changed.push((slot.clone(), *kind, *revision));
+            }
+        }
+        self.pane_observed.retain(|slot, _| live.contains(slot));
+        for (slot, kind, revision) in changed.into_iter().take(PANE_SCAN_LIMIT) {
+            self.pane_generation = self.pane_generation.saturating_add(1);
+            self.publish(&Snapshot::PaneChanges(PaneChange {
+                slot,
+                kind,
+                revision,
+                generation: self.pane_generation,
+                coalesced: 0,
+            }))?;
         }
         Ok(())
     }
@@ -468,7 +560,15 @@ impl Conversation {
             return Ok(());
         };
         for message in self.outbox.drain(channel) {
-            let frame = Frame::new(channel, Kind::Event, message.payload);
+            let payload = if topic == Topic::PaneChanges && message.superseded > 0 {
+                serde_json::from_slice::<Snapshot>(&message.payload)
+                    .map(|snapshot| snapshot.with_coalesced(message.superseded))
+                    .and_then(|snapshot| serde_json::to_vec(&snapshot))
+                    .unwrap_or(message.payload)
+            } else {
+                message.payload
+            };
+            let frame = Frame::new(channel, Kind::Event, payload);
             self.wire.send(&frame).map_err(fault)?;
         }
         Ok(())
@@ -839,6 +939,68 @@ mod tests {
         let released = peer.receive().expect("latest event released");
         let latest: Snapshot = serde_json::from_slice(&released.payload).expect("snapshot");
         assert!(matches!(latest, Snapshot::Containers(containers) if containers[0].created == 99));
+    }
+
+    #[test]
+    fn pane_observation_does_no_terminal_or_semantic_work_without_a_subscriber() {
+        let ledger = Arc::new(Ledger::default());
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
+        let (ours, _theirs) = UnixStream::pair().expect("socket pair");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::PaneObserve]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.observe(&services(&host)).expect("idle observation");
+        assert!(ledger.reached().is_empty(), "no subscription means zero adapter calls");
+    }
+
+    #[test]
+    fn pane_observation_is_credit_gated_and_reports_transport_coalescing() {
+        let ledger = Arc::new(Ledger::default());
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::PaneObserve]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::PaneChanges);
+        for generation in 0..=(hl_extension::Channels::CREDIT + 1) {
+            let change = hl_extension::PaneChange {
+                slot: "s1".into(),
+                kind: hl_extension::PaneChangeKind::Terminal,
+                revision: 0,
+                generation: u64::from(generation),
+                coalesced: 0,
+            };
+            conversation.publish(&Snapshot::PaneChanges(change)).expect("publish");
+        }
+        let channel = conversation
+            .subscriptions
+            .channel(hl_extension::Topic::PaneChanges)
+            .expect("route");
+        ledger.reached.lock().expect("ledger").clear();
+        conversation
+            .observe_panes(&services(&host))
+            .expect("stalled observation");
+        assert!(ledger.reached().is_empty(), "zero credit means zero GTK adapter work");
+
+        let mut peer = Wire::new(theirs);
+        for _ in 0..hl_extension::Channels::CREDIT {
+            peer.receive().expect("credited event");
+        }
+        let credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&1_u32).expect("credit"));
+        conversation.exchange(&credit, &services(&host)).expect("return credit");
+        let released = peer.receive().expect("coalesced event");
+        let snapshot: Snapshot = serde_json::from_slice(&released.payload).expect("snapshot");
+        assert!(matches!(snapshot, Snapshot::PaneChanges(change) if change.coalesced == 1));
     }
 
     #[test]

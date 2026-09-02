@@ -153,7 +153,7 @@ export const vocabulary: { props: string[]; handlers: string[] };
 export const SOCKET: string;
 export const PROTOCOL: number;
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'workspace-events';
+export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
@@ -198,6 +198,7 @@ export interface PaneSummary {
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
 export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
 export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
 export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
 export interface PaneSemanticTree { slot: string; revision: number; root: SemanticNode; truncated: boolean }
@@ -220,6 +221,7 @@ export type SnapshotEvent =
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
   | { snapshot: 'terminal'; of: TabSummary[] }
+  | { snapshot: 'pane_changes'; of: PaneChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 
 export class ExtensionError extends Error {
@@ -311,6 +313,7 @@ export interface WorkspaceApi {
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
+  watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;

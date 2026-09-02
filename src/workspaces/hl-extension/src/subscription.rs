@@ -8,6 +8,27 @@ use hl_rpc::{Coding, Frame};
 use crate::port::{ContainerSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
 use crate::request::Topic;
 
+/// What produced a pane notification. Contents remain behind their separate
+/// terminal-output and pane-semantic-read grants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneChangeKind {
+    Terminal,
+    Surface,
+    Native,
+}
+
+/// Bounded invalidation metadata. Consumers fetch a fresh typed snapshot after
+/// receiving this rather than polling or accepting pushed pane contents.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PaneChange {
+    pub slot: String,
+    pub kind: PaneChangeKind,
+    pub revision: u64,
+    pub generation: u64,
+    pub coalesced: u64,
+}
+
 /// Window-level activity visible to an extension holding `workspace-events`.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -66,6 +87,7 @@ pub enum Snapshot {
     Volumes(Vec<VolumeSummary>),
     Networks(Vec<NetworkSummary>),
     Terminal(Vec<TabSummary>),
+    PaneChanges(PaneChange),
     WorkspaceEvents(WorkspaceEventBatch),
 }
 
@@ -81,6 +103,7 @@ impl Snapshot {
             Self::Volumes(_) => Topic::Volumes,
             Self::Networks(_) => Topic::Networks,
             Self::Terminal(_) => Topic::Terminal,
+            Self::PaneChanges(_) => Topic::PaneChanges,
             Self::WorkspaceEvents(_) => Topic::WorkspaceEvents,
         }
     }
@@ -97,11 +120,22 @@ impl Snapshot {
         }
         Ok(bytes)
     }
+
+    /// Applies transport coalescing immediately before delivery. Keeping this
+    /// in the bounded metadata means overload is visible without exposing the
+    /// generic RPC envelope to domain consumers.
+    #[must_use]
+    pub fn with_coalesced(mut self, count: u64) -> Self {
+        if let Self::PaneChanges(change) = &mut self {
+            change.coalesced = count;
+        }
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Snapshot;
+    use super::{PaneChange, PaneChangeKind, Snapshot};
     use crate::request::Topic;
 
     #[test]
@@ -111,5 +145,23 @@ mod tests {
         assert_eq!(Snapshot::Volumes(Vec::new()).topic(), Topic::Volumes);
         assert_eq!(Snapshot::Networks(Vec::new()).topic(), Topic::Networks);
         assert_eq!(Snapshot::Terminal(Vec::new()).topic(), Topic::Terminal);
+        let change = Snapshot::PaneChanges(PaneChange {
+            slot: "s1".into(),
+            kind: PaneChangeKind::Surface,
+            revision: 4,
+            generation: 9,
+            coalesced: 0,
+        });
+        assert_eq!(change.topic(), Topic::PaneChanges);
+        assert_eq!(
+            change.with_coalesced(17),
+            Snapshot::PaneChanges(PaneChange {
+                slot: "s1".into(),
+                kind: PaneChangeKind::Surface,
+                revision: 4,
+                generation: 9,
+                coalesced: 17,
+            })
+        );
     }
 }

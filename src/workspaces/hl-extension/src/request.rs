@@ -283,6 +283,7 @@ pub enum Topic {
     Volumes,
     Networks,
     Terminal,
+    PaneChanges,
     Extensions,
     WorkspaceEvents,
 }
@@ -298,6 +299,7 @@ impl Topic {
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
+            Self::PaneChanges => Capability::PaneObserve,
             Self::Extensions => Capability::WorkspaceRead,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
         }
@@ -309,6 +311,7 @@ impl Topic {
         Self::Volumes,
         Self::Networks,
         Self::Terminal,
+        Self::PaneChanges,
         Self::Extensions,
         Self::WorkspaceEvents,
     ];
