@@ -25,12 +25,16 @@ const HOST_ISA: GuestIsa = GuestIsa::Aarch64;
 const HOST_ISA_NAME: &str = "aarch64";
 #[cfg(target_arch = "aarch64")]
 const HOST_CC: &str = "/usr/bin/cc";
+#[cfg(target_arch = "aarch64")]
+const HOST_CC_ARGS: &[&str] = &["-B/usr/bin/"];
 #[cfg(target_arch = "x86_64")]
 const HOST_ISA: GuestIsa = GuestIsa::X86_64;
 #[cfg(target_arch = "x86_64")]
 const HOST_ISA_NAME: &str = "x86_64";
 #[cfg(target_arch = "x86_64")]
 const HOST_CC: &str = "x86_64-linux-gnu-gcc";
+#[cfg(target_arch = "x86_64")]
+const HOST_CC_ARGS: &[&str] = &[];
 
 fn getpid_refusal() -> String {
     format!("{}:38", libc::SYS_getpid)
@@ -129,6 +133,7 @@ fn fixture_with_link(directory: &Path, link: &str) -> PathBuf {
     let output = directory.join("native-supervised-fixture");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native_supervised.c");
     let status = std::process::Command::new(HOST_CC)
+        .args(HOST_CC_ARGS)
         .args([link, "-O2", "-o"])
         .arg(&output)
         .arg(source)
