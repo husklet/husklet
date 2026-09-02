@@ -1003,7 +1003,10 @@ mod tests {
     #[test]
     fn translated_execution_requires_executed_translated_blocks() {
         validate_translated_execution(census().as_bytes()).unwrap();
-        let idle = census().replacen(" translated_entries=2", " translated_entries=0", 2);
+        let idle = TREE
+            .replacen(" crossings=5", " crossings=3", 1)
+            .replacen(" translated_entries=2", " translated_entries=0", 1)
+            .replacen(" reason0=2", " reason0=0", 1);
         assert!(
             validate_translated_execution(idle.as_bytes())
                 .unwrap_err()
