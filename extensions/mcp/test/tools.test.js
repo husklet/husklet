@@ -102,11 +102,14 @@ test('container termination requires confirmation before host authority is calle
   assert.equal(stop.inputSchema.safeParse({ id: 'abc' }).success, false);
   assert.equal(stop.inputSchema.safeParse({ id: 'abc', confirm: false }).success, false);
   assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'SIGKILL' }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: '1', signal: 'SIGKILL', confirm: true }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'SIGKILL', confirm: true }).success, false);
   assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'x'.repeat(33), confirm: true }).success, false);
   assert.deepEqual(calls, [], 'schema refusal cannot call host authority');
   await stop.run({ id: 'abc', confirm: true });
-  await kill.run({ id: 'abc', signal: 'SIGKILL', confirm: true });
-  assert.deepEqual(calls, [['containers.stop', 'abc'], ['containers.kill', 'abc', 'SIGKILL']]);
+  const immutable = 'a'.repeat(64);
+  await kill.run({ id: immutable, signal: 'SIGKILL', confirm: true });
+  assert.deepEqual(calls, [['containers.stop', 'abc'], ['containers.kill', immutable, 'SIGKILL']]);
 });
 
 test('pane list exposes bounded discovery metadata without requiring known slots', async () => {
@@ -263,10 +266,13 @@ test('execution signaling targets an execution with a strict bounded signal', as
   const { api, calls } = fake();
   const signal = tools(api).find(({ name }) => name === 'husklet_execution_signal');
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: '' }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: '1', signal: 'SIGTERM' }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: 'friendly', signal: 'SIGTERM' }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'x'.repeat(33) }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
-  await signal.run({ id: 'e1', signal: 'SIGTERM' });
-  assert.deepEqual(calls, [['containers.signalExecution', 'e1', 'SIGTERM']]);
+  const immutable = 'b'.repeat(32);
+  await signal.run({ id: immutable, signal: 'SIGTERM' });
+  assert.deepEqual(calls, [['containers.signalExecution', immutable, 'SIGTERM']]);
 });
 
 test('execution removal requires literal confirmation', async () => {
@@ -681,13 +687,13 @@ test('a real MCP client lists strict tools and calls through the React session c
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
   await client.callTool({ name: 'husklet_execution_wait', arguments: { id: 'exec-live', timeout_ms: 250 } });
-  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
+  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'b'.repeat(32), signal: 'SIGHUP' } });
   const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
   assert.equal(refusedStop.isError, true);
   const refusedKill = await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL' } });
   assert.equal(refusedKill.isError, true);
   await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1', confirm: true } });
-  await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL', confirm: true } });
+  await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'a'.repeat(64), signal: 'SIGKILL', confirm: true } });
   const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
   assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
   const volumes = await client.callTool({ name: 'husklet_volume_list', arguments: {} });
@@ -716,9 +722,9 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_wait', { id: 'exec-live', timeout_ms: 250 }],
-    ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
+    ['execution_kill', { id: 'b'.repeat(32), signal: 'SIGHUP' }],
     ['container_stop', { id: 'container-1' }],
-    ['container_kill', { id: 'container-1', signal: 'SIGKILL' }],
+    ['container_kill', { id: 'a'.repeat(64), signal: 'SIGKILL' }],
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],

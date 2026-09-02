@@ -118,9 +118,11 @@ await host.files.write('project/generated/config.json', new TextEncoder().encode
 await host.files.rename('project/generated/config.json', 'project/generated/app.json');
 ```
 
-Container reads include bounded logs, process tables, and execution inspection;
-the explicit control grant covers pause, unpause, restart, kill, and detached
-`exec`. The host currently publishes changed full snapshots for `containers`,
+Container reads include bounded logs, initial-process snapshots, and execution
+inspection. Process PIDs are point-in-time display values and may be reused;
+`kill` and `signalExecution` accept only complete immutable IDs returned by
+container or execution inspection. The explicit control grant covers pause,
+unpause, restart, kill, and detached `exec`. The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`.

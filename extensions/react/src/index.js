@@ -16,6 +16,11 @@ const FRAME_BUFFER_LIMIT = 64;
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
 
+function immutableIdentity(id, widths, noun) {
+  if (typeof id === 'string' && widths.includes(id.length) && /^[0-9a-f]+$/.test(id)) return id;
+  throw new TypeError(`${noun} signaling requires the complete immutable ID returned by inspection`);
+}
+
 /**
  * Connects to the workspace this extension runs in.
  *
@@ -132,7 +137,7 @@ export function workspace(session) {
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
         await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
       ),
-      signalExecution: (id, signal) => done('execution_kill', { id, signal }),
+      signalExecution: (id, signal) => done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
       removeExecution: (id) => done('execution_remove', { id }),
       create: async (configuration, legacyName) => {
         const spec = typeof configuration === 'string' ? {
@@ -152,7 +157,7 @@ export function workspace(session) {
       pause: (id) => done('container_pause', { id }),
       unpause: (id) => done('container_unpause', { id }),
       restart: (id) => done('container_restart', { id }),
-      kill: (id, signal) => done('container_kill', { id, signal }),
+      kill: (id, signal) => done('container_kill', { id: immutableIdentity(id, [32, 64], 'container'), signal }),
       exec: async (id, { command, user, workingDirectory } = {}) => expect(
         await session.call('container_exec', {
           id, command, user: user ?? null, working_directory: workingDirectory ?? null,

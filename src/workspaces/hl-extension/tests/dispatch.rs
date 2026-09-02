@@ -860,14 +860,14 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ContainerKill {
-                id: "c1".into(),
+                id: "c".repeat(64),
                 signal: "SIGTERM".into(),
             },
             Capability::ContainerControl,
         ),
         (
             Request::ExecutionKill {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 signal: "SIGTERM".into(),
             },
             Capability::ContainerControl,
@@ -1155,6 +1155,26 @@ fn execution_signals_are_bounded_before_the_container_port_is_reached() {
         ));
     }
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    for request in [
+        Request::ContainerKill { id: "1".into(), signal: "SIGTERM".into() },
+        Request::ContainerKill { id: "friendly-name".into(), signal: "SIGTERM".into() },
+        Request::ContainerKill { id: "a".repeat(12), signal: "SIGTERM".into() },
+        Request::ExecutionKill { id: "7".into(), signal: "SIGTERM".into() },
+        Request::ExecutionKill { id: "b".repeat(12), signal: "SIGTERM".into() },
+    ] {
+        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+    }
+    assert!(host.ledger.reached().is_empty());
+
+    session.dispatch(&Request::ContainerKill { id: "a".repeat(64), signal: "SIGTERM".into() }, &services(&host)).unwrap();
+    session.dispatch(&Request::ExecutionKill { id: "b".repeat(32), signal: "SIGTERM".into() }, &services(&host)).unwrap();
+    assert_eq!(host.ledger.reached(), ["containers.kill", "executions.kill"]);
 }
 
 #[test]

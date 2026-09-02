@@ -7,6 +7,8 @@ import { paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
+const containerIdentity = z.string().regex(/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/, 'complete immutable container ID is required');
+const executionIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable execution ID is required');
 const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
@@ -128,7 +130,7 @@ export function tools(api) {
     define('husklet_execution_list', 'List the bounded durable execution catalogue for this workspace.', empty, () => api.containers.executions()),
     define('husklet_execution_logs', 'Replay bounded captured output for one execution.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr })),
     define('husklet_execution_wait', 'Wait up to 30 seconds for one execution to stop and return its final state.', z.object({ id, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ id: value, timeout_ms }) => api.containers.waitExecution(value, { timeoutMs: timeout_ms })),
-    define('husklet_execution_signal', 'Signal one execution without signaling its owning container.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
+    define('husklet_execution_signal', 'Signal one immutable execution ID without signaling its owning container; snapshot PIDs are never accepted.', z.object({ id: executionIdentity, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
     define('husklet_execution_remove', 'Remove one stopped execution record and its captured output after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.removeExecution(value); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
     define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, (spec) => api.containers.create(spec)),
@@ -136,7 +138,7 @@ export function tools(api) {
     ...['start', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_stop', 'Stop one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),
     define('husklet_container_remove', 'Remove one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
-    define('husklet_container_kill', 'Signal one container after explicit confirmation; signal must be explicit.', z.object({ id, signal: z.string().min(1).max(32), confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
+    define('husklet_container_kill', 'Signal one complete immutable container ID after explicit confirmation; names, prefixes and process PIDs are refused.', z.object({ id: containerIdentity, signal: z.string().min(1).max(32), confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
     define('husklet_volume_list', 'List bounded local volume summaries.', empty, () => api.volumes.list()),
     define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.inspect(name)),
     define('husklet_volume_create', 'Create one named local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.create(name)),

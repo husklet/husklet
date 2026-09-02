@@ -398,10 +398,14 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
+  const containerId = 'a'.repeat(64);
+  const executionId = 'b'.repeat(32);
+  assert.throws(() => api.containers.signalExecution('7', 'SIGTERM'), /complete immutable ID/);
+  assert.throws(() => api.containers.kill('friendly-name', 'SIGTERM'), /complete immutable ID/);
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
     api.containers.execution('e1'), api.containers.executions(), api.containers.executionLogs('e1', { stdout: true, stderr: false }), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.pause('c1'), api.containers.unpause('c1'),
-    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'), api.containers.removeExecution('e1'),
+    api.containers.restart('c1'), api.containers.kill(containerId, 'SIGTERM'), api.containers.signalExecution(executionId, 'SIGHUP'), api.containers.removeExecution('e1'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
@@ -417,8 +421,8 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_pause', with: { id: 'c1' } },
     { call: 'container_unpause', with: { id: 'c1' } },
     { call: 'container_restart', with: { id: 'c1' } },
-    { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
-    { call: 'execution_kill', with: { id: 'e1', signal: 'SIGHUP' } },
+    { call: 'container_kill', with: { id: containerId, signal: 'SIGTERM' } },
+    { call: 'execution_kill', with: { id: executionId, signal: 'SIGHUP' } },
     { call: 'execution_remove', with: { id: 'e1' } },
     { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },

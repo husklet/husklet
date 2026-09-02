@@ -9,9 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -313,10 +312,12 @@ impl Session {
             Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerKill { id, signal } => {
                 bounded_signal(signal)?;
+                immutable_identity(id, &[32, 64], "container")?;
                 port.kill(id, signal).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ExecutionKill { id, signal } => {
                 bounded_signal(signal)?;
+                immutable_identity(id, &[32], "execution")?;
                 port.execution_kill(id, signal)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
@@ -708,6 +709,19 @@ fn bounded_signal(signal: &str) -> Result<(), Failure> {
     }
     Err(Failure::Conflict {
         detail: "signal must contain 1..=32 bytes".into(),
+    })
+}
+
+fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Failure> {
+    if widths.contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: format!("{noun} signaling requires the complete immutable ID returned by inspection"),
     })
 }
 
