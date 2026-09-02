@@ -717,6 +717,7 @@ fn moment() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::process::{Child, Command};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
 
@@ -729,11 +730,14 @@ mod tests {
         Resources, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
+    use super::super::roster::Roster;
     use super::super::sidecar::Image;
     use super::{enrol, faulted, Hall, Host, Order, Plan, Report, SidecarSpec, Standing, Supply, VACANCY};
     use super::{Conversation, UnixStream};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
+
+    const REFERENCE_SOCKET: &str = "HUSKLET_TEST_REFERENCE_SOCKET";
 
     /// The source the fake extension's table draws from.
     const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
@@ -1125,6 +1129,124 @@ mod tests {
                 return;
             }
         }
+    }
+
+    struct ReferenceProcessSupply {
+        plan: Plan,
+        child: Mutex<Option<Child>>,
+    }
+
+    impl Supply for ReferenceProcessSupply {
+        fn plan(&self) -> Result<Option<Plan>, String> {
+            Ok(Some(self.plan.clone()))
+        }
+
+        fn ensure(&self, plan: &Plan) -> Result<(), String> {
+            let child = Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
+                .args([
+                    "--exact",
+                    "extension::host::tests::reference_extension_sidecar_process",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(REFERENCE_SOCKET, plan.spec.socket())
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            *self.child.lock().expect("reference child") = Some(child);
+            Ok(())
+        }
+
+        fn attend(&self, _plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
+            let ports = Ports;
+            let services = Services {
+                workspace: WorkspaceInfo {
+                    name: "dev".to_owned(),
+                    architecture: "x86_64".to_owned(),
+                    image: "reference:test".to_owned(),
+                },
+                workspaces: &ports,
+                workspace_control: &ports,
+                extensions: &ports,
+                containers: &ports,
+                control: &ports,
+                images: &ports,
+                volumes: &ports,
+                networks: &ports,
+                terminal: &ports,
+                files: &ports,
+            };
+            conversation.serve(&services).map_err(|fault| fault.to_string())
+        }
+
+        fn halt(&self, _plan: &Plan) {
+            if let Some(mut child) = self.child.lock().expect("reference child").take() {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline {
+                    if child.try_wait().ok().flatten().is_some() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint for the reference-sidecar lifecycle test"]
+    fn reference_extension_sidecar_process() {
+        let socket = PathBuf::from(std::env::var(REFERENCE_SOCKET).expect("reference socket"));
+        let stream = connect(&socket).expect("host listener");
+        extension::serve(stream, extension::Extension::new()).expect("reference extension session");
+    }
+
+    #[test]
+    fn a_roster_enabled_reference_extension_runs_as_a_real_host_sidecar_process() {
+        let storage = tempfile::TempDir::new().expect("storage");
+        let directory = hl_ws::storage::Directory::open(storage.path()).expect("directory");
+        let manifest = extension::manifest().expect("reference manifest");
+        let mut roster = Roster::open(directory).expect("roster");
+        roster
+            .register(&manifest, "sha256:reference", &extension::requested(), 1)
+            .expect("installed with consent");
+        roster.enable(&manifest.name).expect("enabled");
+        let record = roster
+            .enabled_record(&manifest.name)
+            .expect("records")
+            .expect("enabled record");
+        let socket_root = tempfile::TempDir::new().expect("socket root");
+        let spec = SidecarSpec::new(
+            &manifest,
+            &record.granted,
+            &Image {
+                reference: record.image_digest.clone(),
+                digest: record.image_digest.clone(),
+                entrypoint: Vec::new(),
+                user: String::new(),
+            },
+            socket_root.path().join("reference.sock"),
+        );
+        let supply = ReferenceProcessSupply {
+            plan: Plan {
+                record,
+                manifest,
+                spec,
+                workspace: "dev".to_owned(),
+            },
+            child: Mutex::new(None),
+        };
+        let gallery = Gallery::default();
+        let host = Host::open(supply, gallery.audience());
+
+        assert!(
+            until(|| !gallery.frames().is_empty()),
+            "the real reference process drew through Host; standing={:?} reports={:?}",
+            host.standing(),
+            gallery.reports()
+        );
+        assert_eq!(host.standing(), Standing::Duty);
+        host.close().expect("host closed");
     }
 
     /// Sends one call and reads its answer, so both ends stay in step.

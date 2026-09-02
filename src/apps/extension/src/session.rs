@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 
-use hl_extension::{ChannelId, Frame, Hello, Kind, Reply, Request, Transit, Welcome, Wire, PROTOCOL};
+use hl_extension::{codec, Frame, Hello, Kind, Reply, Request, Transit, Welcome, Wire, PROTOCOL};
 
 use crate::Extension;
 
@@ -127,8 +127,8 @@ fn observe<S: Read + Write>(wire: &mut Wire<S>, extension: &mut Extension, frame
 }
 
 fn send<S: Write>(wire: &mut Wire<S>, request: &Request) -> Result<(), Outcome> {
-    let payload = encode(request)?;
-    wire.send(&Frame::new(ChannelId::new(1), Kind::Request, payload))?;
+    let frame = codec::request(request).map_err(|error| Outcome::Malformed(error.to_string()))?;
+    wire.send(&frame)?;
     Ok(())
 }
 

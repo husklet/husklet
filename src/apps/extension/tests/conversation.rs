@@ -10,7 +10,7 @@ const EXCHANGES: usize = 8;
 
 use hl_extension::port::ContainerSummary;
 use hl_extension::{
-    ChannelId, ExtensionName, Frame, Grant, Kind, Limits, Reply, Request, Transit, Welcome, Wire, PROTOCOL,
+    codec, ChannelId, ExtensionName, Frame, Grant, Kind, Limits, Reply, Request, Transit, Welcome, Wire, PROTOCOL,
 };
 use hl_gui::{Patch, Prop, PropValue, RequestId, RowRange, RowRequest, Tag, Tree, Version};
 
@@ -70,9 +70,10 @@ fn greet(wire: &mut Wire<Stream>) {
         ]),
         limits: Limits::default(),
     };
-    send(wire, Kind::Request, &welcome);
+    wire.send(&codec::welcome(&welcome).expect("welcome encoded"))
+        .expect("welcome sent");
     let hello = wire.receive().expect("a greeting");
-    let hello: hl_extension::Hello = serde_json::from_slice(&hello.payload).expect("a hello");
+    let hello = codec::read_hello(&hello).expect("a hello");
     assert_eq!(hello.protocol, PROTOCOL, "the extension must state its protocol");
 }
 
@@ -89,11 +90,12 @@ fn listen(wire: &mut Wire<Stream>, exchanges: usize) -> Vec<Request> {
             Err(Transit::Closed) => break,
             Err(other) => panic!("the extension stopped talking: {other}"),
         };
-        let request: Request = serde_json::from_slice(&frame.payload).expect("a call");
+        let request = codec::read_request(&frame).expect("a call on the protocol call channel");
         let reply = answer(&request);
         let complete = matches!(request, Request::SourceResize { .. });
         said.push(request);
-        send(wire, Kind::Response, &reply);
+        wire.send(&codec::reply(&reply).expect("reply encoded"))
+            .expect("reply sent");
         if complete {
             break;
         }
@@ -122,11 +124,6 @@ fn containers() -> Vec<ContainerSummary> {
             created: 1_700_000_000,
         })
         .collect()
-}
-
-fn send<T: serde::Serialize>(wire: &mut Wire<Stream>, kind: Kind, value: &T) {
-    let payload = serde_json::to_vec(value).expect("serialized");
-    wire.send(&Frame::new(ChannelId::new(1), kind, payload)).expect("sent");
 }
 
 #[test]
