@@ -198,6 +198,11 @@ impl Console {
     }
 
     fn semantics(window: &Rc<TermWin>, slot: &str) -> Result<hl_extension::PaneSemanticTree, HostError> {
+        if slot == "workspace" {
+            return Window::gallery(window)
+                .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+                .native_semantics(slot);
+        }
         let extension = Self::surface_owner(window, slot)?;
         Window::gallery(window)
             .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
@@ -209,6 +214,11 @@ impl Console {
         slot: &str,
         action: &hl_extension::PaneSemanticAction,
     ) -> Result<(), HostError> {
+        if slot == "workspace" {
+            return Window::gallery(window)
+                .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
+                .native_action(action);
+        }
         let extension = Self::surface_owner(window, slot)?;
         Window::gallery(window)
             .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?

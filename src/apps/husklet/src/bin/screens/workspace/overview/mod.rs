@@ -286,6 +286,7 @@ impl<'a> Overview<'a> {
         let (relay, errands) = hl::extension::Relay::open();
         let relay = Rc::new(relay);
         let gallery = Gallery::new();
+        gallery.enrol_native(view.semantic_registry());
         // The window looks its panes' interfaces up here, so it must be told
         // where they are before a saved layout is restored into it.
         if let Some(window) = self.window {

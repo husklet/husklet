@@ -52,6 +52,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
@@ -1180,7 +1181,7 @@ mod panes {
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
-    use hl_extension::port::{Division, HostError, LayoutNode, Occupant};
+    use hl_extension::port::{Division, HostError, LayoutNode, Occupant, TerminalSurface};
     use hl_extension::ExtensionName;
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
@@ -1255,6 +1256,65 @@ mod panes {
             std::thread::sleep(Duration::from_millis(5));
         }
         condition()
+    }
+
+    pub(super) fn native_workspace_semantics_cross_the_terminal_request_bridge() {
+        use super::super::super::semantic::{ActionKind, Registry, Value};
+        let bench = Bench::new();
+        let invoked = Rc::new(std::cell::Cell::new(false));
+        let marked = Rc::clone(&invoked);
+        let registry = Registry::new("workspace");
+        registry.register(
+            "workspace/page/Settings",
+            "tab",
+            Some("Settings"),
+            Some(Value::Public("false")),
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| marked.set(true)),
+        );
+        let gallery = Gallery::new();
+        gallery.enrol_native(registry);
+        Window::exhibit(&bench.window, gallery);
+        let (relay, errands) = hl::extension::Relay::open();
+        let relay = std::sync::Arc::new(relay);
+        let console = Console::new(&bench.window, errands);
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        std::thread::spawn(move || sent.send(request.semantics("workspace")).unwrap());
+        let tree = loop {
+            console.drain();
+            if let Ok(tree) = received.try_recv() {
+                break tree.expect("native semantic read crossed the request bridge");
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        };
+        assert_eq!(tree.slot, "workspace");
+        let settings = tree
+            .root
+            .children
+            .iter()
+            .find(|node| node.label.as_deref() == Some("Settings"))
+            .unwrap();
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let action = hl_extension::PaneSemanticAction {
+            revision: tree.revision,
+            node: settings.id,
+            action: hl_extension::SemanticActionKind::Invoke,
+            value: None,
+        };
+        std::thread::spawn(move || sent.send(request.semantic_action("workspace", &action)).unwrap());
+        loop {
+            console.drain();
+            if let Ok(result) = received.try_recv() {
+                result.expect("native semantic action crossed the request bridge");
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+        assert!(invoked.get(), "the socket-facing action reached its GTK owner");
     }
 
     /// What a bounded read of one pane answered with.

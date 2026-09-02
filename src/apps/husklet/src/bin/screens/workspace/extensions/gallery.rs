@@ -43,13 +43,57 @@ pub struct Provider {
 /// gallery is a place to look something up, not a reason for a widget to
 /// outlive the window it was drawn in.
 #[derive(Clone, Default)]
-pub struct Gallery(Rc<RefCell<HashMap<String, Exhibit>>>);
+pub struct Gallery(
+    Rc<RefCell<HashMap<String, Exhibit>>>,
+    Rc<RefCell<Option<super::super::semantic::Registry>>>,
+);
 
 impl Gallery {
     /// An empty gallery.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn enrol_native(&self, registry: super::super::semantic::Registry) {
+        self.1.replace(Some(registry));
+    }
+
+    pub fn native_semantics(&self, slot: &str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError> {
+        if slot != "workspace" {
+            return Err(hl_extension::HostError::Absent(slot.to_owned()));
+        }
+        let registry = self
+            .1
+            .borrow()
+            .clone()
+            .ok_or_else(|| hl_extension::HostError::Absent("workspace has no native semantic pane".into()))?;
+        let snapshot = registry.snapshot();
+        Ok(hl_extension::PaneSemanticTree {
+            slot: snapshot.slot,
+            revision: snapshot.revision,
+            root: native_node(snapshot.root),
+            truncated: snapshot.truncated,
+        })
+    }
+
+    pub fn native_action(&self, action: &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError> {
+        let registry = self
+            .1
+            .borrow()
+            .clone()
+            .ok_or_else(|| hl_extension::HostError::Absent("workspace has no native semantic pane".into()))?;
+        registry
+            .act(&super::super::semantic::Action {
+                revision: action.revision,
+                node: action.node,
+                action: native_action(action.action),
+                value: action.value.clone(),
+            })
+            .map_err(|refusal| match refusal {
+                super::super::semantic::Refusal::Absent(node) => hl_extension::HostError::Absent(node.to_string()),
+                other => hl_extension::HostError::Conflict(format!("native semantic action refused: {other:?}")),
+            })
     }
 
     /// Records where one extension's interface is, replacing whatever was
@@ -201,6 +245,42 @@ impl Gallery {
             .borrow()
             .get(extension)
             .is_some_and(|exhibit| exhibit.interface.upgrade().is_some())
+    }
+}
+
+fn native_node(node: super::super::semantic::Node) -> hl_extension::SemanticNode {
+    hl_extension::SemanticNode {
+        id: node.id,
+        role: node.role,
+        label: node.label,
+        value: node.value,
+        disabled: node.disabled,
+        actions: node.actions.into_iter().map(wire_action).collect(),
+        children: node.children.into_iter().map(native_node).collect(),
+    }
+}
+
+fn wire_action(action: super::super::semantic::ActionKind) -> hl_extension::SemanticActionKind {
+    use super::super::semantic::ActionKind;
+    match action {
+        ActionKind::Invoke => hl_extension::SemanticActionKind::Invoke,
+        ActionKind::Change => hl_extension::SemanticActionKind::Change,
+        ActionKind::Submit => hl_extension::SemanticActionKind::Submit,
+        ActionKind::Toggle => hl_extension::SemanticActionKind::Toggle,
+        ActionKind::Expand => hl_extension::SemanticActionKind::Expand,
+        ActionKind::Focus => hl_extension::SemanticActionKind::Focus,
+    }
+}
+
+fn native_action(action: hl_extension::SemanticActionKind) -> super::super::semantic::ActionKind {
+    use super::super::semantic::ActionKind;
+    match action {
+        hl_extension::SemanticActionKind::Invoke => ActionKind::Invoke,
+        hl_extension::SemanticActionKind::Change => ActionKind::Change,
+        hl_extension::SemanticActionKind::Submit => ActionKind::Submit,
+        hl_extension::SemanticActionKind::Toggle => ActionKind::Toggle,
+        hl_extension::SemanticActionKind::Expand => ActionKind::Expand,
+        hl_extension::SemanticActionKind::Focus => ActionKind::Focus,
     }
 }
 
