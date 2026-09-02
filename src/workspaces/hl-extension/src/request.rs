@@ -187,6 +187,16 @@ pub enum Request {
         path: RelativePath,
         contents: Vec<u8>,
     },
+    FilesystemMkdir {
+        path: RelativePath,
+    },
+    FilesystemRename {
+        from: RelativePath,
+        to: RelativePath,
+    },
+    FilesystemRemove {
+        path: RelativePath,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -260,7 +270,10 @@ impl Request {
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
-            Self::FilesystemWrite { .. } => Capability::FilesystemWrite,
+            Self::FilesystemWrite { .. }
+            | Self::FilesystemMkdir { .. }
+            | Self::FilesystemRename { .. }
+            | Self::FilesystemRemove { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceRender { .. }
@@ -274,9 +287,12 @@ impl Request {
     #[must_use]
     pub const fn path(&self) -> Option<&RelativePath> {
         match self {
-            Self::FilesystemList { path } | Self::FilesystemRead { path } | Self::FilesystemWrite { path, .. } => {
-                Some(path)
-            }
+            Self::FilesystemList { path }
+            | Self::FilesystemRead { path }
+            | Self::FilesystemWrite { path, .. }
+            | Self::FilesystemMkdir { path }
+            | Self::FilesystemRemove { path } => Some(path),
+            Self::FilesystemRename { from, .. } => Some(from),
             _ => None,
         }
     }
@@ -518,9 +534,16 @@ mod tests {
                 path: path.clone(),
                 contents: Vec::new(),
             },
+            Request::FilesystemMkdir { path: path.clone() },
+            Request::FilesystemRemove { path: path.clone() },
         ] {
             assert_eq!(request.path(), Some(&path), "{request:?} must be confined");
         }
+        let rename = Request::FilesystemRename {
+            from: path.clone(),
+            to: RelativePath::new("logs/new.log").unwrap(),
+        };
+        assert_eq!(rename.path(), Some(&path));
         assert_eq!(Request::ContainerList.path(), None);
     }
 

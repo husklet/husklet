@@ -65,6 +65,17 @@ impl WorkspaceDirectory {
         };
         confine(&self.root, resolved)
     }
+
+    /// Resolves the parent while leaving the final entry itself untouched.
+    fn entry(&self, path: &RelativePath) -> Result<PathBuf, HostError> {
+        let parts = path.parts();
+        let Some((name, parents)) = parts.split_last() else {
+            return Err(HostError::Conflict("the workspace root cannot be mutated".to_owned()));
+        };
+        let parent = join(&self.root, parents.to_vec());
+        let parent = parent.canonicalize().map_err(|error| absence(path, &error))?;
+        Ok(confine(&self.root, parent)?.join(name))
+    }
 }
 
 impl WorkspaceFiles for WorkspaceDirectory {
@@ -97,6 +108,31 @@ impl WorkspaceFiles for WorkspaceDirectory {
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError> {
         let file = self.destination(path)?;
         std::fs::write(file, contents).map_err(|error| absence(path, &error))
+    }
+
+    fn mkdir(&self, path: &RelativePath) -> Result<(), HostError> {
+        let directory = self.destination(path)?;
+        std::fs::create_dir(directory).map_err(|error| absence(path, &error))
+    }
+
+    fn rename(&self, from: &RelativePath, to: &RelativePath) -> Result<(), HostError> {
+        let source = self.entry(from)?;
+        std::fs::symlink_metadata(&source).map_err(|error| absence(from, &error))?;
+        let destination = self.entry(to)?;
+        if std::fs::symlink_metadata(&destination).is_ok() {
+            return Err(HostError::Conflict(format!("{to} already exists")));
+        }
+        std::fs::rename(source, destination).map_err(|error| absence(from, &error))
+    }
+
+    fn remove(&self, path: &RelativePath) -> Result<(), HostError> {
+        let target = self.entry(path)?;
+        let metadata = std::fs::symlink_metadata(&target).map_err(|error| absence(path, &error))?;
+        if metadata.is_dir() {
+            std::fs::remove_dir(target).map_err(|error| absence(path, &error))
+        } else {
+            std::fs::remove_file(target).map_err(|error| absence(path, &error))
+        }
     }
 }
 
@@ -178,6 +214,13 @@ mod tests {
 
         files.write(&path("logs/written.txt"), b"new").expect("write");
         assert_eq!(std::fs::read(root.join("logs/written.txt")).expect("file"), b"new");
+        files.mkdir(&path("logs/nested")).expect("mkdir");
+        files
+            .rename(&path("logs/written.txt"), &path("logs/renamed.txt"))
+            .expect("rename");
+        files.remove(&path("logs/renamed.txt")).expect("remove file");
+        files.remove(&path("logs/nested")).expect("remove empty directory");
+        assert!(!root.join("logs/renamed.txt").exists());
     }
 
     #[test]
@@ -206,6 +249,8 @@ mod tests {
             b"private",
             "the refused write must not have reached the target"
         );
+        files.remove(&path("escape.txt")).expect("remove link itself");
+        assert_eq!(std::fs::read(&secret).expect("secret"), b"private");
     }
 
     #[test]

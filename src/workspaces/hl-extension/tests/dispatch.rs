@@ -489,6 +489,21 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.write");
         Ok(())
     }
+
+    fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
+        self.ledger.note("files.mkdir");
+        Ok(())
+    }
+
+    fn rename(&self, _from: &RelativePath, _to: &RelativePath) -> Result<(), HostError> {
+        self.ledger.note("files.rename");
+        Ok(())
+    }
+
+    fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
+        self.ledger.note("files.remove");
+        Ok(())
+    }
 }
 
 fn services(host: &Host) -> Services<'_> {
@@ -714,6 +729,21 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemWrite,
         ),
         (
+            Request::FilesystemMkdir { path: path("logs/new") },
+            Capability::FilesystemWrite,
+        ),
+        (
+            Request::FilesystemRename {
+                from: path("logs/a"),
+                to: path("logs/b"),
+            },
+            Capability::FilesystemWrite,
+        ),
+        (
+            Request::FilesystemRemove { path: path("logs/old") },
+            Capability::FilesystemWrite,
+        ),
+        (
             Request::InterfaceOpenTab {
                 title: "Postgres".into(),
             },
@@ -813,6 +843,26 @@ fn a_path_outside_the_declared_roots_is_refused_before_the_service() {
 
     assert!(matches!(failure, Failure::Denied { .. }));
     assert!(host.ledger.reached().is_empty(), "confinement precedes the read");
+}
+
+#[test]
+fn a_rename_destination_outside_the_declared_roots_is_refused_before_the_service() {
+    let host = Host::new();
+    let mut session = session(&[Capability::FilesystemWrite], &["logs"]);
+    let failure = session
+        .dispatch(
+            &Request::FilesystemRename {
+                from: path("logs/old"),
+                to: path("state/new"),
+            },
+            &services(&host),
+        )
+        .expect_err("destination refused");
+    assert!(matches!(failure, Failure::Denied { .. }));
+    assert!(
+        host.ledger.reached().is_empty(),
+        "both paths are confined before rename"
+    );
 }
 
 #[test]

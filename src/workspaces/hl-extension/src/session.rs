@@ -81,9 +81,15 @@ impl Session {
     /// Returns a refusal, or whatever the host service reported.
     pub fn dispatch(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let capability = request.capability();
-        match request.path() {
-            Some(path) => self.peer.authority().permit_path(capability, path)?,
-            None => self.peer.authority().permit(capability)?,
+        match request {
+            Request::FilesystemRename { from, to } => {
+                self.peer.authority().permit_path(capability, from)?;
+                self.peer.authority().permit_path(capability, to)?;
+            }
+            _ => match request.path() {
+                Some(path) => self.peer.authority().permit_path(capability, path)?,
+                None => self.peer.authority().permit(capability)?,
+            },
         }
         self.serve(request, services)
     }
@@ -166,9 +172,12 @@ impl Session {
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
-            Request::FilesystemList { .. } | Request::FilesystemRead { .. } | Request::FilesystemWrite { .. } => {
-                self.files(request, services)
-            }
+            Request::FilesystemList { .. }
+            | Request::FilesystemRead { .. }
+            | Request::FilesystemWrite { .. }
+            | Request::FilesystemMkdir { .. }
+            | Request::FilesystemRename { .. }
+            | Request::FilesystemRemove { .. } => self.files(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceRender { frame } => self.render(frame),
@@ -401,6 +410,27 @@ impl Session {
                     .authority()
                     .port(Capability::FilesystemWrite, services.files)?;
                 port.write(path, contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemMkdir { path } => {
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
+                port.mkdir(path).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemRename { from, to } => {
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
+                port.rename(from, to).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemRemove { path } => {
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
+                port.remove(path).map(|()| Reply::Done).map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "filesystem".into(),

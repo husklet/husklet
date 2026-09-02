@@ -326,6 +326,22 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('filesystem controls use exact confined protocol request shapes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const files = workspace(stage.session).files;
+  const operations = [files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
+  assert.deepEqual((await next()).payload, { call: 'filesystem_mkdir', with: { path: 'logs/new' } });
+  assert.deepEqual((await next()).payload, { call: 'filesystem_rename', with: { from: 'logs/a', to: 'logs/b' } });
+  assert.deepEqual((await next()).payload, { call: 'filesystem_remove', with: { path: 'logs/b' } });
+  for (let index = 0; index < operations.length; index += 1) {
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  }
+  await Promise.all(operations);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pane semantics and actions preserve revision and node identity', async () => {
   const stage = await pair();
   const next = frames(stage.host);

@@ -4249,6 +4249,9 @@ export interface WorkspaceApi {
     list(path: string): Promise<FileEntry[]>;
     read(path: string): Promise<number[]>;
     write(path: string, contents: Iterable<number>): Promise<void>;
+    mkdir(path: string): Promise<void>;
+    rename(from: string, to: string): Promise<void>;
+    remove(path: string): Promise<void>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;

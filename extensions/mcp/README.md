@@ -41,6 +41,10 @@ It uses stable slots and semantic IDs, never screenshots, coordinates, or GTK
 widget scraping. The older terminal-read and pane-snapshot tools remain for
 consumers that need their specific typed result.
 
+Workspace filesystem controls create one directory, rename without overwriting,
+or remove one file or empty directory. All paths remain relative to declared
+roots; removal requires `confirm: true`, and recursive deletion is unavailable.
+
 Terminal layout tools use the same `beside`/`below` vocabulary as the host and
 can focus, split, resize, rebalance, and close panes. Grid sizes and split ratios
 are bounded; closing a pane requires an explicit `confirm: true` argument.
