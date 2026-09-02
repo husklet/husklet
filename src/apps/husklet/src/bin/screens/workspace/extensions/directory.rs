@@ -515,13 +515,21 @@ impl Catalogue {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let install = gtk::Button::with_label(accept);
         install.add_css_class(CONSENT);
-        let page = Rc::clone(self);
-        install.connect_clicked(move |_| page.consent());
+        let page = Rc::downgrade(self);
+        install.connect_clicked(move |_| {
+            if let Some(page) = page.upgrade() {
+                page.consent();
+            }
+        });
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class(DECLINE);
-        let page = Rc::clone(self);
-        cancel.connect_clicked(move |_| page.decline());
-        let page = Rc::clone(self);
+        let page = Rc::downgrade(self);
+        cancel.connect_clicked(move |_| {
+            if let Some(page) = page.upgrade() {
+                page.decline();
+            }
+        });
+        let page = Rc::downgrade(self);
         let semantic_install = install.clone();
         self.semantics.register(
             "extensions/proposal/consent",
@@ -530,14 +538,18 @@ impl Catalogue {
             None,
             &[ActionKind::Invoke, ActionKind::Focus],
             Rc::new(move |action, _| match action {
-                ActionKind::Invoke => page.consent(),
+                ActionKind::Invoke => {
+                    if let Some(page) = page.upgrade() {
+                        page.consent();
+                    }
+                }
                 ActionKind::Focus => {
                     semantic_install.grab_focus();
                 }
                 _ => {}
             }),
         );
-        let page = Rc::clone(self);
+        let page = Rc::downgrade(self);
         let semantic_cancel = cancel.clone();
         self.semantics.register(
             "extensions/proposal/cancel",
@@ -546,7 +558,11 @@ impl Catalogue {
             None,
             &[ActionKind::Invoke, ActionKind::Focus],
             Rc::new(move |action, _| match action {
-                ActionKind::Invoke => page.decline(),
+                ActionKind::Invoke => {
+                    if let Some(page) = page.upgrade() {
+                        page.decline();
+                    }
+                }
                 ActionKind::Focus => {
                     semantic_cancel.grab_focus();
                 }
@@ -633,7 +649,7 @@ impl Catalogue {
             &[],
             Rc::new(|_, _| {}),
         );
-        let page = Rc::clone(self);
+        let page = Rc::downgrade(self);
         let cancel = self.cancel.clone();
         self.semantics.register(
             "extensions/acquisition/cancel",
@@ -642,7 +658,11 @@ impl Catalogue {
             None,
             &[ActionKind::Invoke, ActionKind::Focus],
             Rc::new(move |action, _| match action {
-                ActionKind::Invoke => page.cancel(),
+                ActionKind::Invoke => {
+                    if let Some(page) = page.upgrade() {
+                        page.cancel();
+                    }
+                }
                 ActionKind::Focus => {
                     cancel.grab_focus();
                 }
@@ -724,9 +744,13 @@ impl Catalogue {
             "dhint",
         ));
         self.inspect.add_css_class(INSPECT);
-        let page = Rc::clone(self);
-        self.inspect.connect_clicked(move |_| page.inspect());
-        let inspect = Rc::clone(self);
+        let page = Rc::downgrade(self);
+        self.inspect.connect_clicked(move |_| {
+            if let Some(page) = page.upgrade() {
+                page.inspect();
+            }
+        });
+        let inspect = Rc::downgrade(self);
         let inspect_button = self.inspect.clone();
         self.semantics.register(
             "extensions/inspect",
@@ -735,7 +759,11 @@ impl Catalogue {
             None,
             &[ActionKind::Invoke, ActionKind::Focus],
             Rc::new(move |action, _| match action {
-                ActionKind::Invoke => inspect.inspect(),
+                ActionKind::Invoke => {
+                    if let Some(inspect) = inspect.upgrade() {
+                        inspect.inspect();
+                    }
+                }
                 ActionKind::Focus => {
                     inspect_button.grab_focus();
                 }
@@ -752,8 +780,12 @@ impl Catalogue {
         );
         self.widget.append(&self.inspect);
         self.widget.append(&self.progress);
-        let page = Rc::clone(self);
-        self.cancel.connect_clicked(move |_| page.cancel());
+        let page = Rc::downgrade(self);
+        self.cancel.connect_clicked(move |_| {
+            if let Some(page) = page.upgrade() {
+                page.cancel();
+            }
+        });
         self.widget.append(&self.cancel);
         self.widget.append(&self.proposal);
         self.widget.append(&self.notice);
@@ -770,6 +802,15 @@ impl Catalogue {
             page.poll();
             gtk::glib::ControlFlow::Continue
         });
+    }
+}
+
+impl Drop for Catalogue {
+    fn drop(&mut self) {
+        if let Some(pending) = self.pending.get_mut().as_ref() {
+            pending.cancellation.cancel();
+        }
+        self.semantics.remove_prefix("extensions/");
     }
 }
 

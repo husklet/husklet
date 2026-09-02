@@ -51,6 +51,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
         remote_image_progress_precedes_the_consent_prompt();
         cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
+        closing_the_catalogue_cancels_its_exact_acquisition_before_reentry();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
@@ -1319,6 +1320,47 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
     assert!(
         inspect_action(&page).is_sensitive(),
         "retry is offered after acknowledgement"
+    );
+}
+
+fn closing_the_catalogue_cancels_its_exact_acquisition_before_reentry() {
+    let fixture = Fixture::new(&[]);
+    let cancellations = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::clone(&cancellations);
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&attempts);
+    let inspection: Inspection = Rc::new(move |_| {
+        counted.fetch_add(1, Ordering::Release);
+        let token = hl::extension::Cancellation::default();
+        held.lock().expect("cancellations").push(token.clone());
+        PendingInspection {
+            events: std::sync::mpsc::channel().1,
+            cancellation: token,
+        }
+    });
+
+    let page = Catalogue::new(&fixture.shelf, Rc::clone(&inspection));
+    typed(&page, "team/tool:latest");
+    page.inspect();
+    let former = Rc::downgrade(&page);
+    drop(page);
+    assert!(
+        former.upgrade().is_none(),
+        "widget callbacks do not retain a closed catalogue"
+    );
+    assert!(
+        cancellations.lock().expect("cancellations")[0].is_cancelled(),
+        "closing propagates cancellation to the exact worker"
+    );
+
+    let retry = Catalogue::new(&fixture.shelf, inspection);
+    typed(&retry, "team/tool:latest");
+    retry.inspect();
+    assert_eq!(attempts.load(Ordering::Acquire), 2, "re-entry starts exactly one retry");
+    let tokens = cancellations.lock().expect("cancellations");
+    assert!(
+        !tokens[1].is_cancelled(),
+        "the new retry has independent live authority"
     );
 }
 
