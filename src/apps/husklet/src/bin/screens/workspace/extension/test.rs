@@ -130,12 +130,24 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         validation_summary_is_readable_and_keeps_corrective_actions();
         diff_lines_project_status_and_bounded_text();
         markdown_preserves_bounded_source_in_semantics();
+        json_preserves_source_in_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn json_preserves_source_in_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::json_view(r#"{"nested":{"ready":true}}"#));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let document = &tree.root.children[0];
+    assert_eq!(document.role, "JsonView");
+    assert_eq!(document.value.as_deref(), Some(r#"{"nested":{"ready":true}}"#));
+    assert!(document.actions.is_empty());
 }
 
 fn diff_lines_project_status_and_bounded_text() {

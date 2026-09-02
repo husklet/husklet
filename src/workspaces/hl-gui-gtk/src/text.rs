@@ -101,6 +101,9 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }
+    if tag == Tag::JsonView {
+        return content::json(widget, content);
+    }
     if tag == Tag::LogView {
         return content::append(widget, content);
     }

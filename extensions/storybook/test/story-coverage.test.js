@@ -14,6 +14,7 @@ import { KeyValueInspectorStory, KeyValueSource } from '../src/key-value-inspect
 import { MarkdownReviewStory } from '../src/markdown-review.js';
 import { storyCoverage } from '../src/story-coverage.js';
 import { DIFF_STORY, DiffReviewStory } from '../src/diff-review.js';
+import { JsonResponseStory } from '../src/json-response.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -53,6 +54,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['event timeline', h(EventStreamStory, { source: new TimelineSource() })],
     ['key/value inspector', h(KeyValueInspectorStory, { source: new KeyValueSource() })],
     ['diff review', h(DiffReviewStory)],
+    ['JSON response', h(JsonResponseStory)],
     ['markdown review', h(MarkdownReviewStory)],
   ];
   for (const [name, story] of stories) {

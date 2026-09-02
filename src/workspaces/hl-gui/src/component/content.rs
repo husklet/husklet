@@ -6,6 +6,12 @@ use crate::node::{Prop, PropValue, Tag};
 
 /// Marks and imagery.
 impl Element {
+    /// A bounded, read-only structured JSON document.
+    #[must_use]
+    pub fn json_view(value: impl Into<String>) -> Self {
+        Self::new(Tag::JsonView).value(value)
+    }
+
     /// A safe, selectable Markdown document. HTML is never interpreted.
     #[must_use]
     pub fn markdown_view(value: impl Into<String>) -> Self {

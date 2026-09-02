@@ -93,6 +93,7 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
         return;
     }
     markdown_is_safe_selectable_and_structured();
+    json_is_selectable_string_safe_and_depth_bounded();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
@@ -815,6 +816,7 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::TextField
         | Tag::CodeView
         | Tag::MarkdownView
+        | Tag::JsonView
         | Tag::LogView => Aspect::Value,
         _ => structural(tag),
     }
@@ -838,6 +840,28 @@ fn markdown_is_safe_selectable_and_structured() {
     assert!(label.is_selectable(), "document text must be copyable");
     assert_eq!(label.text(), "Release <unsafe>\n• bounded\nlet x = 1;");
     assert!(!label.text().contains("```"), "fence syntax is presentation, not content");
+}
+
+fn json_is_selectable_string_safe_and_depth_bounded() {
+    let mut session = Session::new();
+    let document = session.producer.create(Tag::JsonView);
+    session.producer.append(NodeId::ROOT, document);
+    session.producer.set(
+        document,
+        Prop::Value,
+        PropValue::text(r#"{"message":"{literal},:[]","items":[1,2]}"#),
+    );
+    session.flush().expect("json renders");
+    let widget = session.tagged(Tag::JsonView).expect("json widget");
+    let view = subtree(&widget)
+        .into_iter()
+        .find_map(|child| child.downcast::<gtk::TextView>().ok())
+        .expect("json owns a text view");
+    assert!(!view.is_editable());
+    assert!(view.is_monospace());
+    let rendered = written_text(&view);
+    assert!(rendered.contains("\"{literal},:[]\""), "punctuation inside strings is untouched");
+    assert!(rendered.contains("\n  \"items\": ["), "objects and arrays are structured");
 }
 
 /// The families whose principal property is how they arrange what they hold.

@@ -10,6 +10,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::CodeView => source().upcast(),
         Tag::MarkdownView => markdown_view().upcast(),
+        Tag::JsonView => json_view().upcast(),
         Tag::LogView => log().upcast(),
         Tag::Video => gtk::Video::new().upcast(),
         Tag::Chart => chart().upcast(),
@@ -17,6 +18,47 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::DiffLine => diff_line().upcast(),
         _ => chart().upcast(),
     }
+}
+
+fn json_view() -> gtk::ScrolledWindow {
+    let window = field::editor(false);
+    window.set_min_content_height(180);
+    window
+}
+
+const JSON_INDENT_LIMIT: usize = 32;
+
+/// Formats JSON punctuation without parsing values or recursing. Malformed
+/// input remains visible; nesting beyond the semantic depth limit is clamped.
+pub(crate) fn json(widget: &gtk::Widget, source: &str) -> bool {
+    let Some(view) = field::view(widget) else { return false };
+    let mut output = String::with_capacity(source.len());
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for character in source.chars() {
+        if quoted {
+            output.push(character);
+            if escaped { escaped = false; } else if character == '\\' { escaped = true; } else if character == '"' { quoted = false; }
+            continue;
+        }
+        match character {
+            '"' => { quoted = true; output.push(character); }
+            '{' | '[' => { output.push(character); depth = (depth + 1).min(JSON_INDENT_LIMIT); newline(&mut output, depth); }
+            '}' | ']' => { depth = depth.saturating_sub(1); newline(&mut output, depth); output.push(character); }
+            ',' => { output.push(character); newline(&mut output, depth); }
+            ':' => output.push_str(": "),
+            value if value.is_whitespace() => {}
+            value => output.push(value),
+        }
+    }
+    view.buffer().set_text(&output);
+    true
+}
+
+fn newline(output: &mut String, depth: usize) {
+    output.push('\n');
+    output.extend(std::iter::repeat_n(' ', depth * 2));
 }
 
 fn diff() -> gtk::Box {

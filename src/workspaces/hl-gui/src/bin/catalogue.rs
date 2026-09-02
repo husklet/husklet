@@ -400,6 +400,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::DrawerPanel => "dialogs",
         Tag::CodeView
         | Tag::MarkdownView
+        | Tag::JsonView
         | Tag::LogView
         | Tag::Video
         | Tag::Chart
