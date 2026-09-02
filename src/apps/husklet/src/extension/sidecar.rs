@@ -350,6 +350,9 @@ impl Sidecar {
         };
         let actual = container.config.labels.get(SIGNATURE_LABEL).map(String::as_str);
         let target = removal_target(&spec.signature(), actual, &container.details.metadata.id)?;
+        if container.state.activity.running {
+            self.stop(target)?;
+        }
         self.remove(target)
     }
 
@@ -419,7 +422,7 @@ impl Sidecar {
 }
 
 fn removal_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Result<&'a str, HostError> {
-    if actual == Some(expected) {
+    if !id.is_empty() && actual == Some(expected) {
         return Ok(id);
     }
     Err(HostError::Conflict(
@@ -497,6 +500,7 @@ mod tests {
         assert_eq!(removal_target("ours", Some("ours"), "immutable-id"), Ok("immutable-id"));
         assert!(removal_target("ours", Some("foreign"), "foreign-id").is_err());
         assert!(removal_target("ours", None, "unlabelled-id").is_err());
+        assert!(removal_target("ours", Some("ours"), "").is_err());
     }
 
     #[test]
@@ -570,6 +574,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn owned_removal_stops_then_removes_only_the_immutable_generation() {
+        for (actual, id, expected_requests) in [
+            (Some(spec().signature()), "immutable-old-id", 3),
+            (Some("replacement-signature".to_owned()), "replacement-id", 1),
+            (None, "unrelated-id", 1),
+            (Some(spec().signature()), "", 1),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let socket = temporary.path().join("docker.sock");
+            let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+            let signature = actual.clone();
+            let id = id.to_owned();
+            let served = std::thread::spawn(move || serve_stop(listener, signature.as_deref(), &id, expected_requests));
+            let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+            let result = Sidecar::new(bridge).remove_owned(&spec());
+
+            let requests = served.join().expect("mock joined");
+            assert_eq!(requests[0], "GET /v1.43/containers/extension%2Dsample/json?size=false");
+            if expected_requests == 3 {
+                result.expect("owned removal");
+                assert_eq!(requests[1], "POST /v1.43/containers/immutable%2Dold%2Did/stop?t=5");
+                assert_eq!(
+                    requests[2],
+                    "DELETE /v1.43/containers/immutable%2Dold%2Did?force=true&v=false"
+                );
+            } else {
+                assert!(result.is_err(), "foreign identity must be visible as a refusal");
+                assert_eq!(requests.len(), 1, "foreign/replacement generation was mutated");
+            }
+        }
+    }
+
+    #[test]
+    fn owned_removal_reports_stop_failure_and_never_falls_through_to_remove() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let signature = spec().signature();
+        let served = std::thread::spawn(move || serve_stop(listener, Some(&signature), "immutable-old-id", 4));
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        let failure = Sidecar::new(bridge)
+            .remove_owned(&spec())
+            .expect_err("stop failure is visible");
+
+        assert!(failure.to_string().contains("stop failed"));
+        let requests = served.join().expect("mock joined");
+        assert_eq!(requests.len(), 2, "a failed stop cannot fall through to remove");
+    }
+
     fn serve_stop(listener: UnixListener, signature: Option<&str>, id: &str, expected: usize) -> Vec<String> {
         let (mut stream, _) = listener.accept().expect("client connected");
         stream
@@ -584,9 +640,25 @@ mod tests {
             r#"{{"Id":"{id}","Image":"sha256:image","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
         );
         respond(&mut stream, "200 OK", body.as_bytes());
-        if expected == 2 {
+        if expected >= 2 {
             requests.push(read_request(&mut stream).expect("stop request"));
+            if expected == 4 {
+                respond(
+                    &mut stream,
+                    "500 Internal Server Error",
+                    br#"{"message":"stop failed"}"#,
+                );
+                assert!(
+                    read_request(&mut stream).is_none(),
+                    "failed stop fell through to removal"
+                );
+                return requests;
+            }
             respond(&mut stream, "204 No Content", &[]);
+            if expected == 3 {
+                requests.push(read_request(&mut stream).expect("remove request"));
+                respond(&mut stream, "204 No Content", &[]);
+            }
         } else {
             assert!(
                 read_request(&mut stream).is_none(),
