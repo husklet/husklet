@@ -17,7 +17,7 @@ use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wi
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{directory, settings, Catalogue, Inspection, Shared, Shelf, Surfaces};
+use super::{directory, settings, Catalogue, Cleanup, Inspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -39,6 +39,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_settings_page_says_where_an_extension_stands();
         the_settings_actions_drive_the_installation();
         removing_an_extension_takes_its_pages_with_it();
+        failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
         an_image_is_read_before_anybody_is_asked();
         remote_image_progress_precedes_the_consent_prompt();
@@ -76,6 +77,15 @@ struct Fixture {
 impl Fixture {
     /// A shelf over a roster holding `recorded`, on a shell with the fixed pages.
     fn new(recorded: &[(&str, bool)]) -> Self {
+        let cleanup: Cleanup = Rc::new(|_| {
+            let (sent, received) = std::sync::mpsc::channel();
+            let _ = sent.send(Ok(()));
+            received
+        });
+        Self::with_cleanup(recorded, cleanup)
+    }
+
+    fn with_cleanup(recorded: &[(&str, bool)], cleanup: Cleanup) -> Self {
         let storage = tempfile::tempdir().expect("temporary directory");
         let roster = Rc::new(RefCell::new(
             Roster::open(Directory::open(storage.path()).expect("storage")).expect("roster"),
@@ -92,7 +102,7 @@ impl Fixture {
             widget.add_css_class(SURFACE);
             widget.upcast()
         });
-        let shelf = Shelf::new(&view, &roster, surfaces);
+        let shelf = Shelf::with_cleanup(&view, &roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}), cleanup);
         shelf.install();
         let inspection: Inspection = Rc::new(|_| std::sync::mpsc::channel().1);
         let catalogue = Catalogue::new(&shelf, inspection);
@@ -210,6 +220,18 @@ fn until(condition: impl Fn() -> bool) -> bool {
     false
 }
 
+fn until_gui(condition: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        while gtk::glib::MainContext::default().iteration(false) {}
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
 fn the_sidebar_lists_exactly_what_the_workspace_recorded() {
     let fixture = Fixture::new(&[("alpha", false), ("zulu", true)]);
 
@@ -288,6 +310,13 @@ fn removing_an_extension_takes_its_pages_with_it() {
     let fixture = Fixture::new(&[("alpha", true)]);
 
     fixture.act("alpha", settings::REMOVE);
+    assert_eq!(
+        fixture.stage("alpha"),
+        Stage::Duty,
+        "asking for confirmation changes nothing"
+    );
+    fixture.act("alpha", settings::CONFIRM_REMOVE);
+    assert!(until_gui(|| fixture.stage("alpha") == Stage::Vacancy));
 
     assert_eq!(fixture.stage("alpha"), Stage::Vacancy, "the record is forgotten");
     assert!(!fixture.view.holds("alpha"), "its surface is off the shell");
@@ -298,6 +327,42 @@ fn removing_an_extension_takes_its_pages_with_it() {
     assert!(
         !fixture.view.entries().contains(&"alpha".to_owned()),
         "and its sidebar entry is gone"
+    );
+}
+
+fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&attempts);
+    let cleanup: Cleanup = Rc::new(move |_| {
+        counted.fetch_add(1, Ordering::Release);
+        let (sent, received) = std::sync::mpsc::channel();
+        let _ = sent.send(Err("foreign container occupies the managed name".to_owned()));
+        received
+    });
+    let fixture = Fixture::with_cleanup(&[("alpha", true)], cleanup);
+
+    fixture.act("alpha", settings::REMOVE);
+    fixture.act("alpha", settings::CANCEL_REMOVE);
+    assert_eq!(
+        fixture.stage("alpha"),
+        Stage::Duty,
+        "cancel leaves runtime and record alone"
+    );
+    assert_eq!(attempts.load(Ordering::Acquire), 0);
+
+    fixture.act("alpha", settings::REMOVE);
+    fixture.act("alpha", settings::CONFIRM_REMOVE);
+    assert!(until_gui(|| {
+        fixture
+            .extension_tagged("alpha", settings::REFUSAL)
+            .and_downcast::<gtk::Label>()
+            .is_some_and(|label| label.text().contains("remains installed and disabled"))
+    }));
+    assert_eq!(fixture.stage("alpha"), Stage::Standby);
+    assert_eq!(attempts.load(Ordering::Acquire), 1);
+    assert!(
+        fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE).is_some(),
+        "the same confirmed action becomes an explicit cleanup retry"
     );
 }
 

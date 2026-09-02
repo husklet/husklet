@@ -107,6 +107,34 @@ impl Workspace {
             .find(|record| record.enabled && wanted.is_none_or(|name| *name == record.name)))
     }
 
+    /// Deletes the sidecar owned by one still-installed record. The record is
+    /// deliberately read before its caller forgets it: its digest, grant,
+    /// limits, and socket are the authority for exact ownership.
+    pub fn remove_extension(workspace: &WorkspaceConfig, name: &ExtensionName) -> Result<(), String> {
+        let supply = Self::extension(workspace, name);
+        let storage = hl_ws::storage::Directory::open(supply.root()).map_err(|error| error.to_string())?;
+        let records = Records::open(storage).map_err(|fault| fault.to_string())?;
+        let record = records
+            .all()
+            .map_err(|fault| fault.to_string())?
+            .into_iter()
+            .find(|record| record.name == *name)
+            .ok_or_else(|| format!("extension {name} is not installed"))?;
+        let manifest = described(&record);
+        // Entrypoint and user do not participate in the ownership signature;
+        // no image lookup is needed merely to delete an already-created sidecar.
+        let image = Image {
+            reference: record.image_digest.clone(),
+            digest: record.image_digest.clone(),
+            entrypoint: Vec::new(),
+            user: String::new(),
+        };
+        let spec = SidecarSpec::new(&manifest, &record.granted, &image, supply.socket(name));
+        Sidecar::new(supply.bridge()?)
+            .remove_owned(&spec)
+            .map_err(|error| error.to_string())
+    }
+
     /// The workspace's own container daemon, started if it is not up.
     fn bridge(&self) -> Result<Arc<Bridge>, String> {
         let domain = crate::runtime::domain::Domain::new(&self.config);

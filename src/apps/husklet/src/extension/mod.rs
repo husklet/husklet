@@ -21,8 +21,8 @@ mod host;
 mod image;
 mod inventory;
 mod listener;
-mod resource;
 mod registration;
+mod resource;
 mod roster;
 mod sidecar;
 mod state;
@@ -32,17 +32,19 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hl_extension::port::{ContainerControl, ContainerInventory, HostError, ImageStore, NetworkStore, VolumeStore, WorkspaceFiles};
+use hl_extension::port::{
+    ContainerControl, ContainerInventory, HostError, ImageStore, NetworkStore, VolumeStore, WorkspaceFiles,
+};
 
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
 pub use files::WorkspaceDirectory;
-pub use host::{Audience, Host, Order, Overrun, Plan, Report, Standing, Supply};
+pub use host::{Audience, Host, Order, Overrun, Plan, Report, Standing, Supply, Workspace};
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
-pub use resource::Resources;
 pub use registration::{Acquisition, Candidate};
+pub use resource::Resources;
 pub use roster::{described, Entry, Refusal, Roster};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
@@ -166,10 +168,14 @@ impl Extensions {
     }
 
     #[must_use]
-    pub fn volumes(&self) -> &dyn VolumeStore { &self.resources }
+    pub fn volumes(&self) -> &dyn VolumeStore {
+        &self.resources
+    }
 
     #[must_use]
-    pub fn networks(&self) -> &dyn NetworkStore { &self.resources }
+    pub fn networks(&self) -> &dyn NetworkStore {
+        &self.resources
+    }
 
     /// The workspace file port.
     #[must_use]

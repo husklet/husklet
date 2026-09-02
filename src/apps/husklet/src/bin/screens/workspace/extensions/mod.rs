@@ -61,6 +61,10 @@ pub type Reconcile = Rc<dyn Fn(bool)>;
 /// removed. The shelf names lifecycle intent; the terminal owns pane mechanics.
 pub type Withdraw = Rc<dyn Fn(&ExtensionName)>;
 
+/// Starts deletion of the exact managed sidecar described by an installed
+/// entry. Runtime work stays off GTK; the receiver carries the visible result.
+pub type Cleanup = Rc<dyn Fn(Entry) -> Receiver<Result<(), String>>>;
+
 /// Where a workspace's extensions live on the shell.
 pub struct Shelf {
     /// Held weakly: the pages this shelf builds live inside the shell, and
@@ -71,6 +75,7 @@ pub struct Shelf {
     surfaces: Surfaces,
     reconcile: Reconcile,
     withdraw: Withdraw,
+    cleanup: Cleanup,
     redraw: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
@@ -78,7 +83,18 @@ impl Shelf {
     /// Binds a shelf to a shell and the roster its pages act on.
     #[must_use]
     pub fn new(view: &Rc<View>, roster: &Shared, surfaces: Surfaces) -> Rc<Self> {
-        Self::with_lifecycle(view, roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}))
+        Self::with_cleanup(
+            view,
+            roster,
+            surfaces,
+            Rc::new(|_| {}),
+            Rc::new(|_| {}),
+            Rc::new(|_| {
+                let (sent, received) = std::sync::mpsc::channel();
+                let _ = sent.send(Ok(()));
+                received
+            }),
+        )
     }
 
     #[must_use]
@@ -94,14 +110,61 @@ impl Shelf {
         reconcile: Reconcile,
         withdraw: Withdraw,
     ) -> Rc<Self> {
+        Self::with_cleanup(
+            view,
+            roster,
+            surfaces,
+            reconcile,
+            withdraw,
+            Rc::new(|_| {
+                let (sent, received) = std::sync::mpsc::channel();
+                let _ = sent.send(Ok(()));
+                received
+            }),
+        )
+    }
+
+    #[must_use]
+    pub fn with_cleanup(
+        view: &Rc<View>,
+        roster: &Shared,
+        surfaces: Surfaces,
+        reconcile: Reconcile,
+        withdraw: Withdraw,
+        cleanup: Cleanup,
+    ) -> Rc<Self> {
         Rc::new(Self {
             view: Rc::downgrade(view),
             roster: Rc::clone(roster),
             surfaces,
             reconcile,
             withdraw,
+            cleanup,
             redraw: RefCell::new(None),
         })
+    }
+
+    /// Stops the extension and detaches its page while its durable record is
+    /// retained for cleanup authority and recovery. The central lifecycle card
+    /// remains alive to show progress or failure.
+    pub fn quiesce(&self, name: &ExtensionName) -> Result<Entry, hl::extension::Refusal> {
+        self.roster.borrow_mut().disable(name)?;
+        let entry = self
+            .roster
+            .borrow()
+            .entries()
+            .into_iter()
+            .find(|entry| entry.name == *name)
+            .expect("a successfully disabled extension remains installed");
+        (self.withdraw)(name);
+        if let Some(view) = self.view() {
+            view.detach(&name.to_string());
+        }
+        Ok(entry)
+    }
+
+    pub fn cleanup(&self, entry: Entry) -> Receiver<Result<(), String>> {
+        (self.cleanup)(entry)
     }
 
     /// Puts a page and a settings page on the shell for every extension.

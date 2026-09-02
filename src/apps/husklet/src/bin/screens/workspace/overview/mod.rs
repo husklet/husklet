@@ -170,7 +170,17 @@ impl<'a> Overview<'a> {
             }
             gallery_for_withdrawal.withdraw(name.as_str());
         });
-        let shelf = Shelf::with_lifecycle(view, &roster, surfaces, reconcile, withdraw);
+        let cleanup_workspace = workspace.clone();
+        let cleanup = Rc::new(move |entry: hl::extension::Entry| {
+            let (sent, received) = std::sync::mpsc::channel();
+            let workspace = cleanup_workspace.clone();
+            std::thread::spawn(move || {
+                let result = hl::extension::Workspace::remove_extension(&workspace, &entry.name);
+                let _ = sent.send(result);
+            });
+            received
+        });
+        let shelf = Shelf::with_cleanup(view, &roster, surfaces, reconcile, withdraw, cleanup);
         shelf.install();
         Some(Catalogue::new(&shelf, Self::inspections(workspace)))
     }

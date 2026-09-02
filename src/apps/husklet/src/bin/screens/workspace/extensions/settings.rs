@@ -7,6 +7,7 @@
 //! the central Extensions page; they are not extra sidebar destinations.
 
 use std::rc::Rc;
+use std::sync::mpsc::TryRecvError;
 
 use gtk::prelude::*;
 use hl::extension::{Entry, Refusal};
@@ -20,6 +21,8 @@ pub const ENABLE: &str = "hl-extension-enable";
 pub const DISABLE: &str = "hl-extension-disable";
 /// Style class on the action that forgets an extension and its grant.
 pub const REMOVE: &str = "hl-extension-remove";
+pub const CONFIRM_REMOVE: &str = "hl-extension-confirm-remove";
+pub const CANCEL_REMOVE: &str = "hl-extension-cancel-remove";
 /// Style class on the action offered only to a faulted extension.
 pub const RETRY: &str = "hl-extension-retry-fault";
 /// Style class on the line saying where the extension stands.
@@ -41,11 +44,12 @@ impl Settings {
         main.add_css_class(CARD);
         main.append(&heading(&entry.name));
         main.append(&line(&format!("image  ·  {}", entry.image_digest), "fhint"));
-        main.append(&standing(entry.stage));
+        let standing = standing(entry.stage);
+        main.append(&standing);
         main.append(&capabilities(entry));
         let refusal = line("", REFUSAL);
         refusal.set_visible(false);
-        main.append(&actions(shelf, entry, &refusal));
+        main.append(&actions(shelf, entry, &refusal, &standing));
         main.append(&refusal);
         main
     }
@@ -92,7 +96,7 @@ fn capabilities(entry: &Entry) -> gtk::Box {
 }
 
 /// The actions the current stage allows.
-fn actions(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label) -> gtk::Box {
+fn actions(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label, standing: &gtk::Label) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     if entry.stage.is_fault() {
         row.append(&action(shelf, entry, refusal, "Retry", RETRY, Deed::Retry));
@@ -102,7 +106,7 @@ fn actions(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label) -> gtk::Box {
     } else {
         row.append(&action(shelf, entry, refusal, "Enable", ENABLE, Deed::Enable));
     }
-    row.append(&action(shelf, entry, refusal, "Remove", REMOVE, Deed::Remove));
+    row.append(&removal(shelf, entry, refusal, standing));
     row
 }
 
@@ -112,7 +116,6 @@ enum Deed {
     Enable,
     Disable,
     Retry,
-    Remove,
 }
 
 /// One action, wired to the roster and to the shelf that redraws after it.
@@ -148,8 +151,121 @@ fn apply(shelf: &Rc<Shelf>, name: &ExtensionName, deed: Deed) -> Result<(), Refu
         Deed::Enable => roster.enable(name),
         Deed::Disable => roster.disable(name),
         Deed::Retry => roster.retry(name),
-        Deed::Remove => roster.remove(name),
     }
+}
+
+/// A destructive removal is a separate, confirmed transaction. Runtime
+/// cleanup finishes first; only its success forgets the durable grant.
+fn removal(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label, standing: &gtk::Label) -> gtk::Box {
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let remove = gtk::Button::with_label("Remove");
+    remove.add_css_class(REMOVE);
+    let confirm = gtk::Button::with_label("Confirm removal");
+    confirm.add_css_class(CONFIRM_REMOVE);
+    confirm.set_visible(false);
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.add_css_class(CANCEL_REMOVE);
+    cancel.set_visible(false);
+    controls.append(&remove);
+    controls.append(&confirm);
+    controls.append(&cancel);
+
+    {
+        let remove = remove.clone();
+        let confirm = confirm.clone();
+        let cancel = cancel.clone();
+        let refusal = refusal.clone();
+        remove.clone().connect_clicked(move |_| {
+            refusal.set_text("Remove this extension, its saved grant, and its managed sidecar?");
+            refusal.set_visible(true);
+            remove.set_visible(false);
+            confirm.set_visible(true);
+            cancel.set_visible(true);
+        });
+    }
+    {
+        let remove = remove.clone();
+        let confirm = confirm.clone();
+        let cancel = cancel.clone();
+        let refusal = refusal.clone();
+        cancel.clone().connect_clicked(move |_| {
+            refusal.set_visible(false);
+            remove.set_visible(true);
+            confirm.set_visible(false);
+            cancel.set_visible(false);
+        });
+    }
+    {
+        let shelf = Rc::clone(shelf);
+        let name = entry.name.clone();
+        let confirm = confirm.clone();
+        let cancel = cancel.clone();
+        let refusal = refusal.clone();
+        let standing = standing.clone();
+        confirm.clone().connect_clicked(move |_| {
+            let entry = match shelf.quiesce(&name) {
+                Ok(entry) => entry,
+                Err(fault) => {
+                    refusal.set_text(&fault.to_string());
+                    refusal.set_visible(true);
+                    return;
+                }
+            };
+            standing.set_text("disabled · removing managed sidecar");
+            refusal.set_text("Removing the managed sidecar before forgetting this extension…");
+            refusal.set_visible(true);
+            confirm.set_label("Removing…");
+            confirm.set_sensitive(false);
+            cancel.set_sensitive(false);
+            let answer = shelf.cleanup(entry);
+            let shelf = Rc::clone(&shelf);
+            let name = name.clone();
+            let confirm = confirm.clone();
+            let cancel = cancel.clone();
+            let refusal = refusal.clone();
+            let standing = standing.clone();
+            gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || match answer.try_recv() {
+                Ok(Ok(())) => {
+                    let forgotten = shelf.roster().borrow_mut().remove(&name);
+                    if let Err(fault) = forgotten {
+                        refusal.set_text(&format!(
+                            "The managed sidecar was removed, but the installation record could not be forgotten: {fault}"
+                        ));
+                        refusal.set_visible(true);
+                        standing.set_text("disabled · record cleanup failed");
+                        confirm.set_label("Retry removal");
+                        confirm.set_sensitive(true);
+                        cancel.set_sensitive(true);
+                    } else {
+                        shelf.refresh(&name);
+                    }
+                    gtk::glib::ControlFlow::Break
+                }
+                Ok(Err(reason)) => {
+                    refusal.set_text(&format!(
+                        "Removal failed; the extension remains installed and disabled: {reason}"
+                    ));
+                    refusal.set_visible(true);
+                    standing.set_text("disabled · removal failed");
+                    confirm.set_label("Retry removal");
+                    confirm.set_sensitive(true);
+                    cancel.set_sensitive(true);
+                    gtk::glib::ControlFlow::Break
+                }
+                Err(TryRecvError::Disconnected) => {
+                    refusal.set_text("Removal failed; the cleanup worker ended without an answer");
+                    refusal.set_visible(true);
+                    standing.set_text("disabled · removal failed");
+                    confirm.set_label("Retry removal");
+                    confirm.set_sensitive(true);
+                    cancel.set_sensitive(true);
+                    gtk::glib::ControlFlow::Break
+                }
+                Err(TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+            });
+        });
+    }
+    controls
 }
 
 /// One line of text on the page.
