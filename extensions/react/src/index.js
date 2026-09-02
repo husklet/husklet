@@ -159,6 +159,7 @@ export function workspace(session) {
       disconnect: (reference, container) => done('network_disconnect', { reference, container }),
     },
     terminal: {
+      panes: async () => expect(await session.call('pane_list'), 'panes'),
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
@@ -381,7 +382,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

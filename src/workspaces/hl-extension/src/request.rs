@@ -9,7 +9,7 @@ use hl_rpc::{CapabilityKey, RelativePath};
 use crate::capability::Capability;
 use crate::port::{
     ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
-    ImageSummary, NetworkSummary, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
+    ImageSummary, NetworkSummary, PaneInventory, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
     WorkspaceConfiguration, WorkspaceState,
 };
 
@@ -172,6 +172,7 @@ pub enum Request {
     },
     TerminalTabs,
     TerminalTopology,
+    PaneList,
     TerminalOpenTab {
         title: String,
     },
@@ -312,6 +313,7 @@ impl Request {
             | Self::NetworkConnect { .. }
             | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
+            Self::PaneList => Capability::PaneObserve,
             Self::TerminalOpenTab { .. }
             | Self::TerminalSplit { .. }
             | Self::TerminalSpawn { .. }
@@ -447,6 +449,7 @@ pub enum Reply {
     Network(NetworkSummary),
     Tabs(Vec<TabSummary>),
     Topology(TerminalTopology),
+    Panes(PaneInventory),
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),

@@ -39,7 +39,10 @@ pub use port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionSummary,
 };
-pub use port::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActionKind, SemanticNode};
+pub use port::{
+    HostError, InspectablePane, PaneInventory, PaneKind, PaneSemanticAction, PaneSemanticTree, SemanticActionKind,
+    SemanticNode,
+};
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};

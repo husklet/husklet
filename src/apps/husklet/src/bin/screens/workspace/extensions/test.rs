@@ -1669,6 +1669,21 @@ mod panes {
 
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
+        std::thread::spawn(move || sent.send(request.pane_inventory()).unwrap());
+        let inventory = loop {
+            console.drain();
+            if let Ok(inventory) = received.try_recv() {
+                break inventory.expect("native pane discovery crossed the request bridge");
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        };
+        assert!(!inventory.truncated);
+        assert!(inventory.panes.iter().any(|pane| {
+            pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native
+        }));
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
         std::thread::spawn(move || sent.send(request.semantics("workspace")).unwrap());
         let tree = loop {
             console.drain();

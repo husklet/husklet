@@ -237,6 +237,35 @@ pub struct TerminalTopology {
     pub tabs: Vec<TabTopology>,
 }
 
+/// A bounded inventory of every pane an agent may subsequently inspect.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PaneInventory {
+    pub panes: Vec<InspectablePane>,
+    pub truncated: bool,
+}
+
+/// Discovery metadata only: contents and semantic values require their own grants.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct InspectablePane {
+    pub slot: String,
+    pub kind: PaneKind,
+    pub provider: Option<PaneProviderIdentity>,
+    pub tab: Option<String>,
+    pub title: Option<String>,
+    pub focused: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PaneKind {
+    Terminal,
+    Surface,
+    Native,
+}
+
+/// Maximum descriptors returned by one discovery call.
+pub const PANE_INVENTORY_LIMIT: usize = 512;
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TabTopology {
     pub id: String,
@@ -608,6 +637,10 @@ pub trait TerminalSurface {
     /// the legacy flat listing must refuse rather than synthesize a tree.
     fn topology(&self) -> Result<TerminalTopology, HostError> {
         Err(HostError::Unsupported("terminal topology is unavailable".into()))
+    }
+
+    fn pane_inventory(&self) -> Result<PaneInventory, HostError> {
+        Err(HostError::Unsupported("pane discovery is unavailable".into()))
     }
 
     /// # Errors

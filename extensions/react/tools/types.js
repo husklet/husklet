@@ -215,6 +215,8 @@ export interface PaneSummary {
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
 export interface PaneText { slot: string; lines: string[]; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
+export interface InspectablePane { slot: string; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
+export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
 export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
 export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
 export interface PaneSemanticTree { slot: string; revision: number; root: SemanticNode; truncated: boolean }
@@ -324,6 +326,7 @@ export interface WorkspaceApi {
     disconnect(reference: string, container: string): Promise<void>;
   };
   terminal: {
+    panes(): Promise<PaneInventory>;
     tabs(): Promise<TabSummary[]>;
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;

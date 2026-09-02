@@ -15,8 +15,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
 use hl_extension::port::{
-    Division, GridSize, HostError, PaneSemanticAction, PaneSemanticTree, PaneText, TabSummary, TerminalSurface,
-    TerminalTopology,
+    Division, GridSize, HostError, PaneInventory, PaneSemanticAction, PaneSemanticTree, PaneText, TabSummary,
+    TerminalSurface, TerminalTopology,
 };
 
 /// How long a relayed call waits for the window to answer.
@@ -43,6 +43,7 @@ pub enum Request {
     Tabs,
     /// Nested tab and split topology.
     Topology,
+    PaneList,
     /// A new tab under this title.
     OpenTab(String),
     /// A pane split off the named slot.
@@ -123,6 +124,7 @@ pub enum Answer {
     Tabs(Vec<TabSummary>),
     /// Nested layout, for [`Request::Topology`].
     Topology(TerminalTopology),
+    Panes(PaneInventory),
     /// The identity of what was opened or split.
     Slot(String),
     /// The text one pane is showing, for [`Request::Read`].
@@ -245,6 +247,13 @@ impl TerminalSurface for Relay {
     fn topology(&self) -> Result<TerminalTopology, HostError> {
         match self.ask(Request::Topology)? {
             Answer::Topology(topology) => Ok(topology),
+            other => Err(other.mismatch()),
+        }
+    }
+
+    fn pane_inventory(&self) -> Result<PaneInventory, HostError> {
+        match self.ask(Request::PaneList)? {
+            Answer::Panes(panes) => Ok(panes),
             other => Err(other.mismatch()),
         }
     }

@@ -401,6 +401,18 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('pane discovery uses its distinct bounded inventory reply', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const pending = workspace(stage.session).terminal.panes();
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  const inventory = { panes: [{ slot: 'workspace', kind: 'native', provider: null, tab: null, title: 'Workspace', focused: false }], truncated: false };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: inventory } }));
+  assert.deepEqual(await pending, inventory);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('filesystem controls use exact confined protocol request shapes', async () => {
   const stage = await pair();
   const next = frames(stage.host);

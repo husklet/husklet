@@ -111,6 +111,12 @@ export function tools(api) {
     define('husklet_file_rename', 'Rename one workspace-relative entry without overwriting.', z.object({ from: path, to: path }).strict(), async ({ from, to }) => { await api.files.rename(from, to); return { done: true }; }),
     define('husklet_file_remove', 'Remove one file or empty directory after explicit confirmation.', z.object({ path, confirm: z.literal(true) }).strict(), async ({ path: value }) => { await api.files.remove(value); return { done: true }; }),
   ];
+  if (typeof api.terminal?.panes === 'function') definitions.push(define(
+    'husklet_pane_list',
+    'List every inspectable terminal, extension surface, and native pane without reading its contents.',
+    empty,
+    () => api.terminal.panes(),
+  ));
   if (typeof api.watchPaneChanges === 'function') definitions.push(define(
     'husklet_pane_wait',
     'Wait for bounded pane-change metadata; fetch a snapshot after notification.',

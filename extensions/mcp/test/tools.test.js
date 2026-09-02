@@ -83,6 +83,22 @@ test('schemas are strict, controls map exactly, and no terminal shell shortcut e
   assert.deepEqual(calls, [['containers.start', 'abc']]);
 });
 
+test('pane list exposes bounded discovery metadata without requiring known slots', async () => {
+  const { api, calls } = fake();
+  api.terminal.panes = async () => ({ panes: [
+    { slot: 'term-1', kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true },
+    { slot: 'surface-1', kind: 'surface', provider: { extension: 'demo', provider: 'main' }, tab: 'tab-1', title: 'Shell', focused: false },
+    { slot: 'workspace', kind: 'native', provider: null, tab: null, title: 'Workspace', focused: false },
+  ], truncated: false });
+  const paneList = tools(api).find(({ name }) => name === 'husklet_pane_list');
+  const answer = await paneList.run({});
+  const inventory = JSON.parse(answer.content[0].text);
+  assert.deepEqual(inventory.panes.map(({ slot, kind }) => [slot, kind]), [
+    ['term-1', 'terminal'], ['surface-1', 'surface'], ['workspace', 'native'],
+  ]);
+  assert(!answer.content[0].text.includes('contents'));
+});
+
 test('extension inventory is bounded and every lifecycle mutation requires confirmation', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
