@@ -14,6 +14,32 @@ const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, 
   const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
 });
+const nullable = (schema) => schema.nullable();
+const absolutePath = z.string().min(1).max(4096).startsWith('/');
+const workspaceConfiguration = z.object({
+  name: z.string().min(1).max(128).refine((value) => value.trim() === value),
+  image: imageReference,
+  architecture: z.enum(['arm64', 'amd64']),
+  storage: nullable(absolutePath),
+  shell: nullable(z.string().max(4096)),
+  cpus: nullable(z.number().int().min(1).max(1024)),
+  memory_mb: nullable(z.number().int().min(1).max(1024 * 1024)),
+  environment: z.array(z.tuple([z.string().min(1).max(256), z.string().max(8192)])).max(256),
+  mounts: z.array(z.object({ host: absolutePath, container: absolutePath, read_only: z.boolean() }).strict()).max(128),
+  docker_socket: z.boolean(),
+  scrollback: nullable(z.number().int().min(0).max(10_000_000)),
+  vpn: nullable(z.string().min(1).max(2048)),
+  execution_lifetime: z.enum(['persisted', 'live', 'ephemeral']),
+  terminal: z.object({
+    font_family: nullable(z.string().min(1).max(256)), font_size: nullable(z.number().int().min(1).max(256)),
+    foreground: nullable(z.string().max(64)), background: nullable(z.string().max(64)),
+    cursor_shape: nullable(z.string().max(64)), cursor_blink: nullable(z.boolean()),
+  }).strict(),
+}).strict();
+const workspaceUpdate = z.object({ name: id, configuration: workspaceConfiguration, confirm: z.literal(true) }).strict()
+  .superRefine(({ name, configuration }, context) => {
+    if (name !== configuration.name) context.addIssue({ code: z.ZodIssueCode.custom, message: 'renaming a workspace is not supported' });
+  });
 const empty = z.object({}).strict();
 const slot = z.object({ slot: id }).strict();
 const define = (name, description, inputSchema, run) => ({ name, description, inputSchema, run: async (input) => result(await run(input)) });
@@ -23,6 +49,8 @@ export function tools(api) {
     define('husklet_workspace_info', 'Describe the hosting workspace.', empty, () => api.info()),
     define('husklet_workspace_list', 'List bounded workspace summaries.', empty, () => api.list()),
     define('husklet_workspace_inspect', 'Inspect one named workspace.', z.object({ name: id }).strict(), ({ name }) => api.inspect(name)),
+    define('husklet_workspace_create', 'Create one workspace from a complete bounded configuration.', z.object({ configuration: workspaceConfiguration }).strict(), ({ configuration }) => api.create(configuration)),
+    define('husklet_workspace_update', 'Replace a stopped workspace configuration after explicit confirmation; renaming is not supported.', workspaceUpdate, ({ name, configuration }) => api.update(name, configuration)),
     ...['start', 'stop', 'restart'].map((action) => define(`husklet_workspace_${action}`, `${action} a named workspace.`, z.object({ name: id }).strict(), async ({ name }) => { await api[action](name); return { done: true }; })),
     define('husklet_workspace_delete', 'Delete a stopped workspace after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.delete(name); return { done: true }; }),
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),

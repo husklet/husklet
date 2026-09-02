@@ -11,11 +11,18 @@ npx @husklet/mcp
 Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,
 and actions; other tools use JSON. Container execution state is available as a
-read-only inspection tool under the host's `ContainerRead` grant. Container exec and
-terminal process spawning are deliberately absent: this package provides no
-unrestricted shell shortcut. Pane semantic tools appear only when the installed
+read-only inspection tool under the host's `ContainerRead` grant. Container exec
+accepts only a bounded argv vector under `ContainerControl`; terminal process
+spawning remains absent, so this package provides no unrestricted shell shortcut.
+Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
+
+Workspace creation and update carry the complete typed configuration: identity,
+architecture, storage, resources, environment, mounts, Docker access, terminal,
+VPN, scrollback, and execution lifetime. Every collection and string is bounded.
+Updates require `confirm: true`, refuse renaming, and still require the host's
+`WorkspaceControl` grant and stopped-workspace validation.
 
 Volume and network inventory/inspection use the host's separate `VolumeRead`
 and `NetworkRead` grants. Creation and attachment controls retain their

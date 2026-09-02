@@ -8,7 +8,7 @@ function fake() {
   const calls = [];
   const record = (name, answer = { ok: true }) => async (...args) => { calls.push([name, ...args]); return answer; };
   return { calls, api: {
-    info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'),
+    info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
@@ -18,6 +18,58 @@ function fake() {
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write') },
   }};
 }
+
+const configuration = () => ({
+  name: 'dev', image: 'alpine:3.20', architecture: 'arm64', storage: null, shell: '/bin/sh -l',
+  cpus: 4, memory_mb: 4096, environment: [['MODE', 'dev']],
+  mounts: [{ host: '/source', container: '/workspace', read_only: true }], docker_socket: true,
+  scrollback: 100000, vpn: null, execution_lifetime: 'persisted',
+  terminal: { font_family: 'Mono', font_size: 13, foreground: '#fff', background: '#000', cursor_shape: 'block', cursor_blink: false },
+});
+
+test('workspace create and confirmed update preserve the complete typed configuration', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const create = listed.find(({ name }) => name === 'husklet_workspace_create');
+  const update = listed.find(({ name }) => name === 'husklet_workspace_update');
+  const value = configuration();
+  assert.equal(create.inputSchema.safeParse({ configuration: value }).success, true);
+  assert.equal(create.inputSchema.safeParse({ configuration: { ...value, architecture: 'mips' } }).success, false);
+  assert.equal(create.inputSchema.safeParse({ configuration: { ...value, mounts: [{ host: 'relative', container: '/x', read_only: false }] } }).success, false);
+  assert.equal(update.inputSchema.safeParse({ name: 'dev', configuration: value }).success, false);
+  assert.equal(update.inputSchema.safeParse({ name: 'other', configuration: value, confirm: true }).success, false);
+  await create.run({ configuration: value });
+  await update.run({ name: 'dev', configuration: value, confirm: true });
+  assert.deepEqual(calls, [['workspace.create', value], ['workspace.update', 'dev', value]]);
+});
+
+test('live MCP transport carries workspace configuration and host authority failures', async () => {
+  const value = configuration();
+  const calls = [];
+  const session = { call: async (name, argument) => {
+    calls.push([name, argument]);
+    if (name === 'workspace_create') return { reply: 'workspace_configuration', with: value };
+    if (name === 'workspace_update') throw new Error('denied: workspace-control');
+    throw new Error(`unexpected call ${name}`);
+  } };
+  const server = createServer(session);
+  const client = new Client({ name: 'workspace-config-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const created = await client.callTool({ name: 'husklet_workspace_create', arguments: { configuration: value } });
+  assert.deepEqual(JSON.parse(created.content[0].text), value);
+  const denied = await client.callTool({
+    name: 'husklet_workspace_update', arguments: { name: 'dev', configuration: value, confirm: true },
+  });
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /workspace-control/);
+  assert.deepEqual(calls, [
+    ['workspace_create', { configuration: value }],
+    ['workspace_update', { name: 'dev', configuration: value }],
+  ]);
+  await client.close();
+  await server.close();
+});
 
 test('schemas are strict, controls map exactly, and no terminal shell shortcut exists', async () => {
   const { api, calls } = fake();

@@ -21,7 +21,7 @@ try {
     import { tools, createServer, semanticXml } from '@husklet/mcp';
     if (typeof tools !== 'function' || typeof createServer !== 'function') process.exit(1);
     const names = new Set(tools({}).map(({ name }) => name));
-    for (const name of ['husklet_container_execution', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_remove', 'husklet_image_prune']) {
+    for (const name of ['husklet_workspace_create', 'husklet_workspace_update', 'husklet_container_execution', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_remove', 'husklet_image_prune']) {
       if (!names.has(name)) process.exit(1);
     }
     for (const name of ['husklet_volume_list', 'husklet_volume_inspect', 'husklet_volume_create', 'husklet_volume_remove', 'husklet_network_list', 'husklet_network_inspect', 'husklet_network_create', 'husklet_network_remove', 'husklet_network_connect', 'husklet_network_disconnect']) {
