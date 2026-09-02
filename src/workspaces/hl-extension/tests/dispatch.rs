@@ -70,7 +70,7 @@ impl hl_extension::port::NetworkStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
         self.ledger.note("networks.list");
         Ok(vec![hl_extension::port::NetworkSummary {
-            id: "n1".into(),
+            id: "a".repeat(32),
             name: "private".into(),
             driver: "bridge".into(),
             scope: "local".into(),
@@ -79,7 +79,7 @@ impl hl_extension::port::NetworkStore for Host {
     fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
         self.ledger.note("networks.inspect");
         Ok(hl_extension::port::NetworkSummary {
-            id: "n1".into(),
+            id: "a".repeat(32),
             name: reference.into(),
             driver: "bridge".into(),
             scope: "local".into(),
@@ -87,7 +87,7 @@ impl hl_extension::port::NetworkStore for Host {
     }
     fn create(&self, _name: &str) -> Result<String, HostError> {
         self.ledger.note("networks.create");
-        Ok("n1".into())
+        Ok("a".repeat(32))
     }
     fn remove(&self, _reference: &str) -> Result<(), HostError> {
         self.ledger.note("networks.remove");
@@ -1202,6 +1202,24 @@ fn image_removal_refuses_mutable_tags_and_partial_digests_before_control_authori
 }
 
 #[test]
+fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::NetworkWrite], &[]);
+    for request in [
+        Request::NetworkRemove { reference: "private".into() },
+        Request::NetworkConnect { reference: "a".repeat(12), container: "b".repeat(64) },
+        Request::NetworkDisconnect { reference: "a".repeat(32), container: "friendly".into() },
+    ] {
+        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+    }
+    assert!(host.ledger.reached().is_empty());
+    session.dispatch(&Request::NetworkRemove { reference: "a".repeat(32) }, &services(&host)).unwrap();
+    session.dispatch(&Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
+    session.dispatch(&Request::NetworkDisconnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
+    assert_eq!(host.ledger.reached(), ["networks.remove", "networks.connect", "networks.disconnect"]);
+}
+
+#[test]
 fn a_refusal_is_reported_rather_than_answered_emptily() {
     let host = Host::new();
     let mut session = session(&[Capability::WorkspaceRead], &[]);
@@ -1381,7 +1399,7 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
         matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values[0].name == "cache")
     );
     assert!(
-        matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "n1")
+        matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "a".repeat(32))
     );
     assert!(matches!(
         read.dispatch(&Request::VolumeCreate { name: "unsafe".into() }, &services(&host)),
@@ -1394,13 +1412,13 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     );
     assert_eq!(
         write.dispatch(&Request::NetworkCreate { name: "private".into() }, &services(&host)),
-        Ok(Reply::Identity("n1".into()))
+        Ok(Reply::Identity("a".repeat(32)))
     );
     assert_eq!(
         write.dispatch(
             &Request::NetworkConnect {
-                reference: "private".into(),
-                container: "c1".into()
+                reference: "a".repeat(32),
+                container: "b".repeat(64)
             },
             &services(&host)
         ),
@@ -1409,8 +1427,8 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     assert_eq!(
         write.dispatch(
             &Request::NetworkDisconnect {
-                reference: "private".into(),
-                container: "c1".into()
+                reference: "a".repeat(32),
+                container: "b".repeat(64)
             },
             &services(&host)
         ),

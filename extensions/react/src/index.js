@@ -189,9 +189,9 @@ export function workspace(session) {
       list: async () => expect(await session.call('network_list'), 'networks'),
       inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
       create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
-      remove: (reference) => done('network_remove', { reference }),
-      connect: (reference, container) => done('network_connect', { reference, container }),
-      disconnect: (reference, container) => done('network_disconnect', { reference, container }),
+      remove: (reference) => done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
+      connect: (reference, container) => done('network_connect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
+      disconnect: (reference, container) => done('network_disconnect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
     },
     terminal: {
       panes: async () => expect(await session.call('pane_list'), 'panes'),

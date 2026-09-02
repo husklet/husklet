@@ -500,6 +500,9 @@ test('empty and host-truncated execution catalogues remain explicit', async () =
 
 test('volume and network mutations expose danger only on final confirm and cancel safely', async () => {
   const calls = [];
+  const networkId = 'a'.repeat(32);
+  const refreshedNetworkId = 'c'.repeat(32);
+  const containerId = 'b'.repeat(64);
   const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
   const controlled = {
     volumes: {
@@ -526,18 +529,26 @@ test('volume and network mutations expose danger only on final confirm and cance
   assert.deepEqual(calls, [['volume.remove', 'cache']]);
 
   const networks = host();
-  networks.render(h(Networks, { api: controlled, resource: resource([{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }]) }));
-  change(networks, 'Container ID for connect/disconnect', 'c1');
+  const initialNetworks = resource([{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }]);
+  networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
+  change(networks, 'Container ID for connect/disconnect', containerId);
   invoke(networks, 'Disconnect');
   assert.equal(isDestructive(networks, 'Confirm disconnect'), true);
+  assert.ok(labelled(networks, `Disconnect immutable container ${containerId} from network ${networkId}?`));
   assert.equal(calls.some(([name]) => name === 'network.disconnect'), false);
   invoke(networks, 'Confirm disconnect');
   await settled();
-  assert.deepEqual(calls.at(-1), ['network.disconnect', 'n1', 'c1']);
+  assert.deepEqual(calls.at(-1), ['network.disconnect', networkId, containerId]);
   invoke(networks, 'Remove');
+  assert.ok(labelled(networks, `Remove immutable network ${networkId} (private)?`));
   assert.equal(calls.some(([name]) => name === 'network.remove'), false);
-  invoke(networks, 'Cancel');
+  const staleConfirm = labelled(networks, 'Confirm remove').SetProp.id;
+  const refreshedNetworks = resource([{ id: refreshedNetworkId, name: 'private', driver: 'bridge', scope: 'local' }]);
+  networks.render(h(Networks, { api: controlled, resource: refreshedNetworks }));
+  networks.surface.dispatch({ trigger: 'Invoke', node: staleConfirm, id: `${staleConfirm}:Invoke`, value: null });
+  await settled();
   assert.equal(calls.some(([name]) => name === 'network.remove'), false);
+  assert.ok(labelled(networks, `Network ${networkId} changed or disappeared; inspect and confirm again.`));
 });
 
 test('a failed final confirmation stays visible and retryable', async () => {

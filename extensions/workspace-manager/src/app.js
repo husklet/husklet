@@ -496,8 +496,12 @@ export function Networks({ api, resource, networkDetails }) {
   const [name, setName] = useState('');
   const [container, setContainer] = useState('');
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [error, setError] = useState(null);
+  const currentNetworks = useRef(new Set());
+  currentNetworks.current = new Set((resource.data ?? []).map(resourceReference));
+  const current = (id) => { if (currentNetworks.current.has(id)) return true; setError(new Error(`Network ${id} changed or disappeared; inspect and confirm again.`)); return false; };
   const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (network) => { await api.networks.remove(resourceReference(network)); if (inspection.id === resourceReference(network)) setInspection({ id: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
   const inspect = async (network) => {
     const id = resourceReference(network);
     setInspection({ id, state: 'loading', count: 0, error: null });
@@ -506,21 +510,21 @@ export function Networks({ api, resource, networkDetails }) {
       setInspection({ id, state: 'ready', count, error: null });
     } catch (error) { setInspection({ id, state: 'error', count: 0, error }); }
   };
-  const attach = async (network, verb) => { await api.networks[verb](resourceReference(network), container.trim()); await resource.reload(); };
+  const attach = async (network, verb) => { const id = resourceReference(network); if (!current(id)) return; await api.networks[verb](id, container.trim()); await resource.reload(); };
   const view = bounded(resource.data);
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
-    h(ErrorText, { error: resource.error }),
+    h(ErrorText, { error: error ?? resource.error }),
     h(InventoryEmpty, { resource, records: view.records, label: 'No networks', detail: 'Create a network above to connect workspace containers.' }),
     ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
         label: 'Disconnect', confirmLabel: 'Confirm disconnect',
-        question: `Disconnect ${container.trim() || 'container'} from ${network.name}?`,
+        question: `Disconnect immutable container ${container.trim() || 'container'} from network ${resourceReference(network)}?`,
         enabled: container.trim().length > 0, onConfirm: () => attach(network, 'disconnect'),
       }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove network ${network.name}?`,
+        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
         onConfirm: () => remove(network),
       })),
       inspection.id === resourceReference(network) ? h(CardContent, {},

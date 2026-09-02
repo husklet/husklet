@@ -347,10 +347,14 @@ test('volume and network facades preserve safe request shapes', async () => {
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
+  const networkId = 'a'.repeat(32);
+  const containerId = 'b'.repeat(64);
+  assert.throws(() => api.networks.remove('private'), /complete immutable ID/);
+  assert.throws(() => api.networks.connect(networkId, 'friendly'), /complete immutable ID/);
   const operations = [
     api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache'),
     api.networks.list(), api.networks.inspect('private'), api.networks.create('private'),
-    api.networks.remove('private'), api.networks.connect('private', 'c1'), api.networks.disconnect('private', 'c1'),
+    api.networks.remove(networkId), api.networks.connect(networkId, containerId), api.networks.disconnect(networkId, containerId),
     api.subscribe('volumes'), api.subscribe('networks'), api.subscribe('workspace-events'),
   ];
   const calls = [];
@@ -360,8 +364,8 @@ test('volume and network facades preserve safe request shapes', async () => {
     'network_create', 'network_remove', 'network_connect', 'network_disconnect', 'event_subscribe', 'event_subscribe',
     'event_subscribe',
   ]);
-  assert.deepEqual(calls[8].with, { reference: 'private', container: 'c1' });
-  assert.deepEqual(calls[9].with, { reference: 'private', container: 'c1' });
+  assert.deepEqual(calls[8].with, { reference: networkId, container: containerId });
+  assert.deepEqual(calls[9].with, { reference: networkId, container: containerId });
   const replies = [
     { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local' } },
     { reply: 'volume', with: { name: 'cache', driver: 'local' } }, { reply: 'done' },

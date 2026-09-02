@@ -385,13 +385,22 @@ impl Session {
             Request::NetworkList => Ok(Reply::Networks(port.list()?)),
             Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
             Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
-            Request::NetworkRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::NetworkRemove { reference } => {
+                immutable_identity(reference, &[32], "network")?;
+                port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::NetworkConnect { reference, container } => port
-                .connect(reference, container)
+                .connect(
+                    immutable_reference(reference, &[32], "network")?,
+                    immutable_reference(container, &[32, 64], "container")?,
+                )
                 .map(|()| Reply::Done)
                 .map_err(Failure::from),
             Request::NetworkDisconnect { reference, container } => port
-                .disconnect(reference, container)
+                .disconnect(
+                    immutable_reference(reference, &[32], "network")?,
+                    immutable_reference(container, &[32, 64], "container")?,
+                )
                 .map(|()| Reply::Done)
                 .map_err(Failure::from),
             _ => unreachable!(),
@@ -732,6 +741,11 @@ fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Fail
     Err(Failure::Conflict {
         detail: format!("{noun} signaling requires the complete immutable ID returned by inspection"),
     })
+}
+
+fn immutable_reference<'a>(id: &'a str, widths: &[usize], noun: &str) -> Result<&'a str, Failure> {
+    immutable_identity(id, widths, noun)?;
+    Ok(id)
 }
 
 fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {

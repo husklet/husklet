@@ -389,6 +389,9 @@ test('volume and network tools preserve typed read/control operations and confir
   assert.equal(byName('husklet_network_remove').inputSchema.safeParse({ reference: 'private' }).success, false);
   assert.equal(byName('husklet_network_disconnect').inputSchema.safeParse({ reference: 'private', container: 'c1' }).success, false);
   assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: 'private', container: 'c1', extra: true }).success, false);
+  const networkId = 'a'.repeat(32);
+  const containerId = 'b'.repeat(64);
+  assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: networkId, container: 'friendly' }).success, false);
   await byName('husklet_volume_list').run({});
   await byName('husklet_volume_inspect').run({ name: 'cache' });
   await byName('husklet_volume_create').run({ name: 'build' });
@@ -396,13 +399,13 @@ test('volume and network tools preserve typed read/control operations and confir
   await byName('husklet_network_list').run({});
   await byName('husklet_network_inspect').run({ reference: 'private' });
   await byName('husklet_network_create').run({ name: 'backend' });
-  await byName('husklet_network_remove').run({ reference: 'old-net', confirm: true });
-  await byName('husklet_network_connect').run({ reference: 'backend', container: 'c1' });
-  await byName('husklet_network_disconnect').run({ reference: 'backend', container: 'c1', confirm: true });
+  await byName('husklet_network_remove').run({ reference: networkId, confirm: true });
+  await byName('husklet_network_connect').run({ reference: networkId, container: containerId });
+  await byName('husklet_network_disconnect').run({ reference: networkId, container: containerId, confirm: true });
   assert.deepEqual(calls, [
     ['volumes.list'], ['volumes.inspect', 'cache'], ['volumes.create', 'build'], ['volumes.remove', 'old'],
-    ['networks.list'], ['networks.inspect', 'private'], ['networks.create', 'backend'], ['networks.remove', 'old-net'],
-    ['networks.connect', 'backend', 'c1'], ['networks.disconnect', 'backend', 'c1'],
+    ['networks.list'], ['networks.inspect', 'private'], ['networks.create', 'backend'], ['networks.remove', networkId],
+    ['networks.connect', networkId, containerId], ['networks.disconnect', networkId, containerId],
   ]);
 });
 

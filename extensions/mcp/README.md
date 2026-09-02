@@ -64,6 +64,9 @@ running response is therefore not presented as end-of-stream.
 Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
 complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
 re-resolved to a different image between inspection and removal.
+Network reads may use canonical names. Network removal, connect, and disconnect
+instead require the complete 32-hex network ID; attachment changes also require
+the complete immutable container ID, preventing name or prefix re-resolution.
 Container process inspection is a timestamped, bounded snapshot of the initial
 process only. Its PID is explicitly snapshot-local and may be reused; the host
 does not expose argv or environment values, and does not claim child-process,

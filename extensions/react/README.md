@@ -127,6 +127,9 @@ lookup and display. The explicit control grant covers pause,
 unpause, restart, kill, and detached `exec`. Image inspection and pulls may use
 human tags, but removal requires the complete `sha256:` digest returned by
 inventory so a moved tag cannot select a different image after confirmation.
+Network inspection may use a canonical name, but remove, connect, and disconnect
+require the complete 32-hex network ID from inventory. Attachment mutations also
+require the complete immutable container ID.
 The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
