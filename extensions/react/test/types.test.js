@@ -54,3 +54,17 @@ test('the declarations were generated from this catalogue', () => {
     assert.ok(declarations.includes(spelling), `a tone is missing the spelling ${spelling}`);
   }
 });
+
+test('a render handle exposes the addressed multi-surface lifecycle', () => {
+  const handle = declarations.match(/export interface RenderHandle \{(?<body>[\s\S]*?)\n\}/)?.groups?.body;
+  assert.ok(handle, 'the generated declarations expose RenderHandle');
+  assert.match(handle, /readonly ready: Promise<string>;/);
+  assert.match(handle, /readonly slot: string \| null;/);
+  assert.match(handle, /source\(mutation: InterfaceSourceMutation\): Promise<void>;/);
+  assert.match(handle, /close\(\): void;/);
+  assert.match(
+    declarations,
+    /split\?: \{ slot: string; division: 'beside' \| 'below' \}/,
+    'the generated render options describe tab-to-split composition',
+  );
+});

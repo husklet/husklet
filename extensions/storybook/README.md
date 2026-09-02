@@ -42,6 +42,20 @@ docker build \
 
 The host starts the image, mounts a socket at `HUSKLET_EXTENSION_SOCKET`, and
 reads the manifest off the image label; `src/main.js` connects and renders.
+
+## Concurrent surfaces
+
+[`examples/concurrent-surfaces.js`](examples/concurrent-surfaces.js) demonstrates
+one extension session owning two simultaneous React roots: a tab and a sibling
+split. Each counter has independent React state and event routing. Closing the
+overview invokes its idempotent `RenderHandle.close()` withdrawal while the
+details counter continues receiving events.
+
+The example is intentionally not another Storybook entrypoint. The catalogue in
+`src/main.js` remains canonical; developers can import
+`mountConcurrentSurfaces(session)` into an extension when they want to explore
+the multi-surface lifecycle.
+
 ## Large DataTable story
 
 The DataTable preview is backed by 100,000 logical records through Husklet's

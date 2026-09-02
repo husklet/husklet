@@ -9,8 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface,
-    VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -23,6 +24,7 @@ pub struct Services<'a> {
     pub workspace: WorkspaceInfo,
     pub workspaces: &'a dyn WorkspaceInventory,
     pub workspace_control: &'a dyn WorkspaceControl,
+    pub extensions: &'a dyn ExtensionStore,
     pub containers: &'a dyn ContainerInventory,
     pub control: &'a dyn ContainerControl,
     pub images: &'a dyn ImageStore,
@@ -56,6 +58,13 @@ pub struct SurfaceMutation {
     pub slot: String,
     /// Mutation applied only to the addressed surface.
     pub mutation: hl_gui::SourceMutation,
+}
+
+/// One interaction and the independently addressed surface that produced it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceEvent {
+    pub slot: String,
+    pub event: hl_gui::Event,
 }
 
 impl std::ops::Deref for Session {
@@ -127,6 +136,11 @@ impl Session {
             | Request::WorkspaceStart { .. }
             | Request::WorkspaceStop { .. }
             | Request::WorkspaceRestart { .. } => self.workspace_control(request, services),
+            Request::ExtensionList
+            | Request::ExtensionInspect { .. }
+            | Request::ExtensionEnable { .. }
+            | Request::ExtensionDisable { .. }
+            | Request::ExtensionRemove { .. } => self.extensions(request, services),
             Request::ContainerList
             | Request::ContainerInspect { .. }
             | Request::ContainerProcesses { .. }
@@ -203,6 +217,7 @@ impl Session {
             | Request::FilesystemRemove { .. } => self.files(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
+            Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
             Request::InterfaceRender { frame } => self.render_legacy(frame),
             Request::InterfaceRenderAt { slot, frame } => self.render(slot, frame),
             Request::SourceResize { mutation } => self.mutate_legacy(mutation.clone()),
@@ -347,6 +362,20 @@ impl Session {
             Request::WorkspaceRestart { name } => port.restart(name).map(|()| Reply::Done).map_err(Failure::from),
             _ => Err(Failure::Unsupported {
                 call: "workspace control".into(),
+            }),
+        }
+    }
+
+    fn extensions(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        let port = self.peer.authority().port(request.capability(), services.extensions)?;
+        match request {
+            Request::ExtensionList => Ok(Reply::Extensions(port.list()?)),
+            Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
+            Request::ExtensionEnable { name } => port.enable(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionDisable { name } => port.disable(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            _ => Err(Failure::Unsupported {
+                call: "extension management".into(),
             }),
         }
     }
@@ -563,6 +592,21 @@ impl Session {
         let id = port.surface(slot, division)?;
         self.surfaces.insert(id.clone());
         Ok(Reply::Identity(id))
+    }
+
+    /// Retires one surface owned by this session without disturbing siblings.
+    fn withdraw(&mut self, slot: &str, services: &Services<'_>) -> Result<Reply, Failure> {
+        if !self.surfaces.contains(slot) {
+            return Err(Failure::Conflict {
+                detail: format!("surface {slot} is not owned by this session"),
+            });
+        }
+        let port = self.peer.authority().port(Capability::Interface, services.terminal)?;
+        port.close(slot)?;
+        self.surfaces.remove(slot);
+        self.pending.retain(|frame| frame.slot != slot);
+        self.mutations.retain(|mutation| mutation.slot != slot);
+        Ok(Reply::Done)
     }
 }
 

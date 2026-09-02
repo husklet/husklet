@@ -26,7 +26,9 @@ test('the production entrypoint handshakes and renders through a real Unix socke
         const name = frame.payload?.call;
         if (!name) continue;
         calls.push(name);
-        const payload = name === 'container_list'
+        const payload = name === 'interface_open_tab'
+          ? { reply: 'identity', with: 'workspace-resources' }
+          : name === 'container_list'
           ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
           : name === 'image_list'
             ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
@@ -46,7 +48,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
-    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render') && calls.includes('container_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
+    await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;

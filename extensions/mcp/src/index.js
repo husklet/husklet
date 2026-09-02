@@ -6,6 +6,7 @@ import { paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
+const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const path = z.string().min(1).max(4096);
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
@@ -53,6 +54,11 @@ export function tools(api) {
     define('husklet_workspace_update', 'Replace a stopped workspace configuration after explicit confirmation; renaming is not supported.', workspaceUpdate, ({ name, configuration }) => api.update(name, configuration)),
     ...['start', 'stop', 'restart'].map((action) => define(`husklet_workspace_${action}`, `${action} a named workspace.`, z.object({ name: id }).strict(), async ({ name }) => { await api[action](name); return { done: true }; })),
     define('husklet_workspace_delete', 'Delete a stopped workspace after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.delete(name); return { done: true }; }),
+    define('husklet_extension_list', 'List bounded installed extension records and lifecycle status.', empty, () => api.extensions.list()),
+    define('husklet_extension_inspect', 'Inspect one installed extension record.', z.object({ name: extensionName }).strict(), ({ name }) => api.extensions.inspect(name)),
+    define('husklet_extension_enable', 'Persistently enable an installed extension after explicit confirmation.', z.object({ name: extensionName, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.extensions.enable(name); return { done: true }; }),
+    define('husklet_extension_disable', 'Persistently disable an installed extension after explicit confirmation.', z.object({ name: extensionName, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.extensions.disable(name); return { done: true }; }),
+    define('husklet_extension_remove', 'Forget one installed extension record after explicit confirmation; this does not install or pull images.', z.object({ name: extensionName, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.extensions.remove(name); return { done: true }; }),
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),

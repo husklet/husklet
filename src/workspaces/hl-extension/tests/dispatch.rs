@@ -9,9 +9,9 @@ use std::cell::RefCell;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
-    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
-    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ExtensionStore, ExtensionSummary, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary,
+    Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind,
+    SemanticNode, TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -358,6 +358,7 @@ impl TerminalSurface for Host {
     }
 
     fn close(&self, _slot: &str) -> Result<(), HostError> {
+        self.ledger.note("terminal.close");
         Ok(())
     }
 
@@ -511,6 +512,37 @@ impl WorkspaceFiles for Host {
     }
 }
 
+impl ExtensionStore for Host {
+    fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
+        self.ledger.note("extensions.list");
+        Ok(vec![ExtensionSummary {
+            name: "sample".into(),
+            image_digest: "sha256:abc".into(),
+            status: "duty".into(),
+        }])
+    }
+    fn inspect(&self, name: &str) -> Result<ExtensionSummary, HostError> {
+        self.ledger.note("extensions.inspect");
+        Ok(ExtensionSummary {
+            name: name.into(),
+            image_digest: "sha256:abc".into(),
+            status: "duty".into(),
+        })
+    }
+    fn enable(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.enable");
+        Ok(())
+    }
+    fn disable(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.disable");
+        Ok(())
+    }
+    fn remove(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.remove");
+        Ok(())
+    }
+}
+
 fn services(host: &Host) -> Services<'_> {
     Services {
         workspace: WorkspaceInfo {
@@ -520,6 +552,7 @@ fn services(host: &Host) -> Services<'_> {
         },
         workspaces: host,
         workspace_control: host,
+        extensions: host,
         containers: host,
         control: host,
         images: host,
@@ -601,6 +634,23 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::WorkspaceRestart { name: "other".into() },
             Capability::WorkspaceControl,
+        ),
+        (Request::ExtensionList, Capability::ExtensionRead),
+        (
+            Request::ExtensionInspect { name: "sample".into() },
+            Capability::ExtensionRead,
+        ),
+        (
+            Request::ExtensionEnable { name: "sample".into() },
+            Capability::ExtensionControl,
+        ),
+        (
+            Request::ExtensionDisable { name: "sample".into() },
+            Capability::ExtensionControl,
+        ),
+        (
+            Request::ExtensionRemove { name: "sample".into() },
+            Capability::ExtensionControl,
         ),
         (Request::ContainerList, Capability::ContainerRead),
         (Request::ContainerInspect { id: "c1".into() }, Capability::ContainerRead),
@@ -1123,10 +1173,7 @@ fn a_session_records_each_surface_it_opens() {
         )
         .expect("opened");
     let second = session
-        .dispatch(
-            &Request::InterfaceOpenTab { title: "Logs".into() },
-            &services,
-        )
+        .dispatch(&Request::InterfaceOpenTab { title: "Logs".into() }, &services)
         .expect("opened again");
 
     assert_ne!(first, second);
@@ -1149,10 +1196,7 @@ fn addressed_frames_remain_separate_across_two_owned_surfaces() {
     let services = services(&host);
     for title in ["Containers", "Logs"] {
         session
-            .dispatch(
-                &Request::InterfaceOpenTab { title: title.into() },
-                &services,
-            )
+            .dispatch(&Request::InterfaceOpenTab { title: title.into() }, &services)
             .expect("surface opened");
     }
     let first = hl_gui::Frame::new(7);
@@ -1221,6 +1265,51 @@ fn addressed_frames_remain_separate_across_two_owned_surfaces() {
             )
             .is_err(),
         "addressing does not grant authority over arbitrary workspace panes"
+    );
+}
+
+#[test]
+fn withdrawing_one_owned_surface_preserves_its_sibling() {
+    let host = Host::new();
+    let mut session = session(&[Capability::Interface], &[]);
+    let services = services(&host);
+    for title in ["Containers", "Logs"] {
+        session
+            .dispatch(&Request::InterfaceOpenTab { title: title.into() }, &services)
+            .expect("surface opened");
+    }
+    session
+        .dispatch(
+            &Request::InterfaceWithdraw {
+                slot: "tab-Containers".into(),
+            },
+            &services,
+        )
+        .expect("owned surface withdrawn");
+    assert!(matches!(
+        session.dispatch(
+            &Request::InterfaceRenderAt {
+                slot: "tab-Containers".into(),
+                frame: hl_gui::Frame::new(1),
+            },
+            &services,
+        ),
+        Err(Failure::Conflict { .. })
+    ));
+    session
+        .dispatch(
+            &Request::InterfaceRenderAt {
+                slot: "tab-Logs".into(),
+                frame: hl_gui::Frame::new(2),
+            },
+            &services,
+        )
+        .expect("sibling remains owned");
+    assert_eq!(session.drain()[0].slot, "tab-Logs");
+    assert!(host.ledger.reached().contains(&"terminal.close"));
+    assert_eq!(
+        Request::InterfaceWithdraw { slot: "x".into() }.capability(),
+        Capability::Interface
     );
 }
 

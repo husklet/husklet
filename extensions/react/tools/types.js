@@ -156,6 +156,7 @@ export const PROTOCOL: number;
 export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
+export interface ExtensionSummary { name: string; image_digest: string; status: string }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
 export interface WorkspaceMount { host: string; container: string; read_only: boolean }
 export interface WorkspaceTerminal {
@@ -248,7 +249,7 @@ export class Session {
   call(method: string, params?: unknown): Promise<unknown>;
   answer(channel: number, window: unknown): void;
   onEvent(listener: (event: SnapshotEvent, channel: number) => void): () => boolean;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export function connect(options?: ConnectOptions): Promise<Session>;
@@ -263,6 +264,13 @@ export interface WorkspaceApi {
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;
+  extensions: {
+    list(): Promise<ExtensionSummary[]>;
+    inspect(name: string): Promise<ExtensionSummary>;
+    enable(name: string): Promise<void>;
+    disable(name: string): Promise<void>;
+    remove(name: string): Promise<void>;
+  };
   containers: {
     list(): Promise<ContainerSummary[]>;
     inspect(id: string): Promise<ContainerSummary>;
@@ -329,11 +337,26 @@ export const protocolCoverage: Readonly<{
   unavailable: Readonly<Record<string, readonly string[]>>;
 }>;
 
+export type InterfaceSourceMutation =
+  | { Open: { source: number; columns: readonly unknown[] } }
+  | { Length: { source: number; version: number; rows: number } }
+  | { Window: { source: number; version: number; request: number; range: { start: number; count: number }; rows: readonly unknown[] } }
+  | { Invalidate: { source: number; version: number; range: { start: number; count: number } | null } }
+  | { Close: { source: number } };
+
+export interface RenderHandle {
+  readonly ready: Promise<string>;
+  readonly slot: string | null;
+  update(next: ReactNode): void;
+  source(mutation: InterfaceSourceMutation): Promise<void>;
+  close(): void;
+}
+
 export function render(
   element: ReactNode,
   session: Session,
-  options?: { title?: string },
-): { update(next: ReactNode): void; close(): void };
+  options?: { title?: string; split?: { slot: string; division: 'beside' | 'below' } },
+): RenderHandle;
 
 export function deliver(session: Session, payload: unknown): boolean;
 `;

@@ -35,10 +35,11 @@ pub use installation::{Disposition, Installation, Objection, Record, Stage, Summ
 pub use manifest::{
     Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
 };
+pub use port::ExtensionSummary;
 pub use port::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActionKind, SemanticNode};
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
-pub use session::{Services, Session, SurfaceFrame, SurfaceMutation};
+pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};
 pub use subscription::{
     PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent, WorkspaceEventBatch,
 };

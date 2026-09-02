@@ -48,6 +48,19 @@ pub enum Request {
     WorkspaceRestart {
         name: String,
     },
+    ExtensionList,
+    ExtensionInspect {
+        name: String,
+    },
+    ExtensionEnable {
+        name: String,
+    },
+    ExtensionDisable {
+        name: String,
+    },
+    ExtensionRemove {
+        name: String,
+    },
     ContainerList,
     ContainerInspect {
         id: String,
@@ -208,6 +221,9 @@ pub enum Request {
         slot: String,
         division: Division,
     },
+    InterfaceWithdraw {
+        slot: String,
+    },
     InterfaceRender {
         frame: hl_gui::Frame,
     },
@@ -243,6 +259,10 @@ impl Request {
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
+            Self::ExtensionList | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
+            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRemove { .. } => {
+                Capability::ExtensionControl
+            }
             Self::ContainerList
             | Self::ContainerInspect { .. }
             | Self::ContainerProcesses { .. }
@@ -289,6 +309,7 @@ impl Request {
             | Self::FilesystemRemove { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
+            | Self::InterfaceWithdraw { .. }
             | Self::InterfaceRender { .. }
             | Self::InterfaceRenderAt { .. }
             | Self::SourceResize { .. }
@@ -380,6 +401,8 @@ pub enum Reply {
     Workspace(WorkspaceInfo),
     WorkspaceConfiguration(WorkspaceConfiguration),
     Workspaces(Vec<WorkspaceState>),
+    Extensions(Vec<crate::port::ExtensionSummary>),
+    Extension(crate::port::ExtensionSummary),
     Containers(Vec<ContainerSummary>),
     Container(ContainerSummary),
     Processes(ProcessList),

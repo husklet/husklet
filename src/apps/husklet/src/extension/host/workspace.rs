@@ -221,6 +221,7 @@ impl Supply for Workspace {
             workspace: self.describe(),
             workspaces: &store,
             workspace_control: &store,
+            extensions: extensions.management(),
             containers: extensions.containers(),
             control: extensions.control(),
             images: extensions.images(),

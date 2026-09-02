@@ -20,11 +20,8 @@ pub(crate) const ABSENCE: &str = "hl-surface-absence";
 pub(crate) struct Surface;
 
 impl Surface {
-    /// The pane currently holding one extension's interface, if it has one.
-    ///
-    /// Looking this up before a move is what makes relocation transactional: a
-    /// failed division can put the same widget back where it started instead of
-    /// falling all the way home to the workspace page.
+    /// Legacy single-interface lookup, used only by test/fallback galleries
+    /// that have not registered independent pane renderers.
     pub(crate) fn of(window: &Rc<TermWin>, extension: &str) -> Option<gtk::Widget> {
         Panes::all(window).into_iter().find_map(|pane| {
             Slots::new(window)
@@ -36,17 +33,15 @@ impl Surface {
 
     /// Builds the pane for one extension and registers it under `slot`.
     ///
-    /// The interface placed in it is the one the extension is already drawing,
-    /// moved out of its page on the workspace shell rather than built again: an
-    /// extension has one interface, and a second view of it would be a second
-    /// tree fed none of the frames that built the first.
+    /// The interface placed in it is retained under this stable slot. Other
+    /// panes from the same extension own different widgets and trees.
     pub(crate) fn build(window: &Rc<TermWin>, extension: &str, provider: Option<&str>, slot: String) -> gtk::Widget {
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.add_css_class(SURFACE);
         holder.set_hexpand(true);
         holder.set_vexpand(true);
         holder.set_focusable(true);
-        match Window::gallery(window).and_then(|gallery| gallery.lend(extension)) {
+        match Window::gallery(window).and_then(|gallery| gallery.pane(extension, &slot)) {
             Some(interface) => holder.append(&interface),
             None => holder.append(&Absence::widget(extension)),
         }
@@ -68,11 +63,13 @@ impl Surface {
             return;
         };
         let Some(child) = holder.first_child() else { return };
-        let Some(gallery) = Window::gallery(window) else {
-            return;
-        };
         holder.remove(&child);
-        gallery.recover(&extension, &child);
+        // Addressed pane interfaces remain retained by their extension page.
+        // They are deliberately left detached until this same slot is mounted
+        // again; the overview owns its own independent interface.
+        if let Some(gallery) = Window::gallery(window) {
+            gallery.release(&extension, &child);
+        }
     }
 
     /// Gives up a pane that never reached the layout: its interface goes home
@@ -91,7 +88,10 @@ impl Surface {
         let Some(holder) = pane.downcast_ref::<gtk::Box>() else {
             return;
         };
-        let Some(interface) = Window::gallery(window).and_then(|gallery| gallery.lend(extension)) else {
+        let Some((slot, _, _)) = Slots::new(window).surface(pane) else {
+            return;
+        };
+        let Some(interface) = Window::gallery(window).and_then(|gallery| gallery.pane(extension, &slot)) else {
             return;
         };
         while let Some(child) = holder.first_child() {

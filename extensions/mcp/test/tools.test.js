@@ -10,6 +10,7 @@ function fake() {
   return { calls, api: {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
+    extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove') },
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
@@ -79,6 +80,23 @@ test('schemas are strict, controls map exactly, and no terminal shell shortcut e
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
   assert.deepEqual(calls, [['containers.start', 'abc']]);
+});
+
+test('extension inventory is bounded and every lifecycle mutation requires confirmation', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_extension_inspect').inputSchema.safeParse({ name: '../escape' }).success, false);
+  for (const action of ['enable', 'disable', 'remove']) {
+    assert.equal(byName(`husklet_extension_${action}`).inputSchema.safeParse({ name: 'workspace-manager' }).success, false);
+    await byName(`husklet_extension_${action}`).run({ name: 'workspace-manager', confirm: true });
+  }
+  await byName('husklet_extension_list').run({});
+  await byName('husklet_extension_inspect').run({ name: 'workspace-manager' });
+  assert.deepEqual(calls, [
+    ['extensions.enable', 'workspace-manager'], ['extensions.disable', 'workspace-manager'],
+    ['extensions.remove', 'workspace-manager'], ['extensions.list'], ['extensions.inspect', 'workspace-manager'],
+  ]);
 });
 
 test('container create and exec accept only bounded structured authority', async () => {
@@ -350,6 +368,8 @@ test('a real MCP client lists strict tools and calls through the React session c
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
+      if (name === 'extension_list') return { reply: 'extensions', with: [{ name: 'manager', image_digest: 'sha256:abc', status: 'standby' }] };
+      if (name === 'extension_disable') return { reply: 'done' };
       if (name === 'execution_inspect') return { reply: 'execution', with: {
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
@@ -378,6 +398,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_extension_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
   assert(listed.tools.some(({ name }) => name === 'husklet_execution_signal'));
   assert(listed.tools.some(({ name }) => name === 'husklet_image_list'));
@@ -389,6 +410,9 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
+  const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
+  assert.deepEqual(JSON.parse(extensions.content[0].text), [{ name: 'manager', image_digest: 'sha256:abc', status: 'standby' }]);
+  await client.callTool({ name: 'husklet_extension_disable', arguments: { name: 'manager', confirm: true } });
   const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: 'exec-live' } });
   assert.deepEqual(JSON.parse(execution.content[0].text), {
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
@@ -409,6 +433,8 @@ test('a real MCP client lists strict tools and calls through the React session c
   });
   assert.deepEqual(calls, [
     ['workspace_info', undefined],
+    ['extension_list', undefined],
+    ['extension_disable', { name: 'manager' }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
     ['image_list', undefined],

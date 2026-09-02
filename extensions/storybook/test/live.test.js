@@ -32,10 +32,13 @@ test('the shipped entrypoint connects and renders the complete playground over a
         if (frame.channel === 0) continue;
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
+        const payload = frame.payload.call === 'interface_open_tab'
+          ? { reply: 'identity', with: 'storybook-main' }
+          : { reply: 'done' };
         stream.write(encode({
           channel: frame.channel,
           kind: KIND.response,
-          payload: { reply: 'done' },
+          payload,
         }));
       }
     });
@@ -68,15 +71,17 @@ test('the shipped entrypoint connects and renders the complete playground over a
   });
 
   const rendered = await until(
-    () => calls.find((call) => call.call === 'interface_render'),
+    () => calls.find((call) => call.call === 'interface_render_at'),
     `storybook never rendered; stderr=${stderr}`,
   );
   const length = await until(
-    () => calls.find((call) => call.call === 'source_resize'),
+    () => calls.find((call) => call.call === 'source_resize_at'),
     `storybook never published its large source; stderr=${stderr}`,
   );
   assert.deepEqual(calls[0], { call: 'interface_open_tab', with: { title: 'Storybook' } });
+  assert.equal(rendered.with.slot, 'storybook-main');
   assert.equal(rendered.with.frame.sequence, 1);
+  assert.equal(length.with.slot, 'storybook-main');
   assert.deepEqual(length.with.mutation.Length, { source: 100, version: 1, rows: 100_000 });
   assert.ok(rendered.with.frame.patches.length > 250, 'the live frame does not contain the full component browser');
   assert.equal(

@@ -95,11 +95,43 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_stopped_extension_keeps_its_widgets_and_says_so();
         a_structured_fault_reaches_lifecycle_on_the_toolkit_tick();
         a_rendered_button_reaches_the_sink();
+        retained_pane_actions_keep_their_slot();
         semantics_are_redacted_and_actions_reject_stale_revisions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn retained_pane_actions_keep_their_slot() {
+    let mut fixture = Fixture::new();
+    let frame = Reconciliation::new().reconcile(&panel("Pane two"));
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-2".into(),
+            frame,
+        })
+        .expect("the page is listening");
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-2").expect("pane semantics");
+    let button = &tree.root.children[0].children[1];
+    fixture
+        .page
+        .semantic_action_at(
+            "pane-2",
+            &hl_extension::PaneSemanticAction {
+                revision: tree.revision,
+                node: button.id,
+                action: hl_extension::SemanticActionKind::Invoke,
+                value: None,
+            },
+        )
+        .expect("declared pane action");
+    assert!(matches!(
+        fixture.recorded.borrow().last(),
+        Some(Signal::InteractionAt { slot, event: Event::Invoke { .. } }) if slot == "pane-2"
+    ));
 }
 
 fn semantics_are_redacted_and_actions_reject_stale_revisions() {

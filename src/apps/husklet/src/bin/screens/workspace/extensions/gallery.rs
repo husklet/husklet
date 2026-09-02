@@ -25,7 +25,8 @@ struct Exhibit {
     providers: Vec<hl_extension::PaneProvider>,
     selected: Rc<dyn Fn(hl_extension::PaneSelection)>,
     semantics: Option<Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>>,
-    action: Option<Rc<dyn Fn(&hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
+    action: Option<Rc<dyn Fn(&str, &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
+    pane: Option<Rc<dyn Fn(&str) -> gtk::Widget>>,
 }
 
 /// One choice shown by a terminal pane, tied to the extension that owns it.
@@ -122,6 +123,7 @@ impl Gallery {
             selected,
             semantics: None,
             action: None,
+            pane: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
     }
@@ -130,11 +132,18 @@ impl Gallery {
         &self,
         extension: &str,
         semantics: Rc<dyn Fn(&str) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError>>,
-        action: Rc<dyn Fn(&hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>,
+        action: Rc<dyn Fn(&str, &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>,
     ) {
         if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
             exhibit.semantics = Some(semantics);
             exhibit.action = Some(action);
+        }
+    }
+
+    /// Connects stable pane slots to independently retained renderer trees.
+    pub fn enrol_panes(&self, extension: &str, pane: Rc<dyn Fn(&str) -> gtk::Widget>) {
+        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+            exhibit.pane = Some(pane);
         }
     }
 
@@ -155,6 +164,7 @@ impl Gallery {
     pub fn semantic_action(
         &self,
         extension: &str,
+        slot: &str,
         action: &hl_extension::PaneSemanticAction,
     ) -> Result<(), hl_extension::HostError> {
         let held = self.0.borrow();
@@ -163,7 +173,7 @@ impl Gallery {
             .and_then(|entry| entry.action.clone())
             .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
         drop(held);
-        endpoint(action)
+        endpoint(slot, action)
     }
 
     /// Stops advertising an extension whose lifecycle page is being removed.
@@ -237,6 +247,22 @@ impl Gallery {
         Some(interface)
     }
 
+    /// The independently retained interface for an addressed pane slot.
+    #[must_use]
+    pub fn pane(&self, extension: &str, slot: &str) -> Option<gtk::Widget> {
+        let held = self.0.borrow();
+        let pane = held.get(extension)?.pane.clone();
+        drop(held);
+        let Some(pane) = pane else {
+            return self.lend(extension);
+        };
+        let interface = pane(slot);
+        if let Some(parent) = interface.parent().and_downcast::<gtk::Box>() {
+            parent.remove(&interface);
+        }
+        Some(interface)
+    }
+
     /// Puts one extension's interface back on its page.
     pub fn recover(&self, extension: &str, interface: &gtk::Widget) {
         let held = self.0.borrow();
@@ -248,6 +274,18 @@ impl Gallery {
         }
     }
 
+    /// Releases a closed slot without moving another retained pane surface.
+    pub fn release(&self, extension: &str, interface: &gtk::Widget) {
+        let independently_retained = self
+            .0
+            .borrow()
+            .get(extension)
+            .is_some_and(|exhibit| exhibit.pane.is_some());
+        if !independently_retained {
+            self.recover(extension, interface);
+        }
+    }
+
     /// Whether an interface is recorded under this name and still drawable.
     #[must_use]
     pub fn holds(&self, extension: &str) -> bool {
@@ -255,6 +293,14 @@ impl Gallery {
             .borrow()
             .get(extension)
             .is_some_and(|exhibit| exhibit.interface.upgrade().is_some())
+    }
+
+    #[must_use]
+    pub fn retains_panes(&self, extension: &str) -> bool {
+        self.0
+            .borrow()
+            .get(extension)
+            .is_some_and(|exhibit| exhibit.pane.is_some())
     }
 }
 

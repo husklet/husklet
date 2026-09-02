@@ -65,7 +65,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
         panes::removing_an_extension_tombstones_without_displacing_its_shell();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
-        panes::splitting_an_interface_again_moves_its_one_surface();
+        panes::two_same_extension_panes_render_independently_by_slot();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
         panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
     });
@@ -1128,6 +1128,12 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         deliveries,
         Rc::new(move |signal: Signal| match signal {
             Signal::Interaction(event) => orders.accept(hl::extension::Order::Interaction(event)),
+            Signal::InteractionAt { slot, event } => {
+                orders.accept(hl::extension::Order::InteractionAt(hl_extension::SurfaceEvent {
+                    slot,
+                    event,
+                }));
+            }
             Signal::Retry => orders.accept(hl::extension::Order::Retry),
         }),
     );
@@ -1255,6 +1261,8 @@ mod ports {
 
     impl hl_extension::port::WorkspaceControl for Ports {}
 
+    impl hl_extension::port::ExtensionStore for Ports {}
+
     impl WorkspaceFiles for Ports {
         fn list(&self, _path: &RelativePath) -> Result<Vec<Entry>, HostError> {
             Ok(Vec::new())
@@ -1280,6 +1288,7 @@ mod ports {
             },
             workspaces: &PORTS,
             workspace_control: &PORTS,
+            extensions: &PORTS,
             containers: &PORTS,
             control: &PORTS,
             images: &PORTS,
@@ -1383,8 +1392,8 @@ mod panes {
     #[cfg(feature = "mcp-e2e")]
     pub(super) fn mcp_socket_changes_native_ui() {
         use hl_extension::port::{
-            ContainerControl, ContainerInventory, Entry, ImageStore, NetworkStore, VolumeStore, WorkspaceControl,
-            WorkspaceFiles, WorkspaceInventory,
+            ContainerControl, ContainerInventory, Entry, ExtensionStore, ImageStore, NetworkStore, VolumeStore,
+            WorkspaceControl, WorkspaceFiles, WorkspaceInventory,
         };
         use hl_extension::{Authority, Capability, Grant, RelativePath, Services, WorkspaceInfo};
         use std::process::Command;
@@ -1428,6 +1437,7 @@ mod panes {
             }
         }
         impl WorkspaceControl for Unused {}
+        impl ExtensionStore for Unused {}
         impl WorkspaceFiles for Unused {
             fn list(&self, _: &RelativePath) -> Result<Vec<Entry>, HostError> {
                 unreachable!()
@@ -1488,6 +1498,7 @@ mod panes {
                 networks: &unused,
                 terminal: &relay,
                 files: &unused,
+                extensions: &unused,
             };
             let mut conversation =
                 hl::extension::Conversation::new(stream, authority, "dev", hl::extension::Queue::new())
@@ -1771,6 +1782,36 @@ mod panes {
         assert_eq!(identity.extension, "postgres");
         assert_eq!(identity.provider, "database");
 
+        let chooser = super::descendants(&chrome)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("pane chooser");
+        PaneChooser::populate(&bench.window, &chooser);
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose pane content; currently showing Postgres · postgres")
+        );
+        let popover = chooser.popover().expect("chooser popover");
+        let widgets = super::descendants(popover.upcast_ref::<gtk::Widget>());
+        assert!(widgets.iter().any(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == "Currently showing Postgres · postgres")
+        }));
+        assert!(widgets.iter().any(|widget| {
+            widget.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                button.label().as_deref() == Some("Postgres") && button.has_css_class("suggested-action")
+            })
+        }));
+        assert!(
+            widgets.iter().any(|widget| {
+                widget
+                    .downcast_ref::<gtk::Box>()
+                    .is_some_and(|choices| choices.width_request() == 200)
+            }),
+            "the popover has a compact minimum rather than forcing a wide pane"
+        );
+
         PaneChooser::terminal(&bench.window);
         let restored = Panes::at(&bench.window, &slot).expect("restored pane");
         assert_eq!(restored.occupant, Occupant::Terminal);
@@ -1788,7 +1829,7 @@ mod panes {
         assert_eq!(chooser.icon_name().as_deref(), Some("view-grid-symbolic"));
         assert_eq!(
             chooser.tooltip_text().as_deref(),
-            Some("Choose what this pane displays")
+            Some("Choose pane content; currently showing Terminal")
         );
         let labels = || {
             chooser
@@ -2129,39 +2170,54 @@ mod panes {
         assert_eq!(slots, [one.as_str(), two.as_str()]);
     }
 
-    pub(super) fn splitting_an_interface_again_moves_its_one_surface() {
+    pub(super) fn two_same_extension_panes_render_independently_by_slot() {
+        use super::super::super::extension::{channel, Delivery, Interface};
+        use hl_gui::{Element, Reconciliation};
+
         let bench = Bench::new();
         let (first, one) = bench.shell();
         let (_second, two) = bench.beside(&first);
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        interface.add_css_class(super::SURFACE);
+        let (post, deliveries) = channel();
+        let (interface, page) = Interface::new(deliveries, Rc::new(|_| {}));
         home.append(&interface);
+        let page = Rc::new(RefCell::new(page));
         gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
+        let retained = Rc::clone(&page);
+        gallery.enrol_panes("sample", Rc::new(move |slot| retained.borrow_mut().pane(slot)));
         Window::exhibit(&bench.window, gallery);
 
-        let old = Console::surface(&bench.window, Some("sample"), &one, Division::Below).expect("the first surface");
-        let moved =
-            Console::surface(&bench.window, Some("sample"), &two, Division::Below).expect("the relocated surface");
+        let left = Console::surface(&bench.window, Some("sample"), &one, Division::Below).expect("first surface");
+        let right = Console::surface(&bench.window, Some("sample"), &two, Division::Below).expect("second surface");
+        assert_ne!(left, right);
+        post.send(Delivery::FrameAt {
+            slot: left.clone(),
+            frame: Reconciliation::new().reconcile(&Element::text("left only")),
+        })
+        .expect("left frame");
+        post.send(Delivery::FrameAt {
+            slot: right.clone(),
+            frame: Reconciliation::new().reconcile(&Element::text("right only")),
+        })
+        .expect("right frame");
+        assert_eq!(page.borrow_mut().tick(), 2);
 
-        assert_ne!(moved, old, "the new pane has its own authoritative slot");
-        assert!(Panes::at(&bench.window, &old).is_none(), "the old holder was collapsed");
-        let held = Panes::at(&bench.window, &moved).expect("the returned slot names the new pane");
-        assert_eq!(held.occupant, Occupant::Surface);
+        let labels = |slot: &str| {
+            let pane = Panes::at(&bench.window, slot).expect("addressed surface remains mounted");
+            super::descendants(&pane.widget)
+                .into_iter()
+                .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                .map(|label| label.text().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(labels(&left).iter().any(|label| label == "left only"));
+        assert!(!labels(&left).iter().any(|label| label == "right only"));
+        assert!(labels(&right).iter().any(|label| label == "right only"));
+        assert!(!labels(&right).iter().any(|label| label == "left only"));
         assert!(
-            super::descendants(&held.widget)
-                .iter()
-                .any(|found| found == interface.upcast_ref::<gtk::Widget>()),
-            "the same interface widget moved rather than a second tree being built"
-        );
-        assert_eq!(
-            super::descendants(bench.page.upcast_ref::<gtk::Widget>())
-                .iter()
-                .filter(|found| *found == interface.upcast_ref::<gtk::Widget>())
-                .count(),
-            1,
-            "the interface appears exactly once in the layout"
+            interface.parent().is_some(),
+            "the extension overview remains independently available"
         );
     }
 
