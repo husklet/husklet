@@ -17,6 +17,10 @@ unrestricted shell shortcut. Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
 
+Image tools list and inspect local images under `ImageRead`, and pull under
+`ImageWrite`. Removing an image or pruning unused images additionally requires
+an explicit `confirm: true` MCP argument; the host still enforces `ImageWrite`.
+
 `husklet_pane_read` is the single read path for agents that do not already know
 what a pane holds. It inspects the split topology and returns one bounded XML
 document: terminal panes include screen lines, focus, grid and tab metadata;

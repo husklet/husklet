@@ -11,6 +11,7 @@ function fake() {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write') },
   }};
@@ -56,6 +57,27 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
     ['terminal.resizeGrid', 'pane-1', 120, 40],
     ['terminal.ratio', 'pane-1', 0.6],
     ['terminal.close', 'pane-1'],
+  ]);
+});
+
+test('image tools use typed reads and require confirmation for destructive controls', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_image_inspect').inputSchema.safeParse({ reference: 'a'.repeat(257) }).success, false);
+  assert.equal(byName('husklet_image_remove').inputSchema.safeParse({ reference: 'alpine:3.20' }).success, false);
+  assert.equal(byName('husklet_image_prune').inputSchema.safeParse({ confirm: false }).success, false);
+  await byName('husklet_image_list').run({});
+  await byName('husklet_image_inspect').run({ reference: 'sha256:abc' });
+  await byName('husklet_image_pull').run({ reference: 'alpine:3.20' });
+  await byName('husklet_image_remove').run({ reference: 'old:tag', confirm: true });
+  await byName('husklet_image_prune').run({ confirm: true });
+  assert.deepEqual(calls, [
+    ['images.list'],
+    ['images.inspect', 'sha256:abc'],
+    ['images.pull', 'alpine:3.20'],
+    ['images.remove', 'old:tag'],
+    ['images.prune'],
   ]);
 });
 
@@ -210,6 +232,7 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'execution_inspect') return { reply: 'execution', with: {
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
+      if (name === 'image_list') return { reply: 'images', with: [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }] };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: argument.slot, revision: 11, truncated: false,
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
@@ -232,6 +255,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_image_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
@@ -242,6 +266,8 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(JSON.parse(execution.content[0].text), {
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
+  const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
+  assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
@@ -252,6 +278,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(calls, [
     ['workspace_info', undefined],
     ['execution_inspect', { id: 'exec-live' }],
+    ['image_list', undefined],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],
