@@ -44,6 +44,10 @@ const environmentValue = z.string().max(8192).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 8192,
   'environment value exceeds 8192 UTF-8 bytes',
 );
+const containerLabelValue = z.string().max(4096).refine(
+  (value) => new TextEncoder().encode(value).byteLength <= 4096,
+  'container label value exceeds 4096 UTF-8 bytes',
+);
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
   if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
@@ -60,7 +64,7 @@ const containerCreate = z.object({
   environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), environmentValue])).max(256).default([]),
   working_directory: z.string().min(1).max(4096).startsWith('/').nullable().default(null),
   user: containerUser.nullable().default(null),
-  labels: z.array(z.tuple([z.string().min(1).max(256), z.string().max(4096)])).max(128).default([]),
+  labels: z.array(z.tuple([z.string().min(1).max(256), containerLabelValue])).max(128).default([]),
   mounts: z.array(z.object({ volume: containerName, target: z.string().min(1).max(4096).startsWith('/'), read_only: z.boolean().default(false) }).strict()).max(64).default([]),
   network: containerName.nullable().default(null),
   ports: z.array(z.object({ container: z.number().int().min(1).max(65535), host: z.number().int().min(1).max(65535).nullable().default(null), protocol: z.enum(['tcp', 'udp']) }).strict()).max(64).default([]),
