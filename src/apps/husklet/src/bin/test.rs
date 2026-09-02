@@ -118,6 +118,28 @@ fn removal_refuses_a_recreated_workspace_before_runtime_teardown() {
     assert_eq!(WorkspaceStore::load(path).unwrap().get("demo").unwrap().image, "new");
 }
 
+#[test]
+fn removal_atomically_adopts_an_unchanged_legacy_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    let teardown_generation = std::cell::RefCell::new(String::new());
+    remove_workspace(
+        &mut store,
+        "legacy",
+        "",
+        |workspace| {
+            teardown_generation.replace(workspace.generation.clone());
+            Ok(())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(teardown_generation.borrow().len(), 32);
+    assert!(WorkspaceStore::load(path).unwrap().get("legacy").is_none());
+}
+
 // A captured `ps -axo pid=,ppid=,etime=,command=` slice: Husklet (43405) with two launcher shells for
 // the `general` workspace, one of which (43444) has a guest fork (90001); plus an orphaned launcher
 // (16020, ppid 1), an UNRELATED workspace launcher (`ubuntu-dev`), and noise that must be excluded.

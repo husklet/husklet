@@ -131,6 +131,7 @@ impl Session {
             Request::WorkspaceList => self.workspaces(services),
             Request::WorkspaceInspect { .. }
             | Request::WorkspaceCreate { .. }
+            | Request::WorkspaceAdopt { .. }
             | Request::WorkspaceUpdate { .. }
             | Request::WorkspaceDelete { .. }
             | Request::WorkspaceStart { .. }
@@ -438,6 +439,9 @@ impl Session {
             Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(port.inspect(name)?)),
             Request::WorkspaceCreate { configuration } => {
                 Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
+            }
+            Request::WorkspaceAdopt { configuration } => {
+                Ok(Reply::WorkspaceConfiguration(port.adopt(configuration)?))
             }
             Request::WorkspaceUpdate {
                 name,

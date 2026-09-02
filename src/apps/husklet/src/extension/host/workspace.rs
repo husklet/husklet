@@ -414,6 +414,18 @@ impl WorkspaceControl for Store {
         Ok(Self::configuration(&workspace))
     }
 
+    fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        if !configuration.generation.is_empty() {
+            return Err(HostError::Conflict("only a generation-less legacy workspace can be adopted".into()));
+        }
+        let mut expected = Self::configured(configuration)?;
+        expected.generation.clear();
+        let adopted = crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| store.adopt_generation(&expected))
+            .map_err(|error| HostError::Conflict(error.to_string()))?;
+        Ok(Self::configuration(&adopted))
+    }
+
     fn update(
         &self,
         name: &str,

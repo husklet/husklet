@@ -314,6 +314,8 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  /** Assign identity to the exact still-unchanged generation-less legacy record. */
+  adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
   update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
   delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;

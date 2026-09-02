@@ -114,6 +114,37 @@ fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
 
 #[cfg(feature = "runtime")]
 #[test]
+fn legacy_adoption_is_single_winner_and_exact_snapshot_bound() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+    let expected = WorkspaceStore::load(&path).unwrap().get("legacy").unwrap().clone();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let path = path.clone();
+        let expected = expected.clone();
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || {
+            let mut store = WorkspaceStore::load(path).unwrap();
+            barrier.wait();
+            store.adopt_generation(&expected)
+        }));
+    }
+    barrier.wait();
+    let results: Vec<_> = threads.into_iter().map(|thread| thread.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let persisted = WorkspaceStore::load(&path).unwrap().get("legacy").unwrap().clone();
+    assert_eq!(persisted.generation.len(), 32);
+
+    let mut stale = WorkspaceStore::load(&path).unwrap();
+    let error = stale.adopt_generation(&expected).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(WorkspaceStore::load(path).unwrap().get("legacy").unwrap(), &persisted);
+}
+
+#[cfg(feature = "runtime")]
+#[test]
 fn persisted_gui_mutations_publish_once_after_success_and_failures_publish_nothing() {
     let name = format!("gui-lifecycle-{}", std::process::id());
     let path = tmp_path(&name);

@@ -498,23 +498,27 @@ fn remove_workspace(
     close_domain: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
     close_launchers: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let workspace = store.get(name).cloned().ok_or_else(|| {
+    let mut workspace = store.get(name).cloned().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("Workspace {name:?} no longer exists."),
         )
     })?;
-    if generation.is_empty() || workspace.generation != generation {
+    if workspace.generation != generation {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "Workspace changed; inspect and consent again.",
         ));
     }
+    if generation.is_empty() {
+        workspace = store.adopt_generation(&workspace)?;
+    }
+    let generation = workspace.generation.clone();
     // Keep the persisted entry until teardown succeeds: it is the authority needed to locate and
     // verify the runtime. Removing it first makes a live domain impossible to reclaim safely.
     close_domain(&workspace)?;
     close_launchers(&workspace)?;
-    if store.remove_if_generation(name, generation)? {
+    if store.remove_if_generation(name, &generation)? {
         Ok(())
     } else {
         Err(std::io::Error::new(

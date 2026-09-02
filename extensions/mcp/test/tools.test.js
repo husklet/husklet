@@ -8,7 +8,7 @@ function fake() {
   const calls = [];
   const record = (name, answer = { ok: true }) => async (...args) => { calls.push([name, ...args]); return answer; };
   return { calls, api: {
-    info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
+    info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), adopt: record('workspace.adopt'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), removeExecution: record('containers.removeExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
@@ -44,6 +44,17 @@ test('workspace create and confirmed update preserve the complete typed configur
   await create.run({ configuration: value });
   await update.run({ name: 'dev', generation, configuration: value, confirm: true });
   assert.deepEqual(calls, [['workspace.create', value], ['workspace.update', 'dev', generation, value]]);
+});
+
+test('legacy workspace adoption requires the exact generation-less snapshot and confirmation', async () => {
+  const { api, calls } = fake();
+  const adopt = tools(api).find(({ name }) => name === 'husklet_workspace_adopt');
+  const legacy = { ...configuration(), generation: '' };
+  assert.equal(adopt.inputSchema.safeParse({ configuration: legacy }).success, false);
+  assert.equal(adopt.inputSchema.safeParse({ configuration: { ...legacy, image: 'changed' }, confirm: true }).success, true);
+  assert.equal(adopt.inputSchema.safeParse({ configuration: { ...legacy, generation }, confirm: true }).success, false);
+  await adopt.run({ configuration: legacy, confirm: true });
+  assert.deepEqual(calls, [['workspace.adopt', legacy]]);
 });
 
 test('live MCP transport carries workspace configuration and host authority failures', async () => {

@@ -120,6 +120,7 @@ export function workspace(session) {
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
     inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
     create: async (configuration) => expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
+    adopt: async (configuration) => expect(await session.call('workspace_adopt', { configuration }), 'workspace_configuration'),
     update: async (name, generation, configuration) => expect(await session.call('workspace_update', { name, generation: immutableIdentity(generation, [32], 'workspace generation'), configuration }), 'workspace_configuration'),
     delete: (name, generation) => done('workspace_delete', { name, generation: immutableIdentity(generation, [32], 'workspace generation') }),
     start: (name) => done('workspace_start', { name }),

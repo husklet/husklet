@@ -32,6 +32,9 @@ pub enum Request {
     WorkspaceCreate {
         configuration: WorkspaceConfiguration,
     },
+    WorkspaceAdopt {
+        configuration: WorkspaceConfiguration,
+    },
     WorkspaceUpdate {
         name: String,
         generation: String,
@@ -305,6 +308,7 @@ impl Request {
         match self {
             Self::WorkspaceInfo | Self::WorkspaceList | Self::WorkspaceInspect { .. } => Capability::WorkspaceRead,
             Self::WorkspaceCreate { .. }
+            | Self::WorkspaceAdopt { .. }
             | Self::WorkspaceUpdate { .. }
             | Self::WorkspaceDelete { .. }
             | Self::WorkspaceStart { .. }

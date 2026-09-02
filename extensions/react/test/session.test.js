@@ -141,24 +141,24 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     },
   };
   const operations = [
-    api.inspect('other'), api.create(configuration), api.update('other', '0123456789abcdef0123456789abcdef', configuration),
+    api.inspect('other'), api.create(configuration), api.adopt({ ...configuration, generation: '' }), api.update('other', '0123456789abcdef0123456789abcdef', configuration),
     api.delete('other', '0123456789abcdef0123456789abcdef'), api.start('other'), api.stop('other'), api.restart('other'),
   ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls.map((call) => call.call), [
-    'workspace_inspect', 'workspace_create', 'workspace_update', 'workspace_delete',
+    'workspace_inspect', 'workspace_create', 'workspace_adopt', 'workspace_update', 'workspace_delete',
     'workspace_start', 'workspace_stop', 'workspace_restart',
   ]);
   for (let index = 0; index < operations.length; index += 1) {
-    const payload = index < 3
+    const payload = index < 4
       ? { reply: 'workspace_configuration', with: configuration }
       : { reply: 'done' };
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   }
   const results = await Promise.all(operations);
-  assert.deepEqual(results.slice(0, 3), [configuration, configuration, configuration]);
-  assert.deepEqual(results.slice(3), [undefined, undefined, undefined, undefined]);
+  assert.deepEqual(results.slice(0, 4), [configuration, configuration, configuration, configuration]);
+  assert.deepEqual(results.slice(4), [undefined, undefined, undefined, undefined]);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
