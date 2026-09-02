@@ -75,6 +75,36 @@ static void hl_backend_executed_form_record(
     atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
 }
 
+/* Shared by hook aggregation and the compact product diagnostics census. */
+enum hl_backend_would_link_family {
+    HL_BACKEND_WOULD_LINK_FALLTHROUGH,
+    HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
+    HL_BACKEND_WOULD_LINK_DIRECT_CALL,
+    HL_BACKEND_WOULD_LINK_FAMILY_COUNT,
+};
+
+enum hl_backend_would_link_disposition {
+    HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED,
+    HL_BACKEND_WOULD_LINK_CROSS_PAGE,
+    HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED,
+    HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED,
+    HL_BACKEND_WOULD_LINK_GENERATION,
+    HL_BACKEND_WOULD_LINK_TARGET_PAGE,
+    HL_BACKEND_WOULD_LINK_REL32,
+    HL_BACKEND_WOULD_LINK_ELIGIBLE,
+    HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT,
+};
+
+enum hl_backend_jcc_late_reason {
+    HL_BACKEND_JCC_LATE_INVALID,
+    HL_BACKEND_JCC_LATE_TARGET_ABSENT,
+    HL_BACKEND_JCC_LATE_PAGE_GENERATION,
+    HL_BACKEND_JCC_LATE_DISPLACEMENT,
+    HL_BACKEND_JCC_LATE_OTHER,
+    HL_BACKEND_JCC_LATE_ELIGIBLE,
+    HL_BACKEND_JCC_LATE_REASON_COUNT,
+};
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 
 #define HL_BACKEND_TREE_SLOTS 4096u
@@ -171,26 +201,6 @@ enum hl_backend_shape_edge_resolution {
     HL_BACKEND_SHAPE_EDGE_RESOLUTION_COUNT,
 };
 
-enum hl_backend_would_link_family {
-    HL_BACKEND_WOULD_LINK_FALLTHROUGH,
-    HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
-    HL_BACKEND_WOULD_LINK_DIRECT_CALL,
-    HL_BACKEND_WOULD_LINK_FAMILY_COUNT,
-};
-
-/* Ordered, first-refusal-wins publication facts.  ELIGIBLE is deliberately last. */
-enum hl_backend_would_link_disposition {
-    HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED,
-    HL_BACKEND_WOULD_LINK_CROSS_PAGE,
-    HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED,
-    HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED,
-    HL_BACKEND_WOULD_LINK_GENERATION,
-    HL_BACKEND_WOULD_LINK_TARGET_PAGE,
-    HL_BACKEND_WOULD_LINK_REL32,
-    HL_BACKEND_WOULD_LINK_ELIGIBLE,
-    HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT,
-};
-
 enum hl_backend_family_div_outcome {
     HL_BACKEND_FAMILY_DIV_INLINE,
     HL_BACKEND_FAMILY_DIV_SERVICE64,
@@ -262,6 +272,7 @@ struct hl_backend_tree_slot {
     _Atomic uint64_t jcc_taken_ineligible;
     _Atomic uint64_t would_link[HL_BACKEND_WOULD_LINK_FAMILY_COUNT]
                                [HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT];
+    _Atomic uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
     _Atomic uint64_t family_jmem;
     _Atomic uint64_t family_div[HL_BACKEND_FAMILY_DIV_KIND_COUNT][HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT];
     _Atomic uint64_t family_div_service64_completed[HL_BACKEND_FAMILY_DIV_KIND_COUNT];
@@ -337,6 +348,7 @@ struct hl_backend_tree_summary {
     uint64_t jcc_taken_ineligible;
     uint64_t would_link[HL_BACKEND_WOULD_LINK_FAMILY_COUNT]
                         [HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT];
+    uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
     uint64_t family_jmem;
     uint64_t family_div[HL_BACKEND_FAMILY_DIV_KIND_COUNT][HL_BACKEND_FAMILY_DIV_OUTCOME_COUNT];
     uint64_t family_div_service64_completed[HL_BACKEND_FAMILY_DIV_KIND_COUNT];
@@ -643,6 +655,12 @@ static inline void hl_backend_tree_would_link(unsigned family, unsigned disposit
     atomic_fetch_add_explicit(&slot->would_link[family][disposition], 1, memory_order_relaxed);
 }
 
+static inline void hl_backend_tree_jcc_late(unsigned reason) {
+    struct hl_backend_tree_slot *slot = g_backend_tree_self;
+    if (slot != NULL && reason < HL_BACKEND_JCC_LATE_REASON_COUNT)
+        atomic_fetch_add_explicit(&slot->jcc_late[reason], 1, memory_order_relaxed);
+}
+
 static inline void hl_backend_tree_family_jmem(void) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->family_jmem, 1, memory_order_relaxed);
@@ -850,6 +868,8 @@ static void hl_backend_tree_summary_in(struct hl_backend_tree_shared *shared, st
             for (uint32_t disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
                 summary->would_link[family][disposition] +=
                     atomic_load_explicit(&slot->would_link[family][disposition], memory_order_relaxed);
+        for (uint32_t reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
+            summary->jcc_late[reason] += atomic_load_explicit(&slot->jcc_late[reason], memory_order_relaxed);
         summary->family_jmem += atomic_load_explicit(&slot->family_jmem, memory_order_relaxed);
         summary->mixed_sse_executed += atomic_load_explicit(&slot->mixed_sse_executed, memory_order_relaxed);
         summary->mixed_sse_executed_transitions +=
@@ -1171,6 +1191,9 @@ static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, c
     for (unsigned family = 0; family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT; ++family)
         for (unsigned disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
             candidate[family] += summary.would_link[family][disposition];
+    uint64_t jcc_late_candidate = 0;
+    for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
+        jcc_late_candidate += summary.jcc_late[reason];
 #define WL_ARGS(family)                                                                                               \
     (unsigned long long)candidate[family],                                                                            \
         (unsigned long long)summary.would_link[family][HL_BACKEND_WOULD_LINK_ELIGIBLE],                               \
@@ -1192,9 +1215,18 @@ static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, c
         "jmp_target_page=%llu jmp_rel32=%llu "
         "call_candidate=%llu call_eligible=%llu call_source_unresolved=%llu call_cross_page=%llu "
         "call_target_unmapped=%llu call_target_untranslated=%llu call_generation=%llu "
-        "call_target_page=%llu call_rel32=%llu\n",
+        "call_target_page=%llu call_rel32=%llu "
+        "jcc_late_candidate=%llu jcc_late_eligible=%llu jcc_late_invalid=%llu "
+        "jcc_late_target_absent=%llu jcc_late_page_generation=%llu "
+        "jcc_late_displacement=%llu jcc_late_other=%llu\n",
         WL_ARGS(HL_BACKEND_WOULD_LINK_FALLTHROUGH), WL_ARGS(HL_BACKEND_WOULD_LINK_DIRECT_JUMP),
-        WL_ARGS(HL_BACKEND_WOULD_LINK_DIRECT_CALL));
+        WL_ARGS(HL_BACKEND_WOULD_LINK_DIRECT_CALL), (unsigned long long)jcc_late_candidate,
+        (unsigned long long)summary.jcc_late[HL_BACKEND_JCC_LATE_ELIGIBLE],
+        (unsigned long long)summary.jcc_late[HL_BACKEND_JCC_LATE_INVALID],
+        (unsigned long long)summary.jcc_late[HL_BACKEND_JCC_LATE_TARGET_ABSENT],
+        (unsigned long long)summary.jcc_late[HL_BACKEND_JCC_LATE_PAGE_GENERATION],
+        (unsigned long long)summary.jcc_late[HL_BACKEND_JCC_LATE_DISPLACEMENT],
+        (unsigned long long)summary.jcc_late[HL_BACKEND_JCC_LATE_OTHER]);
 #undef WL_ARGS
     return formatted;
 }
@@ -1366,6 +1398,8 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_GENERATION);
         hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_TARGET_PAGE);
         hl_backend_tree_would_link(HL_BACKEND_WOULD_LINK_DIRECT_CALL, HL_BACKEND_WOULD_LINK_REL32);
+        for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
+            hl_backend_tree_jcc_late(reason);
     }
     if (scenario == 10) {
         hl_backend_tree_family_jmem();
@@ -1436,6 +1470,8 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                    ? 0
                    : 36;
     if (scenario == 9) {
+        char record[2048];
+        int formatted = hl_backend_would_link_format(shared, record, sizeof record);
         uint64_t candidates[HL_BACKEND_WOULD_LINK_FAMILY_COUNT] = {0};
         for (unsigned family = 0; family < HL_BACKEND_WOULD_LINK_FAMILY_COUNT; ++family)
             for (unsigned disposition = 0; disposition < HL_BACKEND_WOULD_LINK_DISPOSITION_COUNT; ++disposition)
@@ -1458,7 +1494,11 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
                        summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_CALL]
                                                  [HL_BACKEND_WOULD_LINK_TARGET_PAGE] == 1 &&
                        summary.would_link[HL_BACKEND_WOULD_LINK_DIRECT_CALL]
-                                                 [HL_BACKEND_WOULD_LINK_REL32] == 1
+                                                 [HL_BACKEND_WOULD_LINK_REL32] == 1 &&
+                       summary.jcc_late[HL_BACKEND_JCC_LATE_ELIGIBLE] == 1 &&
+                       formatted > 0 && (size_t)formatted < sizeof record &&
+                       strstr(record, "jcc_late_candidate=6 jcc_late_eligible=1 jcc_late_invalid=1 ") != NULL &&
+                       strstr(record, "jcc_late_page_generation=1 jcc_late_displacement=1 jcc_late_other=1") != NULL
                    ? 0
                    : 37;
     }
@@ -1702,6 +1742,7 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t jcc_ibtc_fills;
     _Atomic uint64_t jcc_ibtc_suppressed;
     _Atomic uint64_t jcc_ibtc_invalid_refusals;
+    _Atomic uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
     _Atomic uint64_t direct_jmp_ibtc_emitted;
     _Atomic uint64_t direct_jmp_ibtc_hits;
     _Atomic uint64_t direct_jmp_ibtc_misses;
@@ -1934,14 +1975,20 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                  memory_order_relaxed))
         return;
     char record[8192];
+    uint64_t jcc_late_candidate = 0;
+    for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
+        jcc_late_candidate += atomic_load_explicit(&census->jcc_late[reason], memory_order_relaxed);
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=7 available=%d crossings=%llu "
+                             "[diag] backend-shape version=8 available=%d crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
                              "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
                              "jcc_ibtc_enabled=%d jcc_ibtc_emitted=%llu jcc_ibtc_hits=%llu "
                              "jcc_ibtc_misses=%llu jcc_ibtc_irq=%llu jcc_ibtc_fills=%llu "
                              "jcc_ibtc_suppressed=%llu jcc_ibtc_invalid_refusals=%llu "
+                             "jcc_late_candidate=%llu jcc_late_eligible=%llu jcc_late_invalid=%llu "
+                             "jcc_late_target_absent=%llu jcc_late_page_generation=%llu "
+                             "jcc_late_displacement=%llu jcc_late_other=%llu "
                              "direct_jmp_ibtc_enabled=%d direct_jmp_ibtc_emitted=%llu "
                              "direct_jmp_ibtc_hits=%llu direct_jmp_ibtc_misses=%llu direct_jmp_ibtc_irq=%llu "
                              "direct_jmp_ibtc_fills=%llu direct_jmp_ibtc_suppressed=%llu "
@@ -1987,6 +2034,19 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_invalid_refusals,
                                                                      memory_order_relaxed),
+                             (unsigned long long)jcc_late_candidate,
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_late[HL_BACKEND_JCC_LATE_ELIGIBLE], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_late[HL_BACKEND_JCC_LATE_INVALID], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_late[HL_BACKEND_JCC_LATE_TARGET_ABSENT], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_late[HL_BACKEND_JCC_LATE_PAGE_GENERATION], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_late[HL_BACKEND_JCC_LATE_DISPLACEMENT], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_late[HL_BACKEND_JCC_LATE_OTHER], memory_order_relaxed),
                              (int)census->direct_jmp_ibtc_enabled,
                              (unsigned long long)atomic_load_explicit(&census->direct_jmp_ibtc_emitted,
                                                                      memory_order_relaxed),
@@ -2534,6 +2594,10 @@ static void hl_backend_tree_ret_fast_ibtc_add(enum hl_backend_ret_fast_ibtc_coun
 #define hl_backend_tree_direct_edge(family, same_page) ((void)0)
 #define hl_backend_tree_direct_edge_resolution(family, resolution, translated, current, rel32, eligible) ((void)0)
 #define hl_backend_tree_would_link(family, disposition) ((void)0)
+static inline void hl_backend_tree_jcc_late(unsigned reason) {
+    if (g_backend_mixed_sse != NULL && reason < HL_BACKEND_JCC_LATE_REASON_COUNT)
+        atomic_fetch_add_explicit(&g_backend_mixed_sse->jcc_late[reason], 1, memory_order_relaxed);
+}
 #define hl_backend_tree_family_jmem() ((void)0)
 #define hl_backend_tree_family_div(is_signed, outcome) ((void)0)
 #define hl_backend_tree_family_div_service64_completed(is_signed) ((void)0)

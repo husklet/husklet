@@ -64,7 +64,7 @@ struct cpu {
     uint64_t robust_list; // set_robust_list head: walked on exit for OWNER_DIED + robust-mutex waiter wake
     uint64_t sigmask;
     uint64_t alt_sp, alt_size, alt_flags; // sigaltstack (C-only; used by os/linux service)
-    uint64_t dbg_ibsrc;                   // debug: guest PC of the last indirect branch (ret/jmp/call reg)
+    uint64_t dbg_ibsrc;                   // debug: guest PC of the last indirect branch, or profiled JCC miss source
     uint64_t ic_miss; // IBTC: set by an indirect-branch miss -> dispatcher fills g_ibtc for cpu->rip
     // x87 FPU: a register stack ST(0..7) emulated at DOUBLE precision (enough for printf %f of
     // doubles; loses the 80-bit long-double tail). st[fptop&7]=ST(0). Grows downward (push=--top).

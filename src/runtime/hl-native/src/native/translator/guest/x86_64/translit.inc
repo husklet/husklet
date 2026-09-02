@@ -1719,7 +1719,6 @@ static struct interp_block *translit_jcc_link_target(uint64_t source, uint64_t t
     return target_block;
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
 /* Classify at source publication, before map_put makes this source visible.  The stored first refusal is
    immutable: run_block must never repeat map_host and accidentally credit a target published later. */
 static uint8_t translit_would_link_classify(struct interp_block *source_block, const uint8_t *source_start,
@@ -1762,12 +1761,41 @@ static uint8_t translit_would_link_classify(struct interp_block *source_block, c
         return HL_BACKEND_WOULD_LINK_TARGET_PAGE;
     uintptr_t source_lo = (uintptr_t)source_rx_lo;
     uintptr_t source_hi = (uintptr_t)source_rx_last + 1;
-    if (source_hi == 0 || force_rel32_refusal ||
-        !interp_backend_shape_rel32_reachable(1, source_lo, source_hi, target_entry))
+    uint64_t from_lo = source_lo > target_entry ? source_lo - target_entry : target_entry - source_lo;
+    uint64_t from_hi = source_hi > target_entry ? source_hi - target_entry : target_entry - source_hi;
+    if (source_hi == 0 || force_rel32_refusal || from_lo > INT32_MAX || from_hi > INT32_MAX)
         return HL_BACKEND_WOULD_LINK_REL32;
     return HL_BACKEND_WOULD_LINK_ELIGIBLE;
 }
-#endif
+
+/* Re-run the same conservative link predicate at a taken-JCC miss.  The source descriptor is still
+   generation-owned, and using its entire emitted hull makes REL32 a conservative answer even though the
+   immutable descriptor does not retain the individual terminal offset. */
+static uint8_t translit_jcc_late_would_link(uint64_t source, uint64_t target) {
+    struct interp_block *source_block = (struct interp_block *)map_host(source);
+    if (source_block == NULL || source_block->host_entry_off == 0 || source_block->host_len == 0)
+        return HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED;
+    uintptr_t block = (uintptr_t)source_block;
+    uintptr_t start = block + source_block->host_entry_off;
+    if (start < block || source_block->host_len > UINTPTR_MAX - start)
+        return HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED;
+    return translit_would_link_classify(source_block, (const uint8_t *)start,
+                                        (const uint8_t *)(start + source_block->host_len), source, target, 0);
+}
+
+static unsigned translit_jcc_late_reason(uint8_t disposition) {
+    switch (disposition) {
+    case HL_BACKEND_WOULD_LINK_SOURCE_UNRESOLVED:
+    case HL_BACKEND_WOULD_LINK_TARGET_UNTRANSLATED: return HL_BACKEND_JCC_LATE_INVALID;
+    case HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED: return HL_BACKEND_JCC_LATE_TARGET_ABSENT;
+    case HL_BACKEND_WOULD_LINK_CROSS_PAGE:
+    case HL_BACKEND_WOULD_LINK_GENERATION:
+    case HL_BACKEND_WOULD_LINK_TARGET_PAGE: return HL_BACKEND_JCC_LATE_PAGE_GENERATION;
+    case HL_BACKEND_WOULD_LINK_REL32: return HL_BACKEND_JCC_LATE_DISPLACEMENT;
+    case HL_BACKEND_WOULD_LINK_ELIGIBLE: return HL_BACKEND_JCC_LATE_ELIGIBLE;
+    default: return HL_BACKEND_JCC_LATE_OTHER;
+    }
+}
 
 static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *hi) {
     uint64_t page = source & ~UINT64_C(0xfff);
@@ -2323,10 +2351,17 @@ static int translit_direct_jmp_ibtc_stub_init(void) {
 
 // Immutable unresolved taken-JCC source handoff.  The typed OFF option still
 // suppresses only publication, so ON and OFF execute byte-identical bytes.
-static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint64_t target) {
+static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a, uint64_t source,
+                                                            uint64_t target) {
     translit_jcc_ibtc_site_ranges ranges = {0};
     hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
     ranges.save_end = a->cursor;
+    /* Diagnostics-only source provenance. With diagnostics off this emits no bytes, so the product hot
+       path remains byte-identical. dbg_ibsrc is debug-only and survives the shared miss stub's spills. */
+    if (g_prof) {
+        hl_x64_mov_imm64(a, HL_X64_RAX, source);
+        hl_x64_store_gs(a, HL_X64_RAX, OFF_IBSRC);
+    }
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
@@ -2585,6 +2620,9 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
         return;
     }
     cpu->jcc_ibtc_miss = 0;
+    if (miss_kind == TL_JCC_IBTC_MISS && g_prof)
+        hl_backend_tree_jcc_late(
+            translit_jcc_late_reason(translit_jcc_late_would_link(cpu->dbg_ibsrc, cpu->rip)));
     int direct_jmp = miss_kind == TL_DIRECT_JMP_IBTC_MISS;
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
     int disabled = actual_miss && (fallthrough ? 0
@@ -5274,7 +5312,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                         jcc_link_admitted++;
                     } else if (translit_jcc_ibtc_candidate(pc, target)) {
-                        ibtc_site = translit_emit_jcc_ibtc(a, target);
+                        ibtc_site = translit_emit_jcc_ibtc(a, pc, target);
                         jcc_ibtc_sites++;
                     } else {
                         translit_emit_jcc_dispatcher(a, target);
@@ -5408,7 +5446,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 translit_jcc_link_own_page(pc, &linked_page_lo, &linked_page_hi);
                 jcc_link_admitted++;
             } else if (translit_jcc_ibtc_candidate(pc, target)) {
-                ibtc_site = translit_emit_jcc_ibtc(a, target);
+                ibtc_site = translit_emit_jcc_ibtc(a, pc, target);
                 jcc_ibtc_sites++;
             } else {
                 translit_emit_jcc_dispatcher(a, target);
@@ -7930,11 +7968,11 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
         translit_jcc_ibtc_stub_entry = on + 1024;
         translit_jcc_ibtc_site_ranges on_ranges =
-            translit_emit_jcc_ibtc(&a_on, UINT64_C(0x12345678));
+            translit_emit_jcc_ibtc(&a_on, UINT64_C(0x12345000), UINT64_C(0x12345678));
         if (hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) != 0) return 132;
         translit_jcc_ibtc_stub_entry = off + 1024;
         translit_jcc_ibtc_site_ranges off_ranges =
-            translit_emit_jcc_ibtc(&a_off, UINT64_C(0x12345678));
+            translit_emit_jcc_ibtc(&a_off, UINT64_C(0x12345000), UINT64_C(0x12345678));
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
         size_t on_len = (size_t)(a_on.cursor - on), off_len = (size_t)(a_off.cursor - off);
         return !a_on.overflow && !a_off.overflow && on_len == 33 && off_len == 33 &&
