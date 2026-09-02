@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate, Roster};
-use hl_extension::{Capability, ExtensionName, Grant, Manifest, PROTOCOL, Record, Stage, Wire};
+use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wire, PROTOCOL};
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{Catalogue, Inspection, Shared, Shelf, Surfaces, directory, settings};
+use super::{directory, settings, Catalogue, Inspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -504,7 +504,7 @@ fn shake(wire: &mut Wire<UnixStream>) -> Result<(), hl_extension::Transit> {
 }
 
 fn a_click_on_a_rendered_button_reaches_the_extension() {
-    use super::super::extension::{Delivery, Interface, Signal, channel};
+    use super::super::extension::{channel, Delivery, Interface, Signal};
     use hl_gui::{Element, EventId, Reconciliation};
 
     let temporary = tempfile::tempdir().expect("temporary directory");
@@ -713,8 +713,8 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        ABSENCE, Adjustment, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin, Window,
-        WindowSession,
+        Adjustment, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin, Window,
+        WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::Gallery;
