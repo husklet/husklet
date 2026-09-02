@@ -31,8 +31,8 @@ use super::sidecar::SidecarSpec;
 use super::Listener;
 use crate::config::WorkspaceConfig;
 use voice::speak;
-pub(crate) use voice::Voice;
 pub(crate) use voice::speak_at;
+pub(crate) use voice::Voice;
 
 pub use workspace::Workspace;
 
@@ -638,9 +638,6 @@ fn faulted(installation: &mut Installation, hall: &Hall, plan: &Plan, restarts: 
 /// One attempt: the container up, the socket open, and everything the
 /// conversation collects carried to the page until it ends.
 fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
-    if let Err(reason) = supply.ensure(plan) {
-        return Passage::End(reason);
-    }
     let queue = Queue::new();
     let (finish, ended) = mpsc::sync_channel(1);
     let voice = Voice::default();
@@ -648,6 +645,14 @@ fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
         Ok(listener) => listener,
         Err(error) => return Passage::End(error.to_string()),
     };
+    // Bind this generation's credential before its sidecar can connect. During
+    // update handoff the previous listener may still be winding down; starting
+    // first lets the new peer reach that old endpoint, be rejected as a second
+    // conversation, and exit before its own listener exists.
+    if let Err(reason) = supply.ensure(plan) {
+        dismiss(listener);
+        return Passage::End(reason);
+    }
     hall.duty();
     let extension = plan.record.name.to_string();
     let passage = pump(hall, &queue, &voice, &ended, supply.ready_timeout(), &extension);
