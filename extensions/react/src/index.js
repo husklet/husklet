@@ -383,6 +383,9 @@ export const vocabulary = {
   handlers: [...TRIGGERS.keys()],
 };
 
+/** Maximum Unicode characters retained by a LogView; Value patches append. */
+export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
+
 /** Honest inventory of the current host contract; gaps are not callable APIs. */
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({

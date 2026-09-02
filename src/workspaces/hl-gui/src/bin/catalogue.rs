@@ -170,6 +170,13 @@ fn notes() -> Vec<String> {
             "\"lengthEncoding\": {}",
             text("A Length is an externally tagged enum: {\"Step\": 2}, {\"Chars\": 20}, \"Fill\", \"Content\".")
         ),
+        format!(
+            "\"logViewRetention\": {}",
+            text(&format!(
+                "LogView Value patches append; renderers retain only the newest {} Unicode characters.",
+                hl_gui::LOG_VIEW_CHARACTER_LIMIT
+            ))
+        ),
     ]
 }
 

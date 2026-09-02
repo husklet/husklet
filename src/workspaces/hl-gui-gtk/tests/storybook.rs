@@ -12,7 +12,7 @@ mod unix {
         Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire,
         codec,
     };
-    use hl_gui::Tree;
+    use hl_gui::{Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -21,6 +21,7 @@ mod unix {
         "Keyboard and semantic actions",
         "DataTable",
         "Navigation and transient UI",
+        "Bounded streaming log",
     ];
     const PATCH_LIMIT: usize = 1_200;
 
@@ -108,6 +109,13 @@ mod unix {
             assert_contained(&root, story);
         }
         assert!(readable_heading(&root), "{story} has no readable GTK heading");
+        if story == "Bounded streaming log" {
+            let buffer = find::<gtk::TextView>(&root, |_| true).buffer();
+            assert_eq!(buffer.char_count(), LOG_VIEW_CHARACTER_LIMIT);
+            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+            assert!(!text.starts_with("old history"), "oldest history was not evicted");
+            assert!(text.contains("completed operation"), "newest log batch was not retained");
+        }
 
         let event = emit_representative(story, &root, &surface, &tree);
         let payload = codec::interaction(&event, Some("storybook-main"))
@@ -131,6 +139,13 @@ mod unix {
         root.allocate(300, 1_600, -1, None);
         assert_contained(&root, story);
         assert!(readable_heading(&root), "{story} lost its readable heading after interaction");
+        if story == "Bounded streaming log" {
+            assert_eq!(
+                find::<gtk::TextView>(&root, |_| true).buffer().char_count(),
+                LOG_VIEW_CHARACTER_LIMIT,
+                "appending a batch exceeded fixed retention"
+            );
+        }
 
         child.kill().expect("Storybook test process stops");
         let status = child.wait().expect("Storybook process is reaped");
@@ -195,6 +210,9 @@ mod unix {
             }
             "Navigation and transient UI" => {
                 find::<gtk::Expander>(root, |_| true).set_expanded(false);
+            }
+            "Bounded streaming log" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Append batch")).emit_clicked();
             }
             _ => unreachable!(),
         }

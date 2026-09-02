@@ -212,6 +212,7 @@
   ],
   "notes": {
     "values": "A property's value shapes are the PropValue variants an adapter reads for it. Sending another shape is not an error; it is ignored.",
-    "lengthEncoding": "A Length is an externally tagged enum: {\"Step\": 2}, {\"Chars\": 20}, \"Fill\", \"Content\"."
+    "lengthEncoding": "A Length is an externally tagged enum: {\"Step\": 2}, {\"Chars\": 20}, \"Fill\", \"Content\".",
+    "logViewRetention": "LogView Value patches append; renderers retain only the newest 4096 Unicode characters."
   }
 }

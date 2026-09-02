@@ -32,6 +32,7 @@ import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
 import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
+import { STREAMING_LOG_STORY, StreamingLogStory } from './streaming-log.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
@@ -44,7 +45,8 @@ export function Playground({ largeSource, initialStory = OPENING } = {}) {
   const [selected, setSelected] = useState(initialStory);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY || selected === NAVIGATION_STORY;
+  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
+    || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -94,6 +96,12 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(KEYBOARD_STORY),
       }),
       h(ListItemButton, {
+        key: STREAMING_LOG_STORY,
+        label: STREAMING_LOG_STORY,
+        selected: selected === STREAMING_LOG_STORY,
+        onInvoke: () => onSelect(STREAMING_LOG_STORY),
+      }),
+      h(ListItemButton, {
         key: FORM_STORY,
         label: FORM_STORY,
         selected: selected === FORM_STORY,
@@ -141,6 +149,8 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
         ? h(ValidatedSettingsFormStory)
         : name === KEYBOARD_STORY
         ? h(KeyboardAccessibilityStory)
+        : name === STREAMING_LOG_STORY
+        ? h(StreamingLogStory)
         : name === NAVIGATION_STORY
         ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource

@@ -1,7 +1,7 @@
 //! Long-form content: source text, a running log, media and plots.
 
 use gtk::prelude::*;
-use hl_gui::Tag;
+use hl_gui::{Tag, LOG_VIEW_CHARACTER_LIMIT};
 
 use super::field;
 
@@ -48,6 +48,12 @@ pub(crate) fn append(widget: &gtk::Widget, content: &str) -> bool {
     };
     let buffer = view.buffer();
     buffer.insert(&mut buffer.end_iter(), content);
+    let excess = buffer.char_count().saturating_sub(LOG_VIEW_CHARACTER_LIMIT);
+    if excess > 0 {
+        let mut start = buffer.start_iter();
+        let mut retained = buffer.iter_at_offset(excess);
+        buffer.delete(&mut start, &mut retained);
+    }
     follow(widget, &view);
     true
 }
