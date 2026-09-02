@@ -293,6 +293,7 @@ impl Store {
 
     fn configuration(workspace: &WorkspaceConfig) -> WorkspaceConfiguration {
         WorkspaceConfiguration {
+            generation: workspace.generation.clone(),
             name: workspace.name.clone(),
             image: workspace.image.clone(),
             architecture: workspace.arch.as_str().to_owned(),
@@ -413,8 +414,18 @@ impl WorkspaceControl for Store {
         Ok(Self::configuration(&workspace))
     }
 
-    fn update(&self, name: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+    fn update(
+        &self,
+        name: &str,
+        generation: &str,
+        configuration: &WorkspaceConfiguration,
+    ) -> Result<WorkspaceConfiguration, HostError> {
         let old = self.find(name)?;
+        if generation.is_empty() || old.generation != generation {
+            return Err(HostError::Conflict(format!(
+                "workspace {name} changed; inspect and consent again"
+            )));
+        }
         if configuration.name != name {
             return Err(HostError::Conflict("renaming a workspace is not supported".into()));
         }
@@ -423,20 +434,26 @@ impl WorkspaceControl for Store {
                 "stop the workspace before changing its configuration".into(),
             ));
         }
-        let workspace = Self::configured(configuration)?;
+        let mut workspace = Self::configured(configuration)?;
+        workspace.generation.clone_from(&old.generation);
         crate::config::WorkspaceStore::load(Self::path())
-            .and_then(|mut store| store.upsert(workspace.clone()))
+            .and_then(|mut store| store.upsert_if_generation(generation, workspace.clone()))
             .map_err(|error| HostError::Failed(error.to_string()))?;
         Ok(Self::configuration(&workspace))
     }
 
-    fn delete(&self, name: &str) -> Result<(), HostError> {
+    fn delete(&self, name: &str, generation: &str) -> Result<(), HostError> {
         let workspace = self.mutable(name)?;
+        if generation.is_empty() || workspace.generation != generation {
+            return Err(HostError::Conflict(format!(
+                "workspace {name} changed; inspect and consent again"
+            )));
+        }
         crate::runtime::domain::Domain::new(&workspace)
             .close(crate::runtime::domain::Close::Kill)
             .map_err(|error| HostError::Failed(error.to_string()))?;
         let removed = crate::config::WorkspaceStore::load(Self::path())
-            .and_then(|mut store| store.remove(name))
+            .and_then(|mut store| store.remove_if_generation(name, generation))
             .map_err(|error| HostError::Failed(error.to_string()))?;
         if removed {
             Ok(())
@@ -499,6 +516,7 @@ mod workspace_control_tests {
 
         let carried = Store::configuration(&workspace);
         let restored = Store::configured(&carried).expect("valid configuration");
+        workspace.generation.clone_from(&restored.generation);
         assert_eq!(restored, workspace);
     }
 

@@ -385,7 +385,9 @@ impl Session {
             Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
             Request::VolumeRemove { name, generation } => {
                 immutable_identity(generation, &[32], "volume generation")?;
-                port.remove(name, generation).map(|()| Reply::Done).map_err(Failure::from)
+                port.remove(name, generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             _ => unreachable!(),
         }
@@ -437,10 +439,24 @@ impl Session {
             Request::WorkspaceCreate { configuration } => {
                 Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
             }
-            Request::WorkspaceUpdate { name, configuration } => {
-                Ok(Reply::WorkspaceConfiguration(port.update(name, configuration)?))
+            Request::WorkspaceUpdate {
+                name,
+                generation,
+                configuration,
+            } => {
+                immutable_identity(generation, &[32], "workspace generation")?;
+                Ok(Reply::WorkspaceConfiguration(port.update(
+                    name,
+                    generation,
+                    configuration,
+                )?))
             }
-            Request::WorkspaceDelete { name } => port.delete(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::WorkspaceDelete { name, generation } => {
+                immutable_identity(generation, &[32], "workspace generation")?;
+                port.delete(name, generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             Request::WorkspaceStart { name } => port.start(name).map(|()| Reply::Done).map_err(Failure::from),
             Request::WorkspaceStop { name } => port.stop(name).map(|()| Reply::Done).map_err(Failure::from),
             Request::WorkspaceRestart { name } => port.restart(name).map(|()| Reply::Done).map_err(Failure::from),
@@ -753,7 +769,9 @@ fn immutable_reference<'a>(id: &'a str, widths: &[usize], noun: &str) -> Result<
 fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
     let digest = value.strip_prefix("sha256:").unwrap_or_default();
     if digest.len() == 64
-        && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Ok(());
     }

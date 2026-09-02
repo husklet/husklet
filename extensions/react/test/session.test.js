@@ -141,8 +141,8 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     },
   };
   const operations = [
-    api.inspect('other'), api.create(configuration), api.update('other', configuration),
-    api.delete('other'), api.start('other'), api.stop('other'), api.restart('other'),
+    api.inspect('other'), api.create(configuration), api.update('other', '0123456789abcdef0123456789abcdef', configuration),
+    api.delete('other', '0123456789abcdef0123456789abcdef'), api.start('other'), api.stop('other'), api.restart('other'),
   ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);

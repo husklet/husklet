@@ -46,7 +46,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
         const { call, with: argument } = frame.payload;
         if (call === 'workspace_info') answer(frame, 'workspace', { name: 'observer' });
         else if (call === 'workspace_create') {
-          answer(frame, 'workspace_configuration', argument.configuration);
+          answer(frame, 'workspace_configuration', { ...argument.configuration, generation: '0123456789abcdef0123456789abcdef' });
           if (revision === 0) lifecycle('another-workspace', 'create');
           lifecycle(argument.configuration.name, 'create');
         }

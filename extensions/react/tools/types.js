@@ -183,6 +183,7 @@ export interface WorkspaceTerminal {
   cursor_blink: boolean | null;
 }
 export interface WorkspaceConfiguration extends WorkspaceInfo {
+  generation?: string;
   storage: string | null;
   shell: string | null;
   cpus: number | null;
@@ -313,8 +314,8 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  update(name: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  delete(name: string): Promise<void>;
+  update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;

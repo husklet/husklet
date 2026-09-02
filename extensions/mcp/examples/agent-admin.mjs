@@ -29,6 +29,7 @@ export async function runAgentAdmin(client, {
     throw new Error('managed workspace must be distinct from the socket workspace');
   }
   let workspaceCreated = false;
+  let workspaceGeneration;
   let workspaceStarted = false;
   let directoryCreated = false;
   let fileCreated = false;
@@ -44,6 +45,7 @@ export async function runAgentAdmin(client, {
   };
   try {
     const created = await mutate('create', () => json(client, 'husklet_workspace_create', { configuration: workspaceConfiguration }));
+    workspaceGeneration = created.generation;
     workspaceCreated = true;
     await mutate('start', () => call(client, 'husklet_workspace_start', { name: workspaceConfiguration.name }));
     workspaceStarted = true;
@@ -69,7 +71,7 @@ export async function runAgentAdmin(client, {
       catch (error) { cleanupErrors.push(error); }
     }
     if (workspaceCreated) {
-      try { await mutate('remove', () => call(client, 'husklet_workspace_delete', { name: workspaceConfiguration.name, confirm: true })); }
+      try { await mutate('remove', () => call(client, 'husklet_workspace_delete', { name: workspaceConfiguration.name, generation: workspaceGeneration, confirm: true })); }
       catch (error) { cleanupErrors.push(error); }
     }
     if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'administrative cleanup failed');

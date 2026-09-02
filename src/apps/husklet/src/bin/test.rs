@@ -14,11 +14,13 @@ fn removal_stops_the_runtime_before_deleting_its_authority() {
     store
         .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
         .unwrap();
+    let generation = store.get("demo").unwrap().generation.clone();
     let observed = std::cell::Cell::new(false);
 
     remove_workspace(
         &mut store,
         "demo",
+        &generation,
         |workspace| {
             assert_eq!(workspace.name, "demo");
             assert!(WorkspaceStore::load(&path).unwrap().get("demo").is_some());
@@ -41,10 +43,12 @@ fn failed_runtime_teardown_preserves_the_workspace_authority() {
     store
         .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
         .unwrap();
+    let generation = store.get("demo").unwrap().generation.clone();
 
     let error = remove_workspace(
         &mut store,
         "demo",
+        &generation,
         |_| Err(std::io::Error::other("still running")),
         |_| Ok(()),
     )
@@ -62,11 +66,13 @@ fn removal_reclaims_launchers_after_domain_teardown_before_deleting_authority() 
     store
         .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
         .unwrap();
+    let generation = store.get("demo").unwrap().generation.clone();
     let events = std::cell::RefCell::new(Vec::new());
 
     remove_workspace(
         &mut store,
         "demo",
+        &generation,
         |_| {
             events.borrow_mut().push("domain");
             Ok(())
@@ -81,6 +87,35 @@ fn removal_reclaims_launchers_after_domain_teardown_before_deleting_authority() 
 
     assert_eq!(*events.borrow(), ["domain", "launchers"]);
     assert!(WorkspaceStore::load(path).unwrap().get("demo").is_none());
+}
+
+#[test]
+fn removal_refuses_a_recreated_workspace_before_runtime_teardown() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(WorkspaceConfig::new("demo", "old", Arch::Arm64)).unwrap();
+    let stale = store.get("demo").unwrap().generation.clone();
+    store.remove("demo").unwrap();
+    store.upsert(WorkspaceConfig::new("demo", "new", Arch::Arm64)).unwrap();
+    assert_ne!(store.get("demo").unwrap().generation, stale);
+
+    let teardown_called = std::cell::Cell::new(false);
+    let error = remove_workspace(
+        &mut store,
+        "demo",
+        &stale,
+        |_| {
+            teardown_called.set(true);
+            Ok(())
+        },
+        |_| Ok(()),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(!teardown_called.get());
+    assert_eq!(WorkspaceStore::load(path).unwrap().get("demo").unwrap().image, "new");
 }
 
 // A captured `ps -axo pid=,ppid=,etime=,command=` slice: Husklet (43405) with two launcher shells for

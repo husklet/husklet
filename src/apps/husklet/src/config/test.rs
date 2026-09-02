@@ -62,6 +62,56 @@ fn store_persists_across_reload() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn workspace_generation_survives_updates_and_changes_after_recreation() {
+    let path = tmp_path("generation");
+    let _ = std::fs::remove_file(&path);
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(WorkspaceConfig::new("dev", "old", Arch::Arm64)).unwrap();
+    let first = store.get("dev").unwrap().generation.clone();
+    assert_eq!(first.len(), 32);
+    store
+        .upsert(WorkspaceConfig::new("dev", "updated", Arch::Arm64))
+        .unwrap();
+    assert_eq!(store.get("dev").unwrap().generation, first);
+    assert_eq!(
+        WorkspaceStore::load(&path).unwrap().get("dev").unwrap().generation,
+        first
+    );
+
+    store.remove_if_generation("dev", &first).unwrap();
+    store
+        .upsert(WorkspaceConfig::new("dev", "recreated", Arch::Arm64))
+        .unwrap();
+    let second = store.get("dev").unwrap().generation.clone();
+    assert_ne!(second, first);
+    let error = store.remove_if_generation("dev", &first).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(store.get("dev").unwrap().image, "recreated");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
+    let path = tmp_path("legacy-generation");
+    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    assert_eq!(store.get("legacy").unwrap().generation, "");
+    assert_eq!(
+        store.remove_if_generation("legacy", "").unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(WorkspaceStore::load(&path).unwrap().get("legacy").is_some());
+
+    std::fs::write(
+        &path,
+        "[workspace]\nname = bad\ngeneration = NOT-A-GENERATION\nimage = alpine\narch = arm64\n",
+    )
+    .unwrap();
+    assert!(WorkspaceStore::load(&path).is_err());
+    let _ = std::fs::remove_file(path);
+}
+
 #[cfg(feature = "runtime")]
 #[test]
 fn persisted_gui_mutations_publish_once_after_success_and_failures_publish_nothing() {
@@ -174,21 +224,17 @@ fn execution_lifetime_is_backward_compatible_and_nondefault_modes_round_trip_exp
     workspace.execution_lifetime = ExecutionLifetime::Ephemeral;
     let mut store = WorkspaceStore::load(&path).unwrap();
     store.upsert(workspace.clone()).unwrap();
-    assert!(
-        std::fs::read_to_string(&path)
-            .unwrap()
-            .contains("execution_lifetime = ephemeral\n")
-    );
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("execution_lifetime = ephemeral\n"));
     assert_eq!(WorkspaceStore::load(&path).unwrap().get("fast"), Some(&workspace));
 
     workspace.name = "live".into();
     workspace.execution_lifetime = ExecutionLifetime::Live;
     store.upsert(workspace.clone()).unwrap();
-    assert!(
-        std::fs::read_to_string(&path)
-            .unwrap()
-            .contains("execution_lifetime = live\n")
-    );
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("execution_lifetime = live\n"));
     assert_eq!(WorkspaceStore::load(&path).unwrap().get("live"), Some(&workspace));
     let _ = std::fs::remove_file(path);
 }
@@ -316,11 +362,9 @@ fn versioned_mount_serialization_is_canonical_across_repeated_saves() {
     let mut store = WorkspaceStore::load(&path).unwrap();
     store.upsert(workspace.clone()).unwrap();
     let first = std::fs::read(&path).unwrap();
-    assert!(
-        first
-            .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
-            .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" })
-    );
+    assert!(first
+        .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
+        .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" }));
 
     let mut reloaded = WorkspaceStore::load(&path).unwrap();
     reloaded.upsert(workspace).unwrap();
@@ -360,11 +404,9 @@ fn failed_persistence_does_not_change_the_live_store() {
         items: vec![original.clone()],
     };
 
-    assert!(
-        store
-            .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
-            .is_err()
-    );
+    assert!(store
+        .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
+        .is_err());
     assert_eq!(store.all(), [original]);
 }
 

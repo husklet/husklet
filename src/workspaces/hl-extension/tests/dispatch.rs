@@ -571,11 +571,11 @@ impl hl_extension::port::WorkspaceControl for Host {
         self.ledger.note("workspace.create");
         Ok(configuration.clone())
     }
-    fn update(&self, _name: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+    fn update(&self, _name: &str, _generation: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         self.ledger.note("workspace.update");
         Ok(configuration.clone())
     }
-    fn delete(&self, _name: &str) -> Result<(), HostError> {
+    fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         self.ledger.note("workspace.delete");
         Ok(())
     }
@@ -733,6 +733,7 @@ fn path(value: &str) -> RelativePath {
 
 fn workspace_configuration() -> WorkspaceConfiguration {
     WorkspaceConfiguration {
+        generation: "0123456789abcdef0123456789abcdef".into(),
         name: "other".into(),
         image: "alpine:3.20".into(),
         architecture: "arm64".into(),
@@ -768,12 +769,16 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::WorkspaceUpdate {
                 name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
                 configuration: workspace_configuration(),
             },
             Capability::WorkspaceControl,
         ),
         (
-            Request::WorkspaceDelete { name: "other".into() },
+            Request::WorkspaceDelete {
+                name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
+            },
             Capability::WorkspaceControl,
         ),
         (
@@ -1070,6 +1075,26 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
             refused_host.ledger.reached()
         );
     }
+}
+
+#[test]
+fn workspace_mutations_require_a_complete_generation_before_host_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::WorkspaceControl], &[]);
+    for request in [
+        Request::WorkspaceUpdate {
+            name: "other".into(),
+            generation: "short".into(),
+            configuration: workspace_configuration(),
+        },
+        Request::WorkspaceDelete {
+            name: "other".into(),
+            generation: String::new(),
+        },
+    ] {
+        assert!(session.dispatch(&request, &services(&host)).is_err());
+    }
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

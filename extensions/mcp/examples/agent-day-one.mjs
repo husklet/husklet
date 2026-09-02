@@ -57,7 +57,7 @@ export async function runAgentDayOne(client, {
   try {
     const imagePull = pullImage ? await pullImageForAgent(client, image, waitMs) : null;
     await call(client, 'husklet_workspace_update', {
-      name: workspaceName, configuration: updatedConfiguration, confirm: true,
+      name: workspaceName, generation: original.generation, configuration: updatedConfiguration, confirm: true,
     });
     configurationChanged = true;
     container = await json(client, 'husklet_container_create', {
@@ -98,7 +98,8 @@ export async function runAgentDayOne(client, {
       try { await call(client, 'husklet_container_remove', { id: container.id, confirm: true }); } catch (error) { cleanupErrors.push(error); }
     }
     if (configurationChanged) {
-      try { await call(client, 'husklet_workspace_update', { name: workspaceName, configuration: original, confirm: true }); }
+      const { generation: _, ...originalConfiguration } = original;
+      try { await call(client, 'husklet_workspace_update', { name: workspaceName, generation: original.generation, configuration: originalConfiguration, confirm: true }); }
       catch (error) { cleanupErrors.push(error); }
     }
     if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'day-one cleanup failed');

@@ -221,8 +221,11 @@ impl Overview<'_> {
             let dirty = Rc::clone(&dirty);
             let semantics = semantics.clone();
             save.connect_clicked(move |_| {
-                let result = form.configuration().and_then(|workspace| {
-                    WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace.clone())?;
+                let result = form.configuration().and_then(|mut workspace| {
+                    let generation = saved.borrow().generation.clone();
+                    workspace.generation.clone_from(&generation);
+                    WorkspaceStore::load(Home::current().workspaces_config())?
+                        .upsert_if_generation(&generation, workspace.clone())?;
                     Ok(workspace)
                 });
                 match result {

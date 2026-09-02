@@ -187,6 +187,8 @@ pub struct TerminalPreferences {
 pub struct WorkspaceConfig {
     /// The bare run primitive.
     pub ws: Workspace,
+    /// Immutable identity of this persisted workspace incarnation.
+    pub generation: String,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
     /// Terminal scrollback (lines of history each shell retains). `None` = explicitly unlimited. A
@@ -230,6 +232,7 @@ impl WorkspaceConfig {
     pub fn from_ws(ws: Workspace) -> WorkspaceConfig {
         WorkspaceConfig {
             ws,
+            generation: uuid::Uuid::new_v4().simple().to_string(),
             docker_sock: true,
             scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             vpn: None,
@@ -329,7 +332,10 @@ impl WorkspaceStore {
     }
 
     /// Add or replace a workspace by name, then persist.
-    pub fn upsert(&mut self, ws: WorkspaceConfig) -> io::Result<()> {
+    pub fn upsert(&mut self, mut ws: WorkspaceConfig) -> io::Result<()> {
+        if let Some(existing) = self.get(&ws.name) {
+            ws.generation.clone_from(&existing.generation);
+        }
         #[cfg(feature = "runtime")]
         let existed = self.items.iter().any(|workspace| workspace.name == ws.name);
         #[cfg(feature = "runtime")]
@@ -351,6 +357,24 @@ impl WorkspaceStore {
         Ok(())
     }
 
+    /// Replace a workspace only while it is still the generation the caller inspected.
+    pub fn upsert_if_generation(&mut self, expected: &str, mut ws: WorkspaceConfig) -> io::Result<()> {
+        let current = self.get(&ws.name).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Workspace {:?} no longer exists.", ws.name),
+            )
+        })?;
+        if expected.is_empty() || current.generation != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "workspace changed; inspect and consent again",
+            ));
+        }
+        ws.generation.clone_from(&current.generation);
+        self.upsert(ws)
+    }
+
     /// Remove a workspace by name; returns whether one was removed, then persists.
     pub fn remove(&mut self, name: &str) -> io::Result<bool> {
         let mut items = self.items.clone();
@@ -366,6 +390,20 @@ impl WorkspaceStore {
         Ok(removed)
     }
 
+    /// Remove a workspace only while it is still the generation the caller inspected.
+    pub fn remove_if_generation(&mut self, name: &str, expected: &str) -> io::Result<bool> {
+        let current = self
+            .get(name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Workspace {name:?} no longer exists.")))?;
+        if expected.is_empty() || current.generation != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "workspace changed; inspect and consent again",
+            ));
+        }
+        self.remove(name)
+    }
+
     fn save(&self, items: &[WorkspaceConfig]) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -374,6 +412,7 @@ impl WorkspaceStore {
         for w in items {
             out.section();
             out.field("name", &w.name);
+            out.field("generation", &w.generation);
             out.field("image", &w.image);
             out.field("arch", w.arch.as_str());
             if let Some(s) = &w.storage {

@@ -34,10 +34,12 @@ pub enum Request {
     },
     WorkspaceUpdate {
         name: String,
+        generation: String,
         configuration: WorkspaceConfiguration,
     },
     WorkspaceDelete {
         name: String,
+        generation: String,
     },
     WorkspaceStart {
         name: String,
@@ -666,7 +668,11 @@ mod tests {
         );
         assert_eq!(Request::WorkspaceList.capability(), Capability::WorkspaceRead);
         assert_eq!(
-            Request::WorkspaceDelete { name: "other".into() }.capability(),
+            Request::WorkspaceDelete {
+                name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
+            }
+            .capability(),
             Capability::WorkspaceControl
         );
     }

@@ -28,6 +28,7 @@ const configuration = () => ({
   scrollback: 100000, vpn: null, execution_lifetime: 'persisted',
   terminal: { font_family: 'Mono', font_size: 13, foreground: '#fff', background: '#000', cursor_shape: 'block', cursor_blink: false },
 });
+const generation = '0123456789abcdef0123456789abcdef';
 
 test('workspace create and confirmed update preserve the complete typed configuration', async () => {
   const { api, calls } = fake();
@@ -41,8 +42,8 @@ test('workspace create and confirmed update preserve the complete typed configur
   assert.equal(update.inputSchema.safeParse({ name: 'dev', configuration: value }).success, false);
   assert.equal(update.inputSchema.safeParse({ name: 'other', configuration: value, confirm: true }).success, false);
   await create.run({ configuration: value });
-  await update.run({ name: 'dev', configuration: value, confirm: true });
-  assert.deepEqual(calls, [['workspace.create', value], ['workspace.update', 'dev', value]]);
+  await update.run({ name: 'dev', generation, configuration: value, confirm: true });
+  assert.deepEqual(calls, [['workspace.create', value], ['workspace.update', 'dev', generation, value]]);
 });
 
 test('live MCP transport carries workspace configuration and host authority failures', async () => {
@@ -61,13 +62,13 @@ test('live MCP transport carries workspace configuration and host authority fail
   const created = await client.callTool({ name: 'husklet_workspace_create', arguments: { configuration: value } });
   assert.deepEqual(JSON.parse(created.content[0].text), value);
   const denied = await client.callTool({
-    name: 'husklet_workspace_update', arguments: { name: 'dev', configuration: value, confirm: true },
+    name: 'husklet_workspace_update', arguments: { name: 'dev', generation, configuration: value, confirm: true },
   });
   assert.equal(denied.isError, true);
   assert.match(denied.content[0].text, /workspace-control/);
   assert.deepEqual(calls, [
     ['workspace_create', { configuration: value }],
-    ['workspace_update', { name: 'dev', configuration: value }],
+    ['workspace_update', { name: 'dev', generation, configuration: value }],
   ]);
   await client.close();
   await server.close();

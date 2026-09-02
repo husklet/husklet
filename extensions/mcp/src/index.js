@@ -80,7 +80,8 @@ const workspaceConfiguration = z.object({
     cursor_shape: nullable(z.string().max(64)), cursor_blink: nullable(z.boolean()),
   }).strict(),
 }).strict();
-const workspaceUpdate = z.object({ name: id, configuration: workspaceConfiguration, confirm: z.literal(true) }).strict()
+const workspaceGeneration = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable workspace generation is required');
+const workspaceUpdate = z.object({ name: id, generation: workspaceGeneration, configuration: workspaceConfiguration, confirm: z.literal(true) }).strict()
   .superRefine(({ name, configuration }, context) => {
     if (name !== configuration.name) context.addIssue({ code: z.ZodIssueCode.custom, message: 'renaming a workspace is not supported' });
   });
@@ -113,9 +114,9 @@ export function tools(api) {
     define('husklet_workspace_list', 'List bounded workspace summaries.', empty, () => api.list()),
     define('husklet_workspace_inspect', 'Inspect one named workspace.', z.object({ name: id }).strict(), ({ name }) => api.inspect(name)),
     define('husklet_workspace_create', 'Create one workspace from a complete bounded configuration.', z.object({ configuration: workspaceConfiguration }).strict(), ({ configuration }) => api.create(configuration)),
-    define('husklet_workspace_update', 'Replace a stopped workspace configuration after explicit confirmation; renaming is not supported.', workspaceUpdate, ({ name, configuration }) => api.update(name, configuration)),
+    define('husklet_workspace_update', 'Replace the exact observed stopped workspace generation after explicit confirmation.', workspaceUpdate, ({ name, generation, configuration }) => api.update(name, generation, configuration)),
     ...['start', 'stop', 'restart'].map((action) => define(`husklet_workspace_${action}`, `${action} a named workspace.`, z.object({ name: id }).strict(), async ({ name }) => { await api[action](name); return { done: true }; })),
-    define('husklet_workspace_delete', 'Delete a stopped workspace after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.delete(name); return { done: true }; }),
+    define('husklet_workspace_delete', 'Delete the exact observed stopped workspace generation after explicit confirmation.', z.object({ name: id, generation: workspaceGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.delete(name, generation); return { done: true }; }),
     define('husklet_extension_list', 'List bounded installed extension records and lifecycle status.', empty, () => api.extensions.list()),
     define('husklet_extension_inspect', 'Inspect one installed extension record.', z.object({ name: extensionName }).strict(), ({ name }) => api.extensions.inspect(name)),
     define('husklet_extension_enable', 'Persistently enable an installed extension after explicit confirmation.', z.object({ name: extensionName, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.extensions.enable(name); return { done: true }; }),

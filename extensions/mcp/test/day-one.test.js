@@ -22,7 +22,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const containerId = 'a'.repeat(64);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-day-one-'));
   const socketPath = path.join(scratch, 'host.sock');
-  const original = configuration('alpine:3.20');
+  const original = { ...configuration('alpine:3.20'), generation: '0123456789abcdef0123456789abcdef' };
   const updated = configuration('alpine:3.21');
   const calls = [];
   const credits = [];
@@ -146,6 +146,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     slot: 'surface-1', action: { revision: 7, node: 5, action: 'invoke' },
   });
   assert.deepEqual(calls.filter(({ call }) => call === 'workspace_update').map(({ with: value }) => value), [
-    { name: 'target', configuration: updated }, { name: 'target', configuration: original },
+    { name: 'target', generation: original.generation, configuration: updated },
+    { name: 'target', generation: original.generation, configuration: configuration('alpine:3.20') },
   ]);
 });

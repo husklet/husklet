@@ -466,6 +466,8 @@ pub struct WorkspaceState {
 /// Complete extension-facing workspace configuration.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct WorkspaceConfiguration {
+    #[serde(default)]
+    pub generation: String,
     pub name: String,
     pub image: String,
     pub architecture: String,
@@ -951,11 +953,12 @@ pub trait WorkspaceControl {
     fn update(
         &self,
         _name: &str,
+        _generation: &str,
         _configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }
-    fn delete(&self, _name: &str) -> Result<(), HostError> {
+    fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         Err(workspace_control_unavailable())
     }
     fn start(&self, _name: &str) -> Result<(), HostError> {
