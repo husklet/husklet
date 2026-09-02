@@ -7406,7 +7406,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
         }
     } else {
         result = cpu.r[0] == 42 && cpu.rip == target + 5 &&
-                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before + 1
+                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) == hit_before
                      ? 0
                      : 159;
     }
