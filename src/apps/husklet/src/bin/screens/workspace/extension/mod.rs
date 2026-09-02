@@ -25,6 +25,8 @@ use hl_extension::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActi
 use hl_gui::{Event, Frame, Renderer, SourceMutation, Tree};
 use hl_gui_gtk::Surface;
 
+const FAULT_NODE: u64 = u64::MAX;
+
 pub use banner::Banner;
 pub use queue::{channel, Deliveries, Delivery, Post, CAPACITY, DRAIN};
 pub use sink::{Signal, Sink};
@@ -113,19 +115,42 @@ impl Interface {
     }
 
     pub fn semantics(&self, slot: &str) -> Result<PaneSemanticTree, HostError> {
-        if let Some(pane) = self.panes.get(slot) {
-            return Self::semantics_from(&pane.tree, slot);
-        }
-        Self::semantics_from(&self.tree, slot)
+        let tree = self.panes.get(slot).map_or(&self.tree, |pane| &pane.tree);
+        self.semantics_from(tree, slot)
     }
 
-    fn semantics_from(tree: &Tree, slot: &str) -> Result<PaneSemanticTree, HostError> {
+    fn semantics_from(&self, tree: &Tree, slot: &str) -> Result<PaneSemanticTree, HostError> {
         let mut count = 0;
         let mut truncated = false;
-        let root = Self::semantic_node(tree, hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
+        let mut root = Self::semantic_node(tree, hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
+        if self.banner.is_visible() {
+            if count >= hl_extension::port::SEMANTIC_NODE_LIMIT {
+                root.children.pop();
+                truncated = true;
+            }
+            root.children.insert(
+                0,
+                SemanticNode {
+                    id: FAULT_NODE,
+                    role: "alert".into(),
+                    label: Some("Extension stopped".into()),
+                    value: Some(
+                        self.banner
+                            .text()
+                            .chars()
+                            .take(hl_extension::port::SEMANTIC_TEXT_LIMIT)
+                            .collect(),
+                    ),
+                    disabled: false,
+                    destructive: false,
+                    actions: vec![SemanticActionKind::Invoke],
+                    children: Vec::new(),
+                },
+            );
+        }
         Ok(PaneSemanticTree {
             slot: slot.to_owned(),
-            revision: tree.sequence(),
+            revision: Self::semantic_revision(tree, self.banner.is_visible()),
             root,
             truncated,
         })
@@ -196,12 +221,17 @@ impl Interface {
 
     pub fn semantic_action_at(&self, slot: &str, action: &PaneSemanticAction) -> Result<(), HostError> {
         let tree = self.panes.get(slot).map_or(&self.tree, |pane| &pane.tree);
-        if action.revision != tree.sequence() {
+        let revision = Self::semantic_revision(tree, self.banner.is_visible());
+        if action.revision != revision {
             return Err(HostError::Conflict(format!(
                 "stale semantic revision {}; current is {}",
                 action.revision,
-                tree.sequence()
+                revision
             )));
+        }
+        if action.node == FAULT_NODE && action.action == SemanticActionKind::Invoke && self.banner.is_visible() {
+            self.sink.accept(Signal::Retry);
+            return Ok(());
         }
         let node_id = hl_gui::NodeId::new(action.node);
         let trigger = match action.action {
@@ -244,6 +274,10 @@ impl Interface {
             self.sink.accept(Signal::Interaction(event));
         }
         Ok(())
+    }
+
+    fn semantic_revision(tree: &Tree, faulted: bool) -> u64 {
+        tree.sequence().saturating_mul(2).saturating_add(u64::from(faulted))
     }
 
     /// Returns the independently retained widget for one stable pane slot.

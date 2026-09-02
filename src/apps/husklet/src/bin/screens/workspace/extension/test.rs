@@ -304,6 +304,7 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
     fixture.page.tick();
     let widgets = fixture.page.surface().len();
     let live = fixture.widgets().len();
+    let live_semantics = fixture.page.semantics("pane-1").expect("live semantics");
 
     fixture
         .post
@@ -324,6 +325,30 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         "the banner says why, got {:?}",
         fixture.page.banner().text()
     );
+    let faulted = fixture.page.semantics("pane-1").expect("fault semantics");
+    assert_ne!(faulted.revision, live_semantics.revision, "the fault invalidates semantic observers");
+    let fault = faulted
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Extension stopped"))
+        .expect("the visible fault has a semantic projection");
+    assert!(fault.value.as_deref().is_some_and(|value| value.contains("socket closed")));
+    assert_eq!(fault.actions, vec![hl_extension::SemanticActionKind::Invoke]);
+    fixture
+        .page
+        .semantic_action_at(
+            "pane-1",
+            &hl_extension::PaneSemanticAction {
+                revision: faulted.revision,
+                node: fault.id,
+                action: hl_extension::SemanticActionKind::Invoke,
+                value: None,
+            },
+        )
+        .expect("semantic retry");
+    assert_eq!(fixture.recorded.borrow().as_slice(), [Signal::Retry]);
+    fixture.recorded.borrow_mut().clear();
     let retry = fixture
         .widgets()
         .into_iter()
