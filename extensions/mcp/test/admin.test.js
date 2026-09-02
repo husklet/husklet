@@ -50,6 +50,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
           if (revision === 0) lifecycle('another-workspace', 'create');
           lifecycle(argument.configuration.name, 'create');
         }
+        else if (call === 'container_create') answer(frame, 'identity', 'c'.repeat(64));
         else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
           if (call === 'workspace_start') lifecycle(argument.name, 'start');
@@ -137,6 +138,24 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(pathOversized.isError, true);
   assert.equal(calls.length, pathOversizedStart);
+
+  const exactImage = 'é'.repeat(256);
+  const imageExactStart = calls.length;
+  const imageExact = await client.callTool({
+    name: 'husklet_container_create', arguments: { image: exactImage, name: 'wire-boundary' },
+  });
+  assert.notEqual(imageExact.isError, true);
+  assert.equal(calls.length, imageExactStart + 1);
+  assert.equal(calls[imageExactStart].call, 'container_create');
+  assert.equal(calls[imageExactStart].with.spec.image, exactImage);
+
+  const imageOversizedStart = calls.length;
+  const imageOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: '😀'.repeat(129), name: 'wire-overflow' },
+  });
+  assert.equal(imageOversized.isError, true);
+  assert.equal(calls.length, imageOversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 

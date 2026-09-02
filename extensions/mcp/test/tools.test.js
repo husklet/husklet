@@ -198,6 +198,8 @@ test('container create and exec accept only bounded structured authority', async
   const exec = listed.find(({ name }) => name === 'husklet_container_exec');
   const attach = listed.find(({ name }) => name === 'husklet_container_attach_terminal');
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'é'.repeat(256), name: 'worker-1' }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: '😀'.repeat(129), name: 'worker-1' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: '../host', read_only: false }] }).success, false);

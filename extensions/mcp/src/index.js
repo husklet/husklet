@@ -26,7 +26,14 @@ const fileContents = z.string().max(64 * 1024).refine(
   'file contents exceed 65536 UTF-8 bytes',
 );
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
-const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
+const imageReference = z.string().min(1).max(512).superRefine((value, context) => {
+  if (value.trim() !== value || /\s/.test(value)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'image reference must not contain whitespace' });
+  }
+  if (new TextEncoder().encode(value).byteLength > 512) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'image reference exceeds 512 UTF-8 bytes' });
+  }
+});
 const imagePullJob = z.string().min(1).max(20).regex(/^[1-9][0-9]*$/, 'image pull job must be a positive decimal identity');
 const utf8Bytes = (value) => new TextEncoder().encode(value).byteLength;
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
