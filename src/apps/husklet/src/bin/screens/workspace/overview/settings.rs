@@ -262,6 +262,9 @@ impl Overview<'_> {
         register_text(semantics, "settings/scrollback", "Scrollback", &form.scrollback, false);
         register_text(semantics, "settings/vpn", "VPN or proxy", &form.features.vpn, true);
         register_font(semantics, "settings/font-family", "Font family", &form.font);
+        register_color(semantics, "settings/background", "Background color", &form.background);
+        register_color(semantics, "settings/foreground", "Text color", &form.foreground);
+        register_cursor(semantics, form);
         register_spin(semantics, "settings/cpus", "CPU cores", &form.cpus);
         register_spin(semantics, "settings/memory", "Memory MB", &form.mem);
         register_spin(semantics, "settings/font-size", "Font size", &form.font_size);
@@ -335,6 +338,73 @@ impl Overview<'_> {
         let registry = semantics.clone();
         save.connect_sensitive_notify(move |button| registry.set_disabled("settings/save", !button.is_sensitive()));
     }
+}
+
+fn register_cursor(semantics: &screens::workspace::semantic::Registry, form: &Form) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let current = form.cursor.get().as_str();
+    let buttons = form.cursor_buttons.clone();
+    semantics.register(
+        "settings/cursor-shape",
+        "combobox",
+        Some("Cursor shape"),
+        Some(Value::Public(current)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => {
+                let index = match value {
+                    Some("block") => Some(0),
+                    Some("beam") => Some(1),
+                    Some("underline") => Some(2),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    buttons[index].set_active(true);
+                }
+            }
+            ActionKind::Focus => {
+                buttons[0].grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    for (button, value) in form.cursor_buttons.iter().zip(["block", "beam", "underline"]) {
+        let registry = semantics.clone();
+        button.connect_toggled(move |button| {
+            if button.is_active() {
+                registry.update("settings/cursor-shape", Value::Public(value), !button.is_sensitive());
+            }
+        });
+    }
+}
+
+fn register_color(
+    semantics: &screens::workspace::semantic::Registry,
+    path: &str,
+    label: &str,
+    input: &ColorPicker,
+) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.value();
+    let changed = input.clone();
+    let focused = input.widget().clone();
+    semantics.register(
+        path,
+        "colorbutton",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => changed.set_value(value.unwrap_or_default()),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.connect_value_changed(move |value| registry.update(&path, Value::Public(value), false));
 }
 
 fn register_font(
@@ -582,9 +652,41 @@ mod tests {
                 .collect();
             assert!(labels.contains(&"Default shell"));
             assert!(labels.contains(&"Font family"));
+            assert!(labels.contains(&"Background color"));
+            assert!(labels.contains(&"Text color"));
             assert!(labels.contains(&"CPU cores"));
             assert!(labels.contains(&"Docker socket"));
             assert!(labels.contains(&"Save changes"));
+            let editable_contract = [
+                ("Default shell", "textbox", ActionKind::Change, false),
+                ("Scrollback", "textbox", ActionKind::Change, false),
+                ("VPN or proxy", "textbox", ActionKind::Change, true),
+                ("Font family", "combobox", ActionKind::Change, false),
+                ("Background color", "colorbutton", ActionKind::Change, false),
+                ("Text color", "colorbutton", ActionKind::Change, false),
+                ("Cursor shape", "combobox", ActionKind::Change, false),
+                ("CPU cores", "spinbutton", ActionKind::Change, false),
+                ("Memory MB", "spinbutton", ActionKind::Change, false),
+                ("Font size", "spinbutton", ActionKind::Change, false),
+                ("Cursor blink", "switch", ActionKind::Toggle, false),
+                ("Docker socket", "switch", ActionKind::Toggle, false),
+                ("Save changes", "button", ActionKind::Invoke, false),
+            ];
+            for (label, role, action, redacted) in editable_contract {
+                let node = snapshot
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.label.as_deref() == Some(label))
+                    .unwrap_or_else(|| panic!("visible Settings control {label:?} lacks semantics"));
+                assert_eq!(node.role, role, "{label} has the wrong semantic role");
+                assert!(node.actions.contains(&action), "{label} is not actionable");
+                if redacted {
+                    assert_eq!(node.value.as_deref(), Some("[redacted]"), "{label} leaked a sensitive value");
+                } else {
+                    assert_ne!(node.value.as_deref(), Some("[redacted]"), "{label} was needlessly hidden");
+                }
+            }
             let vpn = snapshot
                 .root
                 .children
@@ -605,6 +707,58 @@ mod tests {
                 .find(|node| node.label.as_deref() == Some("Font family"))
                 .unwrap();
             assert_eq!(font.value.as_deref(), Some(expected_font.as_str()));
+            let cursor = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Cursor shape"))
+                .unwrap();
+            let cursor_revision = registry.snapshot().revision;
+            registry
+                .act(&Action {
+                    revision: cursor_revision,
+                    node: cursor.id,
+                    action: ActionKind::Change,
+                    value: Some("beam".to_owned()),
+                })
+                .unwrap();
+            assert_eq!(
+                registry
+                    .snapshot()
+                    .root
+                    .children
+                    .iter()
+                    .find(|candidate| candidate.id == cursor.id)
+                    .and_then(|candidate| candidate.value.as_deref()),
+                Some("beam")
+            );
+            for (label, value) in [("Background color", "#101820"), ("Text color", "#f0f4f8")] {
+                let current = registry.snapshot();
+                let node = current
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.label.as_deref() == Some(label))
+                    .expect("every visible terminal color has semantics");
+                registry
+                    .act(&Action {
+                        revision: current.revision,
+                        node: node.id,
+                        action: ActionKind::Change,
+                        value: Some(value.to_owned()),
+                    })
+                    .unwrap();
+                assert_eq!(
+                    registry
+                        .snapshot()
+                        .root
+                        .children
+                        .iter()
+                        .find(|candidate| candidate.id == node.id)
+                        .and_then(|candidate| candidate.value.as_deref()),
+                    Some(value)
+                );
+            }
             let save = descendants(page.upcast_ref())
                 .into_iter()
                 .find_map(|widget| {
@@ -615,9 +769,10 @@ mod tests {
                 })
                 .expect("settings has a save action");
             assert!(!save.is_sensitive(), "unchanged settings cannot be redundantly saved");
+            let shell_revision = registry.snapshot().revision;
             registry
                 .act(&Action {
-                    revision: snapshot.revision,
+                    revision: shell_revision,
                     node: shell.id,
                     action: ActionKind::Change,
                     value: Some("/bin/zsh -l".to_owned()),

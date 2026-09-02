@@ -21,6 +21,7 @@ pub(crate) struct Form {
     pub(crate) foreground: ColorPicker,
     pub(crate) background: ColorPicker,
     pub(crate) cursor: Rc<Cell<CursorShape>>,
+    pub(crate) cursor_buttons: [gtk::ToggleButton; 3],
     pub(crate) cursor_blink: gtk::Switch,
     pub(crate) features: WorkspaceFeatureFields,
     pub(crate) env_box: gtk::Box,
@@ -146,6 +147,22 @@ impl Form {
         font_size.set_value(terminal.font_size);
         let cursor_blink = gtk::Switch::new();
         cursor_blink.set_active(terminal.cursor_blink);
+        let cursor = Rc::new(Cell::new(terminal.cursor_shape));
+        let cursor_buttons = [
+            gtk::ToggleButton::with_label("block"),
+            gtk::ToggleButton::with_label("beam"),
+            gtk::ToggleButton::with_label("underline"),
+        ];
+        cursor_buttons[1].set_group(Some(&cursor_buttons[0]));
+        cursor_buttons[2].set_group(Some(&cursor_buttons[0]));
+        for (button, shape) in cursor_buttons.iter().zip([
+            CursorShape::Block,
+            CursorShape::Beam,
+            CursorShape::Underline,
+        ]) {
+            button.set_active(terminal.cursor_shape == shape);
+            ToggleValue::cursor(button, cursor.clone(), shape);
+        }
         Self {
             name: Field::entry("name", false),
             image: Field::entry("ubuntu:24.04", true),
@@ -159,7 +176,8 @@ impl Form {
             font_size,
             foreground: ColorPicker::new(&terminal.foreground),
             background: ColorPicker::new(&terminal.background),
-            cursor: Rc::new(Cell::new(terminal.cursor_shape)),
+            cursor,
+            cursor_buttons,
             cursor_blink,
             features: WorkspaceFeatureFields::new(),
             env_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
@@ -179,22 +197,7 @@ impl Form {
 
         let cursor = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         cursor.add_css_class("seg");
-        let block = gtk::ToggleButton::with_label("block");
-        let beam = gtk::ToggleButton::with_label("beam");
-        let underline = gtk::ToggleButton::with_label("underline");
-        beam.set_group(Some(&block));
-        underline.set_group(Some(&block));
-        match self.cursor.get() {
-            CursorShape::Block => block.set_active(true),
-            CursorShape::Beam => beam.set_active(true),
-            CursorShape::Underline => underline.set_active(true),
-        }
-        for (button, shape) in [
-            (&block, CursorShape::Block),
-            (&beam, CursorShape::Beam),
-            (&underline, CursorShape::Underline),
-        ] {
-            ToggleValue::cursor(button, self.cursor.clone(), shape);
+        for button in &self.cursor_buttons {
             cursor.append(button);
         }
         panel.append(&Field::labeled("CURSOR", &cursor));
