@@ -72,7 +72,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::two_same_extension_panes_render_independently_by_slot();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
-        panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
+        panes::a_restored_surface_keeps_a_terminal_escape_hatch_while_its_provider_is_late();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
@@ -2079,8 +2079,8 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneChooser, PaneChrome, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin,
-        Window, WindowSession, ABSENCE,
+        Adjustment, PaneChooser, PaneChrome, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+        WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::{Gallery, Shelf, Surfaces};
@@ -3322,7 +3322,22 @@ mod panes {
         drop(first);
     }
 
-    pub(super) fn a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell() {
+    pub(super) fn a_restored_surface_keeps_a_terminal_escape_hatch_while_its_provider_is_late() {
+        struct Offline;
+        impl PaneLauncher for Offline {
+            fn spawn(
+                &self,
+                _terminal: &vte4::Terminal,
+                _argv: &[&str],
+                _environment: &[&str],
+            ) -> std::io::Result<(i32, vte4::Pty)> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "offline test launcher",
+                ))
+            }
+        }
+
         let bench = Bench::new();
         let gallery = Gallery::new();
         Window::exhibit(&bench.window, gallery.clone());
@@ -3334,15 +3349,15 @@ mod panes {
         });
 
         let mut pids = Vec::new();
-        let (widget, terminal) = WindowSession::new(&bench.window).build_pane_widget(
-            &node,
-            storage.path(),
-            &mut pids,
-            &ProductionPaneLauncher,
-        );
+        let (widget, terminal) =
+            WindowSession::new(&bench.window).build_pane_widget(&node, storage.path(), &mut pids, &Offline);
         bench.page.append(&widget);
 
-        assert!(terminal.is_none(), "an absent extension is never replaced by a shell");
+        assert!(terminal.is_none(), "the hidden fallback does not steal initial focus");
+        assert!(
+            bench.window.displaced.borrow().contains_key("7"),
+            "a restored provider retains a terminal escape hatch"
+        );
         assert!(
             super::descendants(&widget)
                 .iter()
@@ -3361,6 +3376,15 @@ mod panes {
             interface.parent().as_ref(),
             Some(held.content.upcast_ref::<gtk::Widget>()),
             "re-enabling after restart rehydrates the preserved pane"
+        );
+        PaneChooser::withdraw(&bench.window, "departed");
+        gallery.withdraw("departed");
+        let restored = Panes::at(&bench.window, "7").expect("stable restored slot");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert!(bench.window.displaced.borrow().get("7").is_none());
+        assert!(
+            Slots::new(&bench.window).surface(&restored.content).is_none(),
+            "late-provider withdrawal cannot persist stale provider identity"
         );
     }
 }

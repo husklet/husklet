@@ -462,8 +462,14 @@ impl PaneWidget {
             }
             PaneNode::Surface(pane) => {
                 // Reuse the pane's saved slot so an extension addressing its own
-                // pane still finds it after a restart.
+                // pane still finds it after a restart. Keep a live terminal
+                // displaced behind it, just as an in-session provider switch
+                // does, so late or absent providers never remove the escape
+                // hatch from this leaf.
                 let slot = Slots::new(tw).adopt(pane.slot.as_deref());
+                let (terminal, pid) = make_terminal_with(tw, None, None, &slot, launcher);
+                pids.push(pid);
+                tw.displaced.borrow_mut().insert(slot.clone(), terminal);
                 let surface = Surface::build(tw, &pane.extension, pane.provider.as_deref(), slot.clone());
                 if let (Some(provider), Some(gallery)) = (pane.provider.as_deref(), Window::gallery(tw)) {
                     gallery.select(&pane.extension, provider, &slot);
