@@ -614,6 +614,7 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixStream;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -634,6 +635,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct Ledger {
         reached: Mutex<Vec<&'static str>>,
+        semantic_revision: AtomicU64,
     }
 
     impl Ledger {
@@ -643,6 +645,10 @@ mod tests {
 
         fn reached(&self) -> Vec<&'static str> {
             self.reached.lock().expect("ledger").clone()
+        }
+
+        fn semantic_revision(&self, revision: u64) {
+            self.semantic_revision.store(revision, Ordering::Release);
         }
     }
 
@@ -713,6 +719,7 @@ mod tests {
     impl TerminalSurface for Host {
         fn tabs(&self) -> Result<Vec<TabSummary>, HostError> {
             self.ledger.note("terminal.tabs");
+            let semantic = self.ledger.semantic_revision.load(Ordering::Acquire) != 0;
             Ok(vec![TabSummary {
                 id: "t1".to_owned(),
                 title: "shell".to_owned(),
@@ -720,7 +727,11 @@ mod tests {
                     slot: "s1".to_owned(),
                     working_directory: None,
                     command: None,
-                    occupant: hl_extension::port::Occupant::Terminal,
+                    occupant: if semantic {
+                        hl_extension::port::Occupant::Surface
+                    } else {
+                        hl_extension::port::Occupant::Terminal
+                    },
                     provider: None,
                 }],
             }])
@@ -746,6 +757,29 @@ mod tests {
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
                 lines: vec![format!("at most {lines}")],
+                truncated: false,
+            })
+        }
+
+        fn semantics(&self, slot: &str) -> Result<hl_extension::PaneSemanticTree, HostError> {
+            self.ledger.note("terminal.semantics");
+            let revision = self.ledger.semantic_revision.load(Ordering::Acquire);
+            if revision == 0 {
+                return Err(HostError::Unsupported("pane semantics are unavailable".into()));
+            }
+            Ok(hl_extension::PaneSemanticTree {
+                slot: slot.to_owned(),
+                revision,
+                root: hl_extension::SemanticNode {
+                    id: 1,
+                    role: "status".into(),
+                    label: Some("Lifecycle notice".into()),
+                    value: Some(format!("revision {revision}")),
+                    disabled: false,
+                    destructive: false,
+                    actions: Vec::new(),
+                    children: Vec::new(),
+                },
                 truncated: false,
             })
         }
@@ -1133,6 +1167,89 @@ mod tests {
         let released = peer.receive().expect("coalesced event");
         let snapshot: Snapshot = serde_json::from_slice(&released.payload).expect("snapshot");
         assert!(matches!(snapshot, Snapshot::PaneChanges(change) if change.coalesced == 1));
+    }
+
+    #[test]
+    fn semantic_revisions_emit_ordered_bounded_pane_invalidations_and_coalesce_between_scans() {
+        let ledger = Arc::new(Ledger::default());
+        ledger.semantic_revision(1);
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("peer deadline");
+        let mut peer = Wire::new(theirs);
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::PaneObserve]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::PaneChanges);
+        conversation
+            .route(hl_extension::Topic::PaneChanges)
+            .expect("pane event route");
+        let channel = conversation
+            .subscriptions
+            .channel(hl_extension::Topic::PaneChanges)
+            .expect("pane event channel");
+        let credit = Frame::new(
+            channel,
+            Kind::Credit,
+            serde_json::to_vec(&2_u32).expect("credit"),
+        );
+        conversation
+            .exchange(&credit, &services(&host))
+            .expect("event credit accepted");
+        assert!(conversation.channels.credit(channel).is_some_and(|credit| credit >= 2));
+
+        conversation.pane_next = std::time::Instant::now() - Duration::from_secs(1);
+        conversation
+            .observe_panes(&services(&host))
+            .expect("initial semantic observation");
+        assert!(ledger.reached().contains(&"terminal.semantics"));
+        let initial = peer.receive().expect("initial pane invalidation");
+        let initial_snapshot: Snapshot = serde_json::from_slice(&initial.payload).expect("typed invalidation");
+        assert!(matches!(
+            initial_snapshot,
+            Snapshot::PaneChanges(ref change)
+                if change.slot == "s1"
+                    && change.kind == hl_extension::PaneChangeKind::Native
+                    && change.revision == 1
+                    && change.generation == 1
+        ));
+        assert!(
+            initial.payload.len() <= Frame::PAYLOAD_LIMIT,
+            "metadata remains protocol bounded"
+        );
+
+        // Two UI mutations before the next host scan collapse into the latest
+        // revision: contents remain behind PaneSemanticRead and no stale
+        // intermediate revision can overtake it on the event channel.
+        ledger.semantic_revision(2);
+        ledger.semantic_revision(3);
+        conversation.pane_next = std::time::Instant::now() - Duration::from_secs(1);
+        conversation
+            .observe_panes(&services(&host))
+            .expect("changed semantic observation");
+        let latest = peer.receive().expect("latest pane invalidation");
+        let latest_snapshot: Snapshot = serde_json::from_slice(&latest.payload).expect("typed invalidation");
+        assert!(matches!(
+            latest_snapshot,
+            Snapshot::PaneChanges(ref change)
+                if change.revision == 3 && change.generation == 2 && change.coalesced == 0
+        ));
+        assert!(
+            latest.payload.len() <= Frame::PAYLOAD_LIMIT,
+            "metadata remains protocol bounded"
+        );
+        assert_eq!(
+            peer.receive(),
+            Err(Transit::Pending),
+            "the skipped revision was coalesced at observation"
+        );
     }
 
     #[test]
