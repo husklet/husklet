@@ -861,6 +861,18 @@ mod tests {
         }
     }
 
+    struct SharedLifecycleHost;
+
+    impl hl_extension::port::WorkspaceControl for SharedLifecycleHost {
+        fn lifecycle_revision(&self) -> u64 {
+            crate::workspace_lifecycle::revision()
+        }
+
+        fn lifecycle_since(&self, revision: u64) -> Result<Vec<hl_extension::WorkspaceLifecycleChange>, HostError> {
+            Ok(crate::workspace_lifecycle::since(revision))
+        }
+    }
+
     impl WorkspaceFiles for Host {
         fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError> {
             self.ledger.note("files.list");
@@ -1201,6 +1213,48 @@ mod tests {
         let second: Snapshot = serde_json::from_slice(&wire.receive().expect("second").payload).expect("snapshot");
         assert!(matches!(first, Snapshot::WorkspaceLifecycle(change) if change.workspace == "other" && change.revision == 4));
         assert!(matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5));
+    }
+
+    #[test]
+    fn a_native_store_mutation_reaches_the_same_subscriber_as_an_mcp_mutation() {
+        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let lifecycle = SharedLifecycleHost;
+        let (ours, peer) = UnixStream::pair().expect("socket pair");
+        peer.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
+        conversation.workspace_lifecycle_revision = Some(
+            hl_extension::port::WorkspaceControl::lifecycle_revision(&lifecycle),
+        );
+
+        let name = format!("native-observed-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("husklet-{name}.conf"));
+        let _ = std::fs::remove_file(&path);
+        crate::config::WorkspaceStore::load(&path)
+            .and_then(|mut store| {
+                store.upsert(crate::config::WorkspaceConfig::new(
+                    &name,
+                    "alpine:3.20",
+                    hl_ws::Arch::Amd64,
+                ))
+            })
+            .expect("native persistence");
+
+        let mut ports = services(&host);
+        ports.workspace_control = &lifecycle;
+        conversation.observe(&ports).expect("observe native mutation");
+        let mut wire = Wire::new(peer);
+        let observed = (0..256).any(|_| {
+            let event: Snapshot = serde_json::from_slice(&wire.receive().expect("event").payload).expect("snapshot");
+            matches!(event, Snapshot::WorkspaceLifecycle(change)
+                if change.workspace == name && change.action == hl_extension::WorkspaceLifecycleAction::Create)
+        });
+        assert!(observed, "native mutation was delivered through the shared lifecycle ledger");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

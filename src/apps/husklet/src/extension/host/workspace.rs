@@ -5,9 +5,8 @@
 //! orchestration for exactly that reason: what can be tested and what cannot
 //! are not mixed in one file.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use hl_extension::port::{
     Division, HostError, PaneText, TabSummary, TerminalSurface, WorkspaceConfiguration, WorkspaceControl,
@@ -255,30 +254,6 @@ struct Store {
     current: String,
 }
 
-#[derive(Default)]
-struct Lifecycle {
-    revision: u64,
-    changes: VecDeque<hl_extension::WorkspaceLifecycleChange>,
-}
-
-fn lifecycle() -> &'static Mutex<Lifecycle> {
-    static LIFECYCLE: OnceLock<Mutex<Lifecycle>> = OnceLock::new();
-    LIFECYCLE.get_or_init(|| Mutex::new(Lifecycle::default()))
-}
-
-fn changed(workspace: &str, action: hl_extension::WorkspaceLifecycleAction) {
-    const LIMIT: usize = 256;
-    let mut lifecycle = lifecycle().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    lifecycle.revision = lifecycle.revision.saturating_add(1).max(1);
-    let revision = lifecycle.revision;
-    lifecycle.changes.push_back(hl_extension::WorkspaceLifecycleChange {
-        workspace: workspace.to_owned(), action, revision, coalesced: 0,
-    });
-    if lifecycle.changes.len() > LIMIT {
-        lifecycle.changes.pop_front();
-    }
-}
-
 impl Store {
     /// Whether one workspace's execution domain is accepting connections.
     ///
@@ -410,17 +385,11 @@ impl Store {
 
 impl WorkspaceControl for Store {
     fn lifecycle_revision(&self) -> u64 {
-        lifecycle().lock().unwrap_or_else(std::sync::PoisonError::into_inner).revision
+        crate::workspace_lifecycle::revision()
     }
 
     fn lifecycle_since(&self, revision: u64) -> Result<Vec<hl_extension::WorkspaceLifecycleChange>, HostError> {
-        let mut changes: Vec<_> = lifecycle().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-            .changes.iter().filter(|change| change.revision > revision).cloned().collect();
-        if let Some(first) = changes.first_mut() {
-            first.coalesced = first.coalesced
-                .saturating_add(first.revision.saturating_sub(revision).saturating_sub(1));
-        }
-        Ok(changes)
+        Ok(crate::workspace_lifecycle::since(revision))
     }
 
     fn inspect(&self, name: &str) -> Result<WorkspaceConfiguration, HostError> {
@@ -440,7 +409,6 @@ impl WorkspaceControl for Store {
         store
             .upsert(workspace.clone())
             .map_err(|error| HostError::Failed(error.to_string()))?;
-        changed(&workspace.name, hl_extension::WorkspaceLifecycleAction::Create);
         Ok(Self::configuration(&workspace))
     }
 
@@ -458,7 +426,6 @@ impl WorkspaceControl for Store {
         crate::config::WorkspaceStore::load(Self::path())
             .and_then(|mut store| store.upsert(workspace.clone()))
             .map_err(|error| HostError::Failed(error.to_string()))?;
-        changed(name, hl_extension::WorkspaceLifecycleAction::Update);
         Ok(Self::configuration(&workspace))
     }
 
@@ -471,7 +438,6 @@ impl WorkspaceControl for Store {
             .and_then(|mut store| store.remove(name))
             .map_err(|error| HostError::Failed(error.to_string()))?;
         if removed {
-            changed(name, hl_extension::WorkspaceLifecycleAction::Remove);
             Ok(())
         } else {
             Err(HostError::Absent(format!("workspace {name}")))
@@ -482,7 +448,7 @@ impl WorkspaceControl for Store {
         let workspace = self.find(name)?;
         crate::runtime::domain::Domain::new(&workspace)
             .ensure(&workspace)
-            .map(|_| changed(name, hl_extension::WorkspaceLifecycleAction::Start))
+            .map(|_| ())
             .map_err(|error| HostError::Failed(error.to_string()))
     }
 
@@ -491,13 +457,15 @@ impl WorkspaceControl for Store {
         crate::runtime::domain::Domain::new(&workspace)
             .close(crate::runtime::domain::Close::Kill)
             .map_err(|error| HostError::Failed(error.to_string()))?;
-        changed(name, hl_extension::WorkspaceLifecycleAction::Stop);
         Ok(())
     }
 
     fn restart(&self, name: &str) -> Result<(), HostError> {
-        self.stop(name)?;
-        self.start(name)
+        let workspace = self.mutable(name)?;
+        crate::runtime::domain::Domain::new(&workspace)
+            .restart(&workspace)
+            .map(|_| ())
+            .map_err(|error| HostError::Failed(error.to_string()))
     }
 }
 
@@ -505,7 +473,7 @@ impl WorkspaceControl for Store {
 mod workspace_control_tests {
     use hl_extension::port::WorkspaceControl as _;
 
-    use super::{Store, changed};
+    use super::Store;
 
     #[test]
     fn extension_configuration_round_trips_every_persisted_core_field() {
@@ -548,8 +516,8 @@ mod workspace_control_tests {
     fn lifecycle_ledger_is_bounded_and_revisions_are_stable_across_store_instances() {
         let first = Store { current: "one".into() };
         let before = first.lifecycle_revision();
-        changed("created", hl_extension::WorkspaceLifecycleAction::Create);
-        changed("started", hl_extension::WorkspaceLifecycleAction::Start);
+        crate::workspace_lifecycle::changed("created", hl_extension::WorkspaceLifecycleAction::Create);
+        crate::workspace_lifecycle::changed("started", hl_extension::WorkspaceLifecycleAction::Start);
         let second = Store { current: "two".into() };
         let changes = second.lifecycle_since(before).expect("lifecycle");
         assert_eq!(changes.len(), 2);
@@ -560,7 +528,10 @@ mod workspace_control_tests {
 
         let overflow_start = second.lifecycle_revision();
         for index in 0..258 {
-            changed(&format!("overflow-{index}"), hl_extension::WorkspaceLifecycleAction::Update);
+            crate::workspace_lifecycle::changed(
+                &format!("overflow-{index}"),
+                hl_extension::WorkspaceLifecycleAction::Update,
+            );
         }
         let bounded = second.lifecycle_since(overflow_start).expect("bounded lifecycle");
         assert_eq!(bounded.len(), 256);

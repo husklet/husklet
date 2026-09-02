@@ -62,6 +62,54 @@ fn store_persists_across_reload() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[cfg(feature = "runtime")]
+#[test]
+fn persisted_gui_mutations_publish_once_after_success_and_failures_publish_nothing() {
+    let name = format!("gui-lifecycle-{}", std::process::id());
+    let path = tmp_path(&name);
+    let _ = std::fs::remove_file(&path);
+    let before = crate::workspace_lifecycle::revision();
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store
+        .upsert(WorkspaceConfig::new(&name, "alpine:3.20", Arch::Amd64))
+        .unwrap();
+    store
+        .upsert(WorkspaceConfig::new(&name, "alpine:3.21", Arch::Amd64))
+        .unwrap();
+    assert!(store.remove(&name).unwrap());
+    assert!(!store.remove(&name).unwrap());
+    let own: Vec<_> = crate::workspace_lifecycle::since(before)
+        .into_iter()
+        .filter(|change| change.workspace == name)
+        .map(|change| change.action)
+        .collect();
+    assert_eq!(
+        own,
+        [
+            hl_extension::WorkspaceLifecycleAction::Create,
+            hl_extension::WorkspaceLifecycleAction::Update,
+            hl_extension::WorkspaceLifecycleAction::Remove,
+        ]
+    );
+
+    let blocked_parent = std::env::temp_dir().join(format!("lifecycle-blocked-parent-{}", std::process::id()));
+    let _ = std::fs::remove_file(&blocked_parent);
+    let _ = std::fs::remove_dir(&blocked_parent);
+    std::fs::create_dir(&blocked_parent).unwrap();
+    let failed_name = format!("failed-{name}");
+    let mut blocked = WorkspaceStore::load(blocked_parent.join("workspaces.conf")).unwrap();
+    std::fs::remove_dir(&blocked_parent).unwrap();
+    std::fs::write(&blocked_parent, b"not a directory").unwrap();
+    assert!(blocked
+        .upsert(WorkspaceConfig::new(&failed_name, "alpine", Arch::Amd64))
+        .is_err());
+    assert!(crate::workspace_lifecycle::since(before)
+        .into_iter()
+        .all(|change| change.workspace != failed_name));
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(blocked_parent);
+}
+
 #[test]
 fn rich_config_roundtrips() {
     let path = tmp_path("rich");

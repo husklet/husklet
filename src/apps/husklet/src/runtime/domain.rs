@@ -34,6 +34,7 @@ const PROTOCOL: &str = "3";
 /// Owns the host process and socket serving one workspace's persistent execution domain.
 pub struct Domain {
     directory: PathBuf,
+    workspace: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +74,7 @@ impl Domain {
     pub fn in_root(root: &std::path::Path, workspace: &WorkspaceConfig) -> Self {
         Self {
             directory: workspace.storage_dir(root).join("runtime"),
+            workspace: workspace.name.clone(),
         }
     }
 
@@ -87,12 +89,20 @@ impl Domain {
 
     /// Starts the workspace domain process when needed and waits until its API accepts connections.
     pub fn ensure(&self, workspace: &WorkspaceConfig) -> io::Result<PathBuf> {
+        self.ensure_with_action(workspace, None)
+    }
+
+    fn ensure_with_action(
+        &self,
+        workspace: &WorkspaceConfig,
+        requested: Option<hl_extension::WorkspaceLifecycleAction>,
+    ) -> io::Result<PathBuf> {
         std::fs::create_dir_all(&self.directory)?;
         let _startup = Lease::acquire_wait(
             &self.directory.join("startup.lock"),
             std::time::Duration::from_secs(180),
         )?;
-        let reason = match self.decide(workspace)? {
+        let (reason, action) = match self.decide(workspace)? {
             Decision::Serve => return Ok(self.socket()),
             Decision::Replace(peer, reason) => {
                 hl_log::hl_error!(
@@ -103,9 +113,9 @@ impl Domain {
                 peer.stop(libc::SIGTERM, std::time::Duration::from_secs(10), || {
                     std::os::unix::net::UnixStream::connect(self.socket())
                 })?;
-                reason
+                (reason, hl_extension::WorkspaceLifecycleAction::Restart)
             }
-            Decision::Start(reason) => reason,
+            Decision::Start(reason) => (reason, hl_extension::WorkspaceLifecycleAction::Start),
         };
         self.reserve(workspace, HANDOVER)?;
         let output = std::fs::OpenOptions::new()
@@ -124,7 +134,9 @@ impl Domain {
             .stderr(std::process::Stdio::from(errors));
         command.start_session();
         let child = command.spawn()?;
-        self.wait_for_start(child, std::time::Duration::from_secs(180))
+        let socket = self.wait_for_start(child, std::time::Duration::from_secs(180))?;
+        crate::workspace_lifecycle::changed(&workspace.name, requested.unwrap_or(action));
+        Ok(socket)
     }
 
     /// Decides what to do about whatever currently owns this workspace's socket.
@@ -211,12 +223,16 @@ impl Domain {
 
     /// Stops this workspace execution domain according to the user's close choice.
     pub fn close(&self, choice: Close) -> io::Result<()> {
+        self.close_with_event(choice, true)
+    }
+
+    fn close_with_event(&self, choice: Close, publish: bool) -> io::Result<()> {
         let connection = match std::os::unix::net::UnixStream::connect(self.socket()) {
             Ok(connection) => connection,
             Err(error) if Peer::offline(&error) => return Ok(()),
             Err(error) => return Err(error),
         };
-        match choice {
+        let result = match choice {
             Close::Kill => {
                 let peer = Peer::new(&connection)?;
                 Shutdown::request(&self.control(), Disposition::Kill)?;
@@ -231,16 +247,30 @@ impl Domain {
                 Shutdown::request(&self.control(), Disposition::Checkpoint)?;
                 result.wait(&self.socket(), std::time::Duration::from_secs(90))
             }
+        };
+        result?;
+        if publish {
+            crate::workspace_lifecycle::changed(&self.workspace, hl_extension::WorkspaceLifecycleAction::Stop);
         }
+        Ok(())
+    }
+
+    /// Stops and starts one domain as a single observable lifecycle mutation.
+    pub fn restart(&self, workspace: &WorkspaceConfig) -> io::Result<PathBuf> {
+        self.close_with_event(Close::Kill, false)?;
+        self.ensure_with_action(workspace, Some(hl_extension::WorkspaceLifecycleAction::Restart))
     }
 
     /// Closes a domain and its owning attachments as one startup handover.
     pub fn close_handover(&self, choice: Close, close_attachments: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
         std::fs::create_dir_all(&self.directory)?;
+        let was_live = std::cell::Cell::new(false);
         Self::handover_with(
             || Lease::acquire_wait(&self.directory.join("startup.lock"), HANDOVER),
             || match std::os::unix::net::UnixStream::connect(self.socket()) {
-                Ok(connection) => match choice {
+                Ok(connection) => {
+                    was_live.set(true);
+                    match choice {
                     Close::Kill => {
                         drop(connection);
                         Shutdown::request(&self.control(), Disposition::Kill)
@@ -252,13 +282,18 @@ impl Domain {
                         Shutdown::request(&self.control(), Disposition::Checkpoint)?;
                         result.wait(&self.socket(), std::time::Duration::from_secs(90))
                     }
-                },
+                    }
+                }
                 Err(error) if Peer::offline(&error) => Ok(()),
                 Err(error) => Err(error),
             },
             close_attachments,
             || Lease::wait_available(&self.directory.join("domain.lock"), HANDOVER),
-        )
+        )?;
+        if was_live.get() {
+            crate::workspace_lifecycle::changed(&self.workspace, hl_extension::WorkspaceLifecycleAction::Stop);
+        }
+        Ok(())
     }
 
     /// Runs the close request, then reaps the owning attachments, then waits for the domain lease,
