@@ -598,6 +598,69 @@ mod tests {
     }
 
     #[test]
+    fn simultaneous_ensures_coalesce_over_the_real_unix_transport() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        listener.set_nonblocking(true).expect("bounded mock listener");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for step in 0..4 {
+                let mut stream = accept_bounded(&listener);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .expect("read timeout");
+                requests.push(read_request(&mut stream).expect("Docker request"));
+                match step {
+                    0 => respond_close(&mut stream, "404 Not Found", br#"{"message":"absent"}"#),
+                    1 => respond_close(&mut stream, "201 Created", br#"{"Id":"winning-id","Warnings":[]}"#),
+                    2 => respond_close(&mut stream, "204 No Content", &[]),
+                    3 => {
+                        let labels = format!(
+                            r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#
+                        );
+                        respond_close(&mut stream, "200 OK", inspection("winning-id", &labels).as_bytes());
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            requests
+        });
+        let gate = Arc::new(Barrier::new(3));
+        let mut callers = Vec::new();
+        for _ in 0..2 {
+            let gate = Arc::clone(&gate);
+            let socket = socket.clone();
+            let wanted = wanted.clone();
+            callers.push(std::thread::spawn(move || {
+                let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+                gate.wait();
+                Sidecar::new(bridge).ensure(&wanted)
+            }));
+        }
+        gate.wait();
+        let mut outcomes = callers
+            .into_iter()
+            .map(|caller| caller.join().expect("caller").expect("ensure"))
+            .collect::<Vec<_>>();
+        outcomes.sort_by_key(|outcome| format!("{outcome:?}"));
+
+        assert_eq!(outcomes, vec![super::Outcome::Creation, super::Outcome::Reuse]);
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+            ],
+            "one create/start wins and the other caller only reuses it"
+        );
+    }
+
+    #[test]
     fn owned_stop_uses_real_transport_and_never_addresses_a_replacement_name() {
         for (actual, id, expected_requests) in [
             (Some(spec().signature()), "immutable-old-id", 2),
@@ -722,9 +785,7 @@ mod tests {
             || "{}".to_owned(),
             |value| format!(r#"{{"{SIGNATURE_LABEL}":"{value}"}}"#),
         );
-        let body = format!(
-            r#"{{"Id":"{id}","Image":"sha256:image","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
-        );
+        let body = inspection(id, &labels);
         respond(&mut stream, "200 OK", body.as_bytes());
         if expected >= 2 {
             requests.push(read_request(&mut stream).expect("stop request"));
@@ -763,8 +824,51 @@ mod tests {
             }
             bytes.push(byte[0]);
         }
-        let line = String::from_utf8(bytes).ok()?.lines().next()?.to_owned();
+        let headers = String::from_utf8(bytes).ok()?;
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("content-length: ")
+                    .or_else(|| line.strip_prefix("Content-Length: "))
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = vec![0_u8; length];
+        stream.read_exact(&mut body).ok()?;
+        let line = headers.lines().next()?.to_owned();
         line.strip_suffix(" HTTP/1.1").map(str::to_owned)
+    }
+
+    fn accept_bounded(listener: &UnixListener) -> std::os::unix::net::UnixStream {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("client did not connect inside the bound: {error}"),
+            }
+        }
+    }
+
+    fn inspection(id: &str, labels: &str) -> String {
+        format!(
+            r#"{{"Id":"{id}","Image":"sha256:image","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+        )
+    }
+
+    fn respond_close(stream: &mut std::os::unix::net::UnixStream, status: &str, body: &[u8]) {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .expect("response headers");
+        stream.write_all(body).expect("response body");
+        stream.flush().expect("response flush");
     }
 
     fn respond(stream: &mut std::os::unix::net::UnixStream, status: &str, body: &[u8]) {
