@@ -292,6 +292,11 @@ impl Conversation {
                 snapshots.push(Snapshot::Terminal(tabs));
             }
         }
+        if self.session.may_emit(Topic::Extensions) {
+            if let Ok(extensions) = services.extensions.list() {
+                snapshots.push(Snapshot::Extensions(extensions));
+            }
+        }
         if self.session.may_emit(Topic::WorkspaceEvents) {
             if let Some(batch) = self.events.as_ref().and_then(super::host::Events::drain) {
                 snapshots.push(Snapshot::WorkspaceEvents(batch));
@@ -765,7 +770,16 @@ mod tests {
         }
     }
 
-    impl hl_extension::port::ExtensionStore for Host {}
+    impl hl_extension::port::ExtensionStore for Host {
+        fn list(&self) -> Result<Vec<hl_extension::port::ExtensionSummary>, HostError> {
+            self.ledger.note("extensions.list");
+            Ok(vec![hl_extension::port::ExtensionSummary {
+                name: "workspace-manager".into(),
+                image_digest: "sha256:manager".into(),
+                status: "duty".into(),
+            }])
+        }
+    }
 
     fn services(host: &Host) -> Services<'_> {
         Services {
@@ -787,11 +801,15 @@ mod tests {
         }
     }
 
-    /// The grant every test starts from: read containers, and draw.
+    /// The grant every test starts from: read containers/extensions, and draw.
     fn authority() -> Authority {
         Authority::new(
             ExtensionName::new("sample").expect("name"),
-            Grant::new([Capability::ContainerRead, Capability::Interface]),
+            Grant::new([
+                Capability::ContainerRead,
+                Capability::ExtensionRead,
+                Capability::Interface,
+            ]),
             Vec::new(),
         )
     }
@@ -887,6 +905,32 @@ mod tests {
                 >= 2,
             "the absence of a duplicate is from equality, not a stopped producer"
         );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn an_extension_inventory_subscription_receives_one_changed_bounded_listing() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(650)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Extensions,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+        let event = wire.receive().expect("initial extension snapshot");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager"));
+        assert_eq!(wire.receive(), Err(Transit::Pending), "unchanged inventory is coalesced");
+        assert!(ledger.reached().iter().filter(|call| **call == "extensions.list").count() > 1);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
