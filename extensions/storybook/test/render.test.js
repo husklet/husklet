@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground } from '../src/app.js';
+import { Playground, Preview, interactionDetail, interactionProps } from '../src/app.js';
 import { tags } from '../src/catalogue.js';
 import { defaults } from '../src/defaults.js';
 import { components } from '@husklet/react';
@@ -107,6 +107,41 @@ test('the preview is a real instance of the selected component', () => {
     created(frame.patches).some((entry) => entry.tag === 'Button'),
     'the component the playground opens on is rendered, not described',
   );
+});
+
+test('the preview demonstrates declared interactions with a live bounded console', () => {
+  const stage = host();
+  const opened = defaults('Button');
+  const first = stage.render(h(Preview, {
+    name: 'Button',
+    opened,
+    triggers: ['Invoke', 'Key'],
+  }));
+  const preview = node(first.patches, 'Button', 'Button');
+  assert.ok(preview, 'the interactive preview button is absent');
+  assert.ok(node(first.patches, 'InlineMessage', 'Interact with the preview to inspect onInvoke, onKey.'));
+
+  const before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: preview, id: `${preview}:Invoke`, value: null }));
+  const patches = stage.since(before);
+  assert.ok(
+    patches.some(
+      (patch) => 'SetProp' in patch
+        && patch.SetProp.prop === 'Label'
+        && patch.SetProp.value.Text === 'Invoke received · value=null',
+    ),
+    'a real preview event never reaches the visible console',
+  );
+});
+
+test('interaction handlers follow the catalogue and payload descriptions stay bounded', () => {
+  const seen = [];
+  const handlers = interactionProps(['Change', 'Focus'], (trigger, event) => seen.push([trigger, event]));
+  assert.deepEqual(Object.keys(handlers), ['onChange', 'onFocus']);
+  handlers.onFocus({ focused: true });
+  assert.deepEqual(seen, [['Focus', { focused: true }]]);
+  assert.equal(interactionDetail({ key: 'a', pressed: true, private: 'not shown' }), 'key="a" pressed=true');
+  assert.equal(interactionDetail({ value: 'x'.repeat(500) }).length, 240);
 });
 
 test('selecting a component in the sidebar renders that component', () => {

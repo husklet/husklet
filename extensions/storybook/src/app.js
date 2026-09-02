@@ -9,6 +9,7 @@ import {
   Column,
   Entry,
   Heading,
+  InlineMessage,
   List,
   ListItemButton,
   ListSubheader,
@@ -52,7 +53,7 @@ export function Playground({ largeSource } = {}) {
     { gap: 0, grow: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
-    h(Preview, { key: 'preview', name: selected, opened, largeSource }),
+    h(Preview, { key: 'preview', name: selected, opened, largeSource, triggers: contract?.triggers ?? [] }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
     h(Inspector, {
       key: 'inspector',
@@ -96,7 +97,12 @@ export function Sidebar({ families, selected, onSelect }) {
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened, largeSource }) {
+export function Preview({ name, opened, largeSource, triggers = [] }) {
+  const [interaction, setInteraction] = useState(null);
+  const handlers = interactionProps(triggers, (trigger, event) => {
+    setInteraction({ name, trigger, detail: interactionDetail(event) });
+  });
+  const currentInteraction = interaction?.name === name ? interaction : null;
   return h(
     Column,
     { grow: true, gap: 2, pad: 4 },
@@ -108,9 +114,36 @@ export function Preview({ name, opened, largeSource }) {
         ? h(AcquisitionProgressStory)
         : name === 'DataTable' && largeSource
         ? h(LargeDataTableStory, { source: largeSource })
-        : h(components[name], present(opened.props), ...opened.children.map(child)),
+        : h(components[name], { ...present(opened.props), ...handlers }, ...opened.children.map(child)),
     ),
+    ...(triggers.length === 0
+      ? []
+      : [
+          h(InlineMessage, {
+            key: 'interaction-console',
+            label: currentInteraction === null
+              ? `Interact with the preview to inspect ${triggers.map((trigger) => `on${trigger}`).join(', ')}.`
+              : `${currentInteraction.trigger} received${currentInteraction.detail ? ` · ${currentInteraction.detail}` : ''}`,
+            tone: currentInteraction === null ? 'neutral' : 'positive',
+          }),
+        ]),
   );
+}
+
+/** Real handlers for every interaction the selected component declares. */
+export function interactionProps(triggers, receive) {
+  return Object.fromEntries(triggers.map((trigger) => [`on${trigger}`, (event) => receive(trigger, event)]));
+}
+
+/** A short, finite payload description suitable for the visible event console. */
+export function interactionDetail(event) {
+  if (event === null || typeof event !== 'object') return '';
+  const fields = ['value', 'rows', 'key', 'pressed', 'focused', 'phase', 'x', 'y', 'button'];
+  const detail = fields
+    .filter((field) => event[field] !== undefined)
+    .map((field) => `${field}=${JSON.stringify(event[field])}`)
+    .join(' ');
+  return detail.slice(0, 240);
 }
 
 /** One default child, as an element. */
