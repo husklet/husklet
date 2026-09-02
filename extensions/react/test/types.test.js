@@ -72,8 +72,11 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
 
 test('host events type the pane chooser identity as well as subscribed snapshots', () => {
   assert.match(declarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
-  assert.match(declarations, /export interface InterfaceEvent \{/);
-  assert.match(declarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent;/);
+  assert.match(declarations, /export type InterfaceEvent =/);
+  assert.match(declarations, /InterfaceEventBase<'key', 'Key'> & \{ key: string; keycode: number; modifiers: number; pressed: boolean \}/);
+  assert.match(declarations, /phase: 'enter' \| 'motion' \| 'leave' \| 'press' \| 'release';/);
+  assert.match(declarations, /x: number \| null; y: number \| null; button: number; modifiers: number;/);
+  assert.match(declarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent \| LegacyInterfaceEvent;/);
   assert.match(declarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
   assert.doesNotMatch(
     declarations,

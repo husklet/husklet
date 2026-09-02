@@ -4436,12 +4436,27 @@ export type WorkspaceEvent =
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
 export interface PaneSelection { pane_provider: string; slot: string }
-export interface InterfaceEvent {
-  interaction: string; trigger: string; node: number; id: string; slot?: string;
-  value?: unknown; rows?: number[]; key?: string; keycode?: number; modifiers?: number;
-  pressed?: boolean; focused?: boolean; phase?: string; x?: number; y?: number;
-  button?: number; dx?: number; dy?: number;
+export interface InterfaceEventBase<I extends string, T extends string> {
+  interaction: I; trigger: T; node: number; id: string; slot?: string;
 }
+export type InterfaceEvent =
+  | InterfaceEventBase<'invoke', 'Invoke'>
+  | InterfaceEventBase<'submit', 'Submit'>
+  | (InterfaceEventBase<'change', 'Change'> & { value?: unknown })
+  | (InterfaceEventBase<'select', 'Select'> & { rows: number[] })
+  | (InterfaceEventBase<'scroll', 'Scroll'> & { dx: number; dy: number })
+  | InterfaceEventBase<'close', 'Close'>
+  | (InterfaceEventBase<'context', 'Context'> & { x: number; y: number })
+  | (InterfaceEventBase<'key', 'Key'> & { key: string; keycode: number; modifiers: number; pressed: boolean })
+  | (InterfaceEventBase<'focus', 'Focus'> & { focused: boolean })
+  | (InterfaceEventBase<'pointer', 'Pointer'> & {
+      phase: 'enter' | 'motion' | 'leave' | 'press' | 'release';
+      x: number | null; y: number | null; button: number; modifiers: number;
+    });
+/** Protocol-1 interface spellings accepted from older hosts by the event router. */
+export type LegacyInterfaceEvent =
+  | { slot?: string; event: string; node: number; id: string; value?: unknown }
+  | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'images'; of: ImageSummary[] }
@@ -4452,7 +4467,7 @@ export type SnapshotEvent =
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
-export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent;
+export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';

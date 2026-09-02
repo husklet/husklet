@@ -40,7 +40,7 @@ try {
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { render, useHostEvents, usePaneSelection, workspace, type HostEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
+    import { render, useHostEvents, usePaneSelection, workspace, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
@@ -63,6 +63,29 @@ try {
     }
     const interaction: HostEvent = { interaction: 'focus', trigger: 'Focus', node: 1, id: '1:Focus', focused: true };
     void interaction;
+    function describeInterfaceEvent(received: InterfaceEvent): string {
+      switch (received.interaction) {
+        case 'key': {
+          const key: string = received.key;
+          // @ts-expect-error a key event does not carry pointer coordinates
+          void received.x;
+          return key;
+        }
+        case 'pointer': {
+          const phase: 'enter' | 'motion' | 'leave' | 'press' | 'release' = received.phase;
+          const x: number | null = received.x;
+          return phase + ':' + x;
+        }
+        case 'select': return received.rows.join(',');
+        case 'scroll': return received.dx + ',' + received.dy;
+        case 'context': return received.x + ',' + received.y;
+        case 'focus': return String(received.focused);
+        case 'change': return String(received.value);
+        case 'invoke': case 'submit': case 'close': return received.id;
+        default: { const exhaustive: never = received; return exhaustive; }
+      }
+    }
+    void describeInterfaceEvent;
     function ProviderView() {
       useHostEvents(session, (received, channel) => { void received; void channel; });
       const selected = usePaneSelection(session, 'logs');

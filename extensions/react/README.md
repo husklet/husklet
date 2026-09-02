@@ -82,6 +82,11 @@ and diagnostics remain pane-addressed; it is not a request to open an unrelated
 tab or split. `usePaneSelection` removes its session observer on unmount and
 when the session changes. `useHostEvents(session, listener)` provides the same
 cleanup and fresh-callback behavior for other typed `HostEvent` handling.
+Current interface events form a discriminated union on `interaction`: checking
+for `"key"`, for example, makes `key`, `keycode`, `modifiers`, and `pressed`
+required, while a pointer event exposes its finite phase vocabulary and nullable
+coordinates. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
+that used the older `event` envelope; new code should narrow `InterfaceEvent`.
 
 ## Workspace API
 
