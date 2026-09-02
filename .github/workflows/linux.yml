@@ -402,6 +402,25 @@ jobs:
             exit 1
           }
 
+      # The checkpoint suite above launches one engine around one guest. It cannot
+      # exercise the production loader recursively, where an AMD64 engine translates
+      # an AArch64 engine which in turn translates the final AMD64 guest. Keep the
+      # manifest-bound runner in CI and require its exact receipt: merely compiling
+      # `testing` or listing the backend matrix executes none of this chain.
+      - name: Test the nested AMD64 to ARM64 to AMD64 engine chain
+        run: |
+          set -o pipefail
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo run -p testing --bin testing --release --locked --offline -- \
+            nested run tests/runtime/nested/chains-x86.yaml 2>&1 | \
+            tee "$RUNNER_TEMP/nested-engine-chain.log"
+          verdict='PASS nested/amd64-arm64-amd64'
+          count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/nested-engine-chain.log" || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error title=Nested engine verdict missing::$verdict appeared $count times, expected exactly once."
+            exit 1
+          fi
+
       # `--all-targets` reaches hl-native's integration tests, which no CI job on any
       # host has ever run. That is the exact gap that let a tree which did not compile
       # on x86_64 at all reach main: the two reserved-register hooks called emitters
