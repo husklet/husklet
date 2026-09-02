@@ -50,6 +50,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
               ? { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
               ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] }
+            : name === 'volume_inspect'
+              ? { reply: 'volume', with: { name: 'cache', driver: 'local' } }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }] }
               : name === 'network_inspect'
@@ -125,6 +127,15 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const networkResize = requests.findLast((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 204);
     assert.deepEqual(networkResize.with.mutation.Length, { source: 204, version: 1, rows: 4 });
+    peer.write(encode({ channel: 21, kind: KIND.event, payload: invocation(requests, 'Volumes') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Volume name')));
+    peer.write(encode({ channel: 22, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
+    await until(() => calls.includes('volume_inspect') && requests.some((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 205));
+    const volumeResize = requests.findLast((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 205);
+    assert.deepEqual(volumeResize.with.mutation.Length, { source: 205, version: 1, rows: 2 });
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;

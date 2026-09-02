@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { Containers, Executions, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
-import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource } from '../src/model.js';
+import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from '../src/model.js';
 import { host } from './host.js';
 
 const api = {
@@ -158,6 +158,33 @@ test('network inspection exposes loading, retry, empty and bounded typed details
   empty.render(h(Networks, { api: { networks: { ...api.networks, inspect: async () => ({}) } }, resource, networkDetails: new NetworkDetailsSource() }));
   invoke(empty, 'Inspect'); await settled(); await settled();
   assert.ok(labelled(empty, 'No network details'));
+});
+
+test('volume inspection exposes loading, retry, empty and bounded typed details', async () => {
+  let attempts = 0;
+  const controlled = { volumes: {
+    ...api.volumes,
+    inspect: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('volume inspect unavailable');
+      return { name: 'cache', driver: 'local' };
+    },
+  } };
+  const resource = { data: [{ name: 'cache', driver: 'local' }], loading: false, error: null, reload: async () => {} };
+  const details = new VolumeDetailsSource();
+  const stage = host();
+  stage.render(h(Volumes, { api: controlled, resource, volumeDetails: details }));
+  invoke(stage, 'Inspect'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Reading volume details…'));
+  assert.ok(labelled(stage, 'volume inspect unavailable'));
+  invoke(stage, 'Retry inspect'); await settled(); await settled();
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.equal(details.answer({ source: 205, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length, 2);
+
+  const empty = host();
+  empty.render(h(Volumes, { api: { volumes: { ...api.volumes, inspect: async () => ({}) } }, resource, volumeDetails: new VolumeDetailsSource() }));
+  invoke(empty, 'Inspect'); await settled(); await settled();
+  assert.ok(labelled(empty, 'No volume details'));
 });
 
 test('container stop and kill cannot call the API before final confirmation', async () => {

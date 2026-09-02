@@ -5,6 +5,7 @@ import {
   EXECUTION_DETAIL_SOURCE, EXECUTION_DETAIL_WINDOW_LIMIT, ExecutionDetailsSource,
   IMAGE_DETAIL_SOURCE, IMAGE_DETAIL_WINDOW_LIMIT, ImageDetailsSource,
   NETWORK_DETAIL_SOURCE, NETWORK_DETAIL_WINDOW_LIMIT, NetworkDetailsSource,
+  VOLUME_DETAIL_SOURCE, VOLUME_DETAIL_WINDOW_LIMIT, VolumeDetailsSource,
   bounded, bytes, logText, processRows, resourceReference, shortId,
 } from '../src/model.js';
 
@@ -32,6 +33,16 @@ test('typed network inspection is revisioned and window bounded', async () => {
   const window = source.answer({ source: NETWORK_DETAIL_SOURCE, version: 1, id: 7, range: { start: 0, count: 99 } });
   assert.equal(window.rows.length, NETWORK_DETAIL_WINDOW_LIMIT);
   assert.deepEqual(window.rows[0].cells, [{ Text: 'Network ID' }, { Code: 'n1' }]);
+});
+
+test('typed volume inspection exposes only its bounded public fields', async () => {
+  const mutations = [];
+  const source = new VolumeDetailsSource(async (mutation) => mutations.push(mutation));
+  assert.equal(await source.replace({ name: 'cache', driver: 'local', private_field: 'not public' }), 2);
+  assert.deepEqual(mutations, [{ Length: { source: VOLUME_DETAIL_SOURCE, version: 1, rows: 2 } }]);
+  const window = source.answer({ source: VOLUME_DETAIL_SOURCE, version: 1, id: 8, range: { start: 0, count: 99 } });
+  assert.equal(window.rows.length, VOLUME_DETAIL_WINDOW_LIMIT);
+  assert.deepEqual(window.rows.map((row) => row.cells[0].Text), ['Name', 'Driver']);
 });
 
 test('typed container inspection exposes only authoritative bounded fields', async () => {

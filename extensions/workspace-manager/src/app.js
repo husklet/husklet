@@ -4,12 +4,12 @@ import {
   EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
 
-export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, initial = {} }) {
+export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -72,7 +72,7 @@ export function WorkspaceManager({ api, selections, containerDetails, executionD
         : section === 'images'
           ? h(Images, { api, resource: images, imageDetails })
           : section === 'volumes'
-            ? h(Volumes, { api, resource: volumes })
+            ? h(Volumes, { api, resource: volumes, volumeDetails })
             : h(Networks, { api, resource: networks, networkDetails });
   return h(Row, { grow: true, gap: 0 }, h(Navigation, { section, onSelect: setSection }), h(Separator, { orientation: 'vertical' }), body);
 }
@@ -334,23 +334,38 @@ export function Images({ api, resource, imageDetails }) {
     h(Omitted, { count: view.omitted }));
 }
 
-export function Volumes({ api, resource }) {
+export function Volumes({ api, resource, volumeDetails }) {
+  const localDetails = useMemo(() => new VolumeDetailsSource(), []);
+  const detailsSource = volumeDetails ?? localDetails;
   const [name, setName] = useState('');
-  const [detail, setDetail] = useState(null);
+  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, error: null });
   const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (volume) => { await api.volumes.remove(volume.name); if (detail?.name === volume.name) setDetail(null); await resource.reload(); };
-  const inspect = async (volume) => setDetail(await api.volumes.inspect(volume.name));
+  const remove = async (volume) => { await api.volumes.remove(volume.name); if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const inspect = async (volume) => {
+    setInspection({ name: volume.name, state: 'loading', count: 0, error: null });
+    try {
+      const count = await detailsSource.replace(await api.volumes.inspect(volume.name));
+      setInspection({ name: volume.name, state: 'ready', count, error: null });
+    } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, error }); }
+  };
   const view = bounded(resource.data);
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(ErrorText, { error: resource.error }),
-    ...view.records.map((volume) => h(Card, { key: volume.name, variant: detail?.name === volume.name ? 'filled' : 'outline' },
+    ...view.records.map((volume) => h(Card, { key: volume.name, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
         label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name}?`,
         onConfirm: () => remove(volume),
       })),
-      detail?.name === volume.name ? h(CardContent, {}, h(Text, { label: `Driver ${detail.driver}`, color: 'text-dim' })) : null)),
+      inspection.name === volume.name ? h(CardContent, {},
+        inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading volume details…' }))
+          : inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.count === 0
+              ? h(EmptyState, { label: 'No volume details', detail: 'The host returned no inspectable fields.' })
+              : h(KeyValueTable, { source: VOLUME_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 6 }, maximum: { step: 10 } } })) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
