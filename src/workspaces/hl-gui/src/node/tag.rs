@@ -233,6 +233,7 @@ catalogue! {
     // Fields: value entry.
     Entry: leaf, props[Value, Placeholder, Secret, Enabled, Tone], triggers[Change, Submit, Key, Focus, Context],
     Search: leaf, props[Value, Placeholder, Enabled], triggers[Change, Submit, Key, Focus, Context],
+    CommandPalette: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
     NumberEntry: leaf, props[Value, Minimum, Maximum, Step, Enabled], triggers[Change, Key, Focus, Context],
     TextArea: leaf, props[Value, Monospace, Enabled], triggers[Change, Key, Focus, Context],
     PasswordEntry: leaf, props[Value, Placeholder, Secret, Enabled], triggers[Change, Key, Focus, Context],
@@ -331,7 +332,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{Prop, Tag, Trigger, EVERY};
+    use super::{EVERY, Prop, Tag, Trigger};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

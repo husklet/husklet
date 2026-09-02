@@ -75,6 +75,7 @@ export const {
   Overflow,
   Entry,
   Search,
+  CommandPalette,
   NumberEntry,
   TextArea,
   PasswordEntry,

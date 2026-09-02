@@ -798,6 +798,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::TimePicker => Aspect::Time,
         Tag::Entry
         | Tag::Search
+        | Tag::CommandPalette
         | Tag::TextArea
         | Tag::PasswordEntry
         | Tag::TextField

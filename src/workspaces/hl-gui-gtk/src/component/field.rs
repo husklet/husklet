@@ -17,6 +17,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::Entry => entry().upcast(),
         Tag::Search => gtk::SearchEntry::new().upcast(),
+        Tag::CommandPalette => command_palette().upcast(),
         Tag::NumberEntry => counter(0.0, 100.0).upcast(),
         Tag::TextArea => editor(true).upcast(),
         Tag::PasswordEntry => secret().upcast(),
@@ -30,6 +31,16 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         // ColorPicker is the last field tag routed here.
         _ => gtk::ColorDialogButton::new(Some(gtk::ColorDialog::new())).upcast(),
     }
+}
+
+fn command_palette() -> gtk::Box {
+    let widget = axis::column(4);
+    let search = gtk::SearchEntry::new();
+    search.set_search_delay(100);
+    search.set_hexpand(true);
+    slot::field(&search);
+    widget.append(&search);
+    widget
 }
 
 fn entry() -> gtk::Entry {

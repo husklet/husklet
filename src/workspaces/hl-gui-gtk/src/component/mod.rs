@@ -85,6 +85,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::FilePicker => button::widget(tag),
         Tag::Entry
         | Tag::Search
+        | Tag::CommandPalette
         | Tag::NumberEntry
         | Tag::TextArea
         | Tag::PasswordEntry

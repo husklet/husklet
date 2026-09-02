@@ -69,8 +69,11 @@ test('navigation and transient UI is selectable and demonstrates expand, invoke,
   stage.surface.dispatch({ trigger: 'Invoke', node: story, id: `${story}:Invoke` });
   const opened = stage.frames.at(-1).patches;
   const accordion = opened.find((patch) => patch.Create?.tag === 'Accordion')?.Create.id;
+  const palette = opened.find((patch) => patch.Create?.tag === 'CommandPalette')?.Create.id;
   const button = node(opened, 'Button', 'Open actions');
-  assert.ok(accordion && button);
+  assert.ok(accordion && palette && button);
+  stage.surface.dispatch({ trigger: 'Change', node: palette, id: `${palette}:Change`, value: 'logs' });
+  stage.surface.dispatch({ trigger: 'Submit', node: palette, id: `${palette}:Submit` });
   stage.surface.dispatch({ trigger: 'Expand', node: accordion, id: `${accordion}:Expand`, expanded: false });
   const beforeMenu = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: button, id: `${button}:Invoke` });
@@ -82,4 +85,5 @@ test('navigation and transient UI is selectable and demonstrates expand, invoke,
     .filter((patch) => patch.SetProp?.prop === 'Label').map((patch) => patch.SetProp.value.Text);
   assert.ok(labels.includes('Deployment details collapsed.'));
   assert.ok(labels.includes('Action menu dismissed.'));
+  assert.ok(labels.includes('Command submitted: logs.'));
 });

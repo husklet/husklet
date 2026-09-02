@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use hl_gui::{Element, Event, EventId, Reconciliation, Tag};
 
-use super::{channel, Delivery, Interface, Post, Signal, DRAIN};
+use super::{DRAIN, Delivery, Interface, Post, Signal, channel};
 
 /// Everything the sink was handed, in order.
 type Record = Rc<RefCell<Vec<Signal>>>;
@@ -125,12 +125,32 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         retired_panes_ignore_late_frames_until_explicitly_remounted();
         oversized_tree_growth_is_atomic_isolated_and_remountable();
         semantics_are_redacted_and_actions_reject_stale_revisions();
+        command_palette_exposes_typed_semantic_actions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn command_palette_exposes_typed_semantic_actions() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::command_palette(
+        EventId::new("filter-command"),
+        EventId::new("run-command"),
+    ));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let palette = &tree.root.children[0];
+    assert_eq!(palette.role, "CommandPalette");
+    assert_eq!(
+        palette.actions,
+        vec![
+            hl_extension::SemanticActionKind::Change,
+            hl_extension::SemanticActionKind::Submit,
+        ]
+    );
 }
 
 fn retiring_a_pane_discards_its_queued_interaction() {
@@ -526,10 +546,12 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Extension stopped"))
         .expect("the visible fault has a semantic projection");
-    assert!(fault
-        .value
-        .as_deref()
-        .is_some_and(|value| value.contains("socket closed")));
+    assert!(
+        fault
+            .value
+            .as_deref()
+            .is_some_and(|value| value.contains("socket closed"))
+    );
     assert_eq!(fault.actions, vec![hl_extension::SemanticActionKind::Invoke]);
     fixture
         .page

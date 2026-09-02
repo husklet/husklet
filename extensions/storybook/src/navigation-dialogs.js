@@ -1,5 +1,5 @@
 import React from 'react';
-import { Accordion, AccordionDetails, AccordionSummary, Button, Column, Heading, InlineMessage, Menu, MenuItem, Popover, Row, Text } from '@husklet/react';
+import { Accordion, AccordionDetails, AccordionSummary, Button, Column, CommandPalette, Heading, InlineMessage, Menu, MenuItem, Popover, Row, Text } from '@husklet/react';
 
 const { createElement: h, useState } = React;
 
@@ -10,9 +10,19 @@ export function NavigationDialogsStory() {
   const [expanded, setExpanded] = useState(true);
   const [open, setOpen] = useState(false);
   const [event, setEvent] = useState('No navigation event yet.');
+  const [query, setQuery] = useState('');
   return h(Column, { gap: 3 },
     h(Heading, { label: 'Navigation and transient UI', scale: 'title', wrap: true }),
     h(Text, { label: 'Expand details, open the action menu, choose an item, or dismiss it.', wrap: true }),
+    h(CommandPalette, {
+      value: query,
+      placeholder: 'Run a command…',
+      gap: 1,
+      onChange: (report) => setQuery(String(report.value ?? '')),
+      onSubmit: () => setEvent(`Command submitted: ${query || 'none'}.`),
+    },
+    h(MenuItem, { label: 'Open terminal', icon: 'utilities-terminal-symbolic', onInvoke: () => setEvent('Open terminal selected.') }),
+    h(MenuItem, { label: 'Create workspace', icon: 'list-add-symbolic', onInvoke: () => setEvent('Create workspace selected.') })),
     h(Accordion, {
       label: 'Deployment details',
       expanded,
