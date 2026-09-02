@@ -17,7 +17,10 @@ const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
 const extensionGrant = z.array(extensionCapability).max(24);
 const acquisitionRevision = z.number().int().nonnegative().safe();
-const path = z.string().min(1).max(4096);
+const path = z.string().min(1).max(4096).refine(
+  (value) => new TextEncoder().encode(value).byteLength <= 4096,
+  'path exceeds 4096 UTF-8 bytes',
+);
 const fileContents = z.string().max(64 * 1024).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 64 * 1024,
   'file contents exceed 65536 UTF-8 bytes',
