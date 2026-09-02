@@ -195,13 +195,23 @@ fn action(
     let refusal = refusal.clone();
     button.connect_clicked(move |_| commit(&shelf, &name, deed, &refusal));
     let name = entry.name.clone();
+    let semantic_button = button.clone();
     semantics.register(
         &format!("extensions/installed/{}/{label}", entry.name),
         "button",
         Some(label),
         None,
-        &[super::super::semantic::ActionKind::Invoke],
-        Rc::new(move |_, _| commit(&semantic_shelf, &name, deed, &semantic_refusal)),
+        &[
+            super::super::semantic::ActionKind::Invoke,
+            super::super::semantic::ActionKind::Focus,
+        ],
+        Rc::new(move |action, _| match action {
+            super::super::semantic::ActionKind::Invoke => commit(&semantic_shelf, &name, deed, &semantic_refusal),
+            super::super::semantic::ActionKind::Focus => {
+                semantic_button.grab_focus();
+            }
+            _ => {}
+        }),
     );
     button
 }
@@ -263,8 +273,17 @@ fn removal(
             "button",
             Some(label),
             None,
-            &[super::super::semantic::ActionKind::Invoke],
-            Rc::new(move |_, _| button.emit_clicked()),
+            &[
+                super::super::semantic::ActionKind::Invoke,
+                super::super::semantic::ActionKind::Focus,
+            ],
+            Rc::new(move |action, _| match action {
+                super::super::semantic::ActionKind::Invoke => button.emit_clicked(),
+                super::super::semantic::ActionKind::Focus => {
+                    button.grab_focus();
+                }
+                _ => {}
+            }),
         );
     }
     let confirm_path = format!("extensions/installed/{}/Confirm removal", entry.name);

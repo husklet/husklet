@@ -448,22 +448,36 @@ impl Catalogue {
         let page = Rc::clone(self);
         cancel.connect_clicked(move |_| page.decline());
         let page = Rc::clone(self);
+        let semantic_install = install.clone();
         self.semantics.register(
             "extensions/proposal/consent",
             "button",
             Some(accept),
             None,
-            &[ActionKind::Invoke],
-            Rc::new(move |_, _| page.consent()),
+            &[ActionKind::Invoke, ActionKind::Focus],
+            Rc::new(move |action, _| match action {
+                ActionKind::Invoke => page.consent(),
+                ActionKind::Focus => {
+                    semantic_install.grab_focus();
+                }
+                _ => {}
+            }),
         );
         let page = Rc::clone(self);
+        let semantic_cancel = cancel.clone();
         self.semantics.register(
             "extensions/proposal/cancel",
             "button",
             Some("Cancel"),
             None,
-            &[ActionKind::Invoke],
-            Rc::new(move |_, _| page.decline()),
+            &[ActionKind::Invoke, ActionKind::Focus],
+            Rc::new(move |action, _| match action {
+                ActionKind::Invoke => page.decline(),
+                ActionKind::Focus => {
+                    semantic_cancel.grab_focus();
+                }
+                _ => {}
+            }),
         );
         row.append(&install);
         row.append(&cancel);
@@ -546,13 +560,20 @@ impl Catalogue {
             Rc::new(|_, _| {}),
         );
         let page = Rc::clone(self);
+        let cancel = self.cancel.clone();
         self.semantics.register(
             "extensions/acquisition/cancel",
             "button",
             Some("Cancel download"),
             None,
-            &[ActionKind::Invoke],
-            Rc::new(move |_, _| page.cancel()),
+            &[ActionKind::Invoke, ActionKind::Focus],
+            Rc::new(move |action, _| match action {
+                ActionKind::Invoke => page.cancel(),
+                ActionKind::Focus => {
+                    cancel.grab_focus();
+                }
+                _ => {}
+            }),
         );
     }
 
@@ -632,13 +653,20 @@ impl Catalogue {
         let page = Rc::clone(self);
         self.inspect.connect_clicked(move |_| page.inspect());
         let inspect = Rc::clone(self);
+        let inspect_button = self.inspect.clone();
         self.semantics.register(
             "extensions/inspect",
             "button",
             Some("Read manifest"),
             None,
-            &[ActionKind::Invoke],
-            Rc::new(move |_, _| inspect.inspect()),
+            &[ActionKind::Invoke, ActionKind::Focus],
+            Rc::new(move |action, _| match action {
+                ActionKind::Invoke => inspect.inspect(),
+                ActionKind::Focus => {
+                    inspect_button.grab_focus();
+                }
+                _ => {}
+            }),
         );
         self.semantics.register(
             "extensions/notice",
