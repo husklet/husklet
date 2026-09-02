@@ -8,7 +8,10 @@ mod unix {
     use std::process::{Command, Stdio};
 
     use gtk::prelude::*;
-    use hl_extension::{Capability, ExtensionName, Grant, Hello, PROTOCOL, Reply, Request, Welcome, Wire, codec};
+    use hl_extension::{
+        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire,
+        codec,
+    };
     use hl_gui::Tree;
     use hl_gui_gtk::Surface;
 
@@ -106,6 +109,29 @@ mod unix {
         }
         assert!(readable_heading(&root), "{story} has no readable GTK heading");
 
+        let event = emit_representative(story, &root, &surface, &tree);
+        let payload = codec::interaction(&event, Some("storybook-main"))
+            .unwrap_or_else(|| panic!("{story} interaction has no production wire encoding"));
+        wire.send(&Frame::new(ChannelId::new(3), Kind::Event, payload))
+            .expect("interaction returns to Node");
+        let rerender = receive_rerender(&mut wire, story);
+        assert!(
+            !rerender.patches.is_empty(),
+            "{story} interaction produced an empty rerender"
+        );
+        assert!(
+            rerender.patches.len() <= PATCH_LIMIT,
+            "{story} rerender emitted {} patches",
+            rerender.patches.len()
+        );
+        tree.apply(&rerender, &mut surface)
+            .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
+        root.measure(gtk::Orientation::Horizontal, -1);
+        root.measure(gtk::Orientation::Vertical, 300);
+        root.allocate(300, 1_600, -1, None);
+        assert_contained(&root, story);
+        assert!(readable_heading(&root), "{story} lost its readable heading after interaction");
+
         child.kill().expect("Storybook test process stops");
         let status = child.wait().expect("Storybook process is reaped");
         let mut stderr = String::new();
@@ -121,6 +147,99 @@ mod unix {
             "the long-running entrypoint should only end when killed"
         );
         std::fs::remove_file(socket).expect("test socket is removed");
+    }
+
+    fn receive_rerender(wire: &mut Wire<std::os::unix::net::UnixStream>, story: &str) -> hl_gui::Frame {
+        for _ in 0..8 {
+            let carried = wire.receive().expect("Node answers the GTK interaction");
+            if carried.kind == Kind::Credit {
+                continue;
+            }
+            let request = codec::read_request(&carried).expect("post-interaction request decodes");
+            let frame = match request {
+                Request::InterfaceRenderAt { slot, frame } => {
+                    assert_eq!(slot, "storybook-main");
+                    Some(frame)
+                }
+                Request::SourceResizeAt { .. } => None,
+                other => panic!("unexpected post-interaction call from {story}: {other:?}"),
+            };
+            wire.send(&codec::reply(&Reply::Done).expect("done encodes"))
+                .expect("post-interaction reply sends");
+            if let Some(frame) = frame {
+                return frame;
+            }
+        }
+        panic!("{story} did not rerender after its GTK interaction")
+    }
+
+    fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
+        match story {
+            "DataTable" => {
+                let entry = find::<gtk::Entry>(root, |entry| {
+                    entry.placeholder_text().as_deref() == Some("Filter records")
+                });
+                entry.set_text("needle");
+            }
+            "Keyboard and semantic actions" => {
+                let entry = find::<gtk::Entry>(root, |entry| {
+                    entry.placeholder_text().as_deref() == Some("storybook")
+                });
+                entry.set_text("storybook");
+            }
+            "Extension acquisition" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download")).emit_clicked();
+            }
+            "Validated settings form" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Save defaults")).emit_clicked();
+            }
+            "Navigation and transient UI" => {
+                find::<gtk::Expander>(root, |_| true).set_expanded(false);
+            }
+            _ => unreachable!(),
+        }
+        settle_toolkit();
+        let reports = surface.reports().drain();
+        assert!(
+            (1..=2).contains(&reports.len()),
+            "{story} emitted {reports:?} instead of a bounded event"
+        );
+        let event = reports.into_iter().next().expect("one report");
+        if story == "Keyboard and semantic actions" {
+            let hl_gui::Event::Change { node, .. } = event else {
+                panic!("entry did not emit Change")
+            };
+            let id = tree.handler(node, hl_gui::Trigger::Focus).expect("entry declares Focus").clone();
+            return hl_gui::Event::Focus { node, id, focused: true };
+        }
+        event
+    }
+
+    fn find<T: IsA<gtk::Widget> + gtk::glib::object::Cast + Clone + 'static>(
+        root: &gtk::Widget,
+        accepts: impl Fn(&T) -> bool,
+    ) -> T {
+        let mut pending = vec![root.clone()];
+        while let Some(widget) = pending.pop() {
+            if let Ok(candidate) = widget.clone().downcast::<T>() {
+                if accepts(&candidate) {
+                    return candidate;
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                pending.push(current);
+            }
+        }
+        panic!("expected GTK interaction widget was not rendered")
+    }
+
+    fn settle_toolkit() {
+        let context = gtk::glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
     }
 
     fn assert_contained(parent: &gtk::Widget, story: &str) {

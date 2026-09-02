@@ -16,7 +16,7 @@ import {
   Text,
 } from '@husklet/react';
 
-const { createElement: h } = React;
+const { createElement: h, useState } = React;
 
 export const ACQUISITION_STORY = 'Extension acquisition';
 
@@ -55,6 +55,7 @@ export const acquisitionStates = [
 ];
 
 export function AcquisitionProgressStory() {
+  const [event, setEvent] = useState('No acquisition action invoked.');
   return h(
     Column,
     { gap: 3, grow: true },
@@ -65,11 +66,12 @@ export function AcquisitionProgressStory() {
       wrap: true,
       color: 'text-dim',
     }),
-    ...acquisitionStates.map((state) => h(AcquisitionState, { key: state.key, state })),
+    ...acquisitionStates.map((state) => h(AcquisitionState, { key: state.key, state, onAction: (label) => setEvent(`${label} invoked for ${state.key}.`) })),
+    h(InlineMessage, { key: 'event', label: event, tone: 'neutral' }),
   );
 }
 
-function AcquisitionState({ state }) {
+function AcquisitionState({ state, onAction }) {
   const activity =
     state.activity === 'progress'
       ? h(Progress, { key: 'activity', fraction: state.fraction, tooltip: state.status })
@@ -89,7 +91,7 @@ function AcquisitionState({ state }) {
     h(
       CardActions,
       { key: 'actions', gap: 2 },
-      h(Column, { gap: 2 }, ...state.actions.map((label) => h(Button, { key: label, label }))),
+      h(Column, { gap: 2 }, ...state.actions.map((label) => h(Button, { key: label, label, onInvoke: () => onAction(label) }))),
     ),
   );
 }

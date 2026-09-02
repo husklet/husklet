@@ -137,6 +137,34 @@ pub fn is_failure(frame: &Frame) -> bool {
     frame.flags.has(Flags::ERROR)
 }
 
+/// Encodes a toolkit interaction in the event envelope consumed by extension
+/// sessions. Kept beside the request codec so production and E2E hosts cannot
+/// drift into subtly different node, handler, or addressed-slot spellings.
+#[must_use]
+pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
+    use hl_gui::Event;
+    let (name, node, id, detail) = match event {
+        Event::Invoke { node, id } => ("invoke", node, id, serde_json::Value::Null),
+        Event::Submit { node, id } => ("submit", node, id, serde_json::Value::Null),
+        Event::Change { node, id, value } => ("change", node, id, serde_json::json!({ "value": value })),
+        Event::Select { node, id, rows } => ("select", node, id, serde_json::json!({ "rows": rows })),
+        Event::Focus { node, id, focused } => ("focus", node, id, serde_json::json!({ "focused": focused })),
+        _ => return None,
+    };
+    let mut trigger = name.to_owned();
+    trigger.get_mut(0..1)?.make_ascii_uppercase();
+    let mut value = serde_json::json!({
+        "interaction": name, "trigger": trigger, "node": node, "id": id,
+    });
+    if let (Some(target), Some(fields)) = (value.as_object_mut(), detail.as_object()) {
+        target.extend(fields.clone());
+    }
+    if let (Some(slot), Some(target)) = (slot, value.as_object_mut()) {
+        target.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
+    }
+    serde_json::to_vec(&value).ok()
+}
+
 fn payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Coding> {
     hl_rpc::payload(value)
 }
