@@ -350,7 +350,17 @@ impl Host {
     /// Never blocks and never fails: an order for a driver that has already
     /// finished is dropped, because there is nothing left to act on it.
     pub fn accept(&self, order: Order) {
+        if self.stop.load(Ordering::Acquire) {
+            return;
+        }
         let _ = self.orders.send(order);
+    }
+
+    /// Invalidates this host immediately without waiting on its driver. The
+    /// driver observes the same flag used by owned shutdown and closes the
+    /// conversation and sidecar on its next bounded turn.
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::Release);
     }
 
     /// Ends the host: stops the driver, closes the socket, stops the sidecar,
@@ -613,8 +623,8 @@ fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
         return Passage::End(reason);
     }
     let queue = Queue::new();
-    let voice = Voice::default();
     let (finish, ended) = mpsc::sync_channel(1);
+    let voice = Voice::default();
     let listener = match Listener::open(&plan.spec, attendant(supply, plan, &queue, &voice, finish)) {
         Ok(listener) => listener,
         Err(error) => return Passage::End(error.to_string()),

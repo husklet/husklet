@@ -1308,6 +1308,7 @@ struct Bench {
     socket: std::path::PathBuf,
     heard: Heard,
     greeted: Arc<AtomicBool>,
+    ended: Arc<AtomicBool>,
     peers: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -1342,10 +1343,11 @@ impl hl::extension::Supply for Bench {
         let socket = self.socket.clone();
         let heard = Arc::clone(&self.heard);
         let greeted = Arc::clone(&self.greeted);
+        let ended = Arc::clone(&self.ended);
         self.peers
             .lock()
             .expect("peers")
-            .push(std::thread::spawn(move || listen(&socket, &heard, &greeted)));
+            .push(std::thread::spawn(move || listen(&socket, &heard, &greeted, &ended)));
         Ok(())
     }
 
@@ -1370,7 +1372,7 @@ impl hl::extension::Supply for Bench {
 
 /// The fake extension: connect, handshake, then write down every interaction
 /// the host sends.
-fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool) {
+fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool, ended: &AtomicBool) {
     let Some(stream) = connect(socket) else {
         return;
     };
@@ -1413,6 +1415,7 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool) {
         };
         heard.lock().expect("heard").push(id.to_owned());
     }
+    ended.store(true, Ordering::Release);
 }
 
 /// Connects to a socket the host may not have bound yet.
@@ -1446,6 +1449,7 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     let socket = temporary.path().join("run/extension.sock");
     let heard: Heard = Arc::default();
     let greeted = Arc::new(AtomicBool::new(false));
+    let ended = Arc::new(AtomicBool::new(false));
     let (post, deliveries) = channel();
     let delivered = post.clone();
     let host = Rc::new(hl::extension::Host::open(
@@ -1453,6 +1457,7 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
             socket,
             heard: Arc::clone(&heard),
             greeted: Arc::clone(&greeted),
+            ended,
             peers: Mutex::new(Vec::new()),
         },
         Box::new(move |report| {
@@ -1655,11 +1660,13 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
     let gallery = Gallery::new();
     let socket = storage.path().join("extension.sock");
     let greeted = Arc::new(AtomicBool::new(false));
+    let ended = Arc::new(AtomicBool::new(false));
     let heard: Heard = Arc::default();
     let pages: Rc<RefCell<Vec<Rc<RefCell<Interface>>>>> = Rc::new(RefCell::new(Vec::new()));
     let retained_pages = Rc::clone(&pages);
     let shown = gallery.clone();
     let connected = Arc::clone(&greeted);
+    let disconnected = Arc::clone(&ended);
     let surfaces: Surfaces = Rc::new(move |entry| {
         if entry.stage != Stage::Duty {
             return gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
@@ -1670,6 +1677,7 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
                 socket: socket.clone(),
                 heard: Arc::clone(&heard),
                 greeted: Arc::clone(&connected),
+                ended: Arc::clone(&disconnected),
                 peers: Mutex::new(Vec::new()),
             },
             Box::new(move |report| {
@@ -1704,12 +1712,21 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         );
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.append(&widget);
+        let stopping = Rc::downgrade(&host);
         let token = shown.enrol(
             "sample",
             &widget,
             &holder,
             &entry.pane_providers,
             Rc::new(move |selection| host.accept(hl::extension::Order::PaneProvider(selection))),
+        );
+        shown.enrol_shutdown(
+            "sample",
+            Rc::new(move || {
+                if let Some(host) = stopping.upgrade() {
+                    host.request_stop();
+                }
+            }),
         );
         generation.set(Some(token));
         let page = page.install();
@@ -1727,7 +1744,14 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         );
         holder.upcast()
     });
-    let shelf = Shelf::new(&view, &roster, surfaces);
+    let withdrawn = gallery.clone();
+    let shelf = Shelf::with_lifecycle(
+        &view,
+        &roster,
+        surfaces,
+        Rc::new(|_| {}),
+        Rc::new(move |name| withdrawn.withdraw(name.as_str())),
+    );
     shelf.install();
 
     std::fs::remove_dir_all(&root).expect("remove durable root");
@@ -1760,6 +1784,39 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         }),
         "the accepted first frame publishes the provider only after durable retry; semantics={:?}",
         gallery.semantics("sample", "")
+    );
+
+    std::fs::remove_dir_all(&root).expect("remove durable root before disable");
+    std::fs::write(&root, b"jammed").expect("jam disable write");
+    assert!(roster.borrow_mut().disable(&named("sample")).is_err());
+    assert_eq!(roster.borrow().stage(&named("sample")), Stage::Duty);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "failed disable preserves the live provider generation"
+    );
+    assert!(
+        !ended.load(Ordering::Acquire),
+        "failed disable does not half-close the live socket"
+    );
+
+    std::fs::remove_file(&root).expect("clear disable jam");
+    std::fs::create_dir(&root).expect("repair storage for disable");
+    roster.borrow_mut().disable(&named("sample")).expect("durable disable");
+    shelf.refresh(&named("sample"));
+    assert!(
+        gallery.providers().is_empty(),
+        "successful disable withdraws provider authority immediately"
+    );
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !ended.load(Ordering::Acquire) && Instant::now() < deadline {
+        // Deliberately do not iterate GTK: teardown must not wait for the
+        // detached page's next toolkit tick.
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        ended.load(Ordering::Acquire),
+        "successful disable closes the old Unix conversation directly"
     );
 }
 
