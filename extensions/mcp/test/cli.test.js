@@ -1,0 +1,85 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { CONTROL, KIND, Reader, encode } from '../../react/src/wire.js';
+import { assertWorkspace, parseCli } from '../src/cli-options.js';
+
+const cli = path.resolve(import.meta.dirname, '../src/cli.js');
+
+test('CLI arguments require one bounded socket and workspace without accepting extras', () => {
+  assert.deepEqual(parseCli(['--socket', '/tmp/h.sock', '--workspace', 'dev']), {
+    help: false, socket: '/tmp/h.sock', workspace: 'dev',
+  });
+  assert.deepEqual(parseCli(['--help']), { help: true });
+  for (const argv of [
+    [], ['--socket', '/tmp/h.sock'], ['--workspace', 'dev'],
+    ['--socket', '/tmp/a', '--socket', '/tmp/b', '--workspace', 'dev'],
+    ['--socket', '/tmp/a', '--workspace', 'dev', '--extra', 'x'],
+    ['--socket', '/tmp/a\0b', '--workspace', 'dev'],
+  ]) assert.throws(() => parseCli(argv));
+
+  const failed = spawnSync(process.execPath, [cli, '--socket', '/tmp/a', '--workspace', 'dev', '--extra', 'x'], { encoding: 'utf8' });
+  assert.equal(failed.status, 1);
+  assert.equal(failed.stdout, '');
+  assert.match(failed.stderr, /unknown argument.*--extra/);
+  assert.match(failed.stderr, /--help/);
+
+  assert.doesNotThrow(() => assertWorkspace({ name: 'dev' }, 'dev'));
+  assert.throws(() => assertWorkspace({ name: 'production' }, 'dev'), /hosts workspace "production", expected "dev"/);
+  assert.throws(() => assertWorkspace({}, 'dev'), /hosts workspace null, expected "dev"/);
+});
+
+test('spawned packaged CLI initializes stdio MCP and lists tools through a real Unix session', async (context) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-mcp-cli-'));
+  const socketPath = path.join(scratch, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const host = net.createServer((socket) => {
+    connections.add(socket);
+    socket.once('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
+      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read'],
+    } }));
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel === CONTROL || frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        if (frame.payload.call !== 'workspace_info') throw new Error(`unexpected host call ${frame.payload.call}`);
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
+          reply: 'workspace', with: { name: 'dev' },
+        } }));
+      }
+    });
+  });
+  await new Promise((resolve, reject) => host.listen(socketPath, resolve).once('error', reject));
+  context.after(async () => {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => host.close(resolve));
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [cli, '--socket', socketPath, '--workspace', 'dev'],
+    cwd: path.resolve(import.meta.dirname, '..'),
+    stderr: 'pipe',
+  });
+  let diagnostics = '';
+  transport.stderr.on('data', (chunk) => { diagnostics += chunk; });
+  const client = new Client({ name: 'spawned-cli-test', version: '1' });
+  await client.connect(transport);
+  const listed = await client.listTools();
+  assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
+  const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
+  assert.equal(JSON.parse(answer.content[0].text).name, 'dev');
+  assert.deepEqual(calls, [{ call: 'workspace_info' }, { call: 'workspace_info' }]);
+  assert.equal(diagnostics, '');
+  await client.close();
+});

@@ -1,12 +1,31 @@
 # @husklet/mcp
 
-An MCP server for an LLM agent running as a Husklet extension. It connects only
-to `HUSKLET_EXTENSION_SOCKET` and receives exactly the capabilities granted to
-that extension.
+An MCP server for an LLM agent using a capability-scoped Husklet extension
+socket. It receives exactly the capabilities granted to that socket credential.
 
 ```sh
-npx @husklet/mcp
+npx -y @husklet/mcp --socket /path/to/extension.sock --workspace dev
 ```
+
+Common stdio MCP clients accept this copy-paste configuration shape:
+
+```json
+{
+  "mcpServers": {
+    "husklet": {
+      "command": "npx",
+      "args": ["-y", "@husklet/mcp", "--socket", "/path/to/extension.sock", "--workspace", "dev"]
+    }
+  }
+}
+```
+
+The socket path is a credential, not a discovery endpoint: install an observer
+extension with only the grants the client needs and use its host-provisioned
+socket. Both arguments are mandatory, duplicates and unknown flags are refused,
+and startup verifies `workspace_info.name` before exposing MCP tools. Diagnostics
+go to stderr so they cannot corrupt the JSON-RPC stream on stdout. This command
+does not install extensions, discover credentials, or modify client settings.
 
 Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,

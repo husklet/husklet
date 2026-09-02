@@ -17,6 +17,10 @@ try {
   fs.mkdirSync(consumer);
   fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', reactTarball, tarball], { cwd: consumer, stdio: 'pipe' });
+  const help = execFileSync(path.join(consumer, 'node_modules', '.bin', 'husklet-mcp'), ['--help'], {
+    cwd: consumer, encoding: 'utf8',
+  });
+  assert.match(help, /^Usage: husklet-mcp --socket PATH --workspace NAME/m);
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { tools, createServer, semanticXml } from '@husklet/mcp';
     import { runPaneAgentTurn } from '@husklet/mcp/examples/agent-pane-flow.mjs';
