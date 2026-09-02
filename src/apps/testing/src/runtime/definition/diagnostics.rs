@@ -78,8 +78,9 @@ pub(crate) fn digest(stderr: &[u8]) -> String {
         .collect();
     let tree = super::super::output::backend_tree_digest(stderr);
     let forms = super::super::output::executed_form_digest(stderr);
+    let checkpoint = checkpoint_generations(stderr);
     if fields.is_empty() {
-        return [tree, forms]
+        return [tree, forms, checkpoint]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -95,11 +96,33 @@ pub(crate) fn digest(stderr: &[u8]) -> String {
         "native"
     };
     let local = format!("{backend} {}", fields.join(" "));
-    [local, tree, forms]
+    [local, tree, forms, checkpoint]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+/// Retains the three compact, harness-owned backend receipts emitted around two checkpoint cycles.
+/// Guest output is redirected into the checkpoint-state bind, so it cannot manufacture this prefix.
+fn checkpoint_generations(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let receipts = text
+        .lines()
+        .filter(|line| line.starts_with("checkpoint-generation="))
+        .collect::<Vec<_>>();
+    if receipts.is_empty() {
+        return String::new();
+    }
+    if receipts.len() != 3
+        || receipts
+            .iter()
+            .enumerate()
+            .any(|(generation, line)| !line.starts_with(&format!("checkpoint-generation={generation} backend-tree ")))
+    {
+        return "checkpoint-generations=invalid".to_owned();
+    }
+    receipts.join("; ")
 }
 
 /// Collapses the per-pc lines into one field each, hottest first.
@@ -528,6 +551,50 @@ mod tests {
     #[test]
     fn a_run_without_engine_diagnostics_writes_no_digest() {
         assert_eq!(super::digest(b"some unrelated stderr\n"), "");
+    }
+
+    #[test]
+    fn checkpoint_digest_retains_one_ordered_receipt_per_generation() {
+        let report = (0..3)
+            .map(|generation| {
+                format!(
+                    "checkpoint-generation={generation} backend-tree claimed=3 completed=3 \
+                     abnormal=0 missing=0 duplicate_finalize=0 crossings={} translated_entries={} \
+                     interpreted_entries=0 translated_steps={} interpreted_steps=0\n",
+                    generation + 4,
+                    generation + 1,
+                    generation + 10
+                )
+            })
+            .collect::<String>();
+        let digest = super::digest(report.as_bytes());
+        for generation in 0..3 {
+            assert_eq!(
+                digest.matches(&format!("checkpoint-generation={generation} ")).count(),
+                1,
+                "{digest}"
+            );
+            assert!(
+                digest.contains(&format!("translated_entries={}", generation + 1)),
+                "{digest}"
+            );
+        }
+        assert!(
+            digest.len() < super::super::super::diagnostic::DIAGNOSTIC_LIMIT,
+            "{digest}"
+        );
+    }
+
+    #[test]
+    fn checkpoint_digest_marks_missing_duplicate_and_out_of_order_ordinals_invalid() {
+        let line = |generation| format!("checkpoint-generation={generation} backend-tree translated_entries=1\n");
+        for report in [
+            format!("{}{}", line(0), line(1)),
+            format!("{}{}{}", line(0), line(1), line(1)),
+            format!("{}{}{}", line(1), line(0), line(2)),
+        ] {
+            assert_eq!(super::digest(report.as_bytes()), "checkpoint-generations=invalid");
+        }
     }
 
     #[test]

@@ -531,7 +531,10 @@ impl<'a> CaseExecution<'a> {
         let output = state.join("output");
         let mut offset = 0;
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
-        for (marker, cycle) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")] {
+        for (generation, (marker, cycle)) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")]
+            .into_iter()
+            .enumerate()
+        {
             wait_for_marker(&output, marker, deadline).await?;
             bounded_checkpoint_phase(
                 deadline,
@@ -539,7 +542,7 @@ impl<'a> CaseExecution<'a> {
                 self.containers.checkpoint(name, remaining(deadline)?),
             )
             .await?;
-            offset = validate_checkpoint_generation(&output, offset)?;
+            offset = validate_checkpoint_generation(&output, offset, generation)?;
             std::fs::write(state.join(cycle), [])?;
             bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
         }
@@ -552,7 +555,7 @@ impl<'a> CaseExecution<'a> {
         )
         .await?;
         *observed = Some(status);
-        validate_checkpoint_generation(&output, offset)?;
+        validate_checkpoint_generation(&output, offset, 2)?;
         let text = std::fs::read_to_string(output)?;
         validate_daily_dev_protocol(&text)?;
         if status != ExitStatus::Code(0) {
@@ -598,14 +601,19 @@ async fn wait_for_marker(path: &Path, marker: &str, deadline: Instant) -> Result
     }
 }
 
-fn validate_checkpoint_generation(path: &Path, offset: usize) -> Result<usize, Error> {
+fn validate_checkpoint_generation(path: &Path, offset: usize, generation: usize) -> Result<usize, Error> {
     let bytes = std::fs::read(path)?;
-    let generation = bytes
+    let generation_bytes = bytes
         .get(offset..)
         .ok_or("checkpoint output shrank between generations")?;
-    output::validate_backend_tree(generation, true)?;
-    output::validate_translated_execution(generation)?;
-    output::validate_profile(std::str::from_utf8(generation)?)?;
+    output::validate_backend_tree(generation_bytes, true)?;
+    output::validate_translated_execution(generation_bytes)?;
+    output::validate_profile(std::str::from_utf8(generation_bytes)?)?;
+    let receipt = output::backend_tree_digest(generation_bytes);
+    if receipt.is_empty() {
+        return Err("validated checkpoint generation has no backend-tree receipt".into());
+    }
+    eprintln!("checkpoint-generation={generation} {receipt}");
     Ok(bytes.len())
 }
 
