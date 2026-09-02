@@ -43,6 +43,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
+        docker_hub_references_are_explained_and_validated_before_acquisition();
         an_image_is_read_before_anybody_is_asked();
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
@@ -623,6 +624,32 @@ fn candidate() -> Candidate {
     }
 }
 
+fn docker_hub_references_are_explained_and_validated_before_acquisition() {
+    let fixture = Fixture::new(&[]);
+    let attempts = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&attempts);
+    let inspection: Inspection = Rc::new(move |reference| {
+        recorded.borrow_mut().push(reference.to_owned());
+        PendingInspection::detached(std::sync::mpsc::channel().1)
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    let copy: Vec<_> = descendants(page.widget().upcast_ref())
+        .iter()
+        .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+        .map(|label| label.text().to_string())
+        .collect();
+    assert!(copy.iter().any(|line| line.contains("Docker Hub examples")));
+
+    typed(&page, "not a reference with spaces");
+    page.inspect();
+    assert!(attempts.borrow().is_empty(), "invalid input never starts acquisition");
+    assert!(page.notice().contains("not a valid image reference"));
+
+    typed(&page, "alpine:3.20");
+    page.inspect();
+    assert_eq!(attempts.borrow().as_slice(), ["docker.io/library/alpine:3.20"]);
+}
+
 fn update_candidate(digest: &str, version: &str) -> Candidate {
     let mut manifest = manifest("sample");
     manifest.version = version.to_owned();
@@ -651,6 +678,13 @@ fn an_image_is_read_before_anybody_is_asked() {
         "what it asks for is put to a person, got {:?}",
         page.notice()
     );
+    let proposal: Vec<_> = descendants(page.widget().upcast_ref())
+        .iter()
+        .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+        .map(|label| label.text().to_string())
+        .collect();
+    assert!(proposal.contains(&"Image: sample:1".to_owned()));
+    assert!(proposal.contains(&"Digest: sha256:bbbb".to_owned()));
 
     page.consent();
 
@@ -659,6 +693,7 @@ fn an_image_is_read_before_anybody_is_asked() {
     assert_eq!(entries[0].image_digest, "sha256:bbbb");
     assert!(entries[0].granted.holds(Capability::Interface));
     assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
+    assert!(page.notice().contains("sample:1 at sha256:bbbb"));
     assert!(
         fixture.view.holds("sample"),
         "and it is on the sidebar without a restart"
@@ -933,7 +968,7 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     );
     assert_eq!(
         *attempts.lock().expect("attempts"),
-        ["team/tool:latest", "team/tool:latest"],
+        ["docker.io/team/tool:latest", "docker.io/team/tool:latest"],
         "only the two explicit attempts reached the registry"
     );
 }
