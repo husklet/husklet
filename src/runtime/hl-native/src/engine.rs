@@ -547,6 +547,17 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn capacity_limited_translation_publishes_only_a_complete_prefix() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 222 owns its executable arena and constrains only the child-local body budget.
+        assert_eq!(unsafe { hook(222) }, 0, "capacity-limited prefix publication");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn unresolved_direct_jmp_ibtc_lifecycle_is_exact() {
         let _serial = engine_test_lock();
         let hook = crate::loader::tests()

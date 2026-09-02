@@ -50,6 +50,8 @@ _Static_assert(__builtin_offsetof(struct cpu, r) == 0, "translit bakes r[] at of
 // every other block and the dispatcher flushes wholesale when it fills.
 #define TL_MAX_INSNS 192
 #define TL_MAX_BYTES 3072
+#define TL_EXIT_HEADROOM 512
+#define TL_BODY_BYTES (TL_MAX_BYTES - TL_EXIT_HEADROOM)
 _Static_assert(TL_MAX_INSNS < 256,
                "hook marker's source-page delta must represent every monotonic block instruction");
 #ifndef TL_STITCH_MAX_JMPS
@@ -1226,6 +1228,9 @@ typedef struct {
 
 static _Thread_local translit_attempt_telemetry translit_attempt_pending;
 static _Thread_local int translit_attempt_staging;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static size_t translit_test_body_bytes;
+#endif
 
 #define TL_ATTEMPT_ADD(global, member) do { \
     if (translit_attempt_staging) \
@@ -4740,6 +4745,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario == 222) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario >= 101 && scenario <= 111) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -4975,7 +4989,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
-    struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0, 0}, start, g_rw2rx};
+    size_t body_bytes = TL_BODY_BYTES;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_test_body_bytes != 0) body_bytes = translit_test_body_bytes;
+#endif
+    struct translit_builder builder = {{start, start + body_bytes, 0, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
     translit_pcache_census_ranges census_ranges = {0};
     int census_emitted = INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX;
@@ -5031,6 +5049,17 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t failure_pc = gpc;
     unsigned failure_index = 0;
     int failure_decoded = first_decoded;
+    uint8_t *attempt_start = start;
+    uint32_t attempt_owner_count = owner_count, attempt_instruction_range_count = instruction_range_count;
+    int attempt_owner_normal_pending = owner_normal_pending;
+    int attempt_stitched = stitched, attempt_jcc_fall_stitched = jcc_fall_stitched;
+    int attempt_direct_jmp_stitched = direct_jmp_stitched;
+    unsigned attempt_jcc_link_admitted = jcc_link_admitted;
+    uint64_t attempt_jcc_ibtc_sites = jcc_ibtc_sites;
+    uint64_t attempt_direct_call_ibtc_sites = direct_call_ibtc_sites;
+    uint64_t attempt_direct_jmp_ibtc_sites = direct_jmp_ibtc_sites;
+    uint64_t attempt_linked_page_lo = linked_page_lo, attempt_linked_page_hi = linked_page_hi;
+    translit_attempt_telemetry attempt_telemetry = {0};
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
@@ -5097,6 +5126,20 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         uint64_t next = pc + (uint64_t)insn.len;
         unsigned source_page_delta = (unsigned)((pc >> 12) - (gpc >> 12));
         uint8_t *instruction_start = a->cursor;
+        attempt_start = instruction_start;
+        attempt_owner_count = owner_count;
+        attempt_instruction_range_count = instruction_range_count;
+        attempt_owner_normal_pending = owner_normal_pending;
+        attempt_stitched = stitched;
+        attempt_jcc_fall_stitched = jcc_fall_stitched;
+        attempt_direct_jmp_stitched = direct_jmp_stitched;
+        attempt_jcc_link_admitted = jcc_link_admitted;
+        attempt_jcc_ibtc_sites = jcc_ibtc_sites;
+        attempt_direct_call_ibtc_sites = direct_call_ibtc_sites;
+        attempt_direct_jmp_ibtc_sites = direct_jmp_ibtc_sites;
+        attempt_linked_page_lo = linked_page_lo;
+        attempt_linked_page_hi = linked_page_hi;
+        if (staged_telemetry) attempt_telemetry = translit_attempt_pending;
         translit_jcc_ibtc_site_ranges ibtc_site = {0};
         translit_ret_sim_ranges ret_site = {0};
         int preserve_register = -1;
@@ -5709,6 +5752,32 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         previous_kind = kind;
         terminated = 1;
         break;
+    }
+
+    if (count != 0 && a->overflow && a->capacity) {
+        /* Keep the completed prefix and route the first un-emitted guest PC through the ordinary
+           spill/dispatcher boundary.  The reserve is inside TL_MAX_BYTES, so every existing block-length,
+           SMC, generation and checkpoint invariant remains unchanged.  Roll back all metadata staged by
+           the partial instruction before making its bytes unreachable. */
+        a->cursor = attempt_start;
+        a->end = start + TL_MAX_BYTES;
+        a->overflow = 0;
+        a->capacity = 0;
+        owner_count = attempt_owner_count;
+        instruction_range_count = attempt_instruction_range_count;
+        owner_normal_pending = attempt_owner_normal_pending;
+        stitched = attempt_stitched;
+        jcc_fall_stitched = attempt_jcc_fall_stitched;
+        direct_jmp_stitched = attempt_direct_jmp_stitched;
+        jcc_link_admitted = attempt_jcc_link_admitted;
+        jcc_ibtc_sites = attempt_jcc_ibtc_sites;
+        direct_call_ibtc_sites = attempt_direct_call_ibtc_sites;
+        direct_jmp_ibtc_sites = attempt_direct_jmp_ibtc_sites;
+        linked_page_lo = attempt_linked_page_lo;
+        linked_page_hi = attempt_linked_page_hi;
+        if (staged_telemetry) translit_attempt_pending = attempt_telemetry;
+        fall_stop = HL_BACKEND_FALL_CAP;
+        terminated = 0;
     }
 
     if (count == 0 || a->overflow) {
@@ -8069,7 +8138,12 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const size_t source_offset = requested_scenario == 218 ? 0xff0 : 0;
     const size_t target_offset = source_offset + 0x40;
-    if (scenario == 98) {
+    if (requested_scenario == 222) {
+        memset(guest_bytes, 0x90, 128);
+        guest_bytes[128] = 0x0f;
+        guest_bytes[129] = 0x0b;
+        translit_test_body_bytes = 32;
+    } else if (scenario == 98) {
         // Eight legal taken-side sites followed by enough one-byte ordinary
         // instructions to hit the architectural instruction cap. The rejected
         // 412-byte inline probe exceeded TL_MAX_BYTES here; compact sources fit
@@ -8178,6 +8252,23 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     }
     if (source_block->host_entry_off == 0) goto done_ibtc;
+    if (requested_scenario == 222) {
+        struct cpu cpu = {0};
+        cpu.rip = source;
+        cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        cpu.irq = 1;
+        run_block(context, &cpu, source_block);
+        uint8_t *body = (uint8_t *)source_block + source_block->host_entry_off;
+        uint64_t owner = 0;
+        int first_owned = jit_body_owner_lookup((uint64_t)(uintptr_t)body, &owner);
+        int tail_owned = jit_body_owner_lookup((uint64_t)(uintptr_t)(body + source_block->host_len - 1), &owner);
+        result = source_block->profile_insns == 32 && source_block->host_len < TL_MAX_BYTES &&
+                         cpu.rip == source + 32 && cpu.reason == R_BRANCH && cpu.irq == 1 &&
+                         first_owned && tail_owned && map_host(source) == source_block
+                     ? 0
+                     : 154;
+        goto done_ibtc;
+    }
     if (scenario == 98) {
         uint32_t published = 0;
         jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 0);
@@ -8392,6 +8483,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
                  : 143;
 
 done_ibtc:
+    translit_test_body_bytes = 0;
     translit_test_jcc_guard = -1;
     translit_test_jcc_ibtc_stub_fail = 0;
     (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
