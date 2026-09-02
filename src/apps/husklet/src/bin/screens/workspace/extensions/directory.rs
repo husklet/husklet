@@ -165,6 +165,7 @@ impl Catalogue {
         self.cancel.set_label("Cancel download");
         self.cancel.set_sensitive(true);
         self.cancel.set_visible(true);
+        self.acquisition_started(&reference);
         *self.pending.borrow_mut() = Some((self.inspection)(&reference));
     }
 
@@ -206,6 +207,7 @@ impl Catalogue {
             Acquisition::ReadingManifest => self.stage("reading extension manifest"),
             Acquisition::Ready(candidate) => {
                 *self.pending.borrow_mut() = None;
+                self.acquisition_finished();
                 self.progress.set_visible(false);
                 self.cancel.set_visible(false);
                 self.reference.set_sensitive(true);
@@ -234,12 +236,14 @@ impl Catalogue {
             }
             Acquisition::Failed(reason) => {
                 *self.pending.borrow_mut() = None;
+                self.acquisition_finished();
                 self.progress.set_visible(false);
                 self.cancel.set_visible(false);
                 self.reference.set_sensitive(true);
                 self.inspect.set_sensitive(true);
                 self.inspect.set_label("Retry");
                 self.say(&reason);
+                self.offer_retry();
             }
             Acquisition::Cancelled => {
                 self.cancelled();
@@ -256,6 +260,8 @@ impl Catalogue {
         self.inspect.set_sensitive(true);
         self.inspect.set_label("Retry");
         self.say("image acquisition cancelled; nothing was installed");
+        self.acquisition_finished();
+        self.offer_retry();
     }
 
     /// Records the grant for the candidate on screen.
@@ -486,6 +492,11 @@ impl Catalogue {
         self.progress.set_text(Some(stage));
         self.progress.set_visible(true);
         self.say(stage);
+        self.semantics.update(
+            "extensions/acquisition/progress",
+            super::super::semantic::Value::Public(stage),
+            false,
+        );
     }
 
     fn pulling(&self, status: &str, id: Option<&str>, current: Option<u64>, total: Option<u64>) {
@@ -500,6 +511,60 @@ impl Catalogue {
         self.progress.set_text(Some(&said));
         self.progress.set_visible(true);
         self.say(&said);
+        let semantic = match (current, total) {
+            (Some(current), Some(total)) if total != 0 => {
+                format!(
+                    "{said}; {}%; {current} of {total} bytes",
+                    current.saturating_mul(100) / total
+                )
+            }
+            _ => format!("{said}; progress unavailable"),
+        };
+        self.semantics.update(
+            "extensions/acquisition/progress",
+            super::super::semantic::Value::Public(&semantic),
+            false,
+        );
+    }
+
+    fn acquisition_started(self: &Rc<Self>, reference: &str) {
+        use super::super::semantic::{ActionKind, Value};
+        self.semantics.remove_prefix("extensions/acquisition/");
+        self.semantics
+            .update("extensions/inspect", Value::Public("Acquisition in progress"), true);
+        self.semantics.register(
+            "extensions/acquisition/progress",
+            "progressbar",
+            Some("Image acquisition progress"),
+            Some(Value::Public(&format!("Starting {reference}"))),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        let page = Rc::clone(self);
+        self.semantics.register(
+            "extensions/acquisition/cancel",
+            "button",
+            Some("Cancel download"),
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| page.cancel()),
+        );
+    }
+
+    fn acquisition_finished(&self) {
+        self.semantics.remove_prefix("extensions/acquisition/");
+        self.semantics.set_disabled("extensions/inspect", false);
+    }
+
+    fn offer_retry(&self) {
+        // The existing inspect action remains the retry authority. Its value
+        // tells semantic clients why it is currently offered without creating
+        // a second action that can drift from the visible button.
+        self.semantics.update(
+            "extensions/inspect",
+            super::super::semantic::Value::Public("Retry acquisition"),
+            false,
+        );
     }
 
     /// What the page last did, in one line.
