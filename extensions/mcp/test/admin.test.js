@@ -214,6 +214,25 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.equal(labelOversized.isError, true);
   assert.equal(calls.length, labelOversizedStart);
 
+  const exactLabelName = 'é'.repeat(128);
+  const labelNameStart = calls.length;
+  const labelNameExact = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'label-name-boundary', labels: [[exactLabelName, 'note']] },
+  });
+  assert.notEqual(labelNameExact.isError, true);
+  assert.equal(calls.length, labelNameStart + 1);
+  assert.equal(calls[labelNameStart].call, 'container_create');
+  assert.deepEqual(calls[labelNameStart].with.spec.labels, [[exactLabelName, 'note']]);
+
+  const labelNameOversizedStart = calls.length;
+  const labelNameOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'label-name-overflow', labels: [['😀'.repeat(65), 'note']] },
+  });
+  assert.equal(labelNameOversized.isError, true);
+  assert.equal(calls.length, labelNameOversizedStart);
+
   const exactCommand = ['printf', '%s', '$(touch /tmp/not-run)', 'two words', "single'quote", ''];
   const spawnStart = calls.length;
   const spawned = await client.callTool({
