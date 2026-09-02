@@ -1208,6 +1208,9 @@ mod tests {
             "jcc_ibtc_fills",
             "jcc_ibtc_suppressed",
             "jcc_ibtc_invalid_refusals",
+            "shared_jcc_call_indirect_ibtc_misses",
+            "jcc_taken_ibtc_misses",
+            "indirect_ibtc_misses",
             "jcc_late_candidate",
             "jcc_late_eligible",
             "jcc_late_invalid",
@@ -1215,6 +1218,17 @@ mod tests {
             "jcc_late_page_generation",
             "jcc_late_displacement",
             "jcc_late_other",
+            "jcc_invalid_null",
+            "jcc_invalid_magic",
+            "jcc_invalid_gpc",
+            "jcc_invalid_block_generation",
+            "jcc_invalid_entry_zero",
+            "jcc_invalid_length_zero",
+            "jcc_invalid_resolve",
+            "jcc_invalid_resolved_generation",
+            "jcc_invalid_entry_overflow",
+            "jcc_invalid_site_unique",
+            "jcc_invalid_site_overflow",
             "direct_jmp_ibtc_enabled",
             "direct_jmp_ibtc_emitted",
             "direct_jmp_ibtc_hits",
@@ -1273,7 +1287,7 @@ mod tests {
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
         let _serial = engine_test_lock();
         let on = run_product_diagnostic(product_jcc_ibtc_image(), false, true);
-        assert_eq!(on["version"], 8);
+        assert_eq!(on["version"], 9);
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
@@ -1286,6 +1300,12 @@ mod tests {
         assert_eq!(on["jcc_ibtc_suppressed"], 0);
         assert_eq!(on["jcc_ibtc_invalid_refusals"], 0);
         assert_eq!(on["jcc_late_candidate"], on["jcc_ibtc_misses"]);
+        assert_eq!(on["shared_jcc_call_indirect_ibtc_misses"], on["jcc_ibtc_misses"]);
+        assert_eq!(
+            on["shared_jcc_call_indirect_ibtc_misses"],
+            on["jcc_taken_ibtc_misses"] + on["direct_call_ibtc_misses"] + on["indirect_ibtc_misses"]
+        );
+        assert!(on["jcc_ibtc_irq"] <= on["jcc_ibtc_misses"]);
         assert_eq!(
             on["jcc_late_candidate"],
             on["jcc_late_eligible"]
@@ -1295,13 +1315,26 @@ mod tests {
                 + on["jcc_late_displacement"]
                 + on["jcc_late_other"]
         );
+        assert_eq!(
+            on["jcc_ibtc_invalid_refusals"],
+            on["jcc_invalid_null"]
+                + on["jcc_invalid_magic"]
+                + on["jcc_invalid_gpc"]
+                + on["jcc_invalid_block_generation"]
+                + on["jcc_invalid_entry_zero"]
+                + on["jcc_invalid_length_zero"]
+                + on["jcc_invalid_resolve"]
+                + on["jcc_invalid_resolved_generation"]
+                + on["jcc_invalid_entry_overflow"]
+        );
+        assert_eq!(on["jcc_invalid_site_overflow"], 0);
         assert_eq!(on["executed_form_overflow"], 0);
         assert!(on["executed_form_total"] > 0);
         assert!(on["executed_form_unique"] > 0);
         assert!(on["executed_form_total"] >= on["executed_form_unique"]);
 
         let off = run_product_diagnostic(product_jcc_ibtc_image(), true, true);
-        assert_eq!(off["version"], 8);
+        assert_eq!(off["version"], 9);
         assert_eq!(off["available"], 1);
         assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
         assert_eq!(off["jcc_ibtc_emitted"], 1);
@@ -1312,6 +1345,7 @@ mod tests {
         assert_eq!(off["jcc_ibtc_suppressed"], 2);
         assert_eq!(off["jcc_ibtc_invalid_refusals"], 0);
         assert_eq!(off["jcc_late_candidate"], off["jcc_ibtc_misses"]);
+        assert_eq!(off["shared_jcc_call_indirect_ibtc_misses"], off["jcc_ibtc_misses"]);
     }
 
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]

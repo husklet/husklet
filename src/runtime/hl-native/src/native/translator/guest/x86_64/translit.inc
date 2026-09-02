@@ -1797,6 +1797,23 @@ static unsigned translit_jcc_late_reason(uint8_t disposition) {
     }
 }
 
+static int translit_jcc_invalid_component(struct cpu *cpu, void *code) {
+    struct interp_block *block = code;
+    if (block == NULL) return HL_BACKEND_JCC_INVALID_NULL;
+    if (block->magic != INTERP_BLOCK_MAGIC) return HL_BACKEND_JCC_INVALID_MAGIC;
+    if (block->gpc != cpu->rip) return HL_BACKEND_JCC_INVALID_GPC;
+    if (block->generation != g_cache_gen) return HL_BACKEND_JCC_INVALID_BLOCK_GENERATION;
+    if (block->host_entry_off == 0) return HL_BACKEND_JCC_INVALID_ENTRY_ZERO;
+    if (block->host_len == 0) return HL_BACKEND_JCC_INVALID_LENGTH_ZERO;
+    void *rx = NULL;
+    uint64_t generation = UINT64_MAX;
+    if (!jit_resolve_rw_code(block, &rx, &generation)) return HL_BACKEND_JCC_INVALID_RESOLVE;
+    if (generation != g_cache_gen) return HL_BACKEND_JCC_INVALID_RESOLVED_GENERATION;
+    if ((uintptr_t)rx + block->host_entry_off < (uintptr_t)rx)
+        return HL_BACKEND_JCC_INVALID_ENTRY_OVERFLOW;
+    return -1;
+}
+
 static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *hi) {
     uint64_t page = source & ~UINT64_C(0xfff);
     if (page < *lo) *lo = page;
@@ -2138,6 +2155,22 @@ static int translit_jcc_ibtc_stub_init(void) {
         hl_x64_atomic_inc_abs(&a, miss_counter);
         hl_x64_patch_rel32(&a, not_jcc, a.cursor);
     }
+#if !defined(HL_NATIVE_TEST_HOOKS)
+    uintptr_t pure_jcc_miss = hl_backend_tree_typed_ibtc_miss_counter_address(0);
+    if (pure_jcc_miss != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_JCC_IBTC_MISS);
+        uint8_t *not_pure_jcc = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, pure_jcc_miss);
+        hl_x64_patch_rel32(&a, not_pure_jcc, a.cursor);
+    }
+    uintptr_t indirect_miss = hl_backend_tree_typed_ibtc_miss_counter_address(1);
+    if (indirect_miss != 0) {
+        hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_INDIRECT_IBTC_MISS);
+        uint8_t *not_indirect = hl_x64_jcc_rel32(&a, 5);
+        hl_x64_atomic_inc_abs(&a, indirect_miss);
+        hl_x64_patch_rel32(&a, not_indirect, a.cursor);
+    }
+#endif
     uintptr_t call_miss_counter = translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_MISS);
     if (call_miss_counter != 0) {
         hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_DIRECT_CALL_IBTC_MISS);
@@ -2623,10 +2656,18 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
         return;
     }
     cpu->jcc_ibtc_miss = 0;
-    if (miss_kind == TL_JCC_IBTC_MISS && g_prof)
+    if (miss_kind == TL_JCC_IBTC_MISS && g_prof) {
         hl_backend_tree_jcc_late(
             translit_jcc_late_reason(translit_jcc_late_would_link(
                 (struct interp_block *)(uintptr_t)cpu->ic_miss, cpu->dbg_ibsrc, cpu->rip)));
+        int invalid_reason = translit_jcc_invalid_component(cpu, code);
+#if !defined(HL_NATIVE_TEST_HOOKS)
+        if (invalid_reason >= 0)
+            hl_backend_tree_jcc_invalid((unsigned)invalid_reason, cpu->dbg_ibsrc, cpu->rip);
+#else
+        (void)invalid_reason;
+#endif
+    }
     int direct_jmp = miss_kind == TL_DIRECT_JMP_IBTC_MISS;
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
     int disabled = actual_miss && (fallthrough ? 0

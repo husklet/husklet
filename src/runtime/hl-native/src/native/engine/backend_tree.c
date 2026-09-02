@@ -105,6 +105,58 @@ enum hl_backend_jcc_late_reason {
     HL_BACKEND_JCC_LATE_REASON_COUNT,
 };
 
+enum hl_backend_jcc_invalid_reason {
+    HL_BACKEND_JCC_INVALID_NULL,
+    HL_BACKEND_JCC_INVALID_MAGIC,
+    HL_BACKEND_JCC_INVALID_GPC,
+    HL_BACKEND_JCC_INVALID_BLOCK_GENERATION,
+    HL_BACKEND_JCC_INVALID_ENTRY_ZERO,
+    HL_BACKEND_JCC_INVALID_LENGTH_ZERO,
+    HL_BACKEND_JCC_INVALID_RESOLVE,
+    HL_BACKEND_JCC_INVALID_RESOLVED_GENERATION,
+    HL_BACKEND_JCC_INVALID_ENTRY_OVERFLOW,
+    HL_BACKEND_JCC_INVALID_REASON_COUNT,
+};
+
+#define HL_BACKEND_JCC_INVALID_SITES 4096u
+_Static_assert((HL_BACKEND_JCC_INVALID_SITES & (HL_BACKEND_JCC_INVALID_SITES - 1)) == 0,
+               "JCC invalid-site table must be a power of two");
+struct hl_backend_jcc_invalid_site {
+    _Atomic uint32_t state;
+    uint32_t reason;
+    uint64_t source;
+    uint64_t target;
+    _Atomic uint64_t count;
+};
+
+static void hl_backend_jcc_invalid_site_record(
+    struct hl_backend_jcc_invalid_site sites[HL_BACKEND_JCC_INVALID_SITES], _Atomic uint64_t *unique,
+    _Atomic uint64_t *overflow, unsigned reason, uint64_t source, uint64_t target) {
+    uint64_t hash = hl_backend_executed_form_mix(source ^ (target << 1) ^ ((uint64_t)reason << 57));
+    for (uint32_t probe = 0; probe < HL_BACKEND_JCC_INVALID_SITES; ++probe) {
+        struct hl_backend_jcc_invalid_site *site =
+            &sites[(uint32_t)(hash + probe) & (HL_BACKEND_JCC_INVALID_SITES - 1)];
+        uint32_t state = atomic_load_explicit(&site->state, memory_order_acquire);
+        if (state == 2 && site->reason == reason && site->source == source && site->target == target) {
+            atomic_fetch_add_explicit(&site->count, 1, memory_order_relaxed);
+            return;
+        }
+        if (state != 0) continue;
+        uint32_t expected = 0;
+        if (!atomic_compare_exchange_strong_explicit(&site->state, &expected, 1, memory_order_acq_rel,
+                                                     memory_order_acquire))
+            continue;
+        site->reason = reason;
+        site->source = source;
+        site->target = target;
+        atomic_store_explicit(&site->count, 1, memory_order_relaxed);
+        atomic_store_explicit(&site->state, 2, memory_order_release);
+        atomic_fetch_add_explicit(unique, 1, memory_order_relaxed);
+        return;
+    }
+    atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+}
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 
 #define HL_BACKEND_TREE_SLOTS 4096u
@@ -1255,6 +1307,24 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
     }
+    for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
+        struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];
+        if (atomic_load_explicit(&site->state, memory_order_acquire) != 2) continue;
+        char site_record[192];
+        int site_len = snprintf(site_record, sizeof site_record,
+                                "[diag] jcc-invalid-site version=1 source=%llu target=%llu reason=%u count=%llu\n",
+                                (unsigned long long)site->source, (unsigned long long)site->target,
+                                site->reason,
+                                (unsigned long long)atomic_load_explicit(&site->count, memory_order_relaxed));
+        if (site_len <= 0 || (size_t)site_len >= sizeof site_record) return;
+        size_t site_offset = 0;
+        while (site_offset < (size_t)site_len) {
+            int64_t written = hl_linux_write(box, STDERR_FILENO, site_record + site_offset,
+                                             (size_t)site_len - site_offset);
+            if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)site_len - site_offset) return;
+            site_offset += (size_t)written;
+        }
+    }
 }
 
 static _Noreturn void hl_backend_tree_abnormal_exit(int status) {
@@ -1280,6 +1350,33 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         struct hl_backend_tree_summary summary;
         hl_backend_tree_summary(&summary);
         return summary.claimed == 1 && summary.completed == 1 && summary.duplicate_finalize == 1 ? 0 : 42;
+    }
+    if (scenario == 13) {
+        struct invalid_fixture {
+            _Atomic uint64_t unique, overflow;
+            struct hl_backend_jcc_invalid_site sites[HL_BACKEND_JCC_INVALID_SITES];
+        } *fixture = mmap(NULL, sizeof *fixture, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (fixture == MAP_FAILED) return 95;
+        for (uint64_t index = 0; index < HL_BACKEND_JCC_INVALID_SITES; ++index)
+            hl_backend_jcc_invalid_site_record(fixture->sites, &fixture->unique, &fixture->overflow,
+                                               HL_BACKEND_JCC_INVALID_MAGIC, 0x400000 + index,
+                                               0x800000 + index);
+        hl_backend_jcc_invalid_site_record(fixture->sites, &fixture->unique, &fixture->overflow,
+                                           HL_BACKEND_JCC_INVALID_MAGIC, 0x400000, 0x800000);
+        hl_backend_jcc_invalid_site_record(fixture->sites, &fixture->unique, &fixture->overflow,
+                                           HL_BACKEND_JCC_INVALID_GPC, 0xdead, 0xbeef);
+        uint64_t duplicate_count = 0;
+        for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot)
+            if (atomic_load_explicit(&fixture->sites[slot].state, memory_order_acquire) == 2 &&
+                fixture->sites[slot].source == 0x400000 && fixture->sites[slot].target == 0x800000)
+                duplicate_count = atomic_load_explicit(&fixture->sites[slot].count, memory_order_relaxed);
+        int ok = atomic_load_explicit(&fixture->unique, memory_order_relaxed) ==
+                     HL_BACKEND_JCC_INVALID_SITES &&
+                 atomic_load_explicit(&fixture->overflow, memory_order_relaxed) == 1 &&
+                 duplicate_count == 2;
+        (void)munmap(fixture, sizeof *fixture);
+        return ok ? 0 : 96;
     }
     if (scenario == 11) {
         for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason) {
@@ -1743,6 +1840,12 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t jcc_ibtc_suppressed;
     _Atomic uint64_t jcc_ibtc_invalid_refusals;
     _Atomic uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
+    _Atomic uint64_t jcc_taken_ibtc_misses;
+    _Atomic uint64_t indirect_ibtc_misses;
+    _Atomic uint64_t jcc_invalid_reason[HL_BACKEND_JCC_INVALID_REASON_COUNT];
+    _Atomic uint64_t jcc_invalid_site_unique;
+    _Atomic uint64_t jcc_invalid_site_overflow;
+    struct hl_backend_jcc_invalid_site jcc_invalid_sites[HL_BACKEND_JCC_INVALID_SITES];
     _Atomic uint64_t direct_jmp_ibtc_emitted;
     _Atomic uint64_t direct_jmp_ibtc_hits;
     _Atomic uint64_t direct_jmp_ibtc_misses;
@@ -1979,16 +2082,23 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
         jcc_late_candidate += atomic_load_explicit(&census->jcc_late[reason], memory_order_relaxed);
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=8 available=%d crossings=%llu "
+                             "[diag] backend-shape version=9 available=%d crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
                              "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
                              "jcc_ibtc_enabled=%d jcc_ibtc_emitted=%llu jcc_ibtc_hits=%llu "
                              "jcc_ibtc_misses=%llu jcc_ibtc_irq=%llu jcc_ibtc_fills=%llu "
                              "jcc_ibtc_suppressed=%llu jcc_ibtc_invalid_refusals=%llu "
+                             "shared_jcc_call_indirect_ibtc_misses=%llu jcc_taken_ibtc_misses=%llu "
+                             "indirect_ibtc_misses=%llu "
                              "jcc_late_candidate=%llu jcc_late_eligible=%llu jcc_late_invalid=%llu "
                              "jcc_late_target_absent=%llu jcc_late_page_generation=%llu "
                              "jcc_late_displacement=%llu jcc_late_other=%llu "
+                             "jcc_invalid_null=%llu jcc_invalid_magic=%llu jcc_invalid_gpc=%llu "
+                             "jcc_invalid_block_generation=%llu jcc_invalid_entry_zero=%llu "
+                             "jcc_invalid_length_zero=%llu jcc_invalid_resolve=%llu "
+                             "jcc_invalid_resolved_generation=%llu jcc_invalid_entry_overflow=%llu "
+                             "jcc_invalid_site_unique=%llu jcc_invalid_site_overflow=%llu "
                              "direct_jmp_ibtc_enabled=%d direct_jmp_ibtc_emitted=%llu "
                              "direct_jmp_ibtc_hits=%llu direct_jmp_ibtc_misses=%llu direct_jmp_ibtc_irq=%llu "
                              "direct_jmp_ibtc_fills=%llu direct_jmp_ibtc_suppressed=%llu "
@@ -2034,6 +2144,12 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_invalid_refusals,
                                                                      memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_misses,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_taken_ibtc_misses,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->indirect_ibtc_misses,
+                                                                     memory_order_relaxed),
                              (unsigned long long)jcc_late_candidate,
                              (unsigned long long)atomic_load_explicit(
                                  &census->jcc_late[HL_BACKEND_JCC_LATE_ELIGIBLE], memory_order_relaxed),
@@ -2047,6 +2163,31 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                  &census->jcc_late[HL_BACKEND_JCC_LATE_DISPLACEMENT], memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(
                                  &census->jcc_late[HL_BACKEND_JCC_LATE_OTHER], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_NULL], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_MAGIC], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_GPC], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_BLOCK_GENERATION],
+                                 memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_ENTRY_ZERO], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_LENGTH_ZERO], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_RESOLVE], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_RESOLVED_GENERATION],
+                                 memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(
+                                 &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_ENTRY_OVERFLOW],
+                                 memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_invalid_site_unique,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_invalid_site_overflow,
+                                                                     memory_order_relaxed),
                              (int)census->direct_jmp_ibtc_enabled,
                              (unsigned long long)atomic_load_explicit(&census->direct_jmp_ibtc_emitted,
                                                                      memory_order_relaxed),
@@ -2445,6 +2586,20 @@ static uintptr_t hl_backend_tree_jcc_ibtc_dynamic_counter_address(enum hl_backen
 static void hl_backend_tree_jcc_ibtc_add(enum hl_backend_jcc_ibtc_counter kind, uint64_t count) {
     _Atomic uint64_t *counter = hl_backend_tree_jcc_ibtc_counter(kind);
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+}
+
+static uintptr_t hl_backend_tree_typed_ibtc_miss_counter_address(int indirect) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return 0;
+    return (uintptr_t)(indirect ? &census->indirect_ibtc_misses : &census->jcc_taken_ibtc_misses);
+}
+
+static void hl_backend_tree_jcc_invalid(unsigned reason, uint64_t source, uint64_t target) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL || reason >= HL_BACKEND_JCC_INVALID_REASON_COUNT) return;
+    atomic_fetch_add_explicit(&census->jcc_invalid_reason[reason], 1, memory_order_relaxed);
+    hl_backend_jcc_invalid_site_record(census->jcc_invalid_sites, &census->jcc_invalid_site_unique,
+                                       &census->jcc_invalid_site_overflow, reason, source, target);
 }
 
 enum hl_backend_direct_jmp_ibtc_counter {
