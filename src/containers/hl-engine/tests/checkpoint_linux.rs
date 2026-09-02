@@ -789,6 +789,9 @@ fn daily_dev_phase_plan(
     if translit {
         plan.options.set("HL_TRANSLIT", "1", true).unwrap();
         plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+        if isa == GuestIsa::X86_64 {
+            plan.options.set("HL_TRANSLIT_BODY_CAP_TEST", "1", true).unwrap();
+        }
     }
     if std::env::var_os("HL_CHECKPOINT_PROFILE_SCALE").is_some() {
         plan.options.set("HL_CHECKPOINT_FD_SCAN_PROFILE", "1", true).unwrap();
@@ -2730,6 +2733,9 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     assert_eq!(output.matches("MIXED-SSE phase=0 value=42").count(), 1, "{output}");
     assert_eq!(output.matches("MIXED-SSE phase=1 value=43").count(), 1, "{output}");
     assert_eq!(output.matches("MIXED-SSE phase=2 value=44").count(), 1, "{output}");
+    assert_eq!(output.matches("CAPACITY-PREFIX phase=0 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("CAPACITY-PREFIX phase=1 value=43").count(), 1, "{output}");
+    assert_eq!(output.matches("CAPACITY-PREFIX phase=2 value=44").count(), 1, "{output}");
     if translit {
         let diagnostic_text = [
             capture_terminal.text(),
@@ -2751,6 +2757,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
                 (
                     field("translated_entries="),
                     field("e_jt_chained="),
+                    field("fall_cap="),
                     field("mixed_sse_executed="),
                     field("mixed_sse_executed_transitions="),
                     field("mixed_sse_disabled_boundaries="),
@@ -2769,7 +2776,8 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             assert!(
                 shapes
                     .iter()
-                    .all(|(_, _, descriptors, transitions, boundaries)| *descriptors > 0
+                    .all(|(_, _, capacity, descriptors, transitions, boundaries)| *capacity > 0
+                        && *descriptors > 0
                         && *transitions >= *descriptors
                         && *boundaries == 0),
                 "each x86 capture/restore generation must execute translated mixed bodies in its own fork-shared census: {shapes:?}\n{diagnostic_text}"

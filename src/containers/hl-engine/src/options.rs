@@ -136,6 +136,7 @@ const DEFINITIONS: &[Definition] = &[
         "test-only exhaust immutable same-ISA body-owner capacity",
         Flag
     ),
+    internal!("HL_TRANSLIT_BODY_CAP_TEST", "test-only constrain same-ISA emitted body capacity", Flag),
     internal!(
         "HL_TRANSLIT_BODY_OWNER_ROTATE_TEST",
         "test-only force single-thread same-ISA body-owner cache rotation",

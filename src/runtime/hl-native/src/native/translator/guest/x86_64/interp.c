@@ -1903,7 +1903,11 @@ static uint64_t x64_pcache_codegen_modes(void) {
            ((uint64_t)(g_coldprof != 0) << 8) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_READONLY", 1) << 9) |
            ((uint64_t)hl_option_flag_value("HL_TRANSLIT_FS_LOAD_BRIDGE", 1) << 10) |
-           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0) << 11);
+           ((uint64_t)hl_option_flag_value("HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0) << 11)
+#if defined(HL_NATIVE_TEST_HOOKS)
+           | ((uint64_t)hl_option_flag_value("HL_TRANSLIT_BODY_CAP_TEST", 0) << 12)
+#endif
+        ;
 }
 
 static uint64_t pcache_engine_id(void) {

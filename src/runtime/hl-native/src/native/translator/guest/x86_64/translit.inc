@@ -3456,6 +3456,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
+            {"HL_TRANSLIT_BODY_CAP_TEST", 0, 12},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 9},
             {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 10},
             {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 11},
@@ -4991,7 +4992,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     }
     size_t body_bytes = TL_BODY_BYTES;
 #if defined(HL_NATIVE_TEST_HOOKS)
-    if (translit_test_body_bytes != 0) body_bytes = translit_test_body_bytes;
+    if (translit_test_body_bytes != 0)
+        body_bytes = translit_test_body_bytes;
+    else if (hl_option_flag_value("HL_TRANSLIT_BODY_CAP_TEST", 0))
+        body_bytes = 2048;
 #endif
     struct translit_builder builder = {{start, start + body_bytes, 0, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
@@ -8262,9 +8266,14 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         uint64_t owner = 0;
         int first_owned = jit_body_owner_lookup((uint64_t)(uintptr_t)body, &owner);
         int tail_owned = jit_body_owner_lookup((uint64_t)(uintptr_t)(body + source_block->host_len - 1), &owner);
+        guest_bytes[256] = 0x31;
+        guest_bytes[257] = 0xc0;
+        translit_test_body_bytes = 1;
+        struct interp_block *zero = translit_jcc_ibtc_test_build(context, source + 256);
+        int zero_progress = zero != NULL && zero->host_entry_off == 0 && zero->profile_insns == 0;
         result = source_block->profile_insns == 32 && source_block->host_len < TL_MAX_BYTES &&
                          cpu.rip == source + 32 && cpu.reason == R_BRANCH && cpu.irq == 1 &&
-                         first_owned && tail_owned && map_host(source) == source_block
+                         first_owned && tail_owned && map_host(source) == source_block && zero_progress
                      ? 0
                      : 154;
         goto done_ibtc;

@@ -94,6 +94,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_BODY_OWNER_EXHAUST",
                         "test-only exhaust immutable same-ISA body-owner capacity", HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_BODY_CAP_TEST",
+                        "test-only constrain same-ISA emitted body capacity", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_BODY_OWNER_ROTATE_TEST",
                         "test-only force single-thread same-ISA body-owner cache rotation", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PERF_FRESH_ROLLOVER_TEST",
