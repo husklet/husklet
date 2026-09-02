@@ -172,6 +172,7 @@ static const hl_option_definition hl_option_definitions[] = {
                        HL_OPTION_TEXT),
     HL_INTERNAL_OPTION("HL_NATIVE_NOTIFY_TEST_RECEIPT", "test-only supervised notification census receipt",
                        HL_OPTION_PATH),
+    HL_INTERNAL_OPTION("HL_NATIVE_REAP_TEST_RECEIPT", "test-only supervised post-reap receipt", HL_OPTION_PATH),
     HL_INTERNAL_OPTION("HL_NATIVE_CKPT_TEST_RECEIPT", "test-only native checkpoint phase receipt", HL_OPTION_PATH),
     HL_INTERNAL_OPTION("HL_NATIVE_CKPT_TEST_IDLE_RECEIPT", "test-only native checkpoint idle-wakeup receipt",
                        HL_OPTION_PATH),

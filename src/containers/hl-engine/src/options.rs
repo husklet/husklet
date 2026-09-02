@@ -298,6 +298,11 @@ const DEFINITIONS: &[Definition] = &[
         Path
     ),
     internal!(
+        "HL_NATIVE_REAP_TEST_RECEIPT",
+        "test-only supervised post-reap receipt",
+        Path
+    ),
+    internal!(
         "HL_NATIVE_CKPT_TEST_RECEIPT",
         "test-only native checkpoint phase receipt",
         Path

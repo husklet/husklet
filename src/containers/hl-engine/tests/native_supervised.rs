@@ -332,6 +332,64 @@ fn supervised_stdout_and_exit_status_keep_the_engine_contract() {
     assert!(error.is_empty());
 }
 
+fn run_diagnostics(executable: &Path, argument: &str, refusal: Option<&str>, receipt: &Path) -> Option<i32> {
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(executable);
+    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    plan.options
+        .set_bytes("HL_NATIVE_REAP_TEST_RECEIPT", receipt.as_os_str().as_encoded_bytes(), true)
+        .unwrap();
+    if let Some(refusal) = refusal {
+        plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
+    }
+    plan.arguments.push(argument.as_bytes().to_vec());
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    let status = engine
+        .start()
+        .ok()
+        .and_then(|()| engine.wait().ok())
+        .map(|exit| exit.guest_status);
+    engine.destroy().unwrap();
+    status
+}
+
+#[test]
+fn diagnostics_receipt_proves_success_signal_and_pre_exec_absence() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let receipt = work.path().join("reap-receipt");
+    std::fs::write(&receipt, b"").unwrap();
+    let status = run_diagnostics(&executable, "output", None, &receipt);
+    assert_eq!(status, Some(23));
+    let receipts = std::fs::read(&receipt).unwrap();
+    assert_eq!(receipts.iter().filter(|byte| **byte == b'\n').count(), 1);
+    assert!(
+        receipts.ends_with(b" status=23 signal=0\n"),
+        "receipt={}",
+        String::from_utf8_lossy(&receipts)
+    );
+
+    std::fs::write(&receipt, b"").unwrap();
+    let status = run_diagnostics(&executable, "signal", None, &receipt);
+    assert_eq!(status, Some(15));
+    let receipts = std::fs::read(&receipt).unwrap();
+    assert_eq!(receipts.iter().filter(|byte| **byte == b'\n').count(), 1);
+    assert!(
+        receipts.ends_with(b" status=143 signal=15\n"),
+        "receipt={}",
+        String::from_utf8_lossy(&receipts)
+    );
+
+    std::fs::write(&receipt, b"").unwrap();
+    let _ = run_diagnostics(&executable, "output", Some("998:38"), &receipt);
+    assert_eq!(std::fs::read(&receipt).unwrap(), b"");
+}
+
 #[test]
 fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
     let work = TempDir::new().unwrap();

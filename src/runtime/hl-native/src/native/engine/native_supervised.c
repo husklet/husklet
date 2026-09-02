@@ -1470,6 +1470,19 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
 #endif
     int result_signal = atomic_load_explicit(&bootstrap->result_signal, memory_order_acquire);
     if (result_signal != 0) *guest_signal = result_signal;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    const char *reap_receipt_path = hl_options_get(options, "HL_NATIVE_REAP_TEST_RECEIPT");
+#else
+    const char *reap_receipt_path = NULL;
+#endif
+    int reap_diagnostics = hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL;
+    if (reap_diagnostics || reap_receipt_path != NULL) {
+        char reap_receipt[128];
+        snprintf(reap_receipt, sizeof(reap_receipt),
+                 "reaped=1 isa=x86_64 leader=%ld status=%d signal=%d\n", (long)child, result, *guest_signal);
+        if (reap_diagnostics) fprintf(stderr, "[hl-native-supervised]\t%s", reap_receipt);
+        if (reap_receipt_path != NULL) (void)hl_native_supervised_write_text(reap_receipt_path, reap_receipt);
+    }
     hl_native_supervised_projection_cleanup(bootstrap);
     munmap(bootstrap, sizeof(*bootstrap));
     if (leader_pidfd >= 0) close(leader_pidfd);
