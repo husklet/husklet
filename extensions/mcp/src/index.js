@@ -21,6 +21,7 @@ export function tools(api) {
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
+    define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
     ...['start', 'stop', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_remove', 'Remove one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),

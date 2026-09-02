@@ -10,7 +10,7 @@ function fake() {
   return { calls, api: {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
-    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus') },
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write') },
   }};
@@ -19,11 +19,20 @@ function fake() {
 test('schemas are strict, controls map exactly, and no shell shortcut exists', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
-  assert(!listed.some(({ name }) => /exec|spawn|shell/.test(name)));
+  assert(!listed.some(({ name }) => /(?:_exec|spawn|shell)(?:_|$)/.test(name)));
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
   assert.deepEqual(calls, [['containers.start', 'abc']]);
+});
+
+test('container execution inspection is a strict bounded read through the typed API', async () => {
+  const { api, calls } = fake();
+  const execution = tools(api).find(({ name }) => name === 'husklet_container_execution');
+  assert(execution);
+  assert.equal(execution.inputSchema.safeParse({ id: 'exec-1', extra: true }).success, false);
+  await execution.run({ id: 'exec-1' });
+  assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
 });
 
 test('unified pane XML packs terminal metadata and escaped bounded screen lines', async () => {
@@ -174,6 +183,9 @@ test('a real MCP client lists strict tools and calls through the React session c
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
+      if (name === 'execution_inspect') return { reply: 'execution', with: {
+        id: argument.id, container_id: 'container-1', running: true, exit_code: null,
+      } };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: argument.slot, revision: 11, truncated: false,
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
@@ -195,12 +207,17 @@ test('a real MCP client lists strict tools and calls through the React session c
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
+  const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: 'exec-live' } });
+  assert.deepEqual(JSON.parse(execution.content[0].text), {
+    id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
+  });
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
@@ -210,6 +227,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   });
   assert.deepEqual(calls, [
     ['workspace_info', undefined],
+    ['execution_inspect', { id: 'exec-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],

@@ -10,7 +10,8 @@ npx @husklet/mcp
 
 Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,
-and actions; other tools use JSON. Container exec and
+and actions; other tools use JSON. Container execution state is available as a
+read-only inspection tool under the host's `ContainerRead` grant. Container exec and
 terminal process spawning are deliberately absent: this package provides no
 unrestricted shell shortcut. Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
