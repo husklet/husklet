@@ -1,10 +1,11 @@
 //! Files beneath one workspace's storage directory.
 
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use hl_extension::port::{Entry, HostError, WorkspaceFiles};
 use hl_extension::RelativePath;
+use hl_extension::port::{Entry, HostError, WorkspaceFiles};
 
 /// The workspace file port, rooted at one directory.
 ///
@@ -76,6 +77,14 @@ impl WorkspaceDirectory {
         let parent = parent.canonicalize().map_err(|error| absence(path, &error))?;
         Ok(confine(&self.root, parent)?.join(name))
     }
+
+    fn publication(&self, path: &RelativePath) -> Result<PathBuf, HostError> {
+        let target = self.entry(path)?;
+        if std::fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(HostError::Conflict(format!("{path} is a symbolic link")));
+        }
+        Ok(target)
+    }
 }
 
 impl WorkspaceFiles for WorkspaceDirectory {
@@ -104,7 +113,11 @@ impl WorkspaceFiles for WorkspaceDirectory {
     fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
         let resolved = self.existing(path)?;
         let metadata = std::fs::metadata(resolved).map_err(|error| absence(path, &error))?;
-        Ok(Entry { path: path.clone(), directory: metadata.is_dir(), size: metadata.len() })
+        Ok(Entry {
+            path: path.clone(),
+            directory: metadata.is_dir(),
+            size: metadata.len(),
+        })
     }
 
     /// # Errors
@@ -112,8 +125,8 @@ impl WorkspaceFiles for WorkspaceDirectory {
     /// `HostError::Conflict` for a path that resolves outside the root, and a
     /// failure otherwise.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError> {
-        let file = self.destination(path)?;
-        std::fs::write(file, contents).map_err(|error| absence(path, &error))
+        let target = self.publication(path)?;
+        atomic_write(&target, contents).map_err(|error| absence(path, &error))
     }
 
     fn mkdir(&self, path: &RelativePath) -> Result<(), HostError> {
@@ -140,6 +153,58 @@ impl WorkspaceFiles for WorkspaceDirectory {
             std::fs::remove_file(target).map_err(|error| absence(path, &error))
         }
     }
+}
+
+static TEMPORARY: AtomicU64 = AtomicU64::new(0);
+
+struct Temporary(PathBuf);
+
+impl Drop for Temporary {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
+    atomic_write_before_publish(target, contents, |_| Ok(()))
+}
+
+fn atomic_write_before_publish(
+    target: &Path,
+    contents: &[u8],
+    before_publish: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other("file has no parent directory"))?;
+    let mut opened = None;
+    for _ in 0..128 {
+        let sequence = TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(".husklet-write-{}-{sequence}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => {
+                opened = Some((Temporary(temporary), file));
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let (temporary, mut file) = opened
+        .ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not reserve atomic write temporary"))?;
+    if let Ok(metadata) = std::fs::metadata(target) {
+        file.set_permissions(metadata.permissions())?;
+    }
+    file.write_all(contents)?;
+    file.sync_all()?;
+    before_publish(&temporary.0)?;
+    std::fs::rename(&temporary.0, target)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 /// Appends already-validated components to the root.
@@ -196,8 +261,8 @@ fn described(parent: &RelativePath, entry: &std::fs::DirEntry) -> Result<Entry, 
 #[cfg(test)]
 mod tests {
     use super::WorkspaceDirectory;
-    use hl_extension::port::{HostError, WorkspaceFiles};
     use hl_extension::RelativePath;
+    use hl_extension::port::{HostError, WorkspaceFiles};
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
@@ -237,7 +302,10 @@ mod tests {
         std::fs::create_dir_all(&root).expect("root");
         let secret = temporary.path().join("secret.txt");
         std::fs::write(&secret, b"private").expect("secret");
+        let local = root.join("local.txt");
+        std::fs::write(&local, b"local").expect("local target");
         std::os::unix::fs::symlink(&secret, root.join("escape.txt")).expect("link");
+        std::os::unix::fs::symlink("local.txt", root.join("local-link.txt")).expect("local link");
         std::os::unix::fs::symlink(temporary.path(), root.join("outside")).expect("link");
         let files = WorkspaceDirectory::new(&root).expect("root");
 
@@ -247,6 +315,10 @@ mod tests {
         assert!(matches!(files.read(&escape), Err(HostError::Conflict(_))));
         assert!(matches!(files.stat(&escape), Err(HostError::Conflict(_))));
         assert!(matches!(files.write(&escape, b"owned"), Err(HostError::Conflict(_))));
+        assert!(matches!(
+            files.write(&path("local-link.txt"), b"owned"),
+            Err(HostError::Conflict(_))
+        ));
         assert!(matches!(files.list(&path("outside")), Err(HostError::Conflict(_))));
         assert!(
             matches!(files.read(&path("outside/secret.txt")), Err(HostError::Conflict(_))),
@@ -259,6 +331,91 @@ mod tests {
         );
         files.remove(&path("escape.txt")).expect("remove link itself");
         assert_eq!(std::fs::read(&secret).expect("secret"), b"private");
+        assert_eq!(std::fs::read(&local).expect("local target"), b"local");
+    }
+
+    #[test]
+    fn concurrent_atomic_writes_publish_one_complete_value_and_leave_no_temporaries() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = std::sync::Arc::new(WorkspaceDirectory::new(&root).expect("root"));
+        let first = vec![b'a'; 64 * 1024];
+        let second = vec![b'b'; 64 * 1024];
+        let threads = [first.clone(), second.clone()].map(|contents| {
+            let files = std::sync::Arc::clone(&files);
+            std::thread::spawn(move || files.write(&path("state.bin"), &contents).expect("atomic write"))
+        });
+        for thread in threads {
+            thread.join().expect("writer");
+        }
+        let published = std::fs::read(root.join("state.bin")).expect("published");
+        assert!(
+            published == first || published == second,
+            "a reader sees one whole publication"
+        );
+        assert!(std::fs::read_dir(&root).expect("root listing").all(|entry| {
+            !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-write-")
+        }));
+    }
+
+    #[test]
+    fn failed_publication_preserves_the_old_entry_and_cleans_its_temporary() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("target")).expect("old directory");
+        std::fs::write(root.join("target/held"), b"old").expect("old contents");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        assert!(files.write(&path("target"), b"replacement").is_err());
+        assert_eq!(std::fs::read(root.join("target/held")).expect("old contents"), b"old");
+        assert!(std::fs::read_dir(&root).expect("root listing").all(|entry| {
+            !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-write-")
+        }));
+    }
+
+    #[test]
+    fn failure_before_publication_preserves_prior_file_bytes_and_cleans_temporary() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = temporary.path().join("state");
+        std::fs::write(&target, b"old bytes").expect("old contents");
+
+        let result = super::atomic_write_before_publish(&target, b"new bytes", |_| {
+            Err(std::io::Error::other("injected before publication"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).expect("old contents"), b"old bytes");
+        assert!(
+            std::fs::read_dir(temporary.path())
+                .expect("directory listing")
+                .all(|entry| {
+                    !entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".husklet-write-")
+                })
+        );
+    }
+
+    #[test]
+    fn unrelated_torn_temporary_is_never_published_or_removed() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(&root).expect("root");
+        let torn = root.join(".husklet-write-old.tmp");
+        std::fs::write(&torn, b"torn").expect("torn temporary");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        files.write(&path("state"), b"new").expect("write");
+        assert_eq!(std::fs::read(root.join("state")).expect("state"), b"new");
+        assert_eq!(std::fs::read(torn).expect("unowned temporary"), b"torn");
     }
 
     #[test]
