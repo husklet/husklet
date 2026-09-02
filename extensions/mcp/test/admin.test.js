@@ -51,7 +51,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
           lifecycle(argument.configuration.name, 'create');
         }
         else if (call === 'container_create') answer(frame, 'identity', 'c'.repeat(64));
-        else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn', 'terminal_write_pane'].includes(call)) {
+        else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
           if (call === 'workspace_start') lifecycle(argument.name, 'start');
           if (call === 'workspace_stop') lifecycle(argument.name, 'stop');
@@ -245,6 +245,23 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(inputOversized.isError, true);
   assert.equal(calls.length, inputOversizedStart);
+
+  const executionId = 'e'.repeat(32);
+  const signalStart = calls.length;
+  const signaled = await client.callTool({
+    name: 'husklet_execution_signal', arguments: { id: executionId, signal: 'SIGRTMAX-14' },
+  });
+  assert.notEqual(signaled.isError, true);
+  assert.deepEqual(calls.slice(signalStart), [{
+    call: 'execution_kill', with: { id: executionId, signal: 'SIGRTMAX-14' },
+  }]);
+
+  const signalOversizedStart = calls.length;
+  const signalOversized = await client.callTool({
+    name: 'husklet_execution_signal', arguments: { id: executionId, signal: '😀'.repeat(9) },
+  });
+  assert.equal(signalOversized.isError, true);
+  assert.equal(calls.length, signalOversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 

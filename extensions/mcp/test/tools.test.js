@@ -304,12 +304,13 @@ test('execution catalogue and output are finite strict reads', async () => {
 test('execution signaling targets an execution with a strict bounded signal', async () => {
   const { api, calls } = fake();
   const signal = tools(api).find(({ name }) => name === 'husklet_execution_signal');
+  const immutable = 'b'.repeat(32);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: '' }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: '1', signal: 'SIGTERM' }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'friendly', signal: 'SIGTERM' }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'x'.repeat(33) }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: immutable, signal: '😀'.repeat(9) }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
-  const immutable = 'b'.repeat(32);
   await signal.run({ id: immutable, signal: 'SIGTERM' });
   assert.deepEqual(calls, [['containers.signalExecution', immutable, 'SIGTERM']]);
 });
