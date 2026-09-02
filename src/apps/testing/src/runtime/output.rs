@@ -325,16 +325,7 @@ pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
 }
 
 pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), Error> {
-    let product = std::str::from_utf8(stderr).is_ok_and(|text| {
-        text.lines()
-            .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
-            .filter_map(|record| {
-                record
-                    .split_whitespace()
-                    .find_map(|field| field.strip_prefix("version=")?.parse::<u64>().ok())
-            })
-            .any(|version| version >= 4)
-    });
+    let product = product_backend_shape(stderr);
     let records = stderr
         .split(|byte| *byte == b'\n')
         .filter(|line| line.starts_with(BACKEND_TREE_PREFIX.as_bytes()))
@@ -372,12 +363,32 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
 }
 
 pub(super) fn validate_translated_execution(stderr: &[u8]) -> Result<(), Error> {
+    if product_backend_shape(stderr) {
+        let shape = backend_shape_product(stderr, true)?.expect("product-shape detection established one record");
+        if shape["translated_entries"] == 0 {
+            return Err("translated execution backend-shape reported zero translated entries".into());
+        }
+        return Ok(());
+    }
     let text = std::str::from_utf8(stderr).map_err(|_| "translated backend receipt is not UTF-8")?;
     let tree = backend_tree(text)?.ok_or("translated execution emitted no backend-tree receipt")?;
     if tree["translated_entries"] == 0 {
         return Err("translated execution backend-tree reported zero translated entries".into());
     }
     Ok(())
+}
+
+fn product_backend_shape(stderr: &[u8]) -> bool {
+    std::str::from_utf8(stderr).is_ok_and(|text| {
+        text.lines()
+            .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
+            .filter_map(|record| {
+                record
+                    .split_whitespace()
+                    .find_map(|field| field.strip_prefix("version=")?.parse::<u64>().ok())
+            })
+            .any(|version| version >= 4)
+    })
 }
 
 fn backend_tree(stderr: &str) -> Result<Option<BTreeMap<&str, u64>>, Error> {
@@ -718,7 +729,8 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     }
     let dispositions = fields["jcc_ibtc_fills"]
         .checked_add(fields["jcc_ibtc_suppressed"])
-        .and_then(|value| value.checked_add(fields["jcc_ibtc_invalid_refusals"]));
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_invalid_refusals"]))
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_irq"]));
     if dispositions != Some(fields["jcc_ibtc_misses"]) {
         return Err("backend-shape product JCC IBTC miss dispositions do not reconcile".into());
     }
@@ -736,7 +748,8 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     }
     let direct_dispositions = fields["direct_jmp_ibtc_fills"]
         .checked_add(fields["direct_jmp_ibtc_suppressed"])
-        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_invalid_refusals"]));
+        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_invalid_refusals"]))
+        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_irq"]));
     if direct_dispositions != Some(fields["direct_jmp_ibtc_misses"]) {
         return Err("backend-shape product direct-JMP IBTC miss dispositions do not reconcile".into());
     }
@@ -833,6 +846,24 @@ pub(crate) fn backend_tree_digest(stderr: &[u8]) -> String {
         fields["abnormal"],
         fields["missing"],
         fields["duplicate_finalize"],
+        fields["crossings"],
+        fields["translated_entries"],
+        fields["interpreted_entries"],
+        fields["translated_steps"],
+        fields["interpreted_steps"]
+    )
+}
+
+pub(crate) fn backend_execution_digest(stderr: &[u8]) -> String {
+    let tree = backend_tree_digest(stderr);
+    if !tree.is_empty() {
+        return tree;
+    }
+    let Ok(Some(fields)) = backend_shape_product(stderr, true) else {
+        return String::new();
+    };
+    format!(
+        "backend-shape crossings={} translated_entries={} interpreted_entries={} translated_steps={} interpreted_steps={}",
         fields["crossings"],
         fields["translated_entries"],
         fields["interpreted_entries"],
@@ -1091,6 +1122,21 @@ mod tests {
     }
 
     #[test]
+    fn product_backend_shape_counts_irq_as_an_unsettled_miss_disposition() {
+        let interrupted = PRODUCT_SHAPE_ON
+            .replace(" jcc_ibtc_misses=1", " jcc_ibtc_misses=2")
+            .replace(" jcc_ibtc_irq=0", " jcc_ibtc_irq=1")
+            .replace(" direct_jmp_ibtc_misses=1", " direct_jmp_ibtc_misses=2")
+            .replace(" direct_jmp_ibtc_irq=0", " direct_jmp_ibtc_irq=1");
+        backend_shape_product(interrupted.as_bytes(), true).unwrap();
+
+        let missing_jcc_miss = interrupted.replacen(" jcc_ibtc_misses=2", " jcc_ibtc_misses=1", 1);
+        assert!(backend_shape_product(missing_jcc_miss.as_bytes(), true).is_err());
+        let missing_jump_miss = interrupted.replacen(" direct_jmp_ibtc_misses=2", " direct_jmp_ibtc_misses=1", 1);
+        assert!(backend_shape_product(missing_jump_miss.as_bytes(), true).is_err());
+    }
+
+    #[test]
     fn x86_exit_family_is_exact_typed_and_reconciled() {
         let fields = x86_exit_family(EXIT_FAMILY.as_bytes(), true).unwrap().unwrap();
         for (index, name) in X86_EXIT_FAMILY_FIELDS[3..].iter().enumerate() {
@@ -1146,6 +1192,39 @@ mod tests {
         assert!(backend_shape_product(missing.as_bytes(), true).is_err());
         let disagreement = product.replacen(" translated_entries=0 total=0", " translated_entries=1 total=0", 1);
         assert!(backend_shape_product(disagreement.as_bytes(), true).is_err());
+    }
+
+    #[test]
+    fn product_checkpoint_receipt_proves_executed_translated_blocks() {
+        let mut product = PRODUCT_SHAPE_ON.trim_end().replace("version=4", "version=7");
+        for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA
+            .iter()
+            .chain(BACKEND_SHAPE_PRODUCT_V6_EXTRA)
+        {
+            let value = match *name {
+                "crossings" | "translated_entries" => 3,
+                "translated_steps" => 12,
+                _ => 0,
+            };
+            product.push_str(&format!(" {name}={value}"));
+        }
+        for rank in 0..16 {
+            product.push_str(&format!(" executed_form{rank}_key=0 executed_form{rank}_count=0"));
+        }
+        product.push_str(
+            "\n[diag] x86-exit-family version=1 translated_entries=3 total=3 \
+            t_fallthrough=3 t_jcc_taken=0 t_jcc_fall=0 t_direct_jmp=0 t_direct_call=0 t_ret=0 \
+            t_jmp_reg=0 t_jmp_mem=0 t_call_reg=0 t_call_mem=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0\n",
+        );
+
+        validate_backend_tree(product.as_bytes(), true).unwrap();
+        validate_translated_execution(product.as_bytes()).unwrap();
+        let digest = backend_execution_digest(product.as_bytes());
+        assert!(digest.starts_with("backend-shape "), "{digest}");
+        assert!(digest.contains("translated_entries=3"), "{digest}");
+
+        let idle = product.replacen(" translated_entries=3", " translated_entries=0", 1);
+        assert!(validate_translated_execution(idle.as_bytes()).is_err());
     }
 
     #[test]

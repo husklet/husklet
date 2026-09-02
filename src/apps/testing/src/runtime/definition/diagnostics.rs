@@ -115,10 +115,12 @@ fn checkpoint_generations(stderr: &[u8]) -> String {
         return String::new();
     }
     if receipts.len() != 3
-        || receipts
-            .iter()
-            .enumerate()
-            .any(|(generation, line)| !line.starts_with(&format!("checkpoint-generation={generation} backend-tree ")))
+        || receipts.iter().enumerate().any(|(generation, line)| {
+            let prefix = format!("checkpoint-generation={generation} ");
+            !line
+                .strip_prefix(&prefix)
+                .is_some_and(|receipt| receipt.starts_with("backend-tree ") || receipt.starts_with("backend-shape "))
+        })
     {
         return "checkpoint-generations=invalid".to_owned();
     }

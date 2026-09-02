@@ -529,7 +529,7 @@ impl<'a> CaseExecution<'a> {
     ) -> Result<(), Error> {
         let deadline = Instant::now() + timeout;
         let output = state.join("output");
-        let mut offset = 0;
+        let mut diagnostic_offsets = (0, 0);
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
         for (generation, (marker, cycle)) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")]
             .into_iter()
@@ -542,7 +542,9 @@ impl<'a> CaseExecution<'a> {
                 self.containers.checkpoint(name, remaining(deadline)?),
             )
             .await?;
-            offset = validate_checkpoint_generation(&output, offset, generation)?;
+            let logs = self.containers.logs(name).await?;
+            let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
+            validate_checkpoint_generation(&diagnostics, generation)?;
             std::fs::write(state.join(cycle), [])?;
             bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
         }
@@ -555,7 +557,9 @@ impl<'a> CaseExecution<'a> {
         )
         .await?;
         *observed = Some(status);
-        validate_checkpoint_generation(&output, offset, 2)?;
+        let logs = self.containers.logs(name).await?;
+        let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
+        validate_checkpoint_generation(&diagnostics, 2)?;
         let text = std::fs::read_to_string(output)?;
         validate_daily_dev_protocol(&text)?;
         if status != ExitStatus::Code(0) {
@@ -601,20 +605,37 @@ async fn wait_for_marker(path: &Path, marker: &str, deadline: Instant) -> Result
     }
 }
 
-fn validate_checkpoint_generation(path: &Path, offset: usize, generation: usize) -> Result<usize, Error> {
-    let bytes = std::fs::read(path)?;
-    let generation_bytes = bytes
-        .get(offset..)
-        .ok_or("checkpoint output shrank between generations")?;
-    output::validate_backend_tree(generation_bytes, true)?;
-    output::validate_translated_execution(generation_bytes)?;
-    output::validate_profile(std::str::from_utf8(generation_bytes)?)?;
-    let receipt = output::backend_tree_digest(generation_bytes);
+fn checkpoint_generation_logs(logs: &hl_container::Logs, offsets: &mut (usize, usize)) -> Result<Vec<u8>, Error> {
+    let stdout = logs
+        .stdout
+        .get(offsets.0..)
+        .ok_or("checkpoint stdout diagnostics shrank between generations")?;
+    let stderr = logs
+        .stderr
+        .get(offsets.1..)
+        .ok_or("checkpoint stderr diagnostics shrank between generations")?;
+    offsets.0 = logs.stdout.len();
+    offsets.1 = logs.stderr.len();
+    let mut generation = Vec::with_capacity(stdout.len() + stderr.len() + 1);
+    generation.extend_from_slice(stdout);
+    generation.push(b'\n');
+    generation.extend_from_slice(stderr);
+    Ok(generation)
+}
+
+fn validate_checkpoint_generation(generation: &[u8], ordinal: usize) -> Result<(), Error> {
+    output::validate_backend_tree(generation, true)
+        .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    output::validate_translated_execution(generation)
+        .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    output::validate_profile(std::str::from_utf8(generation)?)
+        .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    let receipt = output::backend_execution_digest(generation);
     if receipt.is_empty() {
         return Err("validated checkpoint generation has no backend-tree receipt".into());
     }
-    eprintln!("checkpoint-generation={generation} {receipt}");
-    Ok(bytes.len())
+    eprintln!("checkpoint-generation={ordinal} {receipt}");
+    Ok(())
 }
 
 fn validate_daily_dev_protocol(text: &str) -> Result<(), Error> {
@@ -643,7 +664,7 @@ fn validate_daily_dev_protocol(text: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod checkpoint_protocol_tests {
-    use super::validate_daily_dev_protocol;
+    use super::{checkpoint_generation_logs, validate_daily_dev_protocol};
 
     const COMPLETE: &str = "READY leader=1\nSLEEP-READY pid=2\nCYCLE 1 progress=5\nCYCLE 2 progress=10\n\
         DONE progress=11\nJCC-LINK phase=0 value=42\nJCC-LINK phase=1 value=43\n\
@@ -656,6 +677,28 @@ mod checkpoint_protocol_tests {
         assert!(validate_daily_dev_protocol(&format!("{COMPLETE}CYCLE 1 progress=6\n")).is_err());
         assert!(validate_daily_dev_protocol(&COMPLETE.replace("DONE progress=11\n", "")).is_err());
         assert!(validate_daily_dev_protocol(&format!("{COMPLETE}IDENTITY-ERROR\n")).is_err());
+    }
+
+    #[test]
+    fn checkpoint_generation_slices_both_terminal_journal_streams_once() {
+        let mut offsets = (0, 0);
+        let first = hl_container::Logs {
+            stdout: b"stdout-generation-0\n".to_vec(),
+            stderr: b"stderr-generation-0\n".to_vec(),
+        };
+        let first_slice = checkpoint_generation_logs(&first, &mut offsets).unwrap();
+        assert!(first_slice.windows(19).any(|bytes| bytes == b"stdout-generation-0"));
+        assert!(first_slice.windows(19).any(|bytes| bytes == b"stderr-generation-0"));
+
+        let second = hl_container::Logs {
+            stdout: b"stdout-generation-0\nstdout-generation-1\n".to_vec(),
+            stderr: b"stderr-generation-0\nstderr-generation-1\n".to_vec(),
+        };
+        let second_slice = checkpoint_generation_logs(&second, &mut offsets).unwrap();
+        assert!(!second_slice.windows(19).any(|bytes| bytes == b"stdout-generation-0"));
+        assert!(!second_slice.windows(19).any(|bytes| bytes == b"stderr-generation-0"));
+        assert!(second_slice.windows(19).any(|bytes| bytes == b"stdout-generation-1"));
+        assert!(second_slice.windows(19).any(|bytes| bytes == b"stderr-generation-1"));
     }
 }
 
