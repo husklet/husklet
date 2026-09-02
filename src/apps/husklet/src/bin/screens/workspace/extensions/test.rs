@@ -957,6 +957,25 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
     page.inspect();
     page.cancel();
 
+    let cancelling = fixture.view.semantic_snapshot();
+    let cancel = cancelling
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Cancel download"))
+        .expect("the in-flight cancellation remains observable");
+    assert_eq!(cancel.value.as_deref(), Some("Cancellation requested"));
+    assert!(cancel.disabled, "an agent cannot submit duplicate cancellation");
+    assert!(matches!(
+        fixture.view.semantic_action(&super::super::semantic::Action {
+            revision: cancelling.revision,
+            node: cancel.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        }),
+        Err(super::super::semantic::Refusal::Disabled(id)) if id == cancel.id
+    ));
+
     assert!(
         cancellation
             .lock()

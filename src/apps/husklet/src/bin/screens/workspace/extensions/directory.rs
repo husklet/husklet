@@ -175,6 +175,11 @@ impl Catalogue {
         pending.cancellation.cancel();
         self.cancel.set_label("Cancelling…");
         self.cancel.set_sensitive(false);
+        self.semantics.update(
+            "extensions/acquisition/cancel",
+            super::super::semantic::Value::Public("Cancellation requested"),
+            true,
+        );
         self.say("cancelling image acquisition");
     }
 
