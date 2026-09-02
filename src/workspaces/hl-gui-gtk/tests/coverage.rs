@@ -892,6 +892,8 @@ fn structural(tag: Tag) -> Aspect {
         Tag::Dialog | Tag::DialogContent | Tag::DialogActions | Tag::Menu => Aspect::Gap,
         Tag::DiffViewer => Aspect::Gap,
         Tag::DiffLine => Aspect::Value,
+        Tag::StackTrace => Aspect::Gap,
+        Tag::StackFrame => Aspect::Value,
         // Everything else names itself: a caption is what it carries.
         _ => Aspect::Label,
     }
@@ -914,6 +916,7 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_tag_input_keeps_retained_tags_before_its_editor();
     a_validation_summary_keeps_actions_below_its_message();
     diff_lines_are_selectable_and_keep_status_beside_content();
+    stack_frames_keep_selectable_function_and_location();
 }
 
 fn diff_lines_are_selectable_and_keep_status_beside_content() {
@@ -925,6 +928,21 @@ fn diff_lines_are_selectable_and_keep_status_beside_content() {
     assert!(!status.is_selectable());
     assert!(content.is_selectable(), "diff text cannot be selected and copied");
     assert!(content.has_css_class("monospace"));
+}
+
+fn stack_frames_keep_selectable_function_and_location() {
+    let mut session = Session::new();
+    let trace = session.producer.create(Tag::StackTrace);
+    session.producer.append(NodeId::ROOT, trace);
+    let id = session.producer.create(Tag::StackFrame);
+    session.producer.append(trace, id);
+    session.producer.set(id, Prop::Label, PropValue::text("host::dispatch"));
+    session.producer.set(id, Prop::Value, PropValue::text("src/host.rs:42"));
+    session.flush().expect("stack frame renders");
+    let frame = session.tagged(Tag::StackFrame).expect("stack frame");
+    let labels = subtree(&frame).into_iter().filter_map(|w| w.downcast::<gtk::Label>().ok()).collect::<Vec<_>>();
+    assert!(labels.iter().any(|label| label.text() == "host::dispatch" && label.is_selectable()));
+    assert!(labels.iter().any(|label| label.text() == "src/host.rs:42" && label.is_selectable()));
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {

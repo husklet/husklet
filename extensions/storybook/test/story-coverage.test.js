@@ -15,6 +15,7 @@ import { MarkdownReviewStory } from '../src/markdown-review.js';
 import { storyCoverage } from '../src/story-coverage.js';
 import { DIFF_STORY, DiffReviewStory } from '../src/diff-review.js';
 import { JsonResponseStory } from '../src/json-response.js';
+import { StackTraceStory } from '../src/stack-trace.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -55,6 +56,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['key/value inspector', h(KeyValueInspectorStory, { source: new KeyValueSource() })],
     ['diff review', h(DiffReviewStory)],
     ['JSON response', h(JsonResponseStory)],
+    ['stack trace', h(StackTraceStory)],
     ['markdown review', h(MarkdownReviewStory)],
   ];
   for (const [name, story] of stories) {

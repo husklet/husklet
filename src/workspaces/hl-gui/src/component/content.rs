@@ -12,6 +12,15 @@ impl Element {
         Self::new(Tag::JsonView).value(value)
     }
 
+    /// A bounded list of structured stack frames.
+    #[must_use]
+    pub fn stack_trace() -> Self { Self::new(Tag::StackTrace) }
+
+    #[must_use]
+    pub fn stack_frame(function: impl Into<String>, location: impl Into<String>) -> Self {
+        Self::new(Tag::StackFrame).label(function).value(location)
+    }
+
     /// A safe, selectable Markdown document. HTML is never interpreted.
     #[must_use]
     pub fn markdown_view(value: impl Into<String>) -> Self {

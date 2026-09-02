@@ -39,6 +39,7 @@ import { MARKDOWN_STORY, MarkdownReviewStory } from './markdown-review.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 import { DIFF_STORY, DiffReviewStory } from './diff-review.js';
 import { JSON_STORY, JsonResponseStory } from './json-response.js';
+import { STACK_STORY, StackTraceStory } from './stack-trace.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -53,7 +54,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, initia
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
     || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
     || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY
-    || selected === JSON_STORY;
+    || selected === JSON_STORY || selected === STACK_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -127,6 +128,12 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(JSON_STORY),
       }),
       h(ListItemButton, {
+        key: STACK_STORY,
+        label: STACK_STORY,
+        selected: selected === STACK_STORY,
+        onInvoke: () => onSelect(STACK_STORY),
+      }),
+      h(ListItemButton, {
         key: MARKDOWN_STORY,
         label: MARKDOWN_STORY,
         selected: selected === MARKDOWN_STORY,
@@ -198,6 +205,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
         ? h(MarkdownReviewStory)
         : name === JSON_STORY
         ? h(JsonResponseStory)
+        : name === STACK_STORY
+        ? h(StackTraceStory)
         : name === NAVIGATION_STORY
         ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource

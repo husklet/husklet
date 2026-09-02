@@ -334,6 +334,8 @@ catalogue! {
     Chart: leaf, props[Label, Tone], triggers[],
     DiffViewer: children, props[Gap, Orientation], triggers[],
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
+    StackTrace: children, props[Gap], triggers[],
+    StackFrame: leaf, props[Label, Value, Tone], triggers[],
 }
 
 #[cfg(test)]

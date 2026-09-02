@@ -162,4 +162,6 @@ export const {
   Chart,
   DiffViewer,
   DiffLine,
+  StackTrace,
+  StackFrame,
 } = components;

@@ -16,6 +16,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Chart => chart().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
+        Tag::StackTrace => stack_trace().upcast(),
+        Tag::StackFrame => stack_frame().upcast(),
         _ => chart().upcast(),
     }
 }
@@ -59,6 +61,27 @@ pub(crate) fn json(widget: &gtk::Widget, source: &str) -> bool {
 fn newline(output: &mut String, depth: usize) {
     output.push('\n');
     output.extend(std::iter::repeat_n(' ', depth * 2));
+}
+
+fn stack_trace() -> gtk::Box {
+    let widget = super::axis::column(2);
+    widget.set_hexpand(true);
+    widget
+}
+
+fn stack_frame() -> gtk::Box {
+    let widget = super::axis::column(0);
+    let function = super::slot::caption_label();
+    function.set_selectable(true);
+    function.add_css_class("monospace");
+    let location = super::axis::label();
+    location.set_selectable(true);
+    location.add_css_class("monospace");
+    location.add_css_class("dim-label");
+    super::slot::field(&location);
+    widget.append(&function);
+    widget.append(&location);
+    widget
 }
 
 fn diff() -> gtk::Box {

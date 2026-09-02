@@ -131,6 +131,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         diff_lines_project_status_and_bounded_text();
         markdown_preserves_bounded_source_in_semantics();
         json_preserves_source_in_semantics();
+        stack_frames_project_function_and_location();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
@@ -148,6 +149,17 @@ fn json_preserves_source_in_semantics() {
     assert_eq!(document.role, "JsonView");
     assert_eq!(document.value.as_deref(), Some(r#"{"nested":{"ready":true}}"#));
     assert!(document.actions.is_empty());
+}
+
+fn stack_frames_project_function_and_location() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::stack_trace().child(Element::stack_frame("host::dispatch", "src/host.rs:42")));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let frame = &tree.root.children[0].children[0];
+    assert_eq!(frame.role, "StackFrame");
+    assert_eq!(frame.label.as_deref(), Some("host::dispatch"));
+    assert_eq!(frame.value.as_deref(), Some("src/host.rs:42"));
 }
 
 fn diff_lines_project_status_and_bounded_text() {
