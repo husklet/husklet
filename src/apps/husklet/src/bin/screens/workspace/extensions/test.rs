@@ -1261,6 +1261,8 @@ mod ports {
 
     impl hl_extension::port::WorkspaceControl for Ports {}
 
+    impl hl_extension::port::ExtensionStore for Ports {}
+
     impl WorkspaceFiles for Ports {
         fn list(&self, _path: &RelativePath) -> Result<Vec<Entry>, HostError> {
             Ok(Vec::new())
@@ -1286,6 +1288,7 @@ mod ports {
             },
             workspaces: &PORTS,
             workspace_control: &PORTS,
+            extensions: &PORTS,
             containers: &PORTS,
             control: &PORTS,
             images: &PORTS,
