@@ -30,6 +30,7 @@ import { OPENING, defaults, spaced } from './defaults.js';
 import { amountOf, lengthValue, modeOf, rows } from './editors.js';
 import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
+import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -41,7 +42,7 @@ export function Playground({ largeSource } = {}) {
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY;
+  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -84,6 +85,12 @@ export function Sidebar({ families, selected, onSelect }) {
         selected: selected === ACQUISITION_STORY,
         onInvoke: () => onSelect(ACQUISITION_STORY),
       }),
+      h(ListItemButton, {
+        key: FORM_STORY,
+        label: FORM_STORY,
+        selected: selected === FORM_STORY,
+        onInvoke: () => onSelect(FORM_STORY),
+      }),
       ...families.flatMap((family) => [
         h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
         ...family.tags.map((tag) =>
@@ -116,6 +123,8 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
       { key: 'stage', pad: 4, grow: true },
       name === ACQUISITION_STORY
         ? h(AcquisitionProgressStory)
+        : name === FORM_STORY
+        ? h(ValidatedSettingsFormStory)
         : name === 'DataTable' && largeSource
         ? h(LargeDataTableStory, { source: largeSource })
         : h(components[name], { ...present(opened.props), ...handlers }, ...opened.children.map(child)),

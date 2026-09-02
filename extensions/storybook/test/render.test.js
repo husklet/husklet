@@ -10,6 +10,7 @@ import { tags } from '../src/catalogue.js';
 import { defaults } from '../src/defaults.js';
 import { components } from '@husklet/react';
 import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
+import { FORM_STORY, ValidatedSettingsFormStory } from '../src/form.js';
 
 import { host } from './host.js';
 
@@ -66,11 +67,49 @@ test('the playground renders one frame holding the three panes', () => {
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    tags.length + 1,
-    'every component and the end-user flow are listed',
+    tags.length + 2,
+    'every component and both end-user flows are listed',
   );
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
+});
+
+test('the form story validates submit, recovers on change, and confirms success', () => {
+  const stage = host();
+  const first = stage.render(h(ValidatedSettingsFormStory));
+  const entry = created(first.patches).find((created) => created.tag === 'Entry')?.id;
+  const save = node(first.patches, 'Button', 'Save defaults');
+  assert.ok(entry && save, 'the form has no editable field or save action');
+
+  let before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Submit', node: entry, id: `${entry}:Submit`, value: null }));
+  let patches = stage.since(before);
+  assert.ok(node(patches, 'InlineMessage', 'Fix the highlighted field before saving.'));
+  assert.ok(
+    patches.some((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Tone' && patch.SetProp.value.Tone === 'Danger'),
+    'invalid submission does not mark the field or feedback as dangerous',
+  );
+
+  before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'api' }));
+  patches = stage.since(before);
+  assert.ok(patches.some((patch) => 'Remove' in patch), 'correcting the field leaves stale validation feedback');
+
+  before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: save, id: `${save}:Invoke`, value: null }));
+  patches = stage.since(before);
+  assert.ok(node(patches, 'Banner', 'Defaults saved for api.'), 'valid submission has no success confirmation');
+});
+
+test('the validated form is selectable as a canonical end-user flow', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const item = node(first.patches, 'ListItemButton', FORM_STORY);
+  assert.ok(item, 'the sidebar omits the form flow');
+  const before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  const patches = stage.since(before);
+  assert.ok(node(patches, 'Heading', 'Workspace defaults'), 'selecting the form flow does not render it');
 });
 
 test('the acquisition flow renders every semantic progress state and only its supported actions', () => {

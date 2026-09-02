@@ -32,6 +32,10 @@ the semantic and visual contract for checking, unknown and measured downloads,
 manifest reading, retryable failure, and ready-for-consent. It deliberately
 shows Cancel only during pending work, Retry only after failure, and Install
 only after the image identity and requested capabilities are ready to review.
+It also includes a validated settings form showing controlled text, choice and
+toggle fields; submit-time validation; correction; contextual danger feedback;
+and a positive saved state. Both Enter and the explicit save action follow the
+same validation path.
 
 ## Running it
 
