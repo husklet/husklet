@@ -168,7 +168,8 @@ impl Candidate {
         platform(&inspection, architecture)?;
         let _ = progress.send(Acquisition::ReadingManifest);
         let path = manifest_path(&inspection.config.labels);
-        let archive = extract(&bridge, reference, &path, cancellation)?;
+        let content = immutable_content(reference, &inspection.id)?;
+        let archive = extract(&bridge, content, &path, cancellation)?;
         cancellation.check()?;
         let manifest = Manifest::parse(&document(&archive)?, PROTOCOL).map_err(|invalid| invalid.to_string())?;
         Ok(Self {
@@ -199,6 +200,14 @@ impl Candidate {
         let event = result.map_or_else(Acquisition::Failed, Acquisition::Ready);
         let _ = progress.send(event);
     }
+}
+
+/// Pins manifest extraction to the image identity that will be persisted.
+/// Docker Hub tags may move after inspection; content digests do not.
+fn immutable_content<'a>(_reference: &str, digest: &'a str) -> Result<&'a str, String> {
+    (!digest.trim().is_empty())
+        .then_some(digest)
+        .ok_or_else(|| "the inspected extension image has no immutable digest".to_owned())
 }
 
 fn platform(inspection: &InspectImage, architecture: &str) -> Result<(), String> {
@@ -352,7 +361,7 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{document, manifest_path, split, Acquisition, Candidate};
+    use super::{document, immutable_content, manifest_path, split, Acquisition, Candidate};
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
 
@@ -459,6 +468,18 @@ mod tests {
     #[test]
     fn digests_are_forwarded_as_the_pull_selector() {
         assert_eq!(split("team/tool@sha256:abcd"), ("team/tool", Some("sha256:abcd")));
+    }
+
+    #[test]
+    fn manifest_extraction_is_pinned_to_the_inspected_digest() {
+        assert_eq!(
+            immutable_content("registry/team:latest", "sha256:resolved").expect("digest"),
+            "sha256:resolved"
+        );
+        assert!(
+            immutable_content("registry/team:latest", "  ").is_err(),
+            "a mutable tag cannot substitute for a missing digest"
+        );
     }
 
     #[cfg(unix)]
