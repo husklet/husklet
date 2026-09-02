@@ -11,7 +11,7 @@ function fake() {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write') },
   }};
 }
@@ -33,6 +33,30 @@ test('container execution inspection is a strict bounded read through the typed 
   assert.equal(execution.inputSchema.safeParse({ id: 'exec-1', extra: true }).success, false);
   await execution.run({ id: 'exec-1' });
   assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
+});
+
+test('terminal layout tools use the host wire vocabulary and bounded destructive controls', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const split = listed.find(({ name }) => name === 'husklet_terminal_split');
+  const resize = listed.find(({ name }) => name === 'husklet_terminal_resize');
+  const ratio = listed.find(({ name }) => name === 'husklet_terminal_ratio');
+  const close = listed.find(({ name }) => name === 'husklet_terminal_close');
+  assert.equal(split.inputSchema.safeParse({ slot: 'pane-1', division: 'horizontal' }).success, false);
+  assert.equal(split.inputSchema.safeParse({ slot: 'pane-1', division: 'beside' }).success, true);
+  assert.equal(resize.inputSchema.safeParse({ slot: 'pane-1', columns: 0, rows: 24 }).success, false);
+  assert.equal(ratio.inputSchema.safeParse({ slot: 'pane-1', ratio: 0.99 }).success, false);
+  assert.equal(close.inputSchema.safeParse({ slot: 'pane-1' }).success, false);
+  await split.run({ slot: 'pane-1', division: 'below' });
+  await resize.run({ slot: 'pane-1', columns: 120, rows: 40 });
+  await ratio.run({ slot: 'pane-1', ratio: 0.6 });
+  await close.run({ slot: 'pane-1', confirm: true });
+  assert.deepEqual(calls, [
+    ['terminal.split', 'pane-1', 'below'],
+    ['terminal.resizeGrid', 'pane-1', 120, 40],
+    ['terminal.ratio', 'pane-1', 0.6],
+    ['terminal.close', 'pane-1'],
+  ]);
 });
 
 test('unified pane XML packs terminal metadata and escaped bounded screen lines', async () => {

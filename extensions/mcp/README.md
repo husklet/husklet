@@ -24,3 +24,7 @@ extension surfaces and the native `workspace` pane include their semantic tree.
 It uses stable slots and semantic IDs, never screenshots, coordinates, or GTK
 widget scraping. The older terminal-read and pane-snapshot tools remain for
 consumers that need their specific typed result.
+
+Terminal layout tools use the same `beside`/`below` vocabulary as the host and
+can focus, split, resize, rebalance, and close panes. Grid sizes and split ratios
+are bounded; closing a pane requires an explicit `confirm: true` argument.
