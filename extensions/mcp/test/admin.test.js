@@ -223,6 +223,28 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.deepEqual(calls.slice(spawnStart), [{
     call: 'terminal_spawn', with: { slot: 'admin-terminal', command: exactCommand },
   }]);
+
+  const exactInput = 'é'.repeat(32_768);
+  const inputStart = calls.length;
+  const written = await client.callTool({
+    name: 'husklet_terminal_write', arguments: { slot: 'admin-terminal', input: exactInput },
+  });
+  assert.notEqual(written.isError, true);
+  assert.equal(calls.length, inputStart + 1);
+  assert.equal(calls[inputStart].call, 'terminal_write_pane');
+  assert.equal(calls[inputStart].with.slot, 'admin-terminal');
+  assert.deepEqual(
+    Uint8Array.from(calls[inputStart].with.contents),
+    new TextEncoder().encode(exactInput),
+  );
+
+  const inputOversizedStart = calls.length;
+  const inputOversized = await client.callTool({
+    name: 'husklet_terminal_write',
+    arguments: { slot: 'admin-terminal', input: '😀'.repeat(16_385) },
+  });
+  assert.equal(inputOversized.isError, true);
+  assert.equal(calls.length, inputOversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 

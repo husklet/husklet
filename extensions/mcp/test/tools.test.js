@@ -367,6 +367,16 @@ test('terminal byte input decodes canonical base64 exactly and refuses ambiguity
   assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', exact]]);
 });
 
+test('terminal text input exposes the complete host byte allowance', async () => {
+  const { api, calls } = fake();
+  const write = tools(api).find(({ name }) => name === 'husklet_terminal_write');
+  const exact = 'é'.repeat(32_768);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input: exact }).success, true);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input: '😀'.repeat(16_385) }).success, false);
+  await write.run({ slot: 'pane-1', input: exact });
+  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', exact]]);
+});
+
 test('image tools use typed reads and require confirmation for destructive controls', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
