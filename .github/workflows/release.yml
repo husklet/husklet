@@ -186,6 +186,9 @@ jobs:
           }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Verify image contracts and pre-publish smoke wiring
+        run: .github/scripts/check-first-party-images.sh
+
       - name: Install multi-architecture emulation
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
@@ -198,6 +201,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and run both base-image architectures before publishing
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for architecture in amd64 arm64; do
+            image="husklet/react-base-smoke:$architecture"
+            docker buildx build \
+              --platform "linux/$architecture" \
+              --load \
+              --tag "$image" \
+              --build-arg "HUSKLET_REACT_VERSION=$RELEASE_VERSION" \
+              --file extensions/react/Dockerfile \
+              extensions/react
+            .github/scripts/smoke-extension-image.sh "$image" "$RELEASE_VERSION" base "$architecture"
+          done
 
       - name: Build and publish one multi-architecture manifest
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -261,6 +281,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and run both extension-image architectures before publishing
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          EXTENSION: ${{ matrix.extension }}
+          REACT_IMAGE: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for architecture in amd64 arm64; do
+            image="husklet/extension-$EXTENSION-smoke:$architecture"
+            docker buildx build \
+              --platform "linux/$architecture" \
+              --load \
+              --tag "$image" \
+              --build-arg "HUSKLET_REACT_IMAGE=$REACT_IMAGE" \
+              --build-arg "HUSKLET_REACT_VERSION=$RELEASE_VERSION" \
+              --build-arg "HUSKLET_EXTENSION_VERSION=$RELEASE_VERSION" \
+              --file "extensions/$EXTENSION/Dockerfile" \
+              "extensions/$EXTENSION"
+            .github/scripts/smoke-extension-image.sh \
+              "$image" "$RELEASE_VERSION" "$EXTENSION" "$architecture"
+          done
 
       - name: Build and publish one multi-architecture manifest
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6

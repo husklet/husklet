@@ -18,6 +18,14 @@ expect_literal extensions/react/Dockerfile 'ARG HUSKLET_REACT_VERSION'
 # shellcheck disable=SC2016 # These are literal Dockerfile variable references.
 expect_literal extensions/react/Dockerfile 'LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"'
 
+workflow="$root/.github/workflows/release.yml"
+[[ "$(grep -Fc 'platforms: linux/amd64,linux/arm64' "$workflow")" == 2 ]] \
+  || fail "release must publish exactly two multi-architecture image manifests"
+[[ "$(grep -Fc 'for architecture in amd64 arm64; do' "$workflow")" == 2 ]] \
+  || fail "release must build both architectures before both image publication steps"
+[[ "$(grep -Fc '.github/scripts/smoke-extension-image.sh' "$workflow")" == 2 ]] \
+  || fail "release must run the packaged-image smoke before both publication steps"
+
 for extension in storybook workspace-manager; do
   dockerfile="extensions/$extension/Dockerfile"
   manifest="extensions/$extension/extension.toml"
