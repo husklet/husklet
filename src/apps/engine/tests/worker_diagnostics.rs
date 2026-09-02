@@ -15,6 +15,13 @@ fn worker(arguments: &[&str]) -> Output {
         .expect("run the x86-64 worker")
 }
 
+fn arm_worker(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_hl-aarch64"))
+        .args(arguments)
+        .output()
+        .expect("run the aarch64 worker")
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -99,6 +106,30 @@ fn a_worker_refuses_the_other_guest_isa_out_loud() {
         "hl-x86_64: this worker runs x86_64 guests, so it cannot serve --guest-isa aarch64"
     );
     assert_eq!(output.status.code(), Some(125));
+}
+
+#[test]
+fn native_supervision_requires_a_same_isa_linux_worker() {
+    let absent = absent_rootfs().with_extension("so");
+    let library = absent.to_str().unwrap();
+    let x86 = worker(&["--native-supervised", "--native-library", library, "/bin/true"]);
+    let arm = arm_worker(&["--native-supervised", "--native-library", library, "/bin/true"]);
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        assert!(!stderr(&x86).contains("requires a same-ISA Linux worker"), "{}", stderr(&x86));
+        assert!(stderr(&arm).contains("requires a same-ISA Linux worker"), "{}", stderr(&arm));
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        assert!(stderr(&x86).contains("requires a same-ISA Linux worker"), "{}", stderr(&x86));
+        assert!(!stderr(&arm).contains("requires a same-ISA Linux worker"), "{}", stderr(&arm));
+    }
+    #[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+    {
+        assert!(stderr(&x86).contains("requires a same-ISA Linux worker"), "{}", stderr(&x86));
+        assert!(stderr(&arm).contains("requires a same-ISA Linux worker"), "{}", stderr(&arm));
+    }
 }
 
 #[test]

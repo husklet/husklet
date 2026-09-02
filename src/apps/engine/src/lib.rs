@@ -372,9 +372,9 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             guest.name()
         )));
     }
-    if launch.native_supervised == Some(NativeSupervisedControl::On) && guest != Guest::X86_64 {
+    if launch.native_supervised == Some(NativeSupervisedControl::On) && !native_supervised_worker(guest) {
         return Err(Failure::Request(
-            "--native-supervised is available only in the x86-64 worker".to_owned(),
+            "--native-supervised requires a same-ISA Linux worker".to_owned(),
         ));
     }
     if launch.translit_mixed_sse.is_some() && !launch.translit {
@@ -455,6 +455,21 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
     let exit = engine.wait()?;
     engine.destroy()?;
     Ok(exit)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const fn native_supervised_worker(guest: Guest) -> bool {
+    matches!(guest, Guest::X86_64)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const fn native_supervised_worker(guest: Guest) -> bool {
+    matches!(guest, Guest::Aarch64)
+}
+
+#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+const fn native_supervised_worker(_: Guest) -> bool {
+    false
 }
 
 /// Builds the launch plan for a rootfs-backed run.
