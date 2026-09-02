@@ -71,6 +71,7 @@ const BY_TAG = {
   HexView: { value: '00000000  7f 45 4c 46                                      |.ELF|', monospace: true },
   LogView: { label: 'starting…', monospace: true },
   Chart: { label: 'Load' },
+  Sparkline: { value: '18,22,19,31,28,35,42,39' },
   Badge: { label: '3' },
   Chip: { label: 'tag', variant: 'outline' },
   Toast: { label: 'Saved', tone: 'positive' },

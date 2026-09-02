@@ -249,6 +249,19 @@ impl Element {
         Self::new(Tag::DiffLine).label(status).value(content)
     }
 
+    /// A compact trend over at most 64 finite samples.
+    #[must_use]
+    pub fn sparkline(samples: impl IntoIterator<Item = f64>) -> Self {
+        let value = samples
+            .into_iter()
+            .filter(|sample| sample.is_finite())
+            .take(crate::SPARKLINE_SAMPLE_LIMIT)
+            .map(|sample| sample.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        Self::new(Tag::Sparkline).value(value)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -259,7 +272,7 @@ impl Element {
 #[cfg(test)]
 mod tests {
     use super::{HexSource, HexView};
-    use crate::HEX_VIEW_BYTE_LIMIT;
+    use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
     fn hex_rows_are_fixed_width_and_printable() {
@@ -290,5 +303,26 @@ mod tests {
                 .count(),
             256
         );
+    }
+
+    #[test]
+    fn sparkline_keeps_only_finite_bounded_samples() {
+        let element = Element::sparkline((0..100).map(|value| if value == 2 { f64::NAN } else { f64::from(value) }));
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("sparkline value");
+        assert_eq!(value.split(',').count(), crate::SPARKLINE_SAMPLE_LIMIT);
+        assert!(!value.contains("NaN"));
     }
 }

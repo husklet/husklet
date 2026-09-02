@@ -842,6 +842,7 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::MarkdownView
         | Tag::JsonView
         | Tag::LogView => Aspect::Value,
+        Tag::Sparkline => Aspect::Value,
         _ => structural(tag),
     }
 }

@@ -15,6 +15,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::LogView => log().upcast(),
         Tag::Video => gtk::Video::new().upcast(),
         Tag::Chart => chart().upcast(),
+        Tag::Sparkline => sparkline().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -235,6 +236,61 @@ fn chart() -> gtk::DrawingArea {
     widget.set_hexpand(true);
     widget.set_draw_func(|area, context, width, height| plot(area, context, f64::from(width), f64::from(height)));
     widget
+}
+
+fn sparkline() -> gtk::DrawingArea {
+    let widget = gtk::DrawingArea::new();
+    widget.set_content_width(160);
+    widget.set_content_height(40);
+    widget.set_hexpand(true);
+    widget.set_draw_func(|area, context, width, height| trend(area, context, f64::from(width), f64::from(height)));
+    widget
+}
+
+/// Stores the bounded textual samples for drawing; retained semantics continue
+/// to own the same Value independently of this toolkit projection.
+pub(crate) fn samples(widget: &gtk::Widget, value: &str) -> bool {
+    if !super::belongs(widget, Tag::Sparkline) {
+        return false;
+    }
+    widget.set_tooltip_text(Some(value));
+    widget.queue_draw();
+    true
+}
+
+fn trend(area: &gtk::DrawingArea, context: &gtk::cairo::Context, width: f64, height: f64) {
+    let samples = area
+        .tooltip_text()
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|sample| sample.parse::<f64>().ok())
+        .filter(|sample| sample.is_finite())
+        .take(hl_gui::SPARKLINE_SAMPLE_LIMIT)
+        .collect::<Vec<_>>();
+    if samples.len() < 2 {
+        return;
+    }
+    let minimum = samples.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let span = (maximum - minimum).max(f64::EPSILON);
+    let ink = area.color();
+    context.set_source_rgba(
+        ink.red().into(),
+        ink.green().into(),
+        ink.blue().into(),
+        ink.alpha().into(),
+    );
+    context.set_line_width(2.0);
+    for (index, sample) in samples.iter().enumerate() {
+        let x = index as f64 * width / (samples.len() - 1) as f64;
+        let y = height - ((*sample - minimum) / span * height);
+        if index == 0 {
+            context.move_to(x, y);
+        } else {
+            context.line_to(x, y);
+        }
+    }
+    let _ = context.stroke();
 }
 
 /// Paints the plot frame in the widget's own inherited colour, so the sheet

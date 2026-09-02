@@ -161,6 +161,7 @@ export const {
   LogView,
   Video,
   Chart,
+  Sparkline,
   DiffViewer,
   DiffLine,
   StackTrace,

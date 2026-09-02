@@ -133,6 +133,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         json_preserves_source_in_semantics();
         stack_frames_project_function_and_location();
         hex_view_projects_binary_text_into_semantics();
+        sparkline_projects_bounded_samples_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
@@ -161,6 +162,17 @@ fn stack_frames_project_function_and_location() {
     assert_eq!(frame.role, "StackFrame");
     assert_eq!(frame.label.as_deref(), Some("host::dispatch"));
     assert_eq!(frame.value.as_deref(), Some("src/host.rs:42"));
+}
+
+fn sparkline_projects_bounded_samples_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::sparkline([1.0, 3.0, 2.0]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let trend = &tree.root.children[0];
+    assert_eq!(trend.role, "Sparkline");
+    assert_eq!(trend.value.as_deref(), Some("1,3,2"));
+    assert!(trend.actions.is_empty());
 }
 
 fn hex_view_projects_binary_text_into_semantics() {

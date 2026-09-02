@@ -56,3 +56,6 @@ pub const LOG_VIEW_CHARACTER_LIMIT: i32 = 4_096;
 
 /// Maximum number of source bytes a [`Tag::HexView`] renders.
 pub const HEX_VIEW_BYTE_LIMIT: usize = 4_096;
+
+/// Maximum finite samples retained by a [`Tag::Sparkline`].
+pub const SPARKLINE_SAMPLE_LIMIT: usize = 64;
