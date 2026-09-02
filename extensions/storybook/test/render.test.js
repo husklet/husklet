@@ -9,6 +9,7 @@ import { Playground } from '../src/app.js';
 import { tags } from '../src/catalogue.js';
 import { defaults } from '../src/defaults.js';
 import { components } from '@husklet/react';
+import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
 
 import { host } from './host.js';
 
@@ -63,9 +64,40 @@ test('the playground renders one frame holding the three panes', () => {
   const built = created(frame.patches).map((entry) => entry.tag);
   assert.equal(frame.sequence, 1, 'a commit is one atomic frame');
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
-  assert.equal(built.filter((tag) => tag === 'ListItemButton').length, tags.length, 'every component is listed');
+  assert.equal(
+    built.filter((tag) => tag === 'ListItemButton').length,
+    tags.length + 1,
+    'every component and the end-user flow are listed',
+  );
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
+});
+
+test('the acquisition flow renders every semantic progress state and only its supported actions', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const item = node(first.patches, 'ListItemButton', ACQUISITION_STORY);
+  assert.ok(item, 'the sidebar has no acquisition flow');
+  const before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  const patches = stage.since(before);
+  for (const state of acquisitionStates) {
+    assert.ok(node(patches, 'CardHeader', state.title), `${state.key} is absent`);
+    assert.ok(node(patches, 'InlineMessage', state.status), `${state.key} has no semantic status`);
+  }
+  for (const action of ['Cancel download', 'Retry', 'Install', 'Cancel']) {
+    assert.ok(node(patches, 'Button', action), `${action} is not demonstrated`);
+  }
+  assert.equal(
+    created(patches).filter((entry) => entry.tag === 'Progress').length,
+    1,
+    'only measured transfer claims a fraction',
+  );
+  assert.equal(
+    created(patches).filter((entry) => entry.tag === 'Spinner').length,
+    3,
+    'checking, unknown transfer and manifest read remain indeterminate',
+  );
 });
 
 test('the preview is a real instance of the selected component', () => {

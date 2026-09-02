@@ -27,6 +27,7 @@ import { component, grouped, notes } from './catalogue.js';
 import { OPENING, defaults, spaced } from './defaults.js';
 import { amountOf, lengthValue, modeOf, rows } from './editors.js';
 import { LargeDataTableStory } from './large-table.js';
+import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 
 const { createElement: h, useMemo, useState } = React;
 
@@ -36,9 +37,10 @@ export function Playground({ largeSource } = {}) {
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
 
-  const opened = edited.get(selected) ?? defaults(selected);
-  const contract = component(selected);
-  const properties = rows(selected);
+  const flow = selected === ACQUISITION_STORY;
+  const opened = flow ? null : edited.get(selected) ?? defaults(selected);
+  const contract = flow ? null : component(selected);
+  const properties = flow ? [] : rows(selected);
   const change = (name, value) => {
     const next = new Map(edited);
     next.set(selected, { ...opened, props: { ...opened.props, [name]: value } });
@@ -56,8 +58,8 @@ export function Playground({ largeSource } = {}) {
       key: 'inspector',
       name: selected,
       properties,
-      triggers: contract.triggers,
-      props: opened.props,
+      triggers: contract?.triggers ?? [],
+      props: opened?.props ?? {},
       onChange: change,
     }),
   );
@@ -71,6 +73,13 @@ export function Sidebar({ families, selected, onSelect }) {
     h(
       List,
       { pad: 1 },
+      h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, {
+        key: ACQUISITION_STORY,
+        label: ACQUISITION_STORY,
+        selected: selected === ACQUISITION_STORY,
+        onInvoke: () => onSelect(ACQUISITION_STORY),
+      }),
       ...families.flatMap((family) => [
         h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
         ...family.tags.map((tag) =>
@@ -95,7 +104,9 @@ export function Preview({ name, opened, largeSource }) {
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      name === 'DataTable' && largeSource
+      name === ACQUISITION_STORY
+        ? h(AcquisitionProgressStory)
+        : name === 'DataTable' && largeSource
         ? h(LargeDataTableStory, { source: largeSource })
         : h(components[name], present(opened.props), ...opened.children.map(child)),
     ),

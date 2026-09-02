@@ -27,6 +27,12 @@ puts the properties an inline control can edit before the ones that must be
 written in code, and lists the React handlers for every interaction that
 component can report.
 
+The **End-user flows** group includes an Extension acquisition story showing
+the semantic and visual contract for checking, unknown and measured downloads,
+manifest reading, retryable failure, and ready-for-consent. It deliberately
+shows Cancel only during pending work, Retry only after failure, and Install
+only after the image identity and requested capabilities are ready to review.
+
 ## Running it
 
 ```sh
