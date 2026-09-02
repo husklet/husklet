@@ -1544,6 +1544,22 @@ static int hl_backend_tree_wait(pid_t child, int reap_as_abnormal) {
 static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_services *host) {
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
+    if (scenario == 16) {
+        struct hl_backend_tree_slot *birth = hl_backend_tree_prepare_fork();
+        if (birth == NULL) return 104;
+        pid_t child = fork();
+        hl_backend_tree_after_fork(child, birth);
+        if (child < 0) return 105;
+        if (child == 0) _exit(hl_backend_tree_finalize(0) ? 0 : 106);
+        if (hl_backend_tree_wait(child, 0) != 0) return 107;
+        if (!hl_backend_tree_finalize(0)) return 108;
+        return atomic_load_explicit(&g_backend_tree->duplicate_finalize, memory_order_relaxed) == 0 &&
+                       atomic_load_explicit(&birth->pid, memory_order_acquire) == child &&
+                       atomic_load_explicit(&birth->lifecycle, memory_order_acquire) ==
+                           HL_BACKEND_TREE_COMPLETED
+                   ? 0
+                   : 109;
+    }
     if (scenario == 15) {
         if (!hl_backend_tree_finalize_from(0, HL_BACKEND_FINALIZE_PROCESS_EXIT))
             return 100;

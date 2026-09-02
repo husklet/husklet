@@ -80,6 +80,15 @@ fn finalizer_provenance_preserves_the_first_and_rejected_second_caller() {
 }
 
 #[test]
+fn restore_style_fork_rebinds_each_process_to_its_own_lifecycle_slot() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 16)
+            .unwrap_or_else(|status| panic!("ISA {isa} restore-fork ownership scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

@@ -1232,7 +1232,13 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
             fprintf(stderr, "[restore] runtime refused fork preparation for gpid %d\n", cg);
             continue;
         }
+        /* A restore fork bypasses the guest clone syscall, but it still creates a
+         * new process that will execute and finalize backend-tree accounting.
+         * Reserve before the fork so the child can bind its process-local self
+         * pointer before any exit path, exactly as the ordinary clone paths do. */
+        struct hl_backend_tree_slot *backend_tree_birth = hl_backend_tree_prepare_fork();
         pid_t p = ckpt_restore_clone_current(&private_status);
+        hl_backend_tree_after_fork(p, backend_tree_birth);
         if (private_status != 0) {
             (void)hl_target_task_event(parent, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)source, 0);
             if (p == 0) _exit(127);
