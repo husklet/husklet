@@ -19,6 +19,23 @@ test('the test host receives overview and every resource navigation choice', () 
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
 });
 
+test('every empty operational page explains what is absent and how to proceed', async () => {
+  const stage = host();
+  stage.render(h(WorkspaceManager, { api, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
+  for (const [section, message] of [
+    ['Containers', 'No containers'],
+    ['Processes', 'No running processes'],
+    ['Executions', 'No executions'],
+    ['Images', 'No images'],
+    ['Volumes', 'No volumes'],
+    ['Networks', 'No networks'],
+  ]) {
+    invoke(stage, section);
+    await settled(); await settled();
+    assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+  }
+});
+
 test('execution observation is scoped to its page and replaces inventory without polling', async () => {
   const calls = [];
   let publish;

@@ -136,6 +136,7 @@ export function Containers({ api, resource, containerDetails }) {
   const view = bounded(resource.data);
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
     h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No containers', detail: 'Create a container through an agent or extension, then refresh this page.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.name || shortId(item.id), detail: item.image }),
       h(CardContent, {}, h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' }))),
@@ -200,6 +201,7 @@ function Processes({ api, resource }) {
   const view = bounded(processes);
   return h(Page, { title: 'Processes', subtitle: 'A bounded snapshot across all visible containers.' },
     h(Toolbar, { loading: resource.loading, onRefresh: load }), h(ErrorText, { error }),
+    h(InventoryEmpty, { resource: { loading: resource.loading, error }, records: view.records, label: 'No running processes', detail: 'Start a container to see its process snapshot here.' }),
     ...view.records.map((process, index) => {
       const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
       const command = process.cells.CMD ?? process.cells.Command ?? process.cells.COMMAND ?? process.values.at(-1) ?? 'Process';
@@ -244,6 +246,7 @@ export function Executions({ api, resource, executionDetails, truncated = false 
   const view = bounded(resource.data);
   return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
     h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No executions', detail: 'Commands executed in containers will appear here.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
       h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
@@ -343,6 +346,7 @@ export function Images({ api, resource, imageDetails }) {
       ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', enabled: !busy, tone: 'danger', destructive: true, onInvoke: prune }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
     h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
+    h(InventoryEmpty, { resource: { loading: resource.loading, error: error ?? resource.error }, records: view.records, label: 'No images', detail: 'Enter an image reference above to pull one into this workspace.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
       h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }),
         inspection.id === item.id && inspection.state === 'loading'
@@ -378,6 +382,7 @@ export function Volumes({ api, resource, volumeDetails }) {
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(ErrorText, { error: resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No volumes', detail: 'Create a named volume above when a workload needs durable storage.' }),
     ...view.records.map((volume) => h(Card, { key: volume.name, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
@@ -417,6 +422,7 @@ export function Networks({ api, resource, networkDetails }) {
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
     h(ErrorText, { error: resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No networks', detail: 'Create a network above to connect workspace containers.' }),
     ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
@@ -441,6 +447,11 @@ export function Networks({ api, resource, networkDetails }) {
 function Page({ title: label, subtitle, children }) { return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 2 }, h(Heading, { label, scale: 'title' }), h(Text, { label: subtitle, color: 'text-dim', wrap: true }), children)); }
 function Toolbar({ loading, onRefresh }) { return h(Row, { gap: 1, align: 'center' }, loading ? h(Spinner) : null, h(Button, { label: 'Refresh', enabled: !loading, onInvoke: onRefresh })); }
 function ErrorText({ error }) { return error ? h(Text, { label: error.message ?? String(error), color: 'danger', wrap: true }) : null; }
+function InventoryEmpty({ resource, records, label, detail }) {
+  return !resource.loading && !resource.error && records.length === 0
+    ? h(EmptyState, { label, detail })
+    : null;
+}
 function Omitted({ count }) { return count > 0 ? h(Text, { label: `${count} more records omitted to keep this view bounded.`, color: 'text-dim' }) : null; }
 
 // A destructive operation is always two distinct interactions. The first
