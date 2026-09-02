@@ -186,13 +186,37 @@ test('extension wait filters acquisition jobs and disposes its credit-controlled
   api.watchExtensionAcquisitions = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_extension_wait');
   assert.equal(wait.inputSchema.safeParse({ kind: 'inventory', job: 'j', timeout_ms: 10 }).success, false);
-  const pending = wait.run({ kind: 'acquisition', job: 'wanted', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ kind: 'acquisition', job: 'wanted', timeout_ms: 10 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ kind: 'acquisition', after_revision: 1, timeout_ms: 10 }).success, false);
+  const pending = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 2, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
   listener({ job: 'other', revision: 1, state: 'ready', coalesced: 0 });
   listener({ job: 'wanted', revision: 2, state: 'ready', coalesced: 3 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the already-observed revision must not settle or dispose the wait');
+  listener({ job: 'wanted', revision: 3, state: 'committing', coalesced: 0 });
   const answer = await pending;
-  assert.deepEqual(JSON.parse(answer.content[0].text), { changed: true, change: { job: 'wanted', revision: 2, state: 'ready', coalesced: 3 } });
+  assert.deepEqual(JSON.parse(answer.content[0].text), { changed: true, change: { job: 'wanted', revision: 3, state: 'committing', coalesced: 0 } });
   assert.equal(disposed, 1);
+});
+
+test('concurrent extension waits advance independently from their exact observed revisions', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchExtensionAcquisitions = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_extension_wait');
+  const first = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 1, timeout_ms: 1000 });
+  const second = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 2, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener({ job: 'wanted', revision: 2, state: 'ready', coalesced: 0 });
+  assert.equal(JSON.parse((await first).content[0].text).change.revision, 2);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener({ job: 'wanted', revision: 3, state: 'committing', coalesced: 0 });
+  assert.equal(JSON.parse((await second).content[0].text).change.revision, 3);
+  assert.equal(disposed, 2);
+  assert.equal(listeners.size, 0);
 });
 
 test('container create and exec accept only bounded structured authority', async () => {

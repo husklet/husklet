@@ -338,9 +338,12 @@ export function tools(api) {
   if (typeof api.watchExtensions === 'function' && typeof api.watchExtensionAcquisitions === 'function') definitions.push(define(
     'husklet_extension_wait',
     'Wait for a bounded installed-extension snapshot or acquisition revision invalidation without polling.',
-    z.object({ kind: z.enum(['inventory', 'acquisition']), job: extensionJob.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
-      .superRefine(({ kind, job }, context) => { if (job != null && kind !== 'acquisition') context.addIssue({ code: z.ZodIssueCode.custom, message: 'job filtering applies only to acquisition changes' }); }),
-    ({ kind, job, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    z.object({ kind: z.enum(['inventory', 'acquisition']), job: extensionJob.optional(), after_revision: acquisitionRevision.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+      .superRefine(({ kind, job, after_revision }, context) => {
+        if ((job != null || after_revision != null) && kind !== 'acquisition') context.addIssue({ code: z.ZodIssueCode.custom, message: 'job and revision filtering apply only to acquisition changes' });
+        if ((job == null) !== (after_revision == null)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'job-specific acquisition waits require both job and after_revision' });
+      }),
+    ({ kind, job, after_revision, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop; let settled = false;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
@@ -348,7 +351,9 @@ export function tools(api) {
       };
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       const watch = kind === 'inventory' ? api.watchExtensions : api.watchExtensionAcquisitions;
-      watch((change) => { if (kind === 'inventory' || job == null || change.job === job) finish({ changed: true, change }); })
+      watch((change) => {
+        if (kind === 'inventory' || job == null || (change.job === job && change.revision > after_revision)) finish({ changed: true, change });
+      })
         .then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
