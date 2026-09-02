@@ -140,7 +140,12 @@ impl Session {
             | Request::ExtensionInspect { .. }
             | Request::ExtensionEnable { .. }
             | Request::ExtensionDisable { .. }
-            | Request::ExtensionRemove { .. } => self.extensions(request, services),
+            | Request::ExtensionRemove { .. }
+            | Request::ExtensionAcquisitionStart { .. }
+            | Request::ExtensionAcquisitionStatus { .. }
+            | Request::ExtensionAcquisitionCancel { .. }
+            | Request::ExtensionInstall { .. }
+            | Request::ExtensionUpdate { .. } => self.extensions(request, services),
             Request::ContainerList
             | Request::ContainerInspect { .. }
             | Request::ContainerProcesses { .. }
@@ -374,6 +379,28 @@ impl Session {
             Request::ExtensionEnable { name } => port.enable(name).map(|()| Reply::Done).map_err(Failure::from),
             Request::ExtensionDisable { name } => port.disable(name).map(|()| Reply::Done).map_err(Failure::from),
             Request::ExtensionRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExtensionAcquisitionStart { reference } => {
+                acquisition_reference(reference)?;
+                Ok(Reply::ExtensionAcquisitionJob(port.acquisition_start(reference)?))
+            }
+            Request::ExtensionAcquisitionStatus { job } => {
+                acquisition_job(job)?;
+                Ok(Reply::ExtensionAcquisition(port.acquisition_status(job)?))
+            }
+            Request::ExtensionAcquisitionCancel { job } => {
+                acquisition_job(job)?;
+                port.acquisition_cancel(job)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ExtensionInstall { job, granted } => {
+                acquisition_job(job)?;
+                Ok(Reply::Extension(port.install(job, granted)?))
+            }
+            Request::ExtensionUpdate { job, granted } => {
+                acquisition_job(job)?;
+                Ok(Reply::Extension(port.update(job, granted)?))
+            }
             _ => Err(Failure::Unsupported {
                 call: "extension management".into(),
             }),
@@ -616,5 +643,27 @@ fn bounded_signal(signal: &str) -> Result<(), Failure> {
     }
     Err(Failure::Conflict {
         detail: "signal must contain 1..=32 bytes".into(),
+    })
+}
+
+fn acquisition_reference(reference: &str) -> Result<(), Failure> {
+    if !reference.is_empty()
+        && reference.len() <= crate::port::EXTENSION_REFERENCE_BYTES
+        && reference.trim() == reference
+        && !reference.chars().any(char::is_whitespace)
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "extension image reference must contain 1..=512 bytes without whitespace".into(),
+    })
+}
+
+fn acquisition_job(job: &str) -> Result<(), Failure> {
+    if !job.is_empty() && job.len() <= crate::port::EXTENSION_JOB_BYTES {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "extension acquisition job must contain 1..=128 bytes".into(),
     })
 }

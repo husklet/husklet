@@ -9,9 +9,10 @@ use std::cell::RefCell;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    ExtensionStore, ExtensionSummary, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary,
-    Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind,
-    SemanticNode, TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, GridSize, HostError,
+    ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree,
+    PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface,
+    TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -541,6 +542,33 @@ impl ExtensionStore for Host {
         self.ledger.note("extensions.remove");
         Ok(())
     }
+    fn acquisition_start(&self, _reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
+        self.ledger.note("extensions.acquisition_start");
+        Ok(ExtensionAcquisitionJob { job: "job-1".into() })
+    }
+    fn acquisition_status(&self, job: &str) -> Result<ExtensionAcquisitionStatus, HostError> {
+        self.ledger.note("extensions.acquisition_status");
+        Ok(ExtensionAcquisitionStatus {
+            job: job.into(),
+            reference: "registry/example:1".into(),
+            revision: 7,
+            state: "ready".into(),
+            candidate: None,
+            error: None,
+        })
+    }
+    fn acquisition_cancel(&self, _job: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.acquisition_cancel");
+        Ok(())
+    }
+    fn install(&self, job: &str, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
+        self.ledger.note("extensions.install");
+        ExtensionStore::inspect(self, job)
+    }
+    fn update(&self, job: &str, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
+        self.ledger.note("extensions.update");
+        ExtensionStore::inspect(self, job)
+    }
 }
 
 fn services(host: &Host) -> Services<'_> {
@@ -651,6 +679,34 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::ExtensionRemove { name: "sample".into() },
             Capability::ExtensionControl,
+        ),
+        (
+            Request::ExtensionAcquisitionStart {
+                reference: "registry/example:1".into(),
+            },
+            Capability::ExtensionInstall,
+        ),
+        (
+            Request::ExtensionAcquisitionStatus { job: "job-1".into() },
+            Capability::ExtensionInstall,
+        ),
+        (
+            Request::ExtensionAcquisitionCancel { job: "job-1".into() },
+            Capability::ExtensionInstall,
+        ),
+        (
+            Request::ExtensionInstall {
+                job: "job-1".into(),
+                granted: Grant::new([Capability::Interface]),
+            },
+            Capability::ExtensionInstall,
+        ),
+        (
+            Request::ExtensionUpdate {
+                job: "job-1".into(),
+                granted: Grant::new([Capability::Interface]),
+            },
+            Capability::ExtensionInstall,
         ),
         (Request::ContainerList, Capability::ContainerRead),
         (Request::ContainerInspect { id: "c1".into() }, Capability::ContainerRead),
@@ -846,6 +902,35 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
             refused_host.ledger.reached()
         );
     }
+}
+
+#[test]
+fn extension_acquisition_identifiers_are_bounded_before_the_host() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ExtensionInstall], &[]);
+    assert!(session
+        .dispatch(
+            &Request::ExtensionAcquisitionStart {
+                reference: "x".repeat(513)
+            },
+            &services(&host)
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExtensionAcquisitionStart {
+                reference: "bad reference".into()
+            },
+            &services(&host)
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
+            &services(&host)
+        )
+        .is_err());
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

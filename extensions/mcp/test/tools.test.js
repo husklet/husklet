@@ -10,7 +10,7 @@ function fake() {
   return { calls, api: {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
-    extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove') },
+    extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
@@ -97,6 +97,20 @@ test('extension inventory is bounded and every lifecycle mutation requires confi
     ['extensions.enable', 'workspace-manager'], ['extensions.disable', 'workspace-manager'],
     ['extensions.remove', 'workspace-manager'], ['extensions.list'], ['extensions.inspect', 'workspace-manager'],
   ]);
+});
+
+test('extension acquisition is asynchronous, digest-observable, grant-bounded, and confirmed', async () => {
+  const { api, calls } = fake(); const listed = tools(api); const byName = (name) => listed.find((tool) => tool.name === name);
+  for (const name of ['husklet_extension_acquire', 'husklet_extension_acquisition_cancel', 'husklet_extension_install', 'husklet_extension_update']) {
+    assert.equal(byName(name).inputSchema.safeParse(name.endsWith('acquire') ? { reference: 'example:1' } : { job: 'j', granted: [], confirm: false }).success, false);
+  }
+  assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', granted: ['made-up'], confirm: true }).success, false);
+  await byName('husklet_extension_acquire').run({ reference: 'example:1', confirm: true });
+  await byName('husklet_extension_acquisition').run({ job: 'j' });
+  await byName('husklet_extension_acquisition_cancel').run({ job: 'j', confirm: true });
+  await byName('husklet_extension_install').run({ job: 'j', granted: ['interface'], confirm: true });
+  await byName('husklet_extension_update').run({ job: 'j', granted: ['interface'], confirm: true });
+  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j'], ['extensions.install', 'j', ['interface']], ['extensions.update', 'j', ['interface']]]);
 });
 
 test('container create and exec accept only bounded structured authority', async () => {
@@ -370,6 +384,9 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'workspace_info') return { reply: 'workspace', with: { name: 'demo' } };
       if (name === 'extension_list') return { reply: 'extensions', with: [{ name: 'manager', image_digest: 'sha256:abc', status: 'standby' }] };
       if (name === 'extension_disable') return { reply: 'done' };
+      if (name === 'extension_acquisition_start') return { reply: 'extension_acquisition_job', with: { job: 'job-live' } };
+      if (name === 'extension_acquisition_status') return { reply: 'extension_acquisition', with: { job: 'job-live', reference: 'example:1', revision: 3, state: 'ready', candidate: { name: 'example', version: '1', image_digest: 'sha256:def', requested: ['interface'] }, error: null } };
+      if (name === 'extension_install') return { reply: 'extension', with: { name: 'example', image_digest: 'sha256:def', status: 'standby' } };
       if (name === 'execution_inspect') return { reply: 'execution', with: {
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
@@ -413,6 +430,11 @@ test('a real MCP client lists strict tools and calls through the React session c
   const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
   assert.deepEqual(JSON.parse(extensions.content[0].text), [{ name: 'manager', image_digest: 'sha256:abc', status: 'standby' }]);
   await client.callTool({ name: 'husklet_extension_disable', arguments: { name: 'manager', confirm: true } });
+  const acquired = await client.callTool({ name: 'husklet_extension_acquire', arguments: { reference: 'example:1', confirm: true } });
+  assert.equal(JSON.parse(acquired.content[0].text).job, 'job-live');
+  const candidate = await client.callTool({ name: 'husklet_extension_acquisition', arguments: { job: 'job-live' } });
+  assert.equal(JSON.parse(candidate.content[0].text).candidate.image_digest, 'sha256:def');
+  await client.callTool({ name: 'husklet_extension_install', arguments: { job: 'job-live', granted: ['interface'], confirm: true } });
   const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: 'exec-live' } });
   assert.deepEqual(JSON.parse(execution.content[0].text), {
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
@@ -435,6 +457,9 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['workspace_info', undefined],
     ['extension_list', undefined],
     ['extension_disable', { name: 'manager' }],
+    ['extension_acquisition_start', { reference: 'example:1' }],
+    ['extension_acquisition_status', { job: 'job-live' }],
+    ['extension_install', { job: 'job-live', granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
     ['image_list', undefined],

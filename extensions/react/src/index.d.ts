@@ -4093,6 +4093,17 @@ export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
+export type ExtensionCapability =
+  | 'workspace-read' | 'workspace-control' | 'workspace-events'
+  | 'container-read' | 'container-control' | 'image-read' | 'image-write'
+  | 'volume-read' | 'volume-write' | 'network-read' | 'network-write'
+  | 'terminal-read' | 'terminal-control' | 'terminal-output' | 'pane-observe'
+  | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
+  | 'extension-control' | 'extension-install' | 'filesystem-read'
+  | 'filesystem-write' | 'interface';
+export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[] }
+export interface ExtensionAcquisitionJob { job: string }
+export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; candidate: ExtensionCandidate | null; error: string | null }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
 export interface WorkspaceMount { host: string; container: string; read_only: boolean }
 export interface WorkspaceTerminal {
@@ -4206,6 +4217,11 @@ export interface WorkspaceApi {
     enable(name: string): Promise<void>;
     disable(name: string): Promise<void>;
     remove(name: string): Promise<void>;
+    startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
+    acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
+    cancelAcquisition(job: string): Promise<void>;
+    install(job: string, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    update(job: string, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
   };
   containers: {
     list(): Promise<ContainerSummary[]>;

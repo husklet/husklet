@@ -35,7 +35,7 @@ pub use installation::{Disposition, Installation, Objection, Record, Stage, Summ
 pub use manifest::{
     Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
 };
-pub use port::ExtensionSummary;
+pub use port::{ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionCandidate, ExtensionSummary};
 pub use port::{HostError, PaneSemanticAction, PaneSemanticTree, SemanticActionKind, SemanticNode};
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};

@@ -108,6 +108,11 @@ export function workspace(session) {
       enable: (name) => done('extension_enable', { name }),
       disable: (name) => done('extension_disable', { name }),
       remove: (name) => done('extension_remove', { name }),
+      startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
+      acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
+      cancelAcquisition: (job) => done('extension_acquisition_cancel', { job }),
+      install: async (job, granted) => expect(await session.call('extension_install', { job, granted }), 'extension'),
+      update: async (job, granted) => expect(await session.call('extension_update', { job, granted }), 'extension'),
     },
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
@@ -366,7 +371,7 @@ export const protocolCoverage = Object.freeze({
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write', 'mkdir', 'rename', 'remove'],
-    extensions: ['list', 'inspect', 'enable', 'disable', 'remove'],
+    extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,
@@ -376,6 +381,6 @@ export const protocolCoverage = Object.freeze({
     containers: [],
     terminal: ['switchOccupant'],
     events: ['extensions', 'drag', 'drop'],
-    extensions: ['install', 'update'],
+    extensions: [],
   }),
 });

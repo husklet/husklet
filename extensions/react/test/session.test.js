@@ -175,8 +175,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(protocolCoverage.unavailable.events.includes('extensions'));
-  assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove']);
-  assert.deepEqual(protocolCoverage.unavailable.extensions, ['install', 'update']);
+  assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
+  assert.deepEqual(protocolCoverage.unavailable.extensions, []);
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
   const api = workspace({ call() { throw new Error('not called'); } });
   assert.equal(api.renameWorkspace, undefined);
@@ -185,6 +185,32 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.equal(typeof api.networks.connect, 'function');
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(api.terminal.switchOccupant, undefined);
+});
+
+test('extension acquisition preserves job revision and explicit grant identity', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const api = workspace(stage.session);
+  const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
+    api.extensions.cancelAcquisition('job-1'), api.extensions.install('job-1', ['interface']),
+    api.extensions.update('job-2', ['container-read'])];
+  const calls = [];
+  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  assert.deepEqual(calls, [
+    { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
+    { call: 'extension_acquisition_status', with: { job: 'job-1' } },
+    { call: 'extension_acquisition_cancel', with: { job: 'job-1' } },
+    { call: 'extension_install', with: { job: 'job-1', granted: ['interface'] } },
+    { call: 'extension_update', with: { job: 'job-2', granted: ['container-read'] } },
+  ]);
+  const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: { job: 'job-1', reference: 'registry/example:1', revision: 7, state: 'ready', candidate: null, error: null } } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  for (let index = 0; index < 2; index += 1) stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }));
+  const results = await Promise.all(operations);
+  assert.equal(results[0].job, 'job-1'); assert.equal(results[1].revision, 7); assert.equal(results[2], undefined);
+  assert.deepEqual(results.slice(3), [summary, summary]);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('extension facade preserves exact read and control request shapes', async () => {
