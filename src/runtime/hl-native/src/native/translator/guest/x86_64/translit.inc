@@ -3314,8 +3314,18 @@ static void *translit_unsupported_record_thread(void *opaque) {
 }
 
 static int translit_single_fetch_test(void);
+static int translit_tl_no_progress_fixture_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    if (scenario == 222) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_tl_no_progress_fixture_test());
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario == 219) return translit_movsd_memory_fixture_test();
     if (scenario == 217) return translit_jitdump_lifecycle_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
@@ -6691,6 +6701,123 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_cache_gen = saved_generation;
     munmap(arena, arena_size);
     return built && cap_exact && executed ? 0 : 100 + (int)(scenario - 71);
+}
+
+static int translit_tl_no_progress_fixture_test(void) {
+    const size_t arena_size = 16384;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 180;
+    static const uint8_t one_tl_no[] = {
+        0xd9, 0xd0,                                     // TL_NO FNOP
+        0x48, 0xb8, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // translated MOVABS
+        0x0f, 0x0b                                      // terminal UD2
+    };
+    static const uint8_t two_tl_no[] = {0xd9, 0xd0, 0xd9, 0xd0, 0x48, 0xb8, 1, 0, 0, 0, 0, 0, 0, 0, 0x0f, 0x0b};
+    uint8_t *saved_cache = g_cache;
+    uint8_t *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    int saved_selected = translit_selected;
+    int exact = 1;
+    int error = 0;
+
+    (void)hl_option_set("HL_TRANSLIT", "1", 1);
+    translit_selected = -1;
+    g_cache = arena;
+    g_cp = arena;
+    g_rw2rx = 0;
+    g_cache_gen = UINT64_MAX - 222;
+    translit_fall_fixture_bytes = one_tl_no;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)one_tl_no;
+    translit_fall_fixture_length = sizeof one_tl_no;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    struct interp_block *first = context == NULL ? NULL : translate_block(context, translit_fall_fixture_guest);
+    struct cpu cpu = {0};
+    cpu.rip = translit_fall_fixture_guest;
+    if (first == NULL || first->host_entry_off != 0) exact = 0;
+    if (!exact && error == 0) error = 1;
+    if (exact) run_block(context, &cpu, first);
+    exact &= cpu.rip == translit_fall_fixture_guest + 2 && cpu.reason == R_BRANCH;
+    if (!exact && error == 0) error = 2;
+    cpu.reason = 0;
+    struct interp_block *successor = exact ? translate_block(context, cpu.rip) : NULL;
+    exact &= successor != NULL && successor->host_entry_off != 0;
+    if (!exact && error == 0) error = 3;
+    if (exact) run_block(context, &cpu, successor);
+    exact &= cpu.r[RAX] == UINT64_C(0x1122334455667788) && cpu.rip == translit_fall_fixture_guest + 12;
+    if (!exact && error == 0) error = 4;
+
+    map_clear();
+    memset(arena, 0, arena_size);
+    g_cp = arena;
+    g_cache_gen--;
+    translit_fall_fixture_bytes = two_tl_no;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)two_tl_no;
+    translit_fall_fixture_length = sizeof two_tl_no;
+    cpu = (struct cpu){0};
+    cpu.rip = translit_fall_fixture_guest;
+    first = translate_block(context, cpu.rip);
+    if (first == NULL || first->host_entry_off != 0) exact = 0;
+    if (!exact && error == 0) error = 5;
+    if (exact) run_block(context, &cpu, first);
+    exact &= cpu.rip == translit_fall_fixture_guest + 2 && cpu.reason == R_BRANCH;
+    if (!exact && error == 0) error = 6;
+    cpu.reason = 0;
+    struct interp_block *second = exact ? translate_block(context, cpu.rip) : NULL;
+    exact &= second != NULL && second->host_entry_off == 0;
+    if (!exact && error == 0) error = 7;
+    if (exact) run_block(context, &cpu, second);
+    exact &= cpu.rip == translit_fall_fixture_guest + 4 && cpu.reason == R_BRANCH;
+    if (!exact && error == 0) error = 8;
+
+    struct cpu predicate = {.rip = 101};
+    exact &= interp_progress_redispatch(1, 1, TL_NO, STEP_NEXT, 100, &predicate);
+    predicate.rip = 100;
+    exact &= !interp_progress_redispatch(1, 1, TL_NO, STEP_NEXT, 100, &predicate);
+    predicate.rip = 101;
+    predicate.reason = R_SYSCALL;
+    exact &= !interp_progress_redispatch(1, 1, TL_NO, STEP_NEXT, 100, &predicate);
+    predicate.reason = 0;
+    exact &= !interp_progress_redispatch(0, 1, TL_NO, STEP_NEXT, 100, &predicate) &&
+             !interp_progress_redispatch(1, 0, TL_NO, STEP_NEXT, 100, &predicate) &&
+             !interp_progress_redispatch(1, 1, TL_COPY, STEP_NEXT, 100, &predicate) &&
+             !interp_progress_redispatch(1, 1, TL_NO, STEP_END, 100, &predicate);
+    if (!exact && error == 0) error = 9;
+
+    map_clear();
+    memset(arena, 0, arena_size);
+    g_cp = arena;
+    g_cache_gen--;
+    (void)hl_option_set("HL_TRANSLIT", "0", 1);
+    translit_selected = -1;
+    translit_fall_fixture_bytes = one_tl_no;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)one_tl_no;
+    translit_fall_fixture_length = sizeof one_tl_no;
+    cpu = (struct cpu){0};
+    cpu.rip = translit_fall_fixture_guest;
+    first = translate_block(context, cpu.rip);
+    if (first == NULL || first->host_entry_off != 0) exact = 0;
+    if (!exact && error == 0) error = 10;
+    if (exact) run_block(context, &cpu, first);
+    exact &= cpu.r[RAX] == UINT64_C(0x1122334455667788) &&
+             cpu.rip == translit_fall_fixture_guest + 12 && cpu.reason != R_BRANCH;
+    if (!exact && error == 0) error = 11;
+
+    translit_fall_fixture_bytes = NULL;
+    hl_x86_hot_context_destroy(context);
+    map_clear();
+    jit_body_owner_drop_generation(UINT64_MAX - 222);
+    jit_body_owner_drop_generation(UINT64_MAX - 223);
+    jit_body_owner_drop_generation(UINT64_MAX - 224);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    translit_selected = saved_selected;
+    (void)hl_option_unset("HL_TRANSLIT");
+    munmap(arena, arena_size);
+    return exact ? 0 : error;
 }
 
 static int translit_movsd_memory_fixture_test(void) {

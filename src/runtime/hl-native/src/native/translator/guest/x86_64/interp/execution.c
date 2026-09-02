@@ -1,3 +1,6 @@
+// Shared with the feature-gated transliterator fixtures included below.
+enum { STEP_NEXT = 0, STEP_END = 1 };
+
 static uint64_t interp_call_return_pc(uint64_t pc) {
     return pc;
 }
@@ -545,8 +548,6 @@ static int interp_undefined(struct cpu *cpu, const struct insn *insn, uint64_t p
 }
 
 // ---- The interpreter.
-
-enum { STEP_NEXT = 0, STEP_END = 1 };
 
 // Guest trap signal, as the JIT's emit_guest_signal: divop = (signo | si_code<<8), rip = the handler's PC.
 static int interp_guest_trap(struct cpu *cpu, uint64_t rip, int signo, int si_code) {
