@@ -32,6 +32,7 @@ import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
 import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
+import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -43,7 +44,7 @@ export function Playground({ largeSource } = {}) {
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY;
+  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY || selected === NAVIGATION_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -98,6 +99,12 @@ export function Sidebar({ families, selected, onSelect }) {
         selected: selected === FORM_STORY,
         onInvoke: () => onSelect(FORM_STORY),
       }),
+      h(ListItemButton, {
+        key: NAVIGATION_STORY,
+        label: NAVIGATION_STORY,
+        selected: selected === NAVIGATION_STORY,
+        onInvoke: () => onSelect(NAVIGATION_STORY),
+      }),
       ...families.flatMap((family) => [
         h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
         ...family.tags.map((tag) =>
@@ -134,6 +141,8 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
         ? h(ValidatedSettingsFormStory)
         : name === KEYBOARD_STORY
         ? h(KeyboardAccessibilityStory)
+        : name === NAVIGATION_STORY
+        ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource
         ? h(LargeDataTableStory, { source: largeSource })
         : h(components[name], { ...present(opened.props), ...handlers }, ...opened.children.map(child)),
