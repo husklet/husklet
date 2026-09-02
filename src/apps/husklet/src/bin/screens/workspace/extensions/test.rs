@@ -55,6 +55,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         stale_provider_generations_cannot_authorize_replacements();
+        failed_enable_has_no_socket_or_provider_until_durable_retry();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
@@ -1625,6 +1626,140 @@ fn stale_provider_generations_cannot_authorize_replacements() {
     assert!(
         gallery.providers().is_empty(),
         "late frames cannot resurrect a withdrawn generation"
+    );
+}
+
+fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
+    use super::super::extension::{channel, Delivery, Interface, Signal};
+
+    let storage = tempfile::tempdir().expect("storage");
+    let root = storage.path().join("workspace");
+    std::fs::create_dir(&root).expect("storage root");
+    let mut described = manifest("sample");
+    described.pane_providers.push(hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    });
+    let roster = Rc::new(RefCell::new(
+        Roster::open(Directory::open(&root).expect("directory")).expect("roster"),
+    ));
+    roster
+        .borrow_mut()
+        .register(&described, "sha256:aaaa", &described.capabilities, 1)
+        .expect("registered standby record");
+    let view = Rc::new(View::new([(
+        Page::Extensions,
+        gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+    )]));
+    let gallery = Gallery::new();
+    let socket = storage.path().join("extension.sock");
+    let greeted = Arc::new(AtomicBool::new(false));
+    let heard: Heard = Arc::default();
+    let pages: Rc<RefCell<Vec<Rc<RefCell<Interface>>>>> = Rc::new(RefCell::new(Vec::new()));
+    let retained_pages = Rc::clone(&pages);
+    let shown = gallery.clone();
+    let connected = Arc::clone(&greeted);
+    let surfaces: Surfaces = Rc::new(move |entry| {
+        if entry.stage != Stage::Duty {
+            return gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
+        }
+        let (post, deliveries) = channel();
+        let host = Rc::new(hl::extension::Host::open(
+            Bench {
+                socket: socket.clone(),
+                heard: Arc::clone(&heard),
+                greeted: Arc::clone(&connected),
+                peers: Mutex::new(Vec::new()),
+            },
+            Box::new(move |report| {
+                if let hl::extension::Report::Frame(frame) = report {
+                    drop(post.send(Delivery::Frame(frame.frame)));
+                }
+            }),
+        ));
+        let ordered = Rc::clone(&host);
+        let sink = Rc::new(move |signal: Signal| match signal {
+            Signal::Interaction(event) => ordered.accept(hl::extension::Order::Interaction(event)),
+            Signal::InteractionAt { slot, event } => {
+                ordered.accept(hl::extension::Order::InteractionAt(hl_extension::SurfaceEvent {
+                    slot,
+                    event,
+                }))
+            }
+            Signal::Retry => ordered.accept(hl::extension::Order::Retry),
+        });
+        let generation = Rc::new(Cell::new(None));
+        let publish = Rc::clone(&generation);
+        let ready_gallery = shown.clone();
+        let (widget, page) = Interface::with_lifecycle(
+            deliveries,
+            sink,
+            Rc::new(|_| {}),
+            Rc::new(move || {
+                if let Some(generation) = publish.get() {
+                    ready_gallery.ready("sample", generation);
+                }
+            }),
+        );
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.append(&widget);
+        let token = shown.enrol(
+            "sample",
+            &widget,
+            &holder,
+            &entry.pane_providers,
+            Rc::new(move |selection| host.accept(hl::extension::Order::PaneProvider(selection))),
+        );
+        generation.set(Some(token));
+        let page = page.install();
+        retained_pages.borrow_mut().push(Rc::clone(&page));
+        let weak = Rc::downgrade(&page);
+        shown.enrol_semantics(
+            "sample",
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .ok_or_else(|| hl_extension::HostError::Absent("closed".into()))?
+                    .borrow()
+                    .semantics(slot)
+            }),
+            Rc::new(|_, _| Ok(())),
+        );
+        holder.upcast()
+    });
+    let shelf = Shelf::new(&view, &roster, surfaces);
+    shelf.install();
+
+    std::fs::remove_dir_all(&root).expect("remove durable root");
+    std::fs::write(&root, b"jammed").expect("jam durable root");
+    assert!(roster.borrow_mut().enable(&named("sample")).is_err());
+    assert_eq!(roster.borrow().stage(&named("sample")), Stage::Standby);
+    assert!(
+        !greeted.load(Ordering::Acquire),
+        "failed persistence starts no host connection"
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "failed persistence publishes no provider"
+    );
+
+    std::fs::remove_file(&root).expect("clear jam");
+    std::fs::create_dir(&root).expect("repair storage");
+    roster.borrow_mut().enable(&named("sample")).expect("durable retry");
+    shelf.refresh(&named("sample"));
+    assert!(
+        until(|| greeted.load(Ordering::Acquire)),
+        "retry opens the real Unix conversation"
+    );
+    assert!(
+        until(|| {
+            for page in pages.borrow().iter() {
+                page.borrow_mut().tick();
+            }
+            !gallery.providers().is_empty()
+        }),
+        "the accepted first frame publishes the provider only after durable retry; semantics={:?}",
+        gallery.semantics("sample", "")
     );
 }
 
