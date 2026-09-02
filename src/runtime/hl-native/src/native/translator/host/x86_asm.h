@@ -21,6 +21,7 @@ typedef struct hl_x64_asm {
     uint8_t *cursor;
     uint8_t *end;
     int overflow;
+    int capacity;
 } hl_x64_asm;
 
 enum { HL_X64_RAX = 0, HL_X64_RCX = 1, HL_X64_RDX = 2, HL_X64_RSP = 4, HL_X64_R11 = 11, HL_X64_R15 = 15 };
@@ -28,6 +29,7 @@ enum { HL_X64_RAX = 0, HL_X64_RCX = 1, HL_X64_RDX = 2, HL_X64_RSP = 4, HL_X64_R1
 static inline void hl_x64_u8(hl_x64_asm *a, uint8_t value) {
     if (a->cursor >= a->end) {
         a->overflow = 1;
+        a->capacity = 1;
         return;
     }
     *a->cursor++ = value;
@@ -46,6 +48,7 @@ static inline void hl_x64_u64(hl_x64_asm *a, uint64_t value) {
 static inline void hl_x64_copy(hl_x64_asm *a, const uint8_t *bytes, int length) {
     if (length < 0 || a->cursor + length > a->end) {
         a->overflow = 1;
+        a->capacity = length >= 0;
         return;
     }
     memcpy(a->cursor, bytes, (size_t)length);

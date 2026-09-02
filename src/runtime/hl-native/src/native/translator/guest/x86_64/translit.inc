@@ -2070,7 +2070,7 @@ static int translit_jcc_ibtc_stub_init(void) {
     uint32_t owner_token;
     if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) return 0;
     uint8_t *entry = g_cache + ((sizeof *header + 15u) & ~15u);
-    hl_x64_asm a = {entry, g_cache + CACHE_EMIT_HEADROOM, 0};
+    hl_x64_asm a = {entry, g_cache + CACHE_EMIT_HEADROOM, 0, 0};
     uint8_t *rsp_canonical = NULL, *flags_canonical = NULL;
     translit_emit_spill_after_rax(&a, &rsp_canonical, &flags_canonical);
     hl_x64_cmp_gs_imm8(&a, OFF_IRQ, 0);
@@ -2280,7 +2280,7 @@ static int translit_direct_jmp_ibtc_stub_init(void) {
     if (!jit_body_owner_reserve_n(g_cache_gen, 3, &owner_token)) return 0;
     uint8_t *entry = g_cp;
     while ((uintptr_t)entry & 15u) ++entry;
-    hl_x64_asm a = {entry, g_cache + CACHE_EMIT_HEADROOM, 0};
+    hl_x64_asm a = {entry, g_cache + CACHE_EMIT_HEADROOM, 0, 0};
     uint8_t *rsp_canonical = NULL, *flags_canonical = NULL;
     translit_emit_spill_after_rax(&a, &rsp_canonical, &flags_canonical);
     hl_x64_cmp_gs_imm8(&a, OFF_IRQ, 0);
@@ -3549,7 +3549,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                 .imm = scenario == 158 ? 0xA5 : 0x5A,
                                 .imm_bytes = 1};
         uint8_t emitted[64] = {0};
-        hl_x64_asm readonly_output = {emitted, emitted + sizeof emitted, 0};
+        hl_x64_asm readonly_output = {emitted, emitted + sizeof emitted, 0, 0};
         uint8_t *save_end = NULL, *op_end = NULL;
         uint64_t target = UINT64_C(0x1122334455667788);
         if (!translit_lower_natural_riprel_readonly(&readonly_output, &readonly, target, &save_end,
@@ -3610,14 +3610,14 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         const uint64_t target = UINT64_C(0x7f0012345678);
         for (int reg = 0; reg < 16; ++reg) {
             uint8_t code[32] = {0};
-            hl_x64_asm output = {code, code + sizeof code, 0};
+            hl_x64_asm output = {code, code + sizeof code, 0, 0};
             int preserve = -1;
             load.reg = reg;
             int lowered = translit_lower_absolute_riprel(&output, &load, target, target, 0, 1, &preserve);
             if ((reg == HL_X64_RSP) == lowered || (lowered && preserve != reg)) return 252 + reg;
         }
         uint8_t code[32] = {0};
-        hl_x64_asm output = {code, code + sizeof code, 0};
+        hl_x64_asm output = {code, code + sizeof code, 0, 0};
         int preserve = -1;
         load.reg = 1;
         if (translit_lower_absolute_riprel(&output, &load, target, target, 0, 0, &preserve)) return 269;
@@ -3723,7 +3723,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 8) return translit_displaced_safe_for(&insn, TL_CALL, 1) ? 11 : 0;
     if (scenario == 9) return translit_displaced_safe_for(&insn, TL_COPY, 1) ? 0 : 12;
     uint8_t bytes[32] = {0};
-    hl_x64_asm output = {bytes, bytes + sizeof(bytes), 0};
+    hl_x64_asm output = {bytes, bytes + sizeof(bytes), 0, 0};
     insn.opsize = 8;
     if (scenario == 10) {
         insn.op = 0x8D;
@@ -4136,7 +4136,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 40) {
         uint8_t emitted[32] = {0};
-        hl_x64_asm output = {emitted, emitted + sizeof emitted, 0};
+        hl_x64_asm output = {emitted, emitted + sizeof emitted, 0, 0};
         translit_xmm_cpu(&output, 9, 1);
         static const uint8_t load[] = {0x65, 0xF3, 0x44, 0x0F, 0x6F, 0x0C, 0x25,
                                        (uint8_t)(OFF_V + 16 * 9),
@@ -4354,7 +4354,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 49) {
         uint8_t emitted[16] = {0};
-        hl_x64_asm output = {emitted, emitted + sizeof emitted, 0};
+        hl_x64_asm output = {emitted, emitted + sizeof emitted, 0, 0};
         hl_x64_reg_mem_disp32(&output, 0x8B, 15, 11, INT32_C(0x12345678));
         static const uint8_t expected[] = {0x4D, 0x8B, 0xBB, 0x78, 0x56, 0x34, 0x12};
         return !output.overflow && output.cursor - emitted == (ptrdiff_t)sizeof expected &&
@@ -4434,7 +4434,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 55) {
         uint8_t reload[192] = {0};
-        hl_x64_asm reload_output = {reload, reload + sizeof reload, 0};
+        hl_x64_asm reload_output = {reload, reload + sizeof reload, 0, 0};
         translit_emit_reload(&reload_output);
         // push %gs:flags; popfq; load RAX then RCX; load guest RSP last.
         const uint8_t prefix[] = {0x65, 0xff, 0x34, 0x25, 0x90, 0x02, 0x00, 0x00, 0x9d,
@@ -4549,7 +4549,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 67) {
         uint8_t shape[32] = {0};
-        hl_x64_asm shape_output = {shape, shape + sizeof shape, 0};
+        hl_x64_asm shape_output = {shape, shape + sizeof shape, 0, 0};
         uint8_t *marker = translit_shape_exit(&shape_output, HL_BACKEND_SHAPE_T_DIRECT_JUMP, 2, 3, 4);
         translit_shape_would_link_patch(marker, HL_BACKEND_WOULD_LINK_DIRECT_JUMP,
                                         HL_BACKEND_WOULD_LINK_TARGET_UNMAPPED);
@@ -4569,7 +4569,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 68) {
         uint8_t shapes[64] = {0};
-        hl_x64_asm shape_output = {shapes, shapes + sizeof shapes, 0};
+        hl_x64_asm shape_output = {shapes, shapes + sizeof shapes, 0, 0};
         uint8_t *source_marker =
             translit_shape_exit(&shape_output, HL_BACKEND_SHAPE_T_DIRECT_JUMP, 0, 0, 0);
         uint8_t *target_marker =
@@ -4685,7 +4685,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     }
     if (scenario == 70) {
         uint8_t emitted[32] = {0};
-        hl_x64_asm marker_output = {emitted, emitted + sizeof emitted, 0};
+        hl_x64_asm marker_output = {emitted, emitted + sizeof emitted, 0, 0};
         uint8_t *marker = translit_shape_fall_exit(&marker_output, 3, 2, 1, HL_BACKEND_FALL_FETCH);
         if (marker == NULL || marker_output.overflow) return 88;
         translit_shape_would_link_patch(marker, HL_BACKEND_WOULD_LINK_FALLTHROUGH,
@@ -4975,7 +4975,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (staged_telemetry) translit_attempt_telemetry_discard();
         return NULL;
     }
-    struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0}, start, g_rw2rx};
+    struct translit_builder builder = {{start, start + TL_MAX_BYTES, 0, 0}, start, g_rw2rx};
     hl_x64_asm *a = &builder.asm_state;
     translit_pcache_census_ranges census_ranges = {0};
     int census_emitted = INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX;
@@ -5721,6 +5721,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                       ? HL_BACKEND_TRANSLIT_FAILURE_FIRST_UNSUPPORTED
                                   : fall_stop == HL_BACKEND_FALL_DISPLACED_UNSAFE
                                       ? HL_BACKEND_TRANSLIT_FAILURE_FIRST_DISPLACED
+                                  : a->capacity
+                                      ? HL_BACKEND_TRANSLIT_FAILURE_FIRST_CAPACITY
                                       : HL_BACKEND_TRANSLIT_FAILURE_FIRST_EMIT;
         hl_backend_tree_translit_failure(failure_reason, gpc, failure_pc, failure_index,
                                          failure_decoded > 0 ? translit_unsupported_key(&failure_insn) : 0,
@@ -7929,7 +7931,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
     ibtc_ent *entry = &translit_ret_ibtc[ibtc_index(target)];
     if (scenario == 118) {
         uint8_t bytes[128] = {0};
-        hl_x64_asm output = {bytes, bytes + sizeof bytes, 0};
+        hl_x64_asm output = {bytes, bytes + sizeof bytes, 0, 0};
         translit_ret_sim_ranges ranges = translit_emit_ret_exit(&output, 8);
         return !output.overflow && ranges.load_end < ranges.rsp_end && ranges.rsp_end < ranges.rip_end &&
                        ranges.rip_end < ranges.rax_end && ranges.rax_end < ranges.marker_end
@@ -8038,7 +8040,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     }
     if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
-        hl_x64_asm a_on = {on, on + sizeof on, 0}, a_off = {off, off + sizeof off, 0};
+        hl_x64_asm a_on = {on, on + sizeof on, 0, 0}, a_off = {off, off + sizeof off, 0, 0};
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
         translit_jcc_ibtc_stub_entry = on + 1024;
         translit_jcc_ibtc_site_ranges on_ranges =
@@ -9348,7 +9350,7 @@ static int translit_pcache_census_signal_stage_test(void) {
     jit_body_owner_drop_generation(g_cache_gen);
     uint32_t token;
     int exact = jit_body_owner_reserve_n(g_cache_gen, TL_PCACHE_CENSUS_OWNER_RANGES + 1, &token);
-    hl_x64_asm a = {arena, arena + arena_size, 0};
+    hl_x64_asm a = {arena, arena + arena_size, 0, 0};
     translit_pcache_census_ranges site = translit_emit_pcache_census(&a, 0);
     jit_body_owner_range ranges[TL_PCACHE_CENSUS_OWNER_RANGES + 1];
     uint32_t count = 0;
