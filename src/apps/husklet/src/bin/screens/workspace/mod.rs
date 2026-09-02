@@ -279,7 +279,13 @@ mod semantic_tests {
             let first = view.semantic_snapshot();
             assert_eq!(first.root.role, "navigation");
             assert_eq!(first.root.children.len(), 2);
-            assert_eq!(first.root.children[0].value.as_deref(), Some("true"));
+            let extensions = first
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Extensions"))
+                .expect("extensions is registered by its owner");
+            assert_eq!(extensions.value.as_deref(), Some("true"));
 
             let settings = first
                 .root
