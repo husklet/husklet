@@ -461,12 +461,12 @@ impl<'a> CaseExecution<'a> {
             let created = networks.create(network).await?;
             networks.connect(&created.name, name, endpoint).await?;
         }
-        self.containers.start(name).await?;
         if let Some(state) = checkpoint_state {
             return self
                 .container_checkpoint_cycles(name, timeout, observed, state.path())
                 .await;
         }
+        self.containers.start(name).await?;
         let status = if let Some(orchestration) = self.case.orchestration {
             let delay = Duration::from_millis(orchestration.stop_after_ms.expect("validated stop orchestration"));
             tokio::time::sleep(delay).await;
@@ -530,21 +530,37 @@ impl<'a> CaseExecution<'a> {
         let deadline = Instant::now() + timeout;
         let output = state.join("output");
         let mut offset = 0;
+        bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
         wait_for_marker(&output, "READY leader=", deadline).await?;
-        self.containers.checkpoint(name, remaining(deadline)?).await?;
+        bounded_checkpoint_phase(
+            deadline,
+            "first container checkpoint",
+            self.containers.checkpoint(name, remaining(deadline)?),
+        )
+        .await?;
         offset = validate_checkpoint_generation(&output, offset)?;
 
         std::fs::write(state.join("cycle1"), [])?;
-        self.containers.start(name).await?;
+        bounded_checkpoint_phase(deadline, "first container restore", self.containers.start(name)).await?;
         wait_for_marker(&output, "CYCLE 1 progress=", deadline).await?;
-        self.containers.checkpoint(name, remaining(deadline)?).await?;
+        bounded_checkpoint_phase(
+            deadline,
+            "second container checkpoint",
+            self.containers.checkpoint(name, remaining(deadline)?),
+        )
+        .await?;
         offset = validate_checkpoint_generation(&output, offset)?;
 
         std::fs::write(state.join("cycle2"), [])?;
-        self.containers.start(name).await?;
+        bounded_checkpoint_phase(deadline, "second container restore", self.containers.start(name)).await?;
         wait_for_marker(&output, "CYCLE 2 progress=", deadline).await?;
         std::fs::write(state.join("stop"), [])?;
-        let status = self.wait(name, remaining(deadline)?).await?;
+        let status = bounded_checkpoint_phase(
+            deadline,
+            "final restored container exit",
+            self.wait(name, remaining(deadline)?),
+        )
+        .await?;
         *observed = Some(status);
         validate_checkpoint_generation(&output, offset)?;
         let text = std::fs::read_to_string(output)?;
@@ -554,6 +570,20 @@ impl<'a> CaseExecution<'a> {
         }
         Ok(())
     }
+}
+
+async fn bounded_checkpoint_phase<T, E>(
+    deadline: Instant,
+    phase: &str,
+    operation: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, Error>
+where
+    E: Into<Error>,
+{
+    tokio::time::timeout_at(deadline, operation)
+        .await
+        .map_err(|_| format!("{phase} exceeded the container checkpoint case deadline"))?
+        .map_err(Into::into)
 }
 
 fn remaining(deadline: Instant) -> Result<Duration, Error> {
