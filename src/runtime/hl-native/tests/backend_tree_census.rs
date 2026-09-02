@@ -98,6 +98,15 @@ fn jcc_invalid_site_table_counts_duplicates_and_reports_overflow() {
 }
 
 #[test]
+fn fork_reservation_gap_is_visible_until_failed_fork_cleanup() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 14)
+            .unwrap_or_else(|status| panic!("ISA {isa} backend-tree reservation-gap scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn executed_family_counts_aggregate_across_forks_and_ignore_top8_saturation() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

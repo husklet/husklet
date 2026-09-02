@@ -26,6 +26,14 @@ const FIELDS: [&str; 21] = [
     "direct_jmp_ibtc_suppressed",
     "direct_jmp_ibtc_invalid_refusals",
 ];
+const LIFECYCLE_FIELDS: [&str; 6] = [
+    "lifecycle_settled",
+    "missing_claims",
+    "duplicate_finalize",
+    "reserved",
+    "live",
+    "claimed",
+];
 
 fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
     let records = stderr
@@ -43,7 +51,8 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
         let Some((name, value)) = token.split_once('=') else {
             return Err(format!("production mixed-SSE census has malformed token {token:?}"));
         };
-        if !FIELDS.contains(&name) {
+        let version = fields.get("version").copied().unwrap_or(10);
+        if !FIELDS.contains(&name) && !(version >= 10 && LIFECYCLE_FIELDS.contains(&name)) {
             return Err(format!("production mixed-SSE census has extra field {name:?}"));
         }
         let value = value
@@ -58,8 +67,25 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
             return Err(format!("production mixed-SSE census omits field {name:?}"));
         }
     }
-    if fields["version"] != 4 || fields["available"] != 1 {
+    if fields["version"] >= 10 {
+        for name in LIFECYCLE_FIELDS {
+            if !fields.contains_key(name) {
+                return Err(format!("production mixed-SSE census omits field {name:?}"));
+            }
+        }
+    }
+    if !matches!(fields["version"], 4 | 10) || fields["available"] != 1 {
         return Err("production mixed-SSE census is unavailable or has the wrong version".into());
+    }
+    if fields["version"] >= 10
+        && (fields["lifecycle_settled"] != 1
+            || fields["missing_claims"] != 0
+            || fields["duplicate_finalize"] != 0
+            || fields["reserved"] != 0
+            || fields["live"] != 0
+            || fields["claimed"] != 0)
+    {
+        return Err("production mixed-SSE lifecycle did not settle cleanly".into());
     }
     if fields["mixed_sse_executed_transitions"] < fields["mixed_sse_executed"]
         || (fields["mixed_sse_executed"] == 0 && fields["mixed_sse_executed_transitions"] != 0)

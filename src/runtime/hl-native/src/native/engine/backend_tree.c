@@ -1505,6 +1505,24 @@ static int hl_backend_tree_wait(pid_t child, int reap_as_abnormal) {
 static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_services *host) {
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
+    if (scenario == 14) {
+        struct hl_backend_tree_slot *paused = hl_backend_tree_prepare_fork();
+        if (paused == NULL || atomic_load_explicit(&paused->pid, memory_order_acquire) != -1 ||
+            atomic_load_explicit(&paused->lifecycle, memory_order_acquire) != HL_BACKEND_TREE_CLAIMED)
+            return 97;
+        uint64_t reserved = 0;
+        for (uint32_t index = 0; index < HL_BACKEND_TREE_SLOTS; ++index)
+            if (atomic_load_explicit(&g_backend_tree->slots[index].pid, memory_order_acquire) == -1) ++reserved;
+        if (reserved != 1) return 98;
+        hl_backend_tree_after_fork(-1, paused);
+        reserved = 0;
+        for (uint32_t index = 0; index < HL_BACKEND_TREE_SLOTS; ++index)
+            if (atomic_load_explicit(&g_backend_tree->slots[index].pid, memory_order_acquire) == -1) ++reserved;
+        return reserved == 0 && atomic_load_explicit(&paused->pid, memory_order_acquire) == 0 &&
+                       atomic_load_explicit(&paused->lifecycle, memory_order_acquire) == 0
+                   ? 0
+                   : 99;
+    }
     if (scenario == 4) {
         if (!hl_backend_tree_finalize(0) || hl_backend_tree_finalize(0)) return 41;
         struct hl_backend_tree_summary summary;
@@ -2281,7 +2299,37 @@ static int hl_backend_mixed_sse_parent_barrier(struct hl_backend_mixed_sse_share
 #define hl_backend_mixed_sse_parent_barrier(census, root_pid) 0
 #endif
 
+struct hl_backend_mixed_sse_lifecycle_summary {
+    uint64_t reserved;
+    uint64_t live;
+    uint64_t claimed;
+};
+
+static struct hl_backend_mixed_sse_lifecycle_summary hl_backend_mixed_sse_lifecycle_summary(
+    struct hl_backend_mixed_sse_shared *census, int root_pid) {
+    struct hl_backend_mixed_sse_lifecycle_summary summary = {0};
+    for (uint32_t index = 0; index < HL_BACKEND_MIXED_SSE_SLOTS; ++index) {
+        struct hl_backend_tree_slot *slot = &census->slots[index];
+        int pid = atomic_load_explicit(&slot->pid, memory_order_acquire);
+        if (pid == -1) {
+            ++summary.reserved;
+            continue;
+        }
+        if (pid <= 0 ||
+            atomic_load_explicit(&slot->lifecycle, memory_order_acquire) != HL_BACKEND_MIXED_SSE_CLAIMED)
+            continue;
+        ++summary.claimed;
+#if !defined(_WIN32)
+        if (pid != root_pid && hl_backend_mixed_sse_process_can_mutate(slot, pid)) ++summary.live;
+#else
+        (void)root_pid;
+#endif
+    }
+    return summary;
+}
+
 static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *census, int available,
+                                        int settled, struct hl_backend_mixed_sse_lifecycle_summary lifecycle,
                                         hl_linux_abi *box) {
     uint32_t expected = 0;
     if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
@@ -2292,7 +2340,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
         jcc_late_candidate += atomic_load_explicit(&census->jcc_late[reason], memory_order_relaxed);
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=9 available=%d crossings=%llu "
+                             "[diag] backend-shape version=10 available=%d lifecycle_settled=%d "
+                             "missing_claims=%llu duplicate_finalize=%llu reserved=%llu live=%llu claimed=%llu "
+                             "crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
                              "interpreted_steps=%llu mixed_sse_executed=%llu "
                              "mixed_sse_executed_transitions=%llu mixed_sse_disabled_boundaries=%llu "
@@ -2320,7 +2370,13 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "ret_ibtc_unmapped=%llu ret_ibtc_invalid_refusals=%llu "
                              "ret_fast_ibtc_hits=%llu ret_fast_ibtc_misses=%llu ret_fast_ibtc_irq=%llu "
                              "ret_fast_ibtc_fills=%llu ret_fast_ibtc_invalid_refusals=%llu\n",
-                             available,
+                             available, settled,
+                             (unsigned long long)atomic_load_explicit(&census->missing_claims,
+                                                                      memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->duplicate_finalize,
+                                                                      memory_order_relaxed),
+                             (unsigned long long)lifecycle.reserved, (unsigned long long)lifecycle.live,
+                             (unsigned long long)lifecycle.claimed,
                              (unsigned long long)(atomic_load_explicit(&census->translated_entries,
                                                                       memory_order_relaxed) +
                                                   atomic_load_explicit(&census->interpreted_entries,
@@ -2678,7 +2734,9 @@ void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_lin
     int settled = root_pid > 0 && hl_backend_mixed_sse_parent_barrier(census, root_pid);
     int complete = settled && atomic_load_explicit(&census->missing_claims, memory_order_relaxed) == 0 &&
                    atomic_load_explicit(&census->duplicate_finalize, memory_order_relaxed) == 0;
-    hl_backend_mixed_sse_report(census, complete, box);
+    struct hl_backend_mixed_sse_lifecycle_summary lifecycle =
+        hl_backend_mixed_sse_lifecycle_summary(census, root_pid);
+    hl_backend_mixed_sse_report(census, complete, settled, lifecycle, box);
 }
 
 #define hl_backend_tree_begin(enabled, host) ((void)0)

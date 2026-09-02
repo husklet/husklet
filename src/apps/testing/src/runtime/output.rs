@@ -77,26 +77,15 @@ const BACKEND_SHAPE_PRODUCT_V5_EXTRA: &[&str] = &[
 const BACKEND_SHAPE_PRODUCT_V6_EXTRA: &[&str] =
     &["executed_form_total", "executed_form_unique", "executed_form_overflow"];
 const BACKEND_SHAPE_PRODUCT_V9_EXTRA: &[&str] = &[
-    "jcc_taken_ibtc_misses",
-    "indirect_ibtc_misses",
-    "jcc_late_candidate",
-    "jcc_late_eligible",
-    "jcc_late_invalid",
-    "jcc_late_target_absent",
-    "jcc_late_page_generation",
-    "jcc_late_displacement",
-    "jcc_late_other",
-    "jcc_invalid_null",
-    "jcc_invalid_magic",
-    "jcc_invalid_gpc",
-    "jcc_invalid_block_generation",
-    "jcc_invalid_entry_zero",
-    "jcc_invalid_length_zero",
-    "jcc_invalid_resolve",
-    "jcc_invalid_resolved_generation",
-    "jcc_invalid_entry_overflow",
-    "jcc_invalid_site_unique",
-    "jcc_invalid_site_overflow",
+    "jcc_taken_ibtc_misses", "indirect_ibtc_misses", "jcc_late_candidate", "jcc_late_eligible",
+    "jcc_late_invalid", "jcc_late_target_absent", "jcc_late_page_generation", "jcc_late_displacement",
+    "jcc_late_other", "jcc_invalid_null", "jcc_invalid_magic", "jcc_invalid_gpc",
+    "jcc_invalid_block_generation", "jcc_invalid_entry_zero", "jcc_invalid_length_zero",
+    "jcc_invalid_resolve", "jcc_invalid_resolved_generation", "jcc_invalid_entry_overflow",
+    "jcc_invalid_site_unique", "jcc_invalid_site_overflow",
+];
+const BACKEND_SHAPE_PRODUCT_V10_EXTRA: &[&str] = &[
+    "lifecycle_settled", "missing_claims", "duplicate_finalize", "reserved", "live", "claimed",
 ];
 
 fn backend_shape_product_field(name: &str, version: u64) -> bool {
@@ -116,6 +105,9 @@ fn backend_shape_product_field(name: &str, version: u64) -> bool {
         return true;
     }
     if version >= 9 && BACKEND_SHAPE_PRODUCT_V9_EXTRA.contains(&name) {
+        return true;
+    }
+    if version >= 10 && BACKEND_SHAPE_PRODUCT_V10_EXTRA.contains(&name) {
         return true;
     }
     let Some(suffix) = name.strip_prefix("executed_form") else {
@@ -748,15 +740,26 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             }
         }
     }
-    if fields["version"] != 4
-        && fields["version"] != 5
-        && fields["version"] != 6
-        && fields["version"] != 7
-        && fields["version"] != 9
-    {
+    if version >= 10 {
+        for name in BACKEND_SHAPE_PRODUCT_V10_EXTRA {
+            if !fields.contains_key(name) {
+                return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+            }
+        }
+    }
+    if !matches!(fields["version"], 4 | 5 | 6 | 7 | 9 | 10) {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
     if fields["available"] != 1 {
+        if version >= 10 {
+            return Err(format!(
+                "backend-shape product diagnostic is unavailable: lifecycle_settled={} missing_claims={} \
+                 duplicate_finalize={} reserved={} live={} claimed={}",
+                fields["lifecycle_settled"], fields["missing_claims"], fields["duplicate_finalize"],
+                fields["reserved"], fields["live"], fields["claimed"]
+            )
+            .into());
+        }
         return Err("backend-shape product diagnostic is unavailable".into());
     }
     if fields["jcc_ibtc_enabled"] > 1 {
@@ -1322,6 +1325,33 @@ mod tests {
 
         let idle = product.replacen(" translated_entries=3", " translated_entries=0", 1);
         assert!(validate_translated_execution(idle.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn product_v10_unavailable_record_names_the_incomplete_lifecycle_component() {
+        let mut product = PRODUCT_SHAPE_ON
+            .trim_end()
+            .replace("version=4 available=1", "version=10 available=0");
+        for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA
+            .iter()
+            .chain(BACKEND_SHAPE_PRODUCT_V6_EXTRA)
+            .chain(BACKEND_SHAPE_PRODUCT_V9_EXTRA)
+        {
+            product.push_str(&format!(" {name}=0"));
+        }
+        for rank in 0..16 {
+            product.push_str(&format!(" executed_form{rank}_key=0 executed_form{rank}_count=0"));
+        }
+        product.push_str(
+            " lifecycle_settled=0 missing_claims=0 duplicate_finalize=0 reserved=1 live=0 claimed=0\n",
+        );
+        let error = backend_shape_product(product.as_bytes(), true).unwrap_err().to_string();
+        assert!(error.contains(
+            "lifecycle_settled=0 missing_claims=0 duplicate_finalize=0 reserved=1 live=0 claimed=0"
+        ), "{error}");
+        let omitted = product.replace(" reserved=1", "");
+        assert!(backend_shape_product(omitted.as_bytes(), true)
+            .unwrap_err().to_string().contains("omitted field \"reserved\""));
     }
 
     #[test]
