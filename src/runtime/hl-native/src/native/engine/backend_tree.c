@@ -13,6 +13,9 @@
  * No counter influences translation, scheduling, signal delivery, or
  * guest-visible state.
  */
+#ifndef HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE
+#define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 1
+#endif
 
 #define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
 #define HL_BACKEND_EXECUTED_FORM_TOP 16u
@@ -1544,6 +1547,8 @@ static int hl_backend_tree_wait(pid_t child, int reap_as_abnormal) {
 static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_services *host) {
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
+    if (scenario == 17) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 0 ? 0 : 110;
+    if (scenario == 18) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 1 ? 0 : 111;
     if (scenario == 16) {
         struct hl_backend_tree_slot *birth = hl_backend_tree_prepare_fork();
         if (birth == NULL) return 104;
@@ -2453,7 +2458,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
         jcc_late_candidate += atomic_load_explicit(&census->jcc_late[reason], memory_order_relaxed);
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=12 available=%d lifecycle_settled=%d "
+                             "[diag] backend-shape version=13 available=%d translation_codegen_available=%d lifecycle_settled=%d "
                              "missing_claims=%llu duplicate_finalize=%llu reserved=%llu live=%llu claimed=%llu "
                              "first_finalize_caller=%u first_finalize_actor=%d first_finalize_slot_pid=%d "
                              "duplicate_finalize_caller=%u duplicate_finalize_actor=%d "
@@ -2487,7 +2492,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "ret_ibtc_unmapped=%llu ret_ibtc_invalid_refusals=%llu "
                              "ret_fast_ibtc_hits=%llu ret_fast_ibtc_misses=%llu ret_fast_ibtc_irq=%llu "
                              "ret_fast_ibtc_fills=%llu ret_fast_ibtc_invalid_refusals=%llu\n",
-                             available, settled,
+                             available, HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE, settled,
                              (unsigned long long)atomic_load_explicit(&census->missing_claims,
                                                                       memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->duplicate_finalize,

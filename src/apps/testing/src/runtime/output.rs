@@ -93,6 +93,7 @@ const BACKEND_SHAPE_PRODUCT_V11_EXTRA: &[&str] = &[
 ];
 const BACKEND_SHAPE_PRODUCT_V12_EXTRA: &[&str] =
     &["duplicate_slot_first_caller", "duplicate_slot_first_actor"];
+const BACKEND_SHAPE_PRODUCT_V13_EXTRA: &[&str] = &["translation_codegen_available"];
 
 fn backend_shape_product_field(name: &str, version: u64) -> bool {
     if BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
@@ -120,6 +121,9 @@ fn backend_shape_product_field(name: &str, version: u64) -> bool {
         return true;
     }
     if version >= 12 && BACKEND_SHAPE_PRODUCT_V12_EXTRA.contains(&name) {
+        return true;
+    }
+    if version >= 13 && BACKEND_SHAPE_PRODUCT_V13_EXTRA.contains(&name) {
         return true;
     }
     let Some(suffix) = name.strip_prefix("executed_form") else {
@@ -403,6 +407,9 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
 pub(super) fn validate_translated_execution(stderr: &[u8]) -> Result<(), Error> {
     if product_backend_shape(stderr) {
         let shape = backend_shape_product(stderr, true)?.expect("product-shape detection established one record");
+        if shape.get("translation_codegen_available") == Some(&0) {
+            return Err("translated execution backend-shape reports translation codegen unavailable on this host/guest ISA pairing".into());
+        }
         if shape["translated_entries"] == 0 {
             return Err("translated execution backend-shape reported zero translated entries".into());
         }
@@ -773,8 +780,18 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             }
         }
     }
-    if !matches!(fields["version"], 4 | 5 | 6 | 7 | 9 | 10 | 11 | 12) {
+    if version >= 13 {
+        for name in BACKEND_SHAPE_PRODUCT_V13_EXTRA {
+            if !fields.contains_key(name) {
+                return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+            }
+        }
+    }
+    if !matches!(fields["version"], 4 | 5 | 6 | 7 | 9 | 10 | 11 | 12 | 13) {
         return Err("backend-shape product diagnostic has invalid version".into());
+    }
+    if version >= 13 && fields["translation_codegen_available"] > 1 {
+        return Err("backend-shape product translation codegen availability is not boolean".into());
     }
     if fields["available"] != 1 {
         if version >= 12 {
@@ -1389,6 +1406,22 @@ mod tests {
         let omitted = product.replace(" duplicate_slot_first_caller=1", "");
         assert!(backend_shape_product(omitted.as_bytes(), true)
             .unwrap_err().to_string().contains("omitted field \"duplicate_slot_first_caller\""));
+
+        let mut codegen_unavailable = product
+            .trim_end()
+            .replace("version=12 available=0", "version=13 available=1")
+            .replace(" duplicate_finalize=1", " duplicate_finalize=0")
+            .replace(" jcc_taken_ibtc_misses=0", " jcc_taken_ibtc_misses=1");
+        codegen_unavailable.push_str(
+            " translation_codegen_available=0\n[diag] x86-exit-family version=1 translated_entries=0 total=0 \
+             t_fallthrough=0 t_jcc_taken=0 t_jcc_fall=0 t_direct_jmp=0 t_direct_call=0 t_ret=0 \
+             t_jmp_reg=0 t_jmp_mem=0 t_call_reg=0 t_call_mem=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0\n",
+        );
+        let error = validate_translated_execution(codegen_unavailable.as_bytes()).unwrap_err().to_string();
+        assert!(error.contains("translation codegen unavailable on this host/guest ISA pairing"), "{error}");
+        let missing = codegen_unavailable.replace(" translation_codegen_available=0", "");
+        assert!(backend_shape_product(missing.as_bytes(), true)
+            .unwrap_err().to_string().contains("omitted field \"translation_codegen_available\""));
     }
 
     #[test]

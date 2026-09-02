@@ -89,6 +89,16 @@ fn restore_style_fork_rebinds_each_process_to_its_own_lifecycle_slot() {
 }
 
 #[test]
+fn host_guest_pair_reports_whether_translation_codegen_exists() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let aarch64_scenario = if cfg!(target_arch = "aarch64") { 18 } else { 17 };
+    hl_native::backend_tree_census_test(1, aarch64_scenario)
+        .unwrap_or_else(|status| panic!("AArch64 guest codegen selection failed: {status}"));
+    hl_native::backend_tree_census_test(2, 18)
+        .unwrap_or_else(|status| panic!("x86-64 guest codegen selection failed: {status}"));
+}
+
+#[test]
 fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

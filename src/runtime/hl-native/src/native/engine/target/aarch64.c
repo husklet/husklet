@@ -252,9 +252,15 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
+#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
+#define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 1
+#else
+#define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 0
+#endif
 #define HL_BACKEND_TREE_TEST_NAME hl_aarch64_backend_tree_census_test
 #include "../backend_tree.c"
 #undef HL_BACKEND_TREE_TEST_NAME
+#undef HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE
 
 // Host-CPU fork: an AArch64 host takes the same-ISA transliterating JIT below; any other takes interp.c,
 // which supplies the same seam by decoding AArch64. Both share struct cpu: it is the checkpoint format.

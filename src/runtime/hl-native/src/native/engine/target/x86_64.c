@@ -197,9 +197,11 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
+#define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 1
 #define HL_BACKEND_TREE_TEST_NAME hl_x86_64_backend_tree_census_test
 #include "../backend_tree.c"
 #undef HL_BACKEND_TREE_TEST_NAME
+#undef HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE
 
 static void jit86_store_alias_changed(uint64_t guest, size_t size);
 static int jit86_store_alias_observation_active(void);
