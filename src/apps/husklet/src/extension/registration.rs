@@ -142,11 +142,12 @@ impl Candidate {
             .ensure(workspace)
             .map_err(|error| error.to_string())?;
         let bridge = Bridge::new(socket).map_err(|error| error.to_string())?;
-        Self::acquire_with_bridge(reference, progress, cancellation, &bridge)
+        Self::acquire_with_bridge(reference, workspace.arch.as_str(), progress, cancellation, &bridge)
     }
 
     fn acquire_with_bridge(
         reference: &str,
+        architecture: &str,
         progress: &Sender<Acquisition>,
         cancellation: &Cancellation,
         bridge: &Bridge,
@@ -164,6 +165,7 @@ impl Candidate {
             Err(error) => return Err(error.to_string()),
         };
         cancellation.check()?;
+        platform(&inspection, architecture)?;
         let _ = progress.send(Acquisition::ReadingManifest);
         let path = manifest_path(&inspection.config.labels);
         let archive = extract(&bridge, reference, &path, cancellation)?;
@@ -177,13 +179,36 @@ impl Candidate {
     }
 
     #[cfg(test)]
-    fn acquire_from_socket(socket: &std::path::Path, reference: &str, progress: &Sender<Acquisition>) {
+    fn acquire_from_socket(
+        socket: &std::path::Path,
+        architecture: hl_ws::Arch,
+        reference: &str,
+        progress: &Sender<Acquisition>,
+    ) {
         let result = Bridge::new(socket.to_path_buf())
             .map_err(|error| error.to_string())
-            .and_then(|bridge| Self::acquire_with_bridge(reference, progress, &Cancellation::default(), &bridge));
+            .and_then(|bridge| {
+                Self::acquire_with_bridge(
+                    reference,
+                    architecture.as_str(),
+                    progress,
+                    &Cancellation::default(),
+                    &bridge,
+                )
+            });
         let event = result.map_or_else(Acquisition::Failed, Acquisition::Ready);
         let _ = progress.send(event);
     }
+}
+
+fn platform(inspection: &InspectImage, architecture: &str) -> Result<(), String> {
+    if inspection.os != "linux" || inspection.architecture != architecture {
+        return Err(format!(
+            "extension image {} is {}/{}, but this workspace requires linux/{architecture}",
+            inspection.id, inspection.os, inspection.architecture
+        ));
+    }
+    Ok(())
 }
 
 /// Pulls one registry reference, forwarding only progress the daemon actually
@@ -337,19 +362,21 @@ mod tests {
         builder.append_data(&mut header, path, bytes).unwrap();
     }
 
-    fn extension_archive() -> Vec<u8> {
+    fn extension_archive(architecture: &str, reference: &str) -> Vec<u8> {
         use hl_images::Digest;
-        let document = b"name = \"daemon-candidate\"\ndisplay_name = \"Daemon candidate\"\nversion = \"1.2.3\"\nprotocol = 1\ncapabilities = [\"container-read\"]\n";
+        let document = format!(
+            "name = \"daemon-{architecture}\"\ndisplay_name = \"Daemon {architecture}\"\nversion = \"1.2.3\"\nprotocol = 1\ncapabilities = [\"container-read\"]\n"
+        );
         let mut layer = Vec::new();
         {
             let mut tar = tar::Builder::new(&mut layer);
-            append(&mut tar, "etc/husklet/extension.toml", document);
+            append(&mut tar, "etc/husklet/extension.toml", document.as_bytes());
             tar.finish().unwrap();
         }
         let config = serde_json::to_vec(&serde_json::json!({
-            "architecture": "arm64", "os": "linux",
+            "architecture": architecture, "os": "linux",
             "config": {
-                "Entrypoint": ["/opt/husklet/extension"],
+                "Entrypoint": [format!("/opt/husklet/{architecture}")],
                 "Cmd": ["--serve"],
                 "User": "65532:65532",
                 "Labels": {
@@ -361,7 +388,7 @@ mod tests {
         }))
         .unwrap();
         let manifest = serde_json::to_vec(&serde_json::json!([{
-            "Config": "config.json", "RepoTags": ["scenario/extension:v1"], "Layers": ["layer.tar"]
+            "Config": "config.json", "RepoTags": [reference], "Layers": ["layer.tar"]
         }]))
         .unwrap();
         let mut archive = Vec::new();
@@ -433,7 +460,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_real_daemon_candidate_is_inspected_copied_and_removed_without_starting() {
+    async fn both_architecture_candidates_are_bound_to_their_workspace_without_starting() {
         use super::super::sidecar::{Image, SidecarSpec, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
         use hl_client::model::EventQuery;
         use hl_container::{Config, Containers, Persistence};
@@ -447,7 +474,13 @@ mod tests {
             .await
             .unwrap();
         Archive::load(
-            &extension_archive()[..],
+            &extension_archive("arm64", "scenario/extension:arm64")[..],
+            &containers.images().unwrap(),
+            Limits::default(),
+        )
+        .unwrap();
+        Archive::load(
+            &extension_archive("amd64", "scenario/extension:amd64")[..],
             &containers.images().unwrap(),
             Limits::default(),
         )
@@ -466,35 +499,38 @@ mod tests {
         assert!(socket.exists(), "embedded daemon socket did not appear");
 
         let client = hl_client::Client::unix(&socket).unwrap();
-        let (progress, received) = std::sync::mpsc::channel();
-        let acquisition_socket = socket.clone();
-        let worker = std::thread::spawn(move || {
-            Candidate::acquire_from_socket(&acquisition_socket, "scenario/extension:v1", &progress)
-        });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let ready = loop {
-            let event = received
-                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                .expect("candidate acquisition timed out");
-            if matches!(
-                event,
-                Acquisition::Ready(_) | Acquisition::Failed(_) | Acquisition::Cancelled
-            ) {
-                break event;
-            }
+        let acquire = |architecture, reference: &'static str| {
+            let (progress, received) = std::sync::mpsc::channel();
+            let acquisition_socket = socket.clone();
+            let worker = std::thread::spawn(move || {
+                Candidate::acquire_from_socket(&acquisition_socket, architecture, reference, &progress)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let terminal = loop {
+                let event = received
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .expect("candidate acquisition timed out");
+                if matches!(
+                    event,
+                    Acquisition::Ready(_) | Acquisition::Failed(_) | Acquisition::Cancelled
+                ) {
+                    break event;
+                }
+            };
+            worker.join().unwrap();
+            terminal
         };
-        worker.join().unwrap();
-        let Acquisition::Ready(candidate) = ready else {
-            panic!("candidate did not become ready: {ready:?}")
+        let Acquisition::Ready(candidate) = acquire(hl_ws::Arch::Arm64, "scenario/extension:arm64") else {
+            panic!("arm64 candidate did not become ready")
         };
-        assert_eq!(candidate.manifest.name.to_string(), "daemon-candidate");
+        assert_eq!(candidate.manifest.name.to_string(), "daemon-arm64");
         assert_eq!(candidate.manifest.version, "1.2.3");
         assert!(!candidate.digest.is_empty());
 
         let inspection = client.images().inspect(&candidate.digest).await.unwrap();
         assert_eq!(inspection.os, "linux");
         assert_eq!(inspection.architecture, "arm64");
-        assert_eq!(inspection.config.entrypoint, ["/opt/husklet/extension"]);
+        assert_eq!(inspection.config.entrypoint, ["/opt/husklet/arm64"]);
         assert_eq!(inspection.config.user, "65532:65532");
         let image = Image::from_inspection(candidate.digest.clone(), &inspection);
         let credential = root.path().join("credentials/daemon-candidate.sock");
@@ -507,7 +543,7 @@ mod tests {
         let request = spec.request();
         let host = request.host_config.expect("sidecar host policy");
         assert_eq!(request.image, candidate.digest);
-        assert_eq!(request.entrypoint, Some(vec!["/opt/husklet/extension".to_owned()]));
+        assert_eq!(request.entrypoint, Some(vec!["/opt/husklet/arm64".to_owned()]));
         assert_eq!(request.user.as_deref(), Some("65532:65532"));
         assert_eq!(request.env, Some(vec![format!("{SOCKET_VARIABLE}={SOCKET_TARGET}")]));
         assert_eq!(host.network_mode, "none");
@@ -526,6 +562,93 @@ mod tests {
             ungranted.signature(),
             "consent is part of sidecar identity"
         );
+
+        let amd_root = tempfile::TempDir::new().unwrap();
+        let amd_containers = Containers::builder(Config::new(amd_root.path()).persistence(Persistence::Memory))
+            .build()
+            .await
+            .unwrap();
+        Archive::load(
+            &extension_archive("arm64", "scenario/extension:arm64")[..],
+            &amd_containers.images().unwrap(),
+            Limits::default(),
+        )
+        .unwrap();
+        Archive::load(
+            &extension_archive("amd64", "scenario/extension:amd64")[..],
+            &amd_containers.images().unwrap(),
+            Limits::default(),
+        )
+        .unwrap();
+        let amd_socket = amd_root.path().join("candidate.sock");
+        let (amd_stop, amd_stopped) = oneshot::channel();
+        let amd_server = tokio::spawn(
+            Daemon::new(amd_containers)
+                .platform(hl_images::Platform::linux_amd64())
+                .server(&amd_socket)
+                .serve_with_shutdown(async move {
+                    let _ = amd_stopped.await;
+                }),
+        );
+        for _ in 0..100 {
+            if amd_socket.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let acquire_amd = |architecture, reference: &'static str| {
+            let (progress, received) = std::sync::mpsc::channel();
+            let acquisition_socket = amd_socket.clone();
+            let worker = std::thread::spawn(move || {
+                Candidate::acquire_from_socket(&acquisition_socket, architecture, reference, &progress)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let terminal = loop {
+                let event = received
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .expect("amd64 candidate acquisition timed out");
+                if matches!(
+                    event,
+                    Acquisition::Ready(_) | Acquisition::Failed(_) | Acquisition::Cancelled
+                ) {
+                    break event;
+                }
+            };
+            worker.join().unwrap();
+            terminal
+        };
+        let amd_client = hl_client::Client::unix(&amd_socket).unwrap();
+        let amd64 = match acquire_amd(hl_ws::Arch::Amd64, "scenario/extension:amd64") {
+            Acquisition::Ready(candidate) => candidate,
+            other => panic!("amd64 candidate did not become ready: {other:?}"),
+        };
+        assert_eq!(amd64.manifest.name.to_string(), "daemon-amd64");
+        assert_ne!(
+            amd64.digest, candidate.digest,
+            "architecture-specific artifacts have distinct identities"
+        );
+        let amd64_inspection = amd_client.images().inspect(&amd64.digest).await.unwrap();
+        assert_eq!(amd64_inspection.os, "linux");
+        assert_eq!(amd64_inspection.architecture, "amd64");
+        assert_eq!(amd64_inspection.config.entrypoint, ["/opt/husklet/amd64"]);
+        let amd64_image = Image::from_inspection(amd64.digest.clone(), &amd64_inspection);
+        let amd64_spec = SidecarSpec::new(
+            &amd64.manifest,
+            &amd64.manifest.capabilities,
+            &amd64_image,
+            root.path().join("credentials/daemon-amd64.sock"),
+        );
+        assert_eq!(amd64_spec.request().image, amd64.digest);
+        assert_ne!(amd64_spec.signature(), spec.signature());
+
+        let Acquisition::Failed(mismatch) = acquire(hl_ws::Arch::Amd64, "scenario/extension:arm64") else {
+            panic!("cross-architecture candidate was not refused")
+        };
+        assert!(mismatch.contains("linux/arm64"), "actual platform is named: {mismatch}");
+        assert!(
+            mismatch.contains("linux/amd64"),
+            "required platform is named: {mismatch}"
+        );
         assert!(
             client.containers().list(true).await.unwrap().is_empty(),
             "inspection container leaked"
@@ -536,20 +659,48 @@ mod tests {
             .subscribe(&EventQuery::default().since(0))
             .await
             .unwrap();
-        let first = tokio::time::timeout(std::time::Duration::from_secs(2), events.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let second = tokio::time::timeout(std::time::Duration::from_secs(2), events.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert_eq!([first.action.as_str(), second.action.as_str()], ["create", "destroy"]);
-        assert_ne!(first.action, "start", "unconsented image execution was attempted");
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            actions.push(event.action);
+        }
+        assert_eq!(actions, ["create", "destroy"]);
+        assert!(
+            actions.iter().all(|action| action != "start"),
+            "unconsented image execution was attempted"
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), events.next())
+                .await
+                .is_err(),
+            "architecture rejection must happen before an inspection container is created"
+        );
 
         drop(events);
+        assert!(amd_client.containers().list(true).await.unwrap().is_empty());
+        let mut amd_events = amd_client
+            .events()
+            .subscribe(&EventQuery::default().since(0))
+            .await
+            .unwrap();
+        let mut amd_actions = Vec::new();
+        for _ in 0..2 {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), amd_events.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            amd_actions.push(event.action);
+        }
+        assert_eq!(amd_actions, ["create", "destroy"]);
+        assert!(amd_actions.iter().all(|action| action != "start"));
+        drop(amd_events);
+        amd_stop.send(()).unwrap();
+        amd_server.await.unwrap().unwrap();
         stop.send(()).unwrap();
         server.await.unwrap().unwrap();
     }
