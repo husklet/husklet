@@ -9,7 +9,7 @@ import catalogue, { enums, families, grouped, props, tags } from '../src/catalog
 test('the catalogue describes the whole library', () => {
   assert.equal(catalogue.version, 1);
   assert.ok(tags.length >= 120, `only ${tags.length} components; the catalogue is the whole library`);
-  assert.equal(props.length, 42);
+  assert.equal(props.length, 43);
   assert.ok(families.length > 0);
 });
 
