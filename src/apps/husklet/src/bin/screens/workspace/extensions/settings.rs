@@ -43,6 +43,17 @@ impl Settings {
         main.add_css_class("dmain");
         main.add_css_class(CARD);
         main.append(&heading(&entry.name));
+        main.append(&line(
+            &format!(
+                "version  ·  {}",
+                if entry.version.is_empty() {
+                    "unknown"
+                } else {
+                    &entry.version
+                }
+            ),
+            "fhint",
+        ));
         main.append(&line(&format!("image  ·  {}", entry.image_digest), "fhint"));
         let standing = standing(entry.stage);
         main.append(&standing);

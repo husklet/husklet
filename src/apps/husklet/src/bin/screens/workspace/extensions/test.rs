@@ -599,6 +599,14 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     assert!(entry.granted.holds(Capability::ContainerControl));
     assert!(!entry.granted.holds(Capability::ContainerRead));
     assert!(fixture.view.holds("sample"));
+    assert!(
+        descendants(page.widget().upcast_ref()).iter().any(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == "version  ·  2.0.0")
+        }),
+        "the lifecycle card identifies the active version"
+    );
 }
 
 fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
