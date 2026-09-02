@@ -65,7 +65,7 @@ struct cpu {
     uint64_t sigmask;
     uint64_t alt_sp, alt_size, alt_flags; // sigaltstack (C-only; used by os/linux service)
     uint64_t dbg_ibsrc;                   // debug: guest PC of the last indirect branch, or profiled JCC miss source
-    uint64_t ic_miss; // IBTC: set by an indirect-branch miss -> dispatcher fills g_ibtc for cpu->rip
+    uint64_t ic_miss; // IBTC miss state; diagnostics borrow it for the current JCC source descriptor
     // x87 FPU: a register stack ST(0..7) emulated at DOUBLE precision (enough for printf %f of
     // doubles; loses the 80-bit long-double tail). st[fptop&7]=ST(0). Grows downward (push=--top).
     double st[8]; // x87 stack slots
