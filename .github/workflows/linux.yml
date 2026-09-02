@@ -348,6 +348,7 @@ jobs:
           shot="$smoke_root/manager.png"
           printf 'hook-did-not-run\n' >"$shot"
           mkdir -p "$smoke_root/home" "$smoke_root/cache"
+          # shellcheck disable=SC2016 # Expanded deliberately by the inner bash, not this workflow shell.
           nix --extra-experimental-features 'nix-command flakes' develop . --command \
             bash -euo pipefail -c '
               cargo build -p husklet --bin husklet --features gui --locked --offline
