@@ -65,7 +65,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
         panes::removing_an_extension_tombstones_without_displacing_its_shell();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
-        panes::splitting_an_interface_again_moves_its_one_surface();
+        panes::two_same_extension_panes_render_independently_by_slot();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
         panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
     });
@@ -2129,39 +2129,54 @@ mod panes {
         assert_eq!(slots, [one.as_str(), two.as_str()]);
     }
 
-    pub(super) fn splitting_an_interface_again_moves_its_one_surface() {
+    pub(super) fn two_same_extension_panes_render_independently_by_slot() {
+        use super::super::super::extension::{channel, Delivery, Interface};
+        use hl_gui::{Element, Reconciliation};
+
         let bench = Bench::new();
         let (first, one) = bench.shell();
         let (_second, two) = bench.beside(&first);
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        interface.add_css_class(super::SURFACE);
+        let (post, deliveries) = channel();
+        let (interface, page) = Interface::new(deliveries, Rc::new(|_| {}));
         home.append(&interface);
+        let page = Rc::new(RefCell::new(page));
         gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
+        let retained = Rc::clone(&page);
+        gallery.enrol_panes("sample", Rc::new(move |slot| retained.borrow_mut().pane(slot)));
         Window::exhibit(&bench.window, gallery);
 
-        let old = Console::surface(&bench.window, Some("sample"), &one, Division::Below).expect("the first surface");
-        let moved =
-            Console::surface(&bench.window, Some("sample"), &two, Division::Below).expect("the relocated surface");
+        let left = Console::surface(&bench.window, Some("sample"), &one, Division::Below).expect("first surface");
+        let right = Console::surface(&bench.window, Some("sample"), &two, Division::Below).expect("second surface");
+        assert_ne!(left, right);
+        post.send(Delivery::FrameAt {
+            slot: left.clone(),
+            frame: Reconciliation::new().reconcile(&Element::text("left only")),
+        })
+        .expect("left frame");
+        post.send(Delivery::FrameAt {
+            slot: right.clone(),
+            frame: Reconciliation::new().reconcile(&Element::text("right only")),
+        })
+        .expect("right frame");
+        assert_eq!(page.borrow_mut().tick(), 2);
 
-        assert_ne!(moved, old, "the new pane has its own authoritative slot");
-        assert!(Panes::at(&bench.window, &old).is_none(), "the old holder was collapsed");
-        let held = Panes::at(&bench.window, &moved).expect("the returned slot names the new pane");
-        assert_eq!(held.occupant, Occupant::Surface);
+        let labels = |slot: &str| {
+            let pane = Panes::at(&bench.window, slot).expect("addressed surface remains mounted");
+            super::descendants(&pane.widget)
+                .into_iter()
+                .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                .map(|label| label.text().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(labels(&left).iter().any(|label| label == "left only"));
+        assert!(!labels(&left).iter().any(|label| label == "right only"));
+        assert!(labels(&right).iter().any(|label| label == "right only"));
+        assert!(!labels(&right).iter().any(|label| label == "left only"));
         assert!(
-            super::descendants(&held.widget)
-                .iter()
-                .any(|found| found == interface.upcast_ref::<gtk::Widget>()),
-            "the same interface widget moved rather than a second tree being built"
-        );
-        assert_eq!(
-            super::descendants(bench.page.upcast_ref::<gtk::Widget>())
-                .iter()
-                .filter(|found| *found == interface.upcast_ref::<gtk::Widget>())
-                .count(),
-            1,
-            "the interface appears exactly once in the layout"
+            interface.parent().is_some(),
+            "the extension overview remains independently available"
         );
     }
 

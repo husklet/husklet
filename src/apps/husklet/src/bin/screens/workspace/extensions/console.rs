@@ -225,7 +225,7 @@ impl Console {
         let extension = Self::surface_owner(window, slot)?;
         Window::gallery(window)
             .ok_or_else(|| HostError::Absent("workspace has no extension gallery".into()))?
-            .semantic_action(&extension, action)
+            .semantic_action(&extension, slot, action)
     }
 
     fn semantic_requirement(
@@ -304,23 +304,16 @@ impl Console {
         if Panes::at(window, slot).is_none() {
             return Err(absent(slot));
         }
-        let previous = Surface::of(window, origin);
+        let previous = Window::gallery(window)
+            .filter(|gallery| !gallery.retains_panes(origin))
+            .and_then(|_| Surface::of(window, origin));
         let held = Window::slot(window);
         let content = Surface::build(window, origin, None, held.clone());
         if Panes::divide(window, slot, orientation(division), &content) {
-            // One reconciliation stream owns one widget tree. Once the new
-            // half is real, collapse the old holder; `build` already moved its
-            // interface into `content`, so closing it cannot send it home.
-            if let Some(previous) = previous {
-                if let Some((old, _, _)) = Slots::new(window).surface(&previous) {
-                    let _ = Panes::close(window, &old);
-                }
-            }
             return Ok(held);
         }
-        // Nothing took the pane. Give up its registration, then return the
-        // borrowed widget to the old surface rather than changing visible
-        // location on a failed request.
+        // Nothing took the pane. Give up only this new registration; every
+        // existing addressed surface remains mounted where it was.
         Surface::discard(window, &content);
         if let Some(previous) = previous {
             Surface::restore(window, origin, &previous);

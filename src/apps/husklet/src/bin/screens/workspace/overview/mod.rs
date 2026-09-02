@@ -102,8 +102,14 @@ impl<'a> Overview<'a> {
             events,
             Box::new(move |report| {
                 let delivery = match report {
-                    Report::Frame(frame) => Delivery::Frame(frame.frame),
-                    Report::Source(mutation) => Delivery::Source(mutation.mutation),
+                    Report::Frame(frame) => Delivery::FrameAt {
+                        slot: frame.slot,
+                        frame: frame.frame,
+                    },
+                    Report::Source(mutation) => Delivery::SourceAt {
+                        slot: mutation.slot,
+                        mutation: mutation.mutation,
+                    },
                     Report::Loss(reason) => Delivery::Loss(reason),
                     Report::Fault { restarts } => Delivery::Fault { restarts },
                 };
@@ -128,6 +134,15 @@ impl<'a> Overview<'a> {
         holder.append(&widget);
         gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
         let weak = Rc::downgrade(&page);
+        gallery.enrol_panes(
+            name.as_str(),
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .map(|page| page.borrow_mut().pane(slot))
+                    .unwrap_or_else(|| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast())
+            }),
+        );
+        let weak = Rc::downgrade(&page);
         let semantics = Rc::new(move |slot: &str| {
             weak.upgrade()
                 .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
@@ -135,11 +150,11 @@ impl<'a> Overview<'a> {
                 .semantics(slot)
         });
         let weak = Rc::downgrade(&page);
-        let action = Rc::new(move |request: &hl_extension::PaneSemanticAction| {
+        let action = Rc::new(move |slot: &str, request: &hl_extension::PaneSemanticAction| {
             weak.upgrade()
                 .ok_or_else(|| hl_extension::HostError::Absent("extension surface closed".into()))?
                 .borrow()
-                .semantic_action(request)
+                .semantic_action_at(slot, request)
         });
         gallery.enrol_semantics(name.as_str(), semantics, action);
         holder.upcast()
@@ -271,10 +286,13 @@ impl<'a> Overview<'a> {
             (WorkspacePage::Processes, ppane.upcast()),
         ];
         let semantics = screens::workspace::semantic::Registry::new("workspace");
-        let view = Rc::new(screens::workspace::View::with_semantics([
-            (WorkspacePage::Settings, self.settings(&semantics).upcast()),
-            (WorkspacePage::Extensions, shelf.clone().upcast()),
-        ], semantics));
+        let view = Rc::new(screens::workspace::View::with_semantics(
+            [
+                (WorkspacePage::Settings, self.settings(&semantics).upcast()),
+                (WorkspacePage::Extensions, shelf.clone().upcast()),
+            ],
+            semantics,
+        ));
         let fallback = Rc::new(Fallback {
             view: Rc::downgrade(&view),
             pages: fallback_pages,

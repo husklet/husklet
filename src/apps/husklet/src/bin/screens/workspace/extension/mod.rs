@@ -16,6 +16,7 @@ mod sink;
 mod test;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gtk::glib;
@@ -39,12 +40,27 @@ pub struct Interface {
     page: glib::WeakRef<gtk::Box>,
     surface: Surface,
     tree: Tree,
+    panes: HashMap<String, PaneInterface>,
     banner: Banner,
     deliveries: Deliveries,
     sink: Rc<dyn Sink>,
     faulted: Rc<dyn Fn(u32)>,
     /// Monotonic tick count, which is the clock the row models age against.
     clock: u64,
+}
+
+struct PaneInterface {
+    surface: Surface,
+    tree: Tree,
+}
+
+impl PaneInterface {
+    fn new() -> Self {
+        Self {
+            surface: Surface::new(),
+            tree: Tree::new(),
+        }
+    }
 }
 
 impl Interface {
@@ -71,6 +87,7 @@ impl Interface {
             page: widget.downgrade(),
             surface,
             tree: Tree::new(),
+            panes: HashMap::new(),
             banner,
             deliveries,
             sink,
@@ -96,19 +113,26 @@ impl Interface {
     }
 
     pub fn semantics(&self, slot: &str) -> Result<PaneSemanticTree, HostError> {
+        if let Some(pane) = self.panes.get(slot) {
+            return Self::semantics_from(&pane.tree, slot);
+        }
+        Self::semantics_from(&self.tree, slot)
+    }
+
+    fn semantics_from(tree: &Tree, slot: &str) -> Result<PaneSemanticTree, HostError> {
         let mut count = 0;
         let mut truncated = false;
-        let root = self.semantic_node(hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
+        let root = Self::semantic_node(tree, hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
         Ok(PaneSemanticTree {
             slot: slot.to_owned(),
-            revision: self.tree.sequence(),
+            revision: tree.sequence(),
             root,
             truncated,
         })
     }
 
     fn semantic_node(
-        &self,
+        tree: &Tree,
         id: hl_gui::NodeId,
         depth: usize,
         count: &mut usize,
@@ -119,8 +143,7 @@ impl Interface {
             return Err(HostError::Conflict("semantic tree exceeds its bounded shape".into()));
         }
         *count += 1;
-        let node = self
-            .tree
+        let node = tree
             .node(id)
             .ok_or_else(|| HostError::Absent(format!("semantic node {}", id.raw())))?;
         let secret = node.flag(hl_gui::Prop::Secret, false);
@@ -151,7 +174,7 @@ impl Interface {
                 *truncated = true;
                 break;
             }
-            children.push(self.semantic_node(*child, depth + 1, count, truncated)?);
+            children.push(Self::semantic_node(tree, *child, depth + 1, count, truncated)?);
         }
         Ok(SemanticNode {
             id: id.raw(),
@@ -168,11 +191,16 @@ impl Interface {
     }
 
     pub fn semantic_action(&self, action: &PaneSemanticAction) -> Result<(), HostError> {
-        if action.revision != self.tree.sequence() {
+        self.semantic_action_at("", action)
+    }
+
+    pub fn semantic_action_at(&self, slot: &str, action: &PaneSemanticAction) -> Result<(), HostError> {
+        let tree = self.panes.get(slot).map_or(&self.tree, |pane| &pane.tree);
+        if action.revision != tree.sequence() {
             return Err(HostError::Conflict(format!(
                 "stale semantic revision {}; current is {}",
                 action.revision,
-                self.tree.sequence()
+                tree.sequence()
             )));
         }
         let node_id = hl_gui::NodeId::new(action.node);
@@ -184,8 +212,7 @@ impl Interface {
             SemanticActionKind::Toggle => hl_gui::Trigger::Toggle,
             SemanticActionKind::Expand => hl_gui::Trigger::Expand,
         };
-        let id = self
-            .tree
+        let id = tree
             .handler(node_id, trigger)
             .cloned()
             .ok_or_else(|| HostError::Conflict("node does not declare that action".into()))?;
@@ -210,6 +237,12 @@ impl Interface {
         };
         self.sink.accept(Signal::Interaction(event));
         Ok(())
+    }
+
+    /// Returns the independently retained widget for one stable pane slot.
+    pub fn pane(&mut self, slot: &str) -> gtk::Widget {
+        let pane = self.panes.entry(slot.to_owned()).or_insert_with(PaneInterface::new);
+        pane.surface.widget().clone().upcast()
     }
 
     /// One turn: apply what is queued, then hand back what the surface says.
@@ -253,6 +286,8 @@ impl Interface {
         match delivery {
             Delivery::Frame(frame) => self.draw(&frame),
             Delivery::Source(mutation) => self.feed(&mutation),
+            Delivery::FrameAt { slot, frame } => self.draw_at(&slot, &frame),
+            Delivery::SourceAt { slot, mutation } => self.feed_at(&slot, &mutation),
             Delivery::Loss(reason) => self.banner.show(&reason),
             Delivery::Fault { restarts } => (self.faulted)(restarts),
         }
@@ -269,6 +304,14 @@ impl Interface {
         }
     }
 
+    fn draw_at(&mut self, slot: &str, frame: &Frame) {
+        self.banner.hide();
+        let pane = self.panes.entry(slot.to_owned()).or_insert_with(PaneInterface::new);
+        if let Err(fault) = pane.tree.apply(frame, &mut pane.surface) {
+            self.banner.show(&fault.to_string());
+        }
+    }
+
     /// Applies one source mutation. A mutation for a source no table is bound
     /// to is ordinary — the table was removed while it was in flight.
     fn feed(&mut self, mutation: &SourceMutation) {
@@ -281,10 +324,26 @@ impl Interface {
         }
     }
 
+    fn feed_at(&mut self, slot: &str, mutation: &SourceMutation) {
+        let Some(pane) = self.panes.get_mut(slot) else { return };
+        match mutation {
+            SourceMutation::Length { source, version, rows } => {
+                drop(pane.surface.resize(*source, *version, *rows));
+            }
+            SourceMutation::Window(window) => drop(pane.surface.rows(window)),
+            _ => {}
+        }
+    }
+
     /// Hands interaction to the sink.
     fn report(&self) {
         for event in self.surface.reports().drain() {
             self.sink.accept(Signal::Interaction(event));
+        }
+        for pane in self.panes.values() {
+            for event in pane.surface.reports().drain() {
+                self.sink.accept(Signal::Interaction(event));
+            }
         }
     }
 
@@ -294,6 +353,11 @@ impl Interface {
         self.clock = self.clock.wrapping_add(1);
         for request in self.surface.requests(self.clock) {
             self.sink.accept(Signal::Interaction(Event::Rows(request)));
+        }
+        for pane in self.panes.values_mut() {
+            for request in pane.surface.requests(self.clock) {
+                self.sink.accept(Signal::Interaction(Event::Rows(request)));
+            }
         }
     }
 }

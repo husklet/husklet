@@ -15,6 +15,10 @@ pub enum Delivery {
     Frame(Frame),
     /// A source mutation: how long a table is, or a window of its rows.
     Source(SourceMutation),
+    /// A frame for one independently retained pane surface.
+    FrameAt { slot: String, frame: Frame },
+    /// A source mutation for one independently retained pane surface.
+    SourceAt { slot: String, mutation: SourceMutation },
     /// The extension is gone, and why. The page freezes rather than blanks.
     Loss(String),
     /// A structured crash-loop count for the central lifecycle card.
