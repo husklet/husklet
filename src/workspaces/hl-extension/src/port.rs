@@ -84,6 +84,28 @@ pub struct ImageSummary {
     pub created: i64,
 }
 
+/// Bounded, useful image inspection data. Environment values and arbitrary
+/// labels are intentionally not exposed through this inventory API.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImageDetails {
+    pub id: String,
+    pub references: Vec<String>,
+    pub created: String,
+    pub size: u64,
+    pub os: String,
+    pub architecture: String,
+    pub entrypoint: Vec<String>,
+    pub command: Vec<String>,
+    pub working_directory: String,
+    pub user: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePruneResult {
+    pub deleted: u64,
+    pub space_reclaimed: u64,
+}
+
 /// A local volume as an extension sees it. The daemon does not calculate
 /// recursive disk usage during inventory, so this deliberately carries no
 /// synthetic size.
@@ -436,6 +458,18 @@ pub trait ImageStore {
     /// # Errors
     /// Returns a host failure.
     fn pull(&self, reference: &str) -> Result<ImageSummary, HostError>;
+
+    fn inspect(&self, _reference: &str) -> Result<ImageDetails, HostError> {
+        Err(HostError::Unsupported("image inspection is unavailable".into()))
+    }
+
+    fn remove(&self, _reference: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("image removal is unavailable".into()))
+    }
+
+    fn prune(&self) -> Result<ImagePruneResult, HostError> {
+        Err(HostError::Unsupported("image pruning is unavailable".into()))
+    }
 }
 
 /// Reading and safely changing local volumes.

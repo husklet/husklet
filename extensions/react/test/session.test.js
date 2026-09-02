@@ -174,6 +174,26 @@ test('volume and network facades preserve safe request shapes', async () => {
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('image inspection and destructive calls preserve explicit request shapes', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const operations = [api.images.inspect('alpine:3.20'), api.images.remove('alpine:3.20'), api.images.prune()];
+  const calls = [];
+  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  assert.deepEqual(calls, [
+    { call: 'image_inspect', with: { reference: 'alpine:3.20' } },
+    { call: 'image_remove', with: { reference: 'alpine:3.20' } },
+    { call: 'image_prune' },
+  ]);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: { id: 'i1' } } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_prune', with: { deleted: 2, space_reclaimed: 7 } } }));
+  assert.deepEqual(await Promise.all(operations), [{ id: 'i1' }, undefined, { deleted: 2, space_reclaimed: 7 }]);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('deep container methods and subscriptions use exact protocol request shapes', async () => {
   const stage = await pair();
   const next = frames(stage.host);

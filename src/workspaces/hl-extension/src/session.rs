@@ -9,8 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface,
-    VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -113,7 +113,11 @@ impl Session {
             | Request::ContainerRestart { .. }
             | Request::ContainerKill { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
-            Request::ImageList | Request::ImagePull { .. } => self.images(request, services),
+            Request::ImageList
+            | Request::ImagePull { .. }
+            | Request::ImageInspect { .. }
+            | Request::ImageRemove { .. }
+            | Request::ImagePrune => self.images(request, services),
             Request::VolumeList
             | Request::VolumeInspect { .. }
             | Request::VolumeCreate { .. }
@@ -227,12 +231,17 @@ impl Session {
     }
 
     fn images(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
-        if let Request::ImagePull { reference } = request {
-            let port = self.peer.authority().port(Capability::ImageWrite, services.images)?;
-            return Ok(Reply::Image(port.pull(reference)?));
+        let port = self.peer.authority().port(request.capability(), services.images)?;
+        match request {
+            Request::ImageList => Ok(Reply::Images(port.list()?)),
+            Request::ImagePull { reference } => Ok(Reply::Image(port.pull(reference)?)),
+            Request::ImageInspect { reference } => Ok(Reply::ImageDetails(port.inspect(reference)?)),
+            Request::ImageRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ImagePrune => Ok(Reply::ImagePrune(port.prune()?)),
+            _ => Err(Failure::Unsupported {
+                call: "image operation".into(),
+            }),
         }
-        let port = self.peer.authority().port(Capability::ImageRead, services.images)?;
-        Ok(Reply::Images(port.list()?))
     }
 
     fn volumes(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {

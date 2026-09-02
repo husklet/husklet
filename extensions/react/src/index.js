@@ -81,6 +81,9 @@ export function workspace(session) {
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+      inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
+      remove: (reference) => done('image_remove', { reference }),
+      prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
       list: async () => expect(await session.call('volume_list'), 'volumes'),

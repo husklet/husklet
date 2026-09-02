@@ -9,9 +9,9 @@ use std::cell::RefCell;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    GridSize, HostError, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary,
-    PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface, TerminalTopology,
-    WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
+    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
+    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -231,6 +231,35 @@ impl ImageStore for Host {
             reference: reference.into(),
             size: 1,
             created: 0,
+        })
+    }
+
+    fn inspect(&self, reference: &str) -> Result<ImageDetails, HostError> {
+        self.ledger.note("images.inspect");
+        Ok(ImageDetails {
+            id: reference.into(),
+            references: vec![reference.into()],
+            created: String::new(),
+            size: 1,
+            os: "linux".into(),
+            architecture: "amd64".into(),
+            entrypoint: Vec::new(),
+            command: Vec::new(),
+            working_directory: String::new(),
+            user: String::new(),
+        })
+    }
+
+    fn remove(&self, _reference: &str) -> Result<(), HostError> {
+        self.ledger.note("images.remove");
+        Ok(())
+    }
+
+    fn prune(&self) -> Result<ImagePruneResult, HostError> {
+        self.ledger.note("images.prune");
+        Ok(ImagePruneResult {
+            deleted: 2,
+            space_reclaimed: 7,
         })
     }
 }
@@ -581,6 +610,19 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ImageWrite,
         ),
+        (
+            Request::ImageInspect {
+                reference: "alpine".into(),
+            },
+            Capability::ImageRead,
+        ),
+        (
+            Request::ImageRemove {
+                reference: "alpine".into(),
+            },
+            Capability::ImageWrite,
+        ),
+        (Request::ImagePrune, Capability::ImageWrite),
         (Request::TerminalTabs, Capability::TerminalRead),
         (Request::TerminalTopology, Capability::TerminalRead),
         (

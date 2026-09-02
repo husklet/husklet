@@ -147,14 +147,41 @@ function Processes({ api, resource }) {
     h(Omitted, { count: view.omitted }));
 }
 
-function Images({ api, resource }) {
+export function Images({ api, resource }) {
   const [reference, setReference] = useState('');
-  const pull = async () => { await api.images.pull(reference.trim()); setReference(''); await resource.reload(); };
+  const [detail, setDetail] = useState(null);
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState('');
+  const run = async (name, operation) => {
+    setBusy(name); setError(null); setNotice('');
+    try { await operation(); } catch (cause) { setError(cause); } finally { setBusy(''); }
+  };
+  const pull = () => run('pull', async () => { await api.images.pull(reference.trim()); setReference(''); await resource.reload(); });
+  const inspect = (item) => run(`inspect:${item.id}`, async () => setDetail(await api.images.inspect(item.reference || item.id)));
+  const remove = (item) => run(`remove:${item.id}`, async () => {
+    await api.images.remove(item.reference || item.id); setConfirm('');
+    if (detail?.id === item.id) setDetail(null);
+    await resource.reload();
+  });
+  const prune = () => run('prune', async () => {
+    const result = await api.images.prune(); setConfirm('');
+    setNotice(`Pruned ${result.deleted} image records and reclaimed ${bytes(result.space_reclaimed)}.`);
+    await resource.reload();
+  });
   const view = bounded(resource.data);
   return h(Page, { title: 'Images', subtitle: 'Images available to this workspace.' },
-    h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: 'Pull', enabled: reference.trim().length > 0, onInvoke: pull }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
-    h(ErrorText, { error: resource.error }),
-    ...view.records.map((item) => h(Card, { key: item.id, variant: 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }), h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' })))),
+    h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: busy === 'pull' ? 'Pulling…' : 'Pull', enabled: !busy && reference.trim().length > 0, onInvoke: pull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
+    h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
+      ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', tone: 'danger', onInvoke: prune }), h(Button, { label: 'Cancel', onInvoke: () => setConfirm('') }))
+      : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
+    h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
+    ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
+      h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }), detail?.id === item.id ? h(Text, { label: `${detail.os}/${detail.architecture} · ${detail.user || 'default user'} · ${detail.working_directory || '/'}`, color: 'text-dim', wrap: true }) : null),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
+        ? h(React.Fragment, {}, h(Text, { label: 'Remove this local image?', color: 'warning' }), h(Button, { label: 'Confirm remove', tone: 'danger', onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', onInvoke: () => setConfirm('') }))
+        : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
     h(Omitted, { count: view.omitted }));
 }
 

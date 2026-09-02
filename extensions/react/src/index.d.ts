@@ -4123,6 +4123,8 @@ export interface ExecutionSummary {
   command: string[]; user: string;
 }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
+export interface ImagePruneResult { deleted: number; space_reclaimed: number }
 export interface VolumeSummary { name: string; driver: string }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
 export interface PaneSummary {
@@ -4212,7 +4214,7 @@ export interface WorkspaceApi {
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
   };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary> };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
