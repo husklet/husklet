@@ -111,6 +111,10 @@ export function Containers({ api, resource, containerDetails }) {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [draft, setDraft] = useState({ image: '', name: '' });
+  const [created, setCreated] = useState(null);
+  const [creationError, setCreationError] = useState(null);
+  const [creationNotice, setCreationNotice] = useState('');
   const act = async (verb, id, ...args) => {
     setBusy(`${verb}:${id}`);
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
@@ -133,8 +137,34 @@ export function Containers({ api, resource, containerDetails }) {
     }
     void inspect(item);
   };
+  const createAndStart = async () => {
+    setBusy('create'); setCreationError(null); setCreationNotice('');
+    let target = created;
+    try {
+      if (!target) {
+        const id = await api.containers.create({ image: draft.image.trim(), name: draft.name.trim() });
+        target = { id, name: draft.name.trim() };
+        setCreated(target);
+      }
+      await api.containers.start(target.id);
+      setCreationNotice(`Created and started ${target.name}.`);
+      setCreated(null); setDraft({ image: '', name: '' });
+      await resource.reload();
+    } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
+  };
   const view = bounded(resource.data);
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
+    h(Card, { variant: 'outline' },
+      h(CardHeader, { label: 'Create a container', detail: 'Uses a local image and starts it after durable creation.' }),
+      h(CardContent, {}, h(Row, { gap: 1, wrap: true },
+        h(Entry, { value: draft.image, placeholder: 'Image reference', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, image: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }))),
+      h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
+        label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
+        enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0)),
+        onInvoke: createAndStart,
+      })),
+      h(ErrorText, { error: creationError }), creationNotice ? h(Text, { label: creationNotice, color: 'positive', wrap: true }) : null),
     h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
     h(InventoryEmpty, { resource, records: view.records, label: 'No containers', detail: 'Create a container through an agent or extension, then refresh this page.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },

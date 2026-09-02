@@ -277,6 +277,34 @@ test('container stop and kill cannot call the API before final confirmation', as
   assert.deepEqual(calls.at(-1), ['kill', 'container-one', 'SIGKILL']);
 });
 
+test('container creation retains exact identity and retries only start after a partial failure', async () => {
+  const calls = [];
+  let starts = 0;
+  const controlled = { containers: {
+    create: async (spec) => { calls.push(['create', spec]); return 'container-new'; },
+    start: async (id) => {
+      calls.push(['start', id]); starts += 1;
+      if (starts === 1) throw new Error('runtime temporarily unavailable');
+    },
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'worker');
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'runtime temporarily unavailable'));
+  assert.ok(labelled(stage, 'Retry start'), 'the exact created container remains recoverable');
+  invoke(stage, 'Retry start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Created and started worker.'));
+  assert.deepEqual(calls, [
+    ['create', { image: 'alpine:3.20', name: 'worker' }],
+    ['start', 'container-new'],
+    ['start', 'container-new'],
+    ['reload'],
+  ], 'retry never creates a duplicate container');
+});
+
 test('container details load through the bounded source and a failed read is retryable', async () => {
   let attempts = 0;
   const mutations = [];

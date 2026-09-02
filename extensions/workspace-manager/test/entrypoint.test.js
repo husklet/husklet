@@ -38,6 +38,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           ? { reply: 'containers', with: [{ id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 }] }
           : name === 'container_inspect'
             ? { reply: 'container', with: { id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
+          : name === 'container_create'
+            ? { reply: 'identity', with: 'created-over-socket' }
           : name === 'execution_list'
             ? { reply: 'executions', with: { executions: [{ id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' }], truncated: false } }
           : name === 'execution_inspect'
@@ -93,6 +95,17 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const imageRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 11, kind: KIND.event, payload: invocation(requests, 'Containers') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > imageRenders);
+    peer.write(encode({ channel: 26, kind: KIND.event, payload: changeInvocation(requests, 'Image reference', 'alpine:3.20') }));
+    peer.write(encode({ channel: 27, kind: KIND.event, payload: changeInvocation(requests, 'Container name', 'worker') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'worker')));
+    peer.write(encode({ channel: 28, kind: KIND.event, payload: invocation(requests, 'Create and start') }));
+    await until(() => calls.includes('container_create') && calls.includes('container_start'));
+    assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
+      image: 'alpine:3.20', name: 'worker', entrypoint: null, command: [], environment: [], working_directory: null,
+      user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null, pids_limit: null,
+    });
+    assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: 'created-over-socket' });
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }));
     await until(() => calls.includes('container_inspect') && requests.some((request) =>
       request.call === 'source_resize_at' && request.with.mutation.Length?.source === 202));
