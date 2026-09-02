@@ -122,6 +122,12 @@ impl Element {
     pub fn inline_message(label: impl Into<String>) -> Self {
         Self::new(Tag::InlineMessage).label(label)
     }
+
+    /// A bounded group of validation problems and their corrective actions.
+    #[must_use]
+    pub fn validation_summary(label: impl Into<String>) -> Self {
+        Self::new(Tag::ValidationSummary).label(label).icon("dialog-warning-symbolic")
+    }
 }
 
 /// Long-form content.

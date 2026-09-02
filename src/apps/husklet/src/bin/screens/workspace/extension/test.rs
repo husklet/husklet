@@ -127,12 +127,29 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         semantics_are_redacted_and_actions_reject_stale_revisions();
         command_palette_exposes_typed_semantic_actions();
         tag_input_exposes_value_actions_and_authored_tags();
+        validation_summary_is_readable_and_keeps_corrective_actions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn validation_summary_is_readable_and_keeps_corrective_actions() {
+    let mut fixture = Fixture::new();
+    let described = Element::validation_summary("2 problems found")
+        .detail("Correct the highlighted fields")
+        .child(Element::button("Review name", EventId::new("review-name")));
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let summary = &tree.root.children[0];
+    assert_eq!(summary.role, "ValidationSummary");
+    assert_eq!(summary.label.as_deref(), Some("2 problems found"));
+    assert_eq!(summary.value.as_deref(), Some("Correct the highlighted fields"));
+    assert_eq!(summary.children[0].label.as_deref(), Some("Review name"));
+    assert_eq!(summary.children[0].actions, vec![hl_extension::SemanticActionKind::Invoke]);
 }
 
 fn tag_input_exposes_value_actions_and_authored_tags() {

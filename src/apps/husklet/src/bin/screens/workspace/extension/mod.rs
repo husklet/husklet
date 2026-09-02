@@ -234,6 +234,7 @@ impl Interface {
             label: node.text(hl_gui::Prop::Label).map(clip),
             value: node
                 .text(hl_gui::Prop::Value)
+                .or_else(|| node.text(hl_gui::Prop::Detail))
                 .map(|value| if secret { "[redacted]".to_owned() } else { clip(value) }),
             disabled: !node.is_enabled(),
             destructive: node.flag(hl_gui::Prop::Destructive, false),

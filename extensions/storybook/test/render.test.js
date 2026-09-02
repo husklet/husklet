@@ -129,7 +129,12 @@ test('the form story validates submit, recovers on change, and confirms success'
   let before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Submit', node: entry, id: `${entry}:Submit`, value: null }));
   let patches = stage.since(before);
-  assert.ok(node(patches, 'InlineMessage', 'Fix the highlighted field before saving.'));
+  assert.ok(node(patches, 'ValidationSummary', 'Fix the highlighted field before saving.'));
+  const review = node(patches, 'Button', 'Review workspace name');
+  assert.ok(review, 'validation summary has no corrective action');
+  const beforeReview = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke` });
+  assert.ok(stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Workspace name is ready for correction.'));
   assert.ok(
     patches.some((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Tone' && patch.SetProp.value.Tone === 'Danger'),
     'invalid submission does not mark the field or feedback as dangerous',

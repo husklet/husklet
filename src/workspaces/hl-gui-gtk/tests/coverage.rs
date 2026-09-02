@@ -855,6 +855,20 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_tree_nests_an_item_inside_the_item_that_holds_it();
     a_drawer_panel_covers_the_content_instead_of_joining_it();
     a_tag_input_keeps_retained_tags_before_its_editor();
+    a_validation_summary_keeps_actions_below_its_message();
+}
+
+fn a_validation_summary_keeps_actions_below_its_message() {
+    let session = placed(Tag::ValidationSummary, &[Tag::Button]);
+    let summary = session.tagged(Tag::ValidationSummary).expect("a validation summary renders");
+    let body = offspring(&summary)
+        .into_iter()
+        .find(|part| part.has_css_class("hl-validation-body"))
+        .expect("validation summary message body");
+    assert!(
+        offspring(&body).last().is_some_and(|part| part.has_css_class("hl-button")),
+        "the corrective action is not grouped below the validation message"
+    );
 }
 
 fn a_tag_input_keeps_retained_tags_before_its_editor() {

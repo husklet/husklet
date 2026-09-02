@@ -63,6 +63,7 @@ export const {
   Banner,
   AlertTitle,
   InlineMessage,
+  ValidationSummary,
   Button,
   IconButton,
   ToggleButton,

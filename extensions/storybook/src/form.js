@@ -9,13 +9,13 @@ import {
   FormHelperText,
   FormLabel,
   Heading,
-  InlineMessage,
   Row,
   Select,
   Switch,
   TagInput,
   Text,
   ToggleButton,
+  ValidationSummary,
 } from '@husklet/react';
 
 const { createElement: h, useState } = React;
@@ -36,6 +36,7 @@ export function ValidatedSettingsFormStory() {
   const [saved, setSaved] = useState(false);
   const [tag, setTag] = useState('');
   const [tags, setTags] = useState(['backend', 'managed']);
+  const [reviewed, setReviewed] = useState(false);
   const invalid = attempted && name.trim().length < 3;
   const changeName = (event) => {
     setName(String(event.value ?? ''));
@@ -123,7 +124,12 @@ export function ValidatedSettingsFormStory() {
       h(FormHelperText, { label: 'Press Enter to retain a tag; activate a tag to remove it.' }),
     ),
     ...(invalid
-      ? [h(InlineMessage, { key: 'invalid', label: 'Fix the highlighted field before saving.', tone: 'danger' })]
+      ? [h(ValidationSummary, {
+        key: 'invalid',
+        label: 'Fix the highlighted field before saving.',
+        detail: reviewed ? 'Workspace name is ready for correction.' : '1 problem found.',
+        tone: 'danger',
+      }, h(Button, { label: 'Review workspace name', onInvoke: () => setReviewed(true) }))]
       : []),
     ...(saved
       ? [h(Banner, { key: 'saved', label: `Defaults saved for ${name.trim()}.`, tone: 'positive' })]

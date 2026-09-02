@@ -217,6 +217,7 @@ catalogue! {
     Banner: children, props[Label, Icon, Expanded, Tone, Variant], triggers[],
     AlertTitle: leaf, props[Label, Value, Scale, Tone], triggers[],
     InlineMessage: children, props[Label, Icon, Gap, Tone], triggers[],
+    ValidationSummary: children, props[Label, Detail, Icon, Gap, Tone], triggers[],
 
     // Buttons: every shape of invocation.
     Button: children, props[Label, Icon, Enabled, Variant, Tone], triggers[Invoke, Key, Focus, Pointer, Context],

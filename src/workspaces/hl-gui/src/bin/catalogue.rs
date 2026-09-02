@@ -307,7 +307,8 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Toast
         | Tag::Banner
         | Tag::AlertTitle
-        | Tag::InlineMessage => "feedback",
+        | Tag::InlineMessage
+        | Tag::ValidationSummary => "feedback",
         Tag::Button
         | Tag::IconButton
         | Tag::ToggleButton
