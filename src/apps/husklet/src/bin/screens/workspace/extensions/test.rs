@@ -1969,6 +1969,11 @@ mod panes {
     pub(super) fn a_pane_can_hold_an_extensions_interface_beside_a_shell() {
         let bench = Bench::new();
         let (first, one) = bench.shell();
+        assert_ne!(
+            Slots::new(&bench.window).adopt(Some(&one)),
+            one,
+            "duplicated persisted slots cannot alias an already live pane"
+        );
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -2037,6 +2042,74 @@ mod panes {
             Some(home.upcast_ref::<gtk::Widget>()),
             "and hands the interface back to its page rather than taking it away"
         );
+        let replacement = Window::slot(&bench.window);
+        assert_ne!(replacement, slot, "a replacement at the same UI position gets a fresh authority identity");
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || sent.send(request.write(&stale, b"stale")).unwrap());
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || {
+            sent.send(request.resize_grid(&stale, hl_extension::port::GridSize { columns: 80, rows: 24 }))
+                .unwrap()
+        });
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || sent.send(request.semantics(&stale)).unwrap());
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::clone(&relay);
+        let stale = slot.clone();
+        std::thread::spawn(move || {
+            sent.send(request.semantic_action(
+                &stale,
+                &hl_extension::PaneSemanticAction {
+                    revision: 0,
+                    node: 0,
+                    action: hl_extension::SemanticActionKind::Invoke,
+                    value: None,
+                },
+            ))
+            .unwrap()
+        });
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                assert!(matches!(answer, Err(HostError::Absent(_))));
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
         drop(first);
     }
 

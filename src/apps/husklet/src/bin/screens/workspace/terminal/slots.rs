@@ -20,6 +20,11 @@ impl<'a> Slots<'a> {
         let Some(saved) = saved else {
             return self.allocate();
         };
+        let occupied = tw.panes.borrow().iter().any(|pane| pane.slot == saved)
+            || tw.surfaces.borrow().iter().any(|pane| pane.slot == saved);
+        if occupied {
+            return self.allocate();
+        }
         if let Ok(slot) = saved.parse::<u32>() {
             if slot >= tw.slot_ctr.get() {
                 tw.slot_ctr.set(slot + 1);
