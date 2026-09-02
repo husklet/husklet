@@ -1053,7 +1053,7 @@ static hl_status hl_engine_copy_image_plan(hl_engine *engine, const hl_engine_co
 }
 
 static hl_status hl_engine_pin_executable(hl_engine *engine, const hl_engine_config *config,
-                                          const hl_host_services *host) {
+                                          const hl_host_services *host, int read_image) {
     hl_host_result cloned;
     hl_status status;
     if (config->executable == NULL) return HL_STATUS_OK;
@@ -1066,8 +1066,10 @@ static hl_status hl_engine_pin_executable(hl_engine *engine, const hl_engine_con
     engine->executable = cloned.value;
     engine->executable_config = (hl_engine_executable){
         HL_ENGINE_ABI, sizeof(engine->executable_config), HL_ENGINE_FD_BORROW, 0, cloned.value, NULL, 0};
-    status = hl_engine_read_executable(engine, cloned.value);
-    if (status != HL_STATUS_OK) return status;
+    if (read_image) {
+        status = hl_engine_read_executable(engine, cloned.value);
+        if (status != HL_STATUS_OK) return status;
+    }
     engine->config.executable = &engine->executable_config;
     return HL_STATUS_OK;
 }
@@ -1231,14 +1233,11 @@ static void hl_engine_create_cleanup(hl_engine *engine) {
     free(engine->native_fd_bindings);
     if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
     free(engine->owned_rootfs);
-    if (engine->owned_executable_image != NULL) {
-        memset(engine->owned_executable_image, 0, engine->executable_config.image_size);
-        free(engine->owned_executable_image);
-    }
-    if (engine->owned_interpreter_image != NULL) {
-        memset(engine->owned_interpreter_image, 0, engine->interpreter_image_size);
-        free(engine->owned_interpreter_image);
-    }
+    /* These buffers contain public executable bytes, not credentials.  Wiping them after the launch fork
+     * dirties every inherited page in the parent before free and turns teardown into an image-sized COW
+     * fault storm.  Freeing releases the private allocation without writing the file contents again. */
+    free(engine->owned_executable_image);
+    free(engine->owned_interpreter_image);
     if (engine->executable != HL_HOST_HANDLE_INVALID)
         (void)engine->host.file->close(engine->host.context, engine->executable);
     free(engine->owned_working_directory);
@@ -1269,11 +1268,13 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     if (status != HL_STATUS_OK) return status;
     engine = hl_engine_allocate(config, host);
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
-    status = hl_engine_pin_executable(engine, config, host);
-    if (status != HL_STATUS_OK) goto fail;
     status = hl_engine_initialize_options(engine, config, source_options, borrow_options);
     if (status != HL_STATUS_OK) goto fail;
     int native_supervised = hl_engine_native_supervised_selected(&engine->options);
+    /* Native supervision executes the already-pinned descriptor with execveat.  It does not consume an
+     * in-memory image, so reading every executable byte here would only pre-fault and duplicate the file. */
+    status = hl_engine_pin_executable(engine, config, host, !native_supervised);
+    if (status != HL_STATUS_OK) goto fail;
     status = hl_engine_copy_image_plan(engine, config, native_supervised ? NULL : interpreter_image,
                                        native_supervised ? 0 : interpreter_size);
     if (status != HL_STATUS_OK) goto fail;
@@ -1625,14 +1626,10 @@ void hl_engine_destroy(hl_engine *engine) {
     free(engine->native_fd_bindings);
     if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
     free(engine->owned_rootfs);
-    if (engine->owned_executable_image != NULL) {
-        memset(engine->owned_executable_image, 0, engine->executable_config.image_size);
-        free(engine->owned_executable_image);
-    }
-    if (engine->owned_interpreter_image != NULL) {
-        memset(engine->owned_interpreter_image, 0, engine->interpreter_image_size);
-        free(engine->owned_interpreter_image);
-    }
+    /* Executable images are public bytes.  A post-fork wipe would COW the complete image immediately
+     * before free, so release the private allocations without touching every inherited page again. */
+    free(engine->owned_executable_image);
+    free(engine->owned_interpreter_image);
     if (engine->executable != HL_HOST_HANDLE_INVALID)
         (void)engine->host.file->close(engine->host.context, engine->executable);
     free(engine->owned_working_directory);
