@@ -17,7 +17,7 @@ use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wi
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{directory, settings, Catalogue, Inspection, Shared, Shelf, Surfaces};
+use super::{directory, settings, Catalogue, Cleanup, Inspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -37,10 +37,14 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_sidebar_lists_exactly_what_the_workspace_recorded();
         selecting_an_extension_shows_the_surface_it_draws();
         the_settings_page_says_where_an_extension_stands();
+        a_live_host_fault_reaches_central_settings_and_can_retry();
         the_settings_actions_drive_the_installation();
         removing_an_extension_takes_its_pages_with_it();
+        failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
         an_image_is_read_before_anybody_is_asked();
+        an_existing_name_is_an_explicit_update_with_a_capability_delta();
+        a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
         remote_image_progress_precedes_the_consent_prompt();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
@@ -76,6 +80,15 @@ struct Fixture {
 impl Fixture {
     /// A shelf over a roster holding `recorded`, on a shell with the fixed pages.
     fn new(recorded: &[(&str, bool)]) -> Self {
+        let cleanup: Cleanup = Rc::new(|_| {
+            let (sent, received) = std::sync::mpsc::channel();
+            let _ = sent.send(Ok(()));
+            received
+        });
+        Self::with_cleanup(recorded, cleanup)
+    }
+
+    fn with_cleanup(recorded: &[(&str, bool)], cleanup: Cleanup) -> Self {
         let storage = tempfile::tempdir().expect("temporary directory");
         let roster = Rc::new(RefCell::new(
             Roster::open(Directory::open(storage.path()).expect("storage")).expect("roster"),
@@ -92,7 +105,7 @@ impl Fixture {
             widget.add_css_class(SURFACE);
             widget.upcast()
         });
-        let shelf = Shelf::new(&view, &roster, surfaces);
+        let shelf = Shelf::with_cleanup(&view, &roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}), cleanup);
         shelf.install();
         let inspection: Inspection = Rc::new(|_| std::sync::mpsc::channel().1);
         let catalogue = Catalogue::new(&shelf, inspection);
@@ -210,6 +223,18 @@ fn until(condition: impl Fn() -> bool) -> bool {
     false
 }
 
+fn until_gui(condition: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        while gtk::glib::MainContext::default().iteration(false) {}
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
 fn the_sidebar_lists_exactly_what_the_workspace_recorded() {
     let fixture = Fixture::new(&[("alpha", false), ("zulu", true)]);
 
@@ -269,6 +294,29 @@ fn the_settings_page_says_where_an_extension_stands() {
     );
 }
 
+fn a_live_host_fault_reaches_central_settings_and_can_retry() {
+    let fixture = Fixture::new(&[("alpha", true)]);
+
+    fixture.shelf.fault(&named("alpha"), 5);
+
+    assert_eq!(fixture.stage("alpha"), Stage::Fault { restarts: 5 });
+    let standing = fixture
+        .extension_tagged("alpha", settings::STANDING)
+        .and_downcast::<gtk::Label>()
+        .expect("central settings standing");
+    assert_eq!(standing.text(), "faulted after 5 restarts");
+    assert!(fixture.extension_tagged("alpha", settings::RETRY).is_some());
+
+    fixture.act("alpha", settings::RETRY);
+
+    assert_eq!(fixture.stage("alpha"), Stage::Duty);
+    assert!(fixture.view.holds("alpha"), "retry remounts the extension surface");
+    assert!(
+        fixture.extension_tagged("alpha", settings::REMOVE).is_some(),
+        "retry did not remove it"
+    );
+}
+
 fn the_settings_actions_drive_the_installation() {
     let fixture = Fixture::new(&[("alpha", false)]);
     assert_eq!(fixture.stage("alpha"), Stage::Standby);
@@ -288,6 +336,13 @@ fn removing_an_extension_takes_its_pages_with_it() {
     let fixture = Fixture::new(&[("alpha", true)]);
 
     fixture.act("alpha", settings::REMOVE);
+    assert_eq!(
+        fixture.stage("alpha"),
+        Stage::Duty,
+        "asking for confirmation changes nothing"
+    );
+    fixture.act("alpha", settings::CONFIRM_REMOVE);
+    assert!(until_gui(|| fixture.stage("alpha") == Stage::Vacancy));
 
     assert_eq!(fixture.stage("alpha"), Stage::Vacancy, "the record is forgotten");
     assert!(!fixture.view.holds("alpha"), "its surface is off the shell");
@@ -298,6 +353,42 @@ fn removing_an_extension_takes_its_pages_with_it() {
     assert!(
         !fixture.view.entries().contains(&"alpha".to_owned()),
         "and its sidebar entry is gone"
+    );
+}
+
+fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&attempts);
+    let cleanup: Cleanup = Rc::new(move |_| {
+        counted.fetch_add(1, Ordering::Release);
+        let (sent, received) = std::sync::mpsc::channel();
+        let _ = sent.send(Err("foreign container occupies the managed name".to_owned()));
+        received
+    });
+    let fixture = Fixture::with_cleanup(&[("alpha", true)], cleanup);
+
+    fixture.act("alpha", settings::REMOVE);
+    fixture.act("alpha", settings::CANCEL_REMOVE);
+    assert_eq!(
+        fixture.stage("alpha"),
+        Stage::Duty,
+        "cancel leaves runtime and record alone"
+    );
+    assert_eq!(attempts.load(Ordering::Acquire), 0);
+
+    fixture.act("alpha", settings::REMOVE);
+    fixture.act("alpha", settings::CONFIRM_REMOVE);
+    assert!(until_gui(|| {
+        fixture
+            .extension_tagged("alpha", settings::REFUSAL)
+            .and_downcast::<gtk::Label>()
+            .is_some_and(|label| label.text().contains("remains installed and disabled"))
+    }));
+    assert_eq!(fixture.stage("alpha"), Stage::Standby);
+    assert_eq!(attempts.load(Ordering::Acquire), 1);
+    assert!(
+        fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE).is_some(),
+        "the same confirmed action becomes an explicit cleanup retry"
     );
 }
 
@@ -409,6 +500,17 @@ fn candidate() -> Candidate {
     }
 }
 
+fn update_candidate(digest: &str, version: &str) -> Candidate {
+    let mut manifest = manifest("sample");
+    manifest.version = version.to_owned();
+    manifest.capabilities = Grant::new([Capability::Interface, Capability::ContainerControl]);
+    Candidate {
+        reference: format!("sample:{version}"),
+        digest: digest.to_owned(),
+        manifest,
+    }
+}
+
 fn an_image_is_read_before_anybody_is_asked() {
     let fixture = Fixture::new(&[]);
     let page = catalogue(&fixture, Ok(candidate()));
@@ -444,6 +546,116 @@ fn an_image_is_read_before_anybody_is_asked() {
             .iter()
             .any(|widget| widget.has_css_class(settings::STANDING)),
         "the central catalogue gained the lifecycle card"
+    );
+}
+
+fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
+    let fixture = Fixture::new(&[("sample", true)]);
+    let old_surface = fixture.view.page("sample").expect("installed surface");
+    let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    typed(&page, "sample:2");
+    page.inspect();
+    assert!(page.poll());
+
+    let proposal = descendants(page.widget().upcast_ref());
+    let labels: Vec<_> = proposal
+        .iter()
+        .filter_map(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .map(|label| label.text().to_string())
+        })
+        .collect();
+    assert!(labels
+        .iter()
+        .any(|line| line.contains("installed") && line.contains("sha256:aaaa")));
+    assert!(labels
+        .iter()
+        .any(|line| line.contains("candidate  2.0.0") && line.contains("sha256:cccc")));
+    assert!(
+        labels.iter().any(|line| line == "+ container-control"),
+        "new authority is called out explicitly: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|line| line == "− container-read"),
+        "authority the candidate dropped is called out explicitly: {labels:?}"
+    );
+    assert_eq!(
+        fixture.view.page("sample").as_ref(),
+        Some(&old_surface),
+        "inspection and prompt leave the old extension live"
+    );
+
+    page.consent();
+    let entry = fixture
+        .roster
+        .borrow()
+        .entries()
+        .into_iter()
+        .find(|entry| entry.name.as_str() == "sample")
+        .expect("updated record");
+    assert_eq!(entry.image_digest, "sha256:cccc");
+    assert_eq!(entry.version, "2.0.0");
+    assert!(entry.granted.holds(Capability::ContainerControl));
+    assert!(!entry.granted.holds(Capability::ContainerRead));
+    assert!(fixture.view.holds("sample"));
+    assert!(
+        descendants(page.widget().upcast_ref()).iter().any(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == "version  ·  2.0.0")
+        }),
+        "the lifecycle card identifies the active version"
+    );
+}
+
+fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
+    let fixture = Fixture::new(&[("sample", true)]);
+    let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    typed(&page, "sample:2");
+    page.inspect();
+    assert!(page.poll());
+    let old_surface = fixture.view.page("sample").expect("old surface");
+
+    let winner = update_candidate("sha256:dddd", "1.5.0");
+    let prepared = fixture
+        .roster
+        .borrow()
+        .prepare_update(&winner.manifest, &winner.digest)
+        .expect("competing update");
+    fixture
+        .roster
+        .borrow_mut()
+        .commit_update(prepared, &Grant::new([Capability::ContainerControl]), 2)
+        .expect("competing update commits");
+
+    page.consent();
+    assert!(
+        page.notice().contains("unchanged"),
+        "failure is visible: {}",
+        page.notice()
+    );
+    assert_eq!(
+        fixture.view.page("sample").as_ref(),
+        Some(&old_surface),
+        "a refused replacement does not rebuild the running surface"
+    );
+    assert!(
+        descendants(page.widget().upcast_ref())
+            .iter()
+            .any(|widget| widget.has_css_class(directory::CONSENT)),
+        "the accepted proposal remains available for an explicit retry"
+    );
+    assert_eq!(
+        fixture
+            .roster
+            .borrow()
+            .entries()
+            .into_iter()
+            .find(|entry| entry.name.as_str() == "sample")
+            .expect("winner remains")
+            .image_digest,
+        "sha256:dddd"
     );
 }
 
@@ -571,6 +783,7 @@ impl hl::extension::Supply for Bench {
         let record = Record {
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
+            version: manifest.version.clone(),
             granted: manifest.capabilities.clone(),
             enabled: true,
             installed_at: 1,

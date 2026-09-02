@@ -84,7 +84,9 @@ impl<'a> Overview<'a> {
         name: &hl_extension::ExtensionName,
         providers: &[hl_extension::PaneProvider],
         terminal: &std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync>,
+        events: hl::extension::Events,
         gallery: &Gallery,
+        faulted: Rc<dyn Fn(u32)>,
     ) -> gtk::Widget {
         use hl::extension::{Order, Report};
         use screens::workspace::extension::{Delivery, Signal};
@@ -97,11 +99,13 @@ impl<'a> Overview<'a> {
             workspace,
             name,
             std::sync::Arc::clone(terminal),
+            events,
             Box::new(move |report| {
                 let delivery = match report {
                     Report::Frame(frame) => Delivery::Frame(frame),
                     Report::Source(mutation) => Delivery::Source(mutation),
                     Report::Loss(reason) => Delivery::Loss(reason),
+                    Report::Fault { restarts } => Delivery::Fault { restarts },
                 };
                 // A page that has gone away is not a failure: the host is about
                 // to be dropped with it.
@@ -116,7 +120,7 @@ impl<'a> Overview<'a> {
             Signal::Interaction(event) => host.accept(Order::Interaction(event)),
             Signal::Retry => host.accept(Order::Retry),
         });
-        let (widget, page) = screens::workspace::extension::Interface::new(deliveries, sink);
+        let (widget, page) = screens::workspace::extension::Interface::with_faults(deliveries, sink, faulted);
         page.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_hexpand(true);
@@ -149,6 +153,11 @@ impl<'a> Overview<'a> {
         let held = workspace.clone();
         let carried = Rc::clone(relay);
         let shown = gallery.clone();
+        // Filled after the shelf is constructed. The surfaces it owns keep
+        // only a weak route back, so lifecycle callbacks cannot form a cycle.
+        let shelf_anchor = Rc::new(RefCell::new(std::rc::Weak::<Shelf>::new()));
+        let anchored = Rc::clone(&shelf_anchor);
+        let observed = window.map(Rc::downgrade);
         // Each extension holds a port of its own, because a pane that draws an
         // interface has to name whose interface it draws and one shared port
         // could not say.
@@ -160,7 +169,18 @@ impl<'a> Overview<'a> {
             } else {
                 &[]
             };
-            Self::surface(&held, &entry.name, providers, &port, &shown)
+            let name = entry.name.clone();
+            let anchored = Rc::clone(&anchored);
+            let faulted = Rc::new(move |restarts| {
+                if let Some(shelf) = anchored.borrow().upgrade() {
+                    shelf.fault(&name, restarts);
+                }
+            });
+            let events = observed
+                .as_ref()
+                .and_then(std::rc::Weak::upgrade)
+                .map_or_else(hl::extension::Events::default, |window| window.observer());
+            Self::surface(&held, &entry.name, providers, &port, events, &shown, faulted)
         });
         let gallery_for_withdrawal = gallery.clone();
         let window = window.map(Rc::downgrade);
@@ -170,7 +190,18 @@ impl<'a> Overview<'a> {
             }
             gallery_for_withdrawal.withdraw(name.as_str());
         });
-        let shelf = Shelf::with_lifecycle(view, &roster, surfaces, reconcile, withdraw);
+        let cleanup_workspace = workspace.clone();
+        let cleanup = Rc::new(move |entry: hl::extension::Entry| {
+            let (sent, received) = std::sync::mpsc::channel();
+            let workspace = cleanup_workspace.clone();
+            std::thread::spawn(move || {
+                let result = hl::extension::Workspace::remove_extension(&workspace, &entry.name);
+                let _ = sent.send(result);
+            });
+            received
+        });
+        let shelf = Shelf::with_cleanup(view, &roster, surfaces, reconcile, withdraw, cleanup);
+        shelf_anchor.replace(Rc::downgrade(&shelf));
         shelf.install();
         Some(Catalogue::new(&shelf, Self::inspections(workspace)))
     }

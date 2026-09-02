@@ -19,7 +19,7 @@ use hl_client::model::{CreateContainer, DockerMount, HostConfig, InspectImage};
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{Bridge, failure};
+use super::{failure, Bridge};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -338,6 +338,21 @@ impl Sidecar {
         Ok(Some(Outcome::Resumption))
     }
 
+    /// Removes only the container created for this exact recorded
+    /// specification. A container occupying Husklet's canonical name with any
+    /// other signature is foreign state and is left untouched.
+    pub fn remove_owned(&self, spec: &SidecarSpec) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        let inspected = self.bridge.wait(client.containers().inspect(spec.container()));
+        let container = match inspected {
+            Ok(container) => container,
+            Err(error) => return absence(&error).map(|_| ()),
+        };
+        let actual = container.config.labels.get(SIGNATURE_LABEL).map(String::as_str);
+        let target = removal_target(&spec.signature(), actual, &container.details.metadata.id)?;
+        self.remove(target)
+    }
+
     /// Starts an extension container by name.
     ///
     /// # Errors
@@ -385,6 +400,15 @@ impl Sidecar {
     }
 }
 
+fn removal_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Result<&'a str, HostError> {
+    if actual == Some(expected) {
+        return Ok(id);
+    }
+    Err(HostError::Conflict(
+        "the extension container name is occupied by a container Husklet does not own".to_owned(),
+    ))
+}
+
 /// Turns a "no such container" into an absence and anything else into a failure.
 fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
     match failure(error) {
@@ -395,7 +419,7 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Image, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, SidecarSpec};
+    use super::{removal_target, Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
@@ -436,6 +460,13 @@ mod tests {
     #[test]
     fn an_unchanged_specification_signs_the_same_every_time() {
         assert_eq!(spec().signature(), spec().signature());
+    }
+
+    #[test]
+    fn removal_targets_the_inspected_id_only_for_the_exact_signature() {
+        assert_eq!(removal_target("ours", Some("ours"), "immutable-id"), Ok("immutable-id"));
+        assert!(removal_target("ours", Some("foreign"), "foreign-id").is_err());
+        assert!(removal_target("ours", None, "unlabelled-id").is_err());
     }
 
     #[test]

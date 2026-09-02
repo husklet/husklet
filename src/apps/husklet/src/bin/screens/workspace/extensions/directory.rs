@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate};
-use hl_extension::Summary;
+use hl_extension::{Grant, Summary, Update};
 
 use super::{moment, Inspection, Shelf};
 
@@ -29,6 +29,13 @@ pub const NOTICE: &str = "hl-extension-notice";
 pub const PROGRESS: &str = "hl-extension-progress";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
+pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
+
+#[derive(Clone)]
+enum Proposal {
+    Install(Candidate),
+    Update { candidate: Candidate, update: Update },
+}
 
 /// How often the page looks for an inspection that has come back.
 ///
@@ -51,7 +58,7 @@ pub struct Catalogue {
     /// was started from is the same field a second one would read.
     pending: RefCell<Option<Receiver<Acquisition>>>,
     /// What the last inspection found, waiting for an answer.
-    candidate: RefCell<Option<Candidate>>,
+    candidate: RefCell<Option<Proposal>>,
 }
 
 impl Catalogue {
@@ -154,7 +161,26 @@ impl Catalogue {
                 self.reference.set_sensitive(true);
                 self.inspect.set_sensitive(true);
                 self.inspect.set_label("Read another image");
-                self.propose(&candidate);
+                let installed = self
+                    .shelf
+                    .roster()
+                    .borrow()
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.name == candidate.manifest.name);
+                if installed {
+                    let prepared = self
+                        .shelf
+                        .roster()
+                        .borrow()
+                        .prepare_update(&candidate.manifest, &candidate.digest);
+                    match prepared {
+                        Ok(update) => self.propose_update(candidate, update),
+                        Err(refusal) => self.say(&refusal.to_string()),
+                    }
+                } else {
+                    self.propose_install(candidate);
+                }
             }
             Acquisition::Failed(reason) => {
                 *self.pending.borrow_mut() = None;
@@ -173,23 +199,45 @@ impl Catalogue {
     /// The consent recorded is exactly what was shown, and the roster narrows
     /// it again to what the manifest declares.
     pub fn consent(self: &Rc<Self>) {
-        let Some(candidate) = self.candidate.borrow().clone() else {
+        let Some(proposal) = self.candidate.borrow().clone() else {
             self.say("there is nothing to install");
             return;
         };
-        let recorded = self.shelf.roster().borrow_mut().register(
-            &candidate.manifest,
-            &candidate.digest,
-            &candidate.manifest.capabilities,
-            moment(),
-        );
-        self.settle(&candidate, recorded);
+        match proposal {
+            Proposal::Install(candidate) => {
+                let recorded = self.shelf.roster().borrow_mut().register(
+                    &candidate.manifest,
+                    &candidate.digest,
+                    &candidate.manifest.capabilities,
+                    moment(),
+                );
+                self.settle(&candidate, recorded);
+            }
+            Proposal::Update { candidate, update } => {
+                let consent = Grant::new(update.additional.iter().copied());
+                let recorded = self
+                    .shelf
+                    .roster()
+                    .borrow_mut()
+                    .commit_update(update, &consent, moment());
+                if let Err(refusal) = recorded {
+                    self.say(&format!(
+                        "update failed; the installed extension is unchanged: {refusal}"
+                    ));
+                    return;
+                }
+                self.shelf.refresh(&candidate.manifest.name);
+                self.forget();
+                self.refresh();
+                self.say(&format!("{} was updated", candidate.manifest.name));
+            }
+        }
     }
 
     /// Walks away from the candidate, recording nothing.
     pub fn decline(self: &Rc<Self>) {
         self.forget();
-        self.say("nothing was installed");
+        self.say("nothing changed");
     }
 
     /// Puts the candidate on the shelf, or says why it could not go there.
@@ -214,7 +262,7 @@ impl Catalogue {
     }
 
     /// Shows what an image asks for, and asks.
-    fn propose(self: &Rc<Self>, candidate: &Candidate) {
+    fn propose_install(self: &Rc<Self>, candidate: Candidate) {
         let manifest = &candidate.manifest;
         self.proposal.append(&text(
             &format!("{} {} — {}", manifest.name, manifest.version, manifest.display_name),
@@ -228,16 +276,58 @@ impl Catalogue {
         for capability in manifest.capabilities.iter() {
             self.proposal.append(&text(capability.as_str(), "fhint"));
         }
-        self.proposal.append(&self.answer());
+        self.proposal.append(&self.answer("Install"));
         self.proposal.set_visible(true);
-        *self.candidate.borrow_mut() = Some(candidate.clone());
+        *self.candidate.borrow_mut() = Some(Proposal::Install(candidate));
         self.say("this image asks for the capabilities above");
     }
 
+    fn propose_update(self: &Rc<Self>, candidate: Candidate, update: Update) {
+        self.proposal.append(&text(&format!("Update {}", update.name), "dhead"));
+        self.proposal.append(&text(
+            &format!(
+                "installed  {}  ·  {}",
+                if update.current_version.is_empty() {
+                    "unknown version"
+                } else {
+                    &update.current_version
+                },
+                update.current_digest
+            ),
+            "fhint",
+        ));
+        self.proposal.append(&text(
+            &format!(
+                "candidate  {}  ·  {}",
+                update.candidate_version, update.candidate_digest
+            ),
+            "fhint",
+        ));
+        if update.additional.is_empty() && update.removed.is_empty() {
+            self.proposal.append(&text("capabilities unchanged", UPDATE_DELTA));
+        }
+        for capability in &update.additional {
+            self.proposal
+                .append(&text(&format!("+ {}", capability.as_str()), UPDATE_DELTA));
+        }
+        for capability in &update.removed {
+            self.proposal
+                .append(&text(&format!("− {}", capability.as_str()), UPDATE_DELTA));
+        }
+        let summary = Summary::of(&Grant::new(update.additional.iter().copied()));
+        if summary.execution {
+            self.proposal.append(&text(Summary::EXECUTION_NOTICE, "fhint"));
+        }
+        self.proposal.append(&self.answer("Accept update"));
+        self.proposal.set_visible(true);
+        *self.candidate.borrow_mut() = Some(Proposal::Update { candidate, update });
+        self.say("review the installed and candidate image changes before accepting");
+    }
+
     /// The two buttons a candidate is answered with.
-    fn answer(self: &Rc<Self>) -> gtk::Box {
+    fn answer(self: &Rc<Self>, accept: &str) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let install = gtk::Button::with_label("Install");
+        let install = gtk::Button::with_label(accept);
         install.add_css_class(CONSENT);
         let page = Rc::clone(self);
         install.connect_clicked(move |_| page.consent());

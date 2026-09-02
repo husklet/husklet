@@ -143,6 +143,7 @@ pub struct Conversation {
     workspace: String,
     settle: Duration,
     observed: std::collections::BTreeMap<Topic, Snapshot>,
+    events: Option<super::host::Events>,
 }
 
 impl Conversation {
@@ -175,7 +176,12 @@ impl Conversation {
             workspace: workspace.into(),
             settle: Self::SETTLE,
             observed: std::collections::BTreeMap::new(),
+            events: None,
         })
+    }
+
+    pub(crate) fn with_events(&mut self, events: super::host::Events) {
+        self.events = Some(events);
     }
 
     /// Shortens or lengthens the handshake window.
@@ -275,13 +281,20 @@ impl Conversation {
                 snapshots.push(Snapshot::Terminal(tabs));
             }
         }
+        if self.session.may_emit(Topic::WorkspaceEvents) {
+            if let Some(batch) = self.events.as_ref().and_then(super::host::Events::drain) {
+                snapshots.push(Snapshot::WorkspaceEvents(batch));
+            }
+        }
         for snapshot in snapshots {
             let topic = snapshot.topic();
-            if self.observed.get(&topic) == Some(&snapshot) {
+            if topic != Topic::WorkspaceEvents && self.observed.get(&topic) == Some(&snapshot) {
                 continue;
             }
             self.publish(&snapshot)?;
-            self.observed.insert(topic, snapshot);
+            if topic != Topic::WorkspaceEvents {
+                self.observed.insert(topic, snapshot);
+            }
         }
         Ok(())
     }

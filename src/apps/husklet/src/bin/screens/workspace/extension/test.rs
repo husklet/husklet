@@ -93,11 +93,33 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
         a_stopped_extension_keeps_its_widgets_and_says_so();
+        a_structured_fault_reaches_lifecycle_on_the_toolkit_tick();
         a_rendered_button_reaches_the_sink();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn a_structured_fault_reaches_lifecycle_on_the_toolkit_tick() {
+    let (post, deliveries) = channel();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let carried = Rc::clone(&seen);
+    let (_widget, mut page) = Interface::with_faults(
+        deliveries,
+        Rc::new(|_| {}),
+        Rc::new(move |count| {
+            carried.borrow_mut().push(count);
+        }),
+    );
+
+    post.send(Delivery::Fault { restarts: 5 }).expect("page listening");
+    assert!(
+        seen.borrow().is_empty(),
+        "the host thread never calls GTK lifecycle directly"
+    );
+    page.tick();
+    assert_eq!(&*seen.borrow(), &[5]);
 }
 
 fn a_queued_frame_puts_widgets_on_the_page() {

@@ -2,7 +2,8 @@
 //! property under test throughout is that a grant only ever narrows on its own.
 
 use hl_extension::{
-    Capability, Consent, Disposition, ExtensionName, Grant, Installation, Manifest, Record, Stage, Summary, PROTOCOL,
+    Capability, Disposition, ExtensionName, Grant, Installation, Manifest, Record, Stage, Summary, UpdateFailure,
+    PROTOCOL,
 };
 
 fn name() -> ExtensionName {
@@ -72,7 +73,7 @@ fn consent_beyond_the_manifest_is_not_recorded() {
 }
 
 #[test]
-fn an_update_asking_for_more_keeps_the_old_grant_and_names_what_is_new() {
+fn an_update_asking_for_more_preserves_the_old_record_until_commit() {
     let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
     installation.enable(&name()).expect("enabled");
 
@@ -81,26 +82,37 @@ fn an_update_asking_for_more_keeps_the_old_grant_and_names_what_is_new() {
         Capability::ContainerControl,
         Capability::FilesystemWrite,
     ]);
-    let consent = installation
-        .reinstall(&update, "sha256:second", 2_000)
-        .expect("updated");
-
+    let prepared = installation
+        .prepare_update(&update, "sha256:second")
+        .expect("inspected");
+    assert_eq!(prepared.current_version, "1.0.0");
+    assert_eq!(prepared.candidate_version, "1.0.0");
     assert_eq!(
-        consent,
-        Consent::Requirement {
-            additional: vec![Capability::ContainerControl, Capability::FilesystemWrite],
-        }
+        prepared.additional,
+        vec![Capability::ContainerControl, Capability::FilesystemWrite]
     );
-    assert!(consent.is_requirement());
 
     let record = installation.record(&name()).expect("recorded");
     assert_eq!(record.granted, Grant::new([Capability::ContainerRead]));
-    assert_eq!(record.image_digest, "sha256:second", "it runs the new image");
     assert_eq!(
-        installation.stage(&name()),
-        Stage::Duty,
-        "it keeps running, narrowly, rather than stopping"
+        record.image_digest, "sha256:first",
+        "inspection cannot swap the running image"
     );
+    assert_eq!(installation.stage(&name()), Stage::Duty);
+
+    installation
+        .commit_update(
+            prepared,
+            &Grant::new([Capability::ContainerControl, Capability::FilesystemWrite]),
+            2_000,
+            |old, new| {
+                assert_eq!(old.image_digest, "sha256:first");
+                assert_eq!(new.image_digest, "sha256:second");
+                Ok::<_, ()>(())
+            },
+        )
+        .expect("committed");
+    assert_eq!(installation.record(&name()).unwrap().image_digest, "sha256:second");
 }
 
 #[test]
@@ -111,41 +123,85 @@ fn an_update_asking_for_less_narrows_without_prompting() {
     );
 
     let update = manifest(&[Capability::ContainerRead]);
-    let consent = installation
-        .reinstall(&update, "sha256:second", 2_000)
+    let prepared = installation
+        .prepare_update(&update, "sha256:second")
+        .expect("inspected");
+    assert!(prepared.additional.is_empty());
+    assert_eq!(prepared.removed, vec![Capability::ContainerControl]);
+    installation
+        .commit_update(prepared, &Grant::default(), 2_000, |_, _| Ok::<_, ()>(()))
         .expect("updated");
-
-    assert_eq!(consent, Consent::Standing);
     let record = installation.record(&name()).expect("recorded");
     assert_eq!(record.granted, Grant::new([Capability::ContainerRead]));
     assert!(!record.granted.holds(Capability::ContainerControl));
 }
 
 #[test]
-fn a_widened_grant_arrives_only_with_an_answered_prompt() {
+fn a_failed_replacement_and_cancellation_preserve_old_record_and_runtime() {
     let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
     let update = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+    let cancelled = installation
+        .prepare_update(&update, "sha256:second")
+        .expect("inspected");
+    installation.cancel_update(cancelled);
+    assert_eq!(installation.record(&name()).unwrap().image_digest, "sha256:first");
+
+    let prepared = installation
+        .prepare_update(&update, "sha256:second")
+        .expect("inspected");
+    let failure = installation.commit_update(prepared, &Grant::new([Capability::ContainerControl]), 2_000, |_, _| {
+        Err("swap failed")
+    });
+    assert!(matches!(failure, Err(UpdateFailure::Replacement("swap failed"))));
+    let record = installation.record(&name()).unwrap();
+    assert_eq!(record.image_digest, "sha256:first");
+    assert!(!record.granted.holds(Capability::ContainerControl));
+}
+
+#[test]
+fn missing_consent_never_invokes_replacement() {
+    let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
+    let update = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+    let prepared = installation
+        .prepare_update(&update, "sha256:second")
+        .expect("inspected");
+    let mut invoked = false;
+    let result = installation.commit_update(prepared, &Grant::default(), 2_000, |_, _| {
+        invoked = true;
+        Ok::<_, ()>(())
+    });
+    assert!(matches!(result, Err(UpdateFailure::Refused(_))));
+    assert!(!invoked);
+    assert_eq!(installation.record(&name()).unwrap().image_digest, "sha256:first");
+}
+
+#[test]
+fn a_stale_preparation_cannot_replace_a_later_committed_update() {
+    let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
+    let mut newer = manifest(&[Capability::ContainerRead]);
+    newer.version = "2.0.0".into();
+    let stale = installation
+        .prepare_update(&newer, "sha256:second")
+        .expect("first inspection");
+    let winning = installation
+        .prepare_update(&newer, "sha256:third")
+        .expect("second inspection");
     installation
-        .reinstall(&update, "sha256:second", 2_000)
-        .expect("updated");
-
-    let record = installation
-        .consent(&update, &Grant::new([Capability::ContainerControl]))
-        .expect("consented");
-
-    assert!(record.granted.holds(Capability::ContainerControl));
-    assert!(
-        record.granted.holds(Capability::ContainerRead),
-        "the old grant survives"
-    );
+        .commit_update(winning, &Grant::default(), 2_000, |_, _| Ok::<_, ()>(()))
+        .expect("winner");
+    let result = installation.commit_update(stale, &Grant::default(), 3_000, |_, _| Ok::<_, ()>(()));
+    assert!(matches!(result, Err(UpdateFailure::Refused(_))));
+    let record = installation.record(&name()).unwrap();
+    assert_eq!(record.image_digest, "sha256:third");
+    assert_eq!(record.version, "2.0.0");
 }
 
 #[test]
 fn an_update_to_an_absent_record_is_refused_rather_than_installing_one() {
-    let mut installation = Installation::new();
+    let installation = Installation::new();
     let update = manifest(&[Capability::ContainerRead]);
 
-    assert!(installation.reinstall(&update, "sha256:second", 2_000).is_err());
+    assert!(installation.prepare_update(&update, "sha256:second").is_err());
     assert_eq!(installation.stage(&name()), Stage::Vacancy);
     assert!(installation.is_empty());
 }
@@ -303,8 +359,11 @@ fn a_new_image_clears_the_restart_count() {
     }
     assert!(installation.stage(&name()).is_fault());
 
+    let update = installation
+        .prepare_update(&manifest(&[Capability::ContainerRead]), "sha256:second")
+        .expect("inspected");
     installation
-        .reinstall(&manifest(&[Capability::ContainerRead]), "sha256:second", 5_000)
+        .commit_update(update, &Grant::default(), 5_000, |_, _| Ok::<_, ()>(()))
         .expect("updated");
 
     assert_eq!(
@@ -329,6 +388,14 @@ fn a_record_round_trips_through_serde_unchanged() {
     assert_eq!(&decoded, record);
     assert_eq!(decoded.granted.len(), 2);
     assert!(decoded.enabled);
+}
+
+#[test]
+fn a_record_written_before_versions_were_persisted_remains_readable() {
+    let old = r#"{"name":"containers","image_digest":"sha256:first","granted":["container-read"],"enabled":false,"installed_at":1000,"pane_providers":[]}"#;
+    let record: Record = serde_json::from_str(old).expect("legacy record");
+    assert_eq!(record.version, "");
+    assert_eq!(record.image_digest, "sha256:first");
 }
 
 #[test]

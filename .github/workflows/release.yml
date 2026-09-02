@@ -61,6 +61,117 @@ jobs:
           cargo test --locked --offline -p hl-native --test build_reproducibility --
           --ignored --exact native_shared_library_is_reproducible_across_out_directories
 
+  react-package:
+    name: Publish @husklet/react
+    needs: [smoke, native-linux-reproducibility]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: extensions/react
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve and validate package version
+        id: version
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          else
+            version="$MANUAL_VERSION"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "version must have exact X.Y.Z form, got: $version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Node for npm trusted publishing
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: extensions/react/package-lock.json
+
+      - name: Install the locked package graph
+        run: npm ci
+
+      - name: Install an OIDC-capable npm CLI
+        run: npm install --global npm@11.6.2
+
+      - name: Test source and packed-package consumer
+        run: npm test
+
+      - name: Bind the package to the release version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Re-test the exact package that will publish
+        run: npm run pack:check
+
+      - name: Publish with npm trusted publishing
+        run: npm publish --access public --provenance
+
+  react-extension-base:
+    name: Publish React extension base / multi-architecture
+    needs: [smoke, native-linux-reproducibility]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve and validate image version
+        id: version
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          else
+            version="$MANUAL_VERSION"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "version must have exact X.Y.Z form, got: $version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Configure multi-architecture builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish one multi-architecture manifest
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: extensions/react
+          file: extensions/react/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+          provenance: mode=max
+          sbom: true
+
   dmg:
     name: Signed and notarized DMG
     needs: [smoke, native-linux-reproducibility]

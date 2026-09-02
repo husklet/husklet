@@ -13,6 +13,7 @@
 //! toolkit type appears below, which is what lets the whole lifecycle be
 //! exercised over a socket pair with no display and no container daemon.
 
+use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -67,6 +68,9 @@ pub enum Report {
     Source(hl_gui::SourceMutation),
     /// The extension is not speaking any more, and why.
     Loss(String),
+    /// The restart policy has latched a crash loop. Structured rather than
+    /// parsed from `Loss`, so settings never guesses state from prose.
+    Fault { restarts: u32 },
 }
 
 /// Where the page sends what a person did.
@@ -79,6 +83,95 @@ pub enum Order {
     PaneProvider(hl_extension::PaneSelection),
     /// Start the stopped extension again.
     Retry,
+}
+
+/// A non-blocking, bounded bridge from a workspace window to its extension.
+#[derive(Clone, Default)]
+pub struct Events {
+    inner: Arc<Mutex<EventQueue>>,
+}
+
+#[derive(Default)]
+struct EventQueue {
+    pending: VecDeque<hl_extension::WorkspaceEvent>,
+    dropped: u64,
+}
+
+impl Events {
+    pub const LIMIT: usize = 64;
+
+    /// Records activity without ever waiting for the GTK main loop.
+    pub fn observe(&self, event: hl_extension::WorkspaceEvent) {
+        let Ok(mut queue) = self.inner.try_lock() else { return };
+        if matches!(
+            event,
+            hl_extension::WorkspaceEvent::Pointer {
+                phase: hl_extension::PointerPhase::Move,
+                ..
+            }
+        ) && matches!(
+            queue.pending.back(),
+            Some(hl_extension::WorkspaceEvent::Pointer {
+                phase: hl_extension::PointerPhase::Move,
+                ..
+            })
+        ) {
+            queue.pending.pop_back();
+        } else if queue.pending.len() == Self::LIMIT {
+            queue.pending.pop_front();
+            queue.dropped = queue.dropped.saturating_add(1);
+        }
+        queue.pending.push_back(event);
+    }
+
+    pub(crate) fn drain(&self) -> Option<hl_extension::WorkspaceEventBatch> {
+        let Ok(mut queue) = self.inner.try_lock() else {
+            return None;
+        };
+        if queue.pending.is_empty() && queue.dropped == 0 {
+            return None;
+        }
+        Some(hl_extension::WorkspaceEventBatch {
+            events: queue.pending.drain(..).collect(),
+            dropped: std::mem::take(&mut queue.dropped),
+        })
+    }
+}
+
+#[cfg(test)]
+mod event_buffer_tests {
+    use super::Events;
+    use hl_extension::{PointerPhase, WorkspaceEvent};
+
+    fn motion(x: f64) -> WorkspaceEvent {
+        WorkspaceEvent::Pointer {
+            phase: PointerPhase::Move,
+            x,
+            y: 1.0,
+            button: None,
+        }
+    }
+
+    #[test]
+    fn pointer_motion_is_coalesced_before_it_reaches_the_wire() {
+        let events = Events::default();
+        events.observe(motion(1.0));
+        events.observe(motion(2.0));
+        let batch = events.drain().unwrap();
+        assert_eq!(batch.events, vec![motion(2.0)]);
+        assert_eq!(batch.dropped, 0);
+    }
+
+    #[test]
+    fn overload_is_bounded_and_reported() {
+        let events = Events::default();
+        for index in 0..Events::LIMIT + 7 {
+            events.observe(WorkspaceEvent::Focus { active: index % 2 == 0 });
+        }
+        let batch = events.drain().unwrap();
+        assert_eq!(batch.events.len(), Events::LIMIT);
+        assert_eq!(batch.dropped, 7);
+    }
 }
 
 /// Where the hosted extension stands.
@@ -490,6 +583,7 @@ fn faulted(installation: &mut Installation, hall: &Hall, plan: &Plan, restarts: 
         "{} stopped {restarts} times and will not be started again until you retry it",
         plan.record.name
     ));
+    hall.deliver(Report::Fault { restarts });
     hall.retried().is_some() && installation.retry(&plan.record.name).is_ok()
 }
 
@@ -604,21 +698,21 @@ fn moment() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
 
     use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
         TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Capability, ExtensionName, Grant, Hello, Manifest, Record, RelativePath, Request, Resources, Services,
-        Transit, Wire, WorkspaceInfo, PROTOCOL,
+        codec, Capability, ExtensionName, Grant, Hello, Installation, Manifest, Record, RelativePath, Request,
+        Resources, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::super::sidecar::Image;
+    use super::{enrol, faulted, Hall, Host, Order, Plan, Report, SidecarSpec, Standing, Supply, VACANCY};
     use super::{Conversation, UnixStream};
-    use super::{Host, Order, Plan, Report, SidecarSpec, Standing, Supply, VACANCY};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -663,6 +757,16 @@ mod tests {
                 .into_iter()
                 .filter_map(|report| match report {
                     Report::Loss(reason) => Some(reason),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn faults(&self) -> Vec<u32> {
+            self.reports()
+                .into_iter()
+                .filter_map(|report| match report {
+                    Report::Fault { restarts } => Some(restarts),
                     _ => None,
                 })
                 .collect()
@@ -812,6 +916,7 @@ mod tests {
         let record = Record {
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
+            version: "1.0.0".to_owned(),
             granted: manifest.capabilities.clone(),
             enabled: true,
             installed_at: 1,
@@ -1040,6 +1145,30 @@ mod tests {
 
         assert_eq!(host.standing(), Standing::Duty);
         host.close().expect("closed");
+    }
+
+    #[test]
+    fn a_latched_crash_loop_reports_structured_state_before_retrying() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let plan = plan(&temporary.path().join("extension.sock"));
+        let gallery = Gallery::default();
+        let (orders, inbox) = mpsc::channel();
+        orders.send(Order::Retry).expect("retry queued");
+        let standing = Arc::new(Mutex::new(Standing::Duty));
+        let hall = Hall {
+            audience: gallery.audience(),
+            inbox,
+            standing: Arc::clone(&standing),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        let mut installation = Installation::new();
+        enrol(&mut installation, &plan).expect("enrolled");
+
+        assert!(faulted(&mut installation, &hall, &plan, 5));
+
+        assert_eq!(gallery.faults(), [5]);
+        assert!(gallery.losses()[0].contains("stopped 5 times"));
+        assert_eq!(installation.stage(&plan.record.name), hl_extension::Stage::Duty);
     }
 
     #[test]

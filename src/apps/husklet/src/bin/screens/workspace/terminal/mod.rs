@@ -31,6 +31,7 @@ pub(crate) struct TermWin {
     /// The window is closing; child exits should not mutate the saved layout during teardown.
     closing: Cell<bool>,
     overview_page: Option<screens::workspace::Page>,
+    observers: RefCell<Vec<hl::extension::Events>>,
 }
 
 pub(crate) struct PaneRegistration {
@@ -213,6 +214,18 @@ impl SplitAction {
 }
 
 impl TermWin {
+    pub(crate) fn observer(&self) -> hl::extension::Events {
+        let events = hl::extension::Events::default();
+        self.observers.borrow_mut().push(events.clone());
+        events
+    }
+
+    fn broadcast(&self, event: hl_extension::WorkspaceEvent) {
+        for observer in self.observers.borrow().iter() {
+            observer.observe(event.clone());
+        }
+    }
+
     fn apply_zoom(&self, scale: f64) {
         self.panes.borrow_mut().retain(|pane| {
             let Some(terminal) = pane.terminal.upgrade() else {
@@ -222,6 +235,19 @@ impl TermWin {
             true
         });
     }
+}
+
+fn modifier_names(state: gtk::gdk::ModifierType) -> Vec<String> {
+    [
+        (gtk::gdk::ModifierType::SHIFT_MASK, "shift"),
+        (gtk::gdk::ModifierType::CONTROL_MASK, "control"),
+        (gtk::gdk::ModifierType::ALT_MASK, "alt"),
+        (gtk::gdk::ModifierType::META_MASK, "meta"),
+        (gtk::gdk::ModifierType::SUPER_MASK, "super"),
+    ]
+    .into_iter()
+    .filter_map(|(mask, name)| state.contains(mask).then(|| name.to_owned()))
+    .collect()
 }
 
 impl Clipboard {
@@ -345,6 +371,7 @@ impl Window {
             copymode: CopyMode::new(),
             closing: Cell::new(false),
             overview_page: None,
+            observers: RefCell::new(Vec::new()),
         })
     }
 
@@ -419,6 +446,7 @@ impl Window {
             copymode: CopyMode::new(),
             closing: Cell::new(false),
             overview_page,
+            observers: RefCell::new(Vec::new()),
         });
         Search::wire(&tw);
 
@@ -429,6 +457,11 @@ impl Window {
         {
             let tw = tw.clone();
             keys.connect_key_pressed(move |_, key, _c, state| {
+                tw.broadcast(hl_extension::WorkspaceEvent::Key {
+                    key: key.name().map_or_else(String::new, |name| name.to_string()),
+                    modifiers: modifier_names(state),
+                    pressed: true,
+                });
                 let shortcut = Shortcut::from_key(key, state);
                 // Window shortcuts are captured before the focused widget sees them. Text-editing
                 // commands must remain with the search entry; redirecting Paste to the last VTE can
@@ -483,7 +516,61 @@ impl Window {
                 }
             });
         }
+        {
+            let tw = tw.clone();
+            keys.connect_key_released(move |_, key, _c, state| {
+                tw.broadcast(hl_extension::WorkspaceEvent::Key {
+                    key: key.name().map_or_else(String::new, |name| name.to_string()),
+                    modifiers: modifier_names(state),
+                    pressed: false,
+                });
+            });
+        }
         window.add_controller(keys);
+
+        let motion = gtk::EventControllerMotion::new();
+        {
+            let tw = tw.clone();
+            motion.connect_motion(move |_, x, y| {
+                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Move,
+                    x,
+                    y,
+                    button: None,
+                })
+            });
+        }
+        {
+            let tw = tw.clone();
+            motion.connect_enter(move |_, x, y| {
+                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Enter,
+                    x,
+                    y,
+                    button: None,
+                });
+            });
+        }
+        {
+            let tw = tw.clone();
+            motion.connect_leave(move |_| {
+                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Leave,
+                    x: 0.0,
+                    y: 0.0,
+                    button: None,
+                });
+            });
+        }
+        window.add_controller(motion);
+        {
+            let tw = tw.clone();
+            window.connect_is_active_notify(move |window| {
+                tw.broadcast(hl_extension::WorkspaceEvent::Focus {
+                    active: window.is_active(),
+                })
+            });
+        }
 
         CloseRequest::install(&window, &tw);
 

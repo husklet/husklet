@@ -17,6 +17,8 @@ pub enum Delivery {
     Source(SourceMutation),
     /// The extension is gone, and why. The page freezes rather than blanks.
     Loss(String),
+    /// A structured crash-loop count for the central lifecycle card.
+    Fault { restarts: u32 },
 }
 
 /// The end the page drains.
