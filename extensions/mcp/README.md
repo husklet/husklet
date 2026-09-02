@@ -41,6 +41,12 @@ returning either the newest bounded inventory snapshot or acquisition job/revisi
 metadata. Acquisition notifications never carry manifest contents; clients fetch
 status only after an invalidation, and coalescing is reported explicitly.
 
+Container creation accepts only a bounded image reference and name, while exec
+accepts an argv vector rather than shell text. Stopping or signaling the owning
+container requires literal `confirm: true`; the signal remains explicit and is
+bounded to 32 bytes. Execution-level signaling remains a separate typed tool and
+cannot accidentally target the owning container.
+
 Volume and network inventory/inspection use the host's separate `VolumeRead`
 and `NetworkRead` grants. Creation and attachment controls retain their
 `VolumeWrite` or `NetworkWrite` grants. Volume/network removal and network
@@ -67,3 +73,34 @@ roots; removal requires `confirm: true`, and recursive deletion is unavailable.
 Terminal layout tools use the same `beside`/`below` vocabulary as the host and
 can focus, split, resize, rebalance, and close panes. Grid sizes and split ratios
 are bounded; closing a pane requires an explicit `confirm: true` argument.
+
+`husklet_terminal_write` remains the convenient bounded literal UTF-8 text path.
+`husklet_terminal_write_bytes` accepts canonical padded base64 and decodes at
+most 65,536 bytes before making any socket call, preserving NUL, control, and
+non-UTF8 bytes exactly. Whitespace, URL-safe or unpadded spellings, malformed
+padding, and decoded payloads over the protocol limit are rejected.
+
+## Bounded pane-agent turn
+
+[`examples/agent-pane-flow.mjs`](examples/agent-pane-flow.mjs) is an executable
+client-side flow for an LLM integration. Pass it an initialized MCP `Client`:
+
+```js
+import { runPaneAgentTurn } from '@husklet/mcp/examples/agent-pane-flow.mjs';
+
+const observation = await runPaneAgentTurn(client, {
+  actionLabel: 'Refresh',
+  terminalBytes: Uint8Array.from([0x03]), // one exact Ctrl-C byte, not shell text
+  waitMs: 5_000,
+});
+```
+
+The turn discovers slots before reading them, reads at most 100 terminal lines,
+reads either a native or extension semantic tree, and invokes a node using the
+revision returned with that same tree. It writes the supplied bytes through the
+canonical-base64 tool. It arms one `husklet_pane_wait` before the action so a
+fast change is not lost;
+the host's credit-controlled subscription either reports a coalesced change or
+times out. Only a reported change causes one fresh snapshot. There is no polling
+loop. A stale-revision error is authoritative: read a fresh tree and reconsider
+the action instead of replaying an old node ID.

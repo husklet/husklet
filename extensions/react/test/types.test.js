@@ -69,3 +69,29 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
     'the generated render options describe tab-to-split composition',
   );
 });
+
+test('host events type the pane chooser identity as well as subscribed snapshots', () => {
+  assert.match(declarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
+  assert.match(declarations, /export type InterfaceEvent =/);
+  assert.match(declarations, /InterfaceEventBase<'key', 'Key'> & \{ key: string; keycode: number; modifiers: number; pressed: boolean \}/);
+  assert.match(declarations, /phase: 'enter' \| 'motion' \| 'leave' \| 'press' \| 'release';/);
+  assert.match(declarations, /x: number \| null; y: number \| null; button: number; modifiers: number;/);
+  assert.match(declarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent \| LegacyInterfaceEvent;/);
+  assert.match(declarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
+  assert.doesNotMatch(
+    declarations,
+    /onEvent\?: \(event: SnapshotEvent/,
+    'strict consumers are incorrectly told that provider selections cannot arrive',
+  );
+});
+
+test('event hooks expose typed lifecycle-safe subscriptions', () => {
+  assert.match(
+    declarations,
+    /useHostEvents\(session: Session, listener: \(event: HostEvent, channel: number\) => void\): void;/,
+  );
+  assert.match(
+    declarations,
+    /usePaneSelection\(session: Session, provider\?: string \| null\): PaneSelection \| null;/,
+  );
+});

@@ -29,6 +29,7 @@
   "sideEffects": false,
   "files": [
     "catalogue.json",
+    "examples/starter",
     "src",
     "README.md",
     "LICENSE"

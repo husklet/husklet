@@ -83,6 +83,21 @@ test('schemas are strict, controls map exactly, and no terminal shell shortcut e
   assert.deepEqual(calls, [['containers.start', 'abc']]);
 });
 
+test('container termination requires confirmation before host authority is called', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const stop = listed.find(({ name }) => name === 'husklet_container_stop');
+  const kill = listed.find(({ name }) => name === 'husklet_container_kill');
+  assert.equal(stop.inputSchema.safeParse({ id: 'abc' }).success, false);
+  assert.equal(stop.inputSchema.safeParse({ id: 'abc', confirm: false }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'SIGKILL' }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'x'.repeat(33), confirm: true }).success, false);
+  assert.deepEqual(calls, [], 'schema refusal cannot call host authority');
+  await stop.run({ id: 'abc', confirm: true });
+  await kill.run({ id: 'abc', signal: 'SIGKILL', confirm: true });
+  assert.deepEqual(calls, [['containers.stop', 'abc'], ['containers.kill', 'abc', 'SIGKILL']]);
+});
+
 test('pane list exposes bounded discovery metadata without requiring known slots', async () => {
   const { api, calls } = fake();
   api.terminal.panes = async () => ({ panes: [
@@ -220,6 +235,23 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
   ]);
 });
 
+test('terminal byte input decodes canonical base64 exactly and refuses ambiguity or overflow before calling', async () => {
+  const { api, calls } = fake();
+  const write = tools(api).find(({ name }) => name === 'husklet_terminal_write_bytes');
+  const exact = Uint8Array.from([0x00, 0x03, 0x1b, 0x7f, 0x80, 0xff]);
+  const encoded = Buffer.from(exact).toString('base64');
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: encoded }).success, true);
+  for (const invalid of ['AA', 'AA==\n', 'AA', 'AA-_', 'AB==']) {
+    assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: invalid }).success, false, invalid);
+  }
+  const oversized = Buffer.alloc(65_537).toString('base64');
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: oversized }).success, false);
+  await assert.rejects(write.run({ slot: 'pane-1', input_base64: oversized }), /exceeds 65536 bytes/);
+  assert.deepEqual(calls, []);
+  await write.run({ slot: 'pane-1', input_base64: encoded });
+  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', exact]]);
+});
+
 test('image tools use typed reads and require confirmation for destructive controls', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
@@ -285,7 +317,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
   assert.match(xml, /<\/terminal><\/husklet-pane>$/);
 });
 
-test('unified pane XML selects surface semantics and gives a clear absent error', async () => {
+test('unified pane XML selects surface semantics and gives a clear topology absence error', async () => {
   const terminal = {
     topology: async () => ({ active_tab: null, tabs: [{ id: 't', title: 'UI', root: {
       kind: 'pane', focused: false, grid: null,
@@ -302,7 +334,7 @@ test('unified pane XML selects surface semantics and gives a clear absent error'
   assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
-  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from topology and exposes no native semantics/);
+  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from terminal topology/);
 });
 
 test('results redact secrets and remain bounded', async () => {
@@ -423,6 +455,7 @@ test('a real MCP client lists strict tools and calls through the React session c
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
       if (name === 'execution_kill') return { reply: 'done' };
+      if (name === 'container_stop' || name === 'container_kill') return { reply: 'done' };
       if (name === 'image_list') return { reply: 'images', with: [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }] };
       if (name === 'volume_list') return { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] };
       if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
@@ -431,6 +464,7 @@ test('a real MCP client lists strict tools and calls through the React session c
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
+      if (name === 'terminal_write_pane') return { reply: 'done' };
       if (name === 'event_subscribe') {
         queueMicrotask(() => { for (const listener of events) listener({ snapshot: 'pane_changes', of: {
           slot: 'pane-live', kind: 'surface', revision: 12, generation: 13, coalesced: 2,
@@ -457,6 +491,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_terminal_write_bytes'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
   const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
@@ -472,12 +507,21 @@ test('a real MCP client lists strict tools and calls through the React session c
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
   await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
+  const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
+  assert.equal(refusedStop.isError, true);
+  const refusedKill = await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL' } });
+  assert.equal(refusedKill.isError, true);
+  await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1', confirm: true } });
+  await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL', confirm: true } });
   const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
   assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
   const volumes = await client.callTool({ name: 'husklet_volume_list', arguments: {} });
   assert.deepEqual(JSON.parse(volumes.content[0].text), [{ name: 'cache', driver: 'local' }]);
   const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
   assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
+  await client.callTool({ name: 'husklet_terminal_write_bytes', arguments: {
+    slot: 'pane-live', input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
+  } });
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
@@ -494,9 +538,12 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
+    ['container_stop', { id: 'container-1' }],
+    ['container_kill', { id: 'container-1', signal: 'SIGKILL' }],
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],
+    ['terminal_write_pane', { slot: 'pane-live', contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],
@@ -534,6 +581,65 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
   assert.deepEqual(calls.map(([name]) => name), [
     'terminal_topology', 'terminal_read_pane', 'terminal_topology', 'pane_semantic_read',
   ]);
+  await client.close();
+  await server.close();
+});
+
+test('pane XML follows every split leaf and refuses a removed stale slot', async () => {
+  let changed = false;
+  const calls = [];
+  const leaf = (slot, focused, columns, rows) => ({
+    kind: 'pane', focused, grid: { columns, rows },
+    pane: { slot, occupant: 'terminal', working_directory: `/work/${slot}`, command: `shell-${slot}`, provider: null },
+  });
+  const session = { call: async (name, argument) => {
+    calls.push([name, argument]);
+    if (name === 'terminal_topology') return { reply: 'topology', with: {
+      active_tab: changed ? 'tab-b' : 'tab-a',
+      tabs: changed ? [{ id: 'tab-b', title: 'After', root: leaf('right', true, 132, 41) }] : [
+        { id: 'tab-a', title: 'Before', root: { kind: 'split', division: 'beside', ratio_per_mille: 600,
+          first: leaf('left', true, 72, 30), second: { kind: 'split', division: 'below', ratio_per_mille: 400,
+            first: leaf('upper', false, 48, 12), second: leaf('right', false, 48, 18) } } },
+        { id: 'tab-b', title: 'Background', root: leaf('other-tab', true, 90, 25) },
+      ],
+    } };
+    if (name === 'terminal_read_pane') return { reply: 'text', with: {
+      slot: argument.slot, lines: [`visible <${argument.slot}>`], truncated: argument.slot === 'upper',
+    } };
+    // A stale host cache must never make a removed split leaf look native.
+    if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
+      slot: argument.slot, revision: 99, truncated: false,
+      root: { id: 1, role: 'status', label: 'stale', value: 'removed', disabled: false, destructive: false, actions: [], children: [] },
+    } };
+    throw new Error(`unexpected call ${name}`);
+  } };
+  const server = createServer(session);
+  const client = new Client({ name: 'split-reader', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const expected = [
+    ['left', 'tab-a', 'true', 'true', '72', '30', 'false'],
+    ['upper', 'tab-a', 'true', 'false', '48', '12', 'true'],
+    ['right', 'tab-a', 'true', 'false', '48', '18', 'false'],
+    ['other-tab', 'tab-b', 'false', 'true', '90', '25', 'false'],
+  ];
+  for (const [slot, tab, active, focused, columns, rows, truncated] of expected) {
+    const answer = await client.callTool({ name: 'husklet_pane_read', arguments: { slot, lines: 10 } });
+    const xml = answer.content[0].text;
+    assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal">`));
+    assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}"[^>]*truncated="${truncated}">`));
+    assert.match(xml, new RegExp(`visible &lt;${slot}&gt;`));
+  }
+
+  changed = true;
+  const surviving = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'right', lines: 10 } });
+  assert.match(surviving.content[0].text, /tab="tab-b" title="After" active="true" focused="true" columns="132" rows="41"/);
+  const removed = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'upper', lines: 10 } });
+  assert.equal(removed.isError, true);
+  assert.match(removed.content[0].text, /absent from terminal topology/);
+  assert.equal(calls.filter(([name]) => name === 'pane_semantic_read').length, 0, 'removed slots never probe stale semantics');
+
   await client.close();
   await server.close();
 });

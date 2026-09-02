@@ -107,6 +107,15 @@ impl Roster<Directory> {
 }
 
 impl<S: Storage> Roster<S> {
+    #[cfg(test)]
+    pub(crate) fn enabled_record(&self, name: &ExtensionName) -> Result<Option<Record>, Refusal> {
+        Ok(self
+            .records
+            .all()?
+            .into_iter()
+            .find(|record| record.name == *name && record.enabled))
+    }
+
     /// Reads what was recorded and puts every record back under the policy.
     ///
     /// A record is re-installed rather than trusted as read, so the stage a

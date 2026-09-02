@@ -75,6 +75,9 @@ export async function paneXml(terminal, slot, lines = 200) {
   const topology = await terminal.topology();
   const leaf = leaves(topology).find(({ pane }) => pane.slot === slot);
   if (!leaf) {
+    if (slot !== 'workspace') {
+      throw new Error(`pane ${JSON.stringify(slot)} is absent from terminal topology`);
+    }
     try {
       const semantic = semanticXml(await terminal.semantics(slot));
       const open = `<husklet-pane slot="${escape(slot)}" occupant="native">`;

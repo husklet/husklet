@@ -13,7 +13,10 @@ try {
     cwd: root, encoding: 'utf8',
   }));
   const names = new Set(dryRun[0].files.map(({ path: name }) => name));
-  for (const required of ['package.json', 'README.md', 'LICENSE', 'catalogue.json', 'src/index.js', 'src/index.d.ts']) {
+  for (const required of [
+    'package.json', 'README.md', 'LICENSE', 'catalogue.json', 'src/index.js', 'src/index.d.ts',
+    'examples/starter/Dockerfile', 'examples/starter/extension.toml', 'examples/starter/main.js',
+  ]) {
     assert(names.has(required), `npm package omits ${required}`);
   }
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')), 'developer-only files leaked into package');
@@ -39,8 +42,23 @@ try {
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
+  const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
+  const starterDockerfile = fs.readFileSync(path.join(installedStarter, 'Dockerfile'), 'utf8');
+  const starterManifest = fs.readFileSync(path.join(installedStarter, 'extension.toml'), 'utf8');
+  execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], { stdio: 'pipe' });
+  assert.match(starterDockerfile, /^ARG HUSKLET_REACT_IMAGE=ghcr\.io\/husklet\/husklet\/extension-react-base:latest$/m);
+  assert.match(starterDockerfile, /^FROM \$\{HUSKLET_REACT_IMAGE\}$/m);
+  assert.match(starterDockerfile, /COPY --chown=node:node main\.js \/app\/main\.js/);
+  assert.match(starterDockerfile, /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/);
+  assert.match(starterDockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
+  assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
+  assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
+  assert.match(starterManifest, /^name = "react-starter"$/m);
+  assert.match(starterManifest, /^protocol = 1$/m);
+  assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
+
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { render, workspace, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
+    import { render, useHostEvents, usePaneSelection, workspace, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
@@ -55,6 +73,43 @@ try {
     const mutation: InterfaceSourceMutation = { Length: { source: 1, version: 2, rows: 100_000 } };
     void surface.ready;
     void surface.source(mutation);
+    const event: HostEvent = { pane_provider: 'logs', slot: 'pane-1' };
+    if ('pane_provider' in event) {
+      const provider: string = event.pane_provider;
+      const slot: string = event.slot;
+      void provider; void slot;
+    }
+    const interaction: HostEvent = { interaction: 'focus', trigger: 'Focus', node: 1, id: '1:Focus', focused: true };
+    void interaction;
+    function describeInterfaceEvent(received: InterfaceEvent): string {
+      switch (received.interaction) {
+        case 'key': {
+          const key: string = received.key;
+          // @ts-expect-error a key event does not carry pointer coordinates
+          void received.x;
+          return key;
+        }
+        case 'pointer': {
+          const phase: 'enter' | 'motion' | 'leave' | 'press' | 'release' = received.phase;
+          const x: number | null = received.x;
+          return phase + ':' + x;
+        }
+        case 'select': return received.rows.join(',');
+        case 'scroll': return received.dx + ',' + received.dy;
+        case 'context': return received.x + ',' + received.y;
+        case 'focus': return String(received.focused);
+        case 'change': return String(received.value);
+        case 'invoke': case 'submit': case 'close': return received.id;
+        default: { const exhaustive: never = received; return exhaustive; }
+      }
+    }
+    void describeInterfaceEvent;
+    function ProviderView() {
+      useHostEvents(session, (received, channel) => { void received; void channel; });
+      const selected = usePaneSelection(session, 'logs');
+      return selected?.slot ?? null;
+    }
+    void ProviderView;
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',
@@ -70,7 +125,9 @@ try {
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
-  assert.match(readme, /ghcr\.io\/husklet\/husklet\/extension-react-base:latest/);
+  assert.match(readme, /examples\/starter/);
+  assert.match(readme, /import React, \{ useState \} from 'react';/);
+  assert(!readme.includes('husklet.extension.manifest="{...}"'), 'README must not suggest an inline manifest');
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

@@ -6,8 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { connect, render } from '../src/index.js';
-import { Button, Column } from '../src/components.js';
+import { connect, render, useHostEvents, usePaneSelection } from '../src/index.js';
+import { Button, Column, Text } from '../src/components.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -202,6 +202,61 @@ test('a re-render rebinds the callback without a patch', async () => {
   await until(() => latest === 'second');
   assert.equal(stage.calls.length, 2, 'rebinding a closure is not something the host needs to hear about');
 
+  session.close();
+  stage.close();
+});
+
+test('the host-event hook keeps a fresh callback and disposes on unmount', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const seen = [];
+  function Observer({ name }) {
+    useHostEvents(session, () => seen.push(name));
+    return h(Text, { label: name });
+  }
+  const handle = render(h(Observer, { name: 'first' }), session, { title: 'Observer' });
+  await handle.ready;
+  await until(() => stage.calls.some((call) => call.call === 'interface_render_at'));
+  await stage.push({ pane_provider: 'logs', slot: 'pane-1' });
+  await until(() => seen.length === 1);
+
+  handle.update(h(Observer, { name: 'second' }));
+  await stage.push({ pane_provider: 'logs', slot: 'pane-2' });
+  await until(() => seen.length === 2);
+  assert.deepEqual(seen, ['first', 'second'], 'a re-render retained the stale listener closure');
+
+  await handle.close();
+  await stage.push({ pane_provider: 'logs', slot: 'pane-3' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(seen, ['first', 'second'], 'an unmounted hook remained subscribed');
+  session.close();
+  stage.close();
+});
+
+test('the pane-selection hook filters providers and exposes stable slot identity', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  function Selection() {
+    const selection = usePaneSelection(session, 'logs');
+    return h(Text, { label: selection === null ? 'No logs pane selected' : `Logs in ${selection.slot}` });
+  }
+  const handle = render(h(Selection), session, { title: 'Provider' });
+  await handle.ready;
+  await until(() => stage.calls.some((call) => call.call === 'interface_render_at'));
+  const labels = () => stage.calls
+    .filter((call) => call.call === 'interface_render_at')
+    .flatMap((call) => call.with.frame.patches)
+    .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
+    .map((patch) => patch.SetProp.value.Text);
+
+  await stage.push({ pane_provider: 'logs' });
+  await stage.push({ pane_provider: 'images', slot: 'pane-wrong' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(labels().includes('Logs in pane-wrong'), false, 'a different provider changed the selected view');
+  await stage.push({ pane_provider: 'logs', slot: 'pane-7' });
+  await until(() => labels().includes('Logs in pane-7'));
+
+  await handle.close();
   session.close();
   stage.close();
 });

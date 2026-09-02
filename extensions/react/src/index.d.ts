@@ -4435,6 +4435,28 @@ export type WorkspaceEvent =
   | { event: 'focus'; active: boolean }
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
+export interface PaneSelection { pane_provider: string; slot: string }
+export interface InterfaceEventBase<I extends string, T extends string> {
+  interaction: I; trigger: T; node: number; id: string; slot?: string;
+}
+export type InterfaceEvent =
+  | InterfaceEventBase<'invoke', 'Invoke'>
+  | InterfaceEventBase<'submit', 'Submit'>
+  | (InterfaceEventBase<'change', 'Change'> & { value?: unknown })
+  | (InterfaceEventBase<'select', 'Select'> & { rows: number[] })
+  | (InterfaceEventBase<'scroll', 'Scroll'> & { dx: number; dy: number })
+  | InterfaceEventBase<'close', 'Close'>
+  | (InterfaceEventBase<'context', 'Context'> & { x: number; y: number })
+  | (InterfaceEventBase<'key', 'Key'> & { key: string; keycode: number; modifiers: number; pressed: boolean })
+  | (InterfaceEventBase<'focus', 'Focus'> & { focused: boolean })
+  | (InterfaceEventBase<'pointer', 'Pointer'> & {
+      phase: 'enter' | 'motion' | 'leave' | 'press' | 'release';
+      x: number | null; y: number | null; button: number; modifiers: number;
+    });
+/** Protocol-1 interface spellings accepted from older hosts by the event router. */
+export type LegacyInterfaceEvent =
+  | { slot?: string; event: string; node: number; id: string; value?: unknown }
+  | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'images'; of: ImageSummary[] }
@@ -4445,6 +4467,7 @@ export type SnapshotEvent =
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
+export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
@@ -4457,7 +4480,7 @@ export interface ConnectOptions {
   timeout?: number;
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
-  onEvent?: (event: SnapshotEvent, channel: number) => void;
+  onEvent?: (event: HostEvent, channel: number) => void;
   onEventError?: (error: unknown) => void;
 }
 
@@ -4467,11 +4490,17 @@ export class Session {
   readonly granted: readonly string[];
   call(method: string, params?: unknown): Promise<unknown>;
   answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: SnapshotEvent, channel: number) => void): () => boolean;
+  onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
   close(): Promise<void>;
 }
 
 export function connect(options?: ConnectOptions): Promise<Session>;
+
+/** Observe host events with automatic unmount/session cleanup and a fresh render callback. */
+export function useHostEvents(session: Session, listener: (event: HostEvent, channel: number) => void): void;
+
+/** The latest pane chooser selection, optionally restricted to one provider ID. */
+export function usePaneSelection(session: Session, provider?: string | null): PaneSelection | null;
 
 export interface WorkspaceApi {
   info(): Promise<WorkspaceInfo>;

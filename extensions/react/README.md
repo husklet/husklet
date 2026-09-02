@@ -15,22 +15,27 @@ npm install @husklet/react react@18.3.1
 ```
 
 The published base image is multi-architecture (`linux/amd64` and
-`linux/arm64`) and already contains Node, React, the reconciler, and this SDK:
+`linux/arm64`) and already contains Node, React, the reconciler, and this SDK.
+Start from the complete context shipped in this package:
 
-```dockerfile
-ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:latest
-FROM ${HUSKLET_REACT_IMAGE}
-COPY . /app
-CMD ["node", "/app/main.js"]
-LABEL husklet.extension.protocol="1"
-LABEL husklet.extension.manifest="{...}"
+```sh
+cp -R node_modules/@husklet/react/examples/starter my-extension
+cd my-extension
+docker build -t my-extension .
 ```
 
+[`examples/starter`](examples/starter) contains `main.js`, `extension.toml`,
+and its Dockerfile. The manifest label names the file inside the image—the host
+does not accept an inline placeholder—and `COPY --chown=node:node` preserves the
+base image's non-root runtime. Pin `HUSKLET_REACT_IMAGE` to the release version
+you tested before publishing an extension; `latest` is only the starter default.
+
 ```jsx
+import React, { useState } from 'react';
 import { connect, render, Column, Button, Text } from '@husklet/react';
 
 function App() {
-  const [count, setCount] = React.useState(0);
+  const [count, setCount] = useState(0);
   return (
     <Column gap={2} pad={4}>
       <Text scale="title">Clicked {count} times</Text>
@@ -42,6 +47,51 @@ function App() {
 const session = await connect();          // reads HUSKLET_EXTENSION_SOCKET
 render(<App />, session, { title: 'My Extension' });
 ```
+
+## Pane providers
+
+An extension can offer named views in the workspace pane chooser. Declare each
+choice in the image manifest alongside the required `interface` capability:
+
+```toml
+capabilities = ["interface"]
+
+[[pane_providers]]
+id = "logs"
+title = "Service logs"
+icon = "text-x-generic-symbolic"
+```
+
+Choosing that entry sends a typed `PaneSelection` carrying both the provider ID
+and the stable workspace slot that selected it. Use that event to select the
+view rendered by the extension's existing root:
+
+```jsx
+import React from 'react';
+import { connect, render, LogView, Text, usePaneSelection } from '@husklet/react';
+
+const session = await connect();
+
+function App() {
+  const selection = usePaneSelection(session, 'logs');
+  return selection
+    ? <LogView value={`Logs selected in ${selection.slot}`} />
+    : <Text value="Choose Service logs from a pane menu" />;
+}
+
+render(<App />, session, { title: 'My Extension' });
+```
+
+The host sends only providers declared by this extension. The `slot` lets state
+and diagnostics remain pane-addressed; it is not a request to open an unrelated
+tab or split. `usePaneSelection` removes its session observer on unmount and
+when the session changes. `useHostEvents(session, listener)` provides the same
+cleanup and fresh-callback behavior for other typed `HostEvent` handling.
+Current interface events form a discriminated union on `interaction`: checking
+for `"key"`, for example, makes `key`, `keycode`, `modifiers`, and `pressed`
+required, while a pointer event exposes its finite phase vocabulary and nullable
+coordinates. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
+that used the older `event` envelope; new code should narrow `InterfaceEvent`.
 
 ## Workspace API
 

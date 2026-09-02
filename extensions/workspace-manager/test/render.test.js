@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
+import { Containers, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
 import { host } from './host.js';
 
 const api = {
@@ -18,21 +18,34 @@ test('the test host receives overview and every resource navigation choice', () 
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
 });
 
-test('image removal and prune require an explicit confirmation step', () => {
+test('image removal and prune require an explicit confirmation step', async () => {
+  const calls = [];
+  const controlled = { images: {
+    ...api.images,
+    remove: async (...args) => calls.push(['remove', ...args]),
+    prune: async () => { calls.push(['prune']); return { deleted: 0, space_reclaimed: 0 }; },
+  } };
   const resource = { data: [{ id: 'sha256:one', reference: 'alpine:3.20', size: 7, created: 0 }], loading: false, error: null, reload: async () => {} };
   const stage = host();
-  const frame = stage.render(h(Images, { api, resource }));
+  const frame = stage.render(h(Images, { api: controlled, resource }));
   const labels = () => stage.frames.flatMap((current) => current.patches).filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label');
   const remove = labels().find((patch) => patch.SetProp.value.Text === 'Remove').SetProp.id;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: remove, id: `${remove}:Invoke`, value: null }));
+  assert.deepEqual(calls, [], 'opening image removal performs no operation');
   assert.ok(labels().some((patch) => patch.SetProp.value.Text === 'Confirm remove'));
   assert.equal(frame.patches.some((patch) => 'SetProp' in patch && patch.SetProp.value?.Text === 'Confirm remove'), false);
+  invoke(stage, 'Cancel');
+  assert.deepEqual(calls, [], 'cancelling image removal is safe');
 
   const pruneStage = host();
-  const pruneFrame = pruneStage.render(h(Images, { api, resource }));
+  const pruneFrame = pruneStage.render(h(Images, { api: controlled, resource }));
   const prune = pruneFrame.patches.find((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value.Text === 'Prune unused images').SetProp.id;
   assert.ok(pruneStage.surface.dispatch({ trigger: 'Invoke', node: prune, id: `${prune}:Invoke`, value: null }));
+  assert.deepEqual(calls, [], 'opening image prune performs no operation');
   assert.ok(pruneStage.frames.flatMap((current) => current.patches).some((patch) => 'SetProp' in patch && patch.SetProp.value?.Text === 'Confirm prune'));
+  invoke(pruneStage, 'Confirm prune');
+  await settled();
+  assert.deepEqual(calls, [['prune']]);
 });
 
 test('volume and network panels render bounded real inventories and controls', () => {
@@ -46,7 +59,130 @@ test('volume and network panels render bounded real inventories and controls', (
     const id = frame.patches.find((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value.Text === label).SetProp.id;
     return frame.patches.some((patch) => 'SetProp' in patch && patch.SetProp.id === id && patch.SetProp.prop === 'Destructive' && patch.SetProp.value.Flag === true);
   };
-  assert.equal(destructive(volumeFrame, 'Remove'), true);
-  assert.equal(destructive(networkFrame, 'Disconnect'), true);
-  assert.equal(destructive(networkFrame, 'Remove'), true);
+  assert.equal(destructive(volumeFrame, 'Remove'), false);
+  assert.equal(destructive(networkFrame, 'Disconnect'), false);
+  assert.equal(destructive(networkFrame, 'Remove'), false);
 });
+
+test('container stop and kill cannot call the API before final confirmation', async () => {
+  const calls = [];
+  const controlled = {
+    containers: {
+      stop: async (...args) => calls.push(['stop', ...args]),
+      kill: async (...args) => calls.push(['kill', ...args]),
+      exec: async () => {}, logs: async () => new Uint8Array(),
+    },
+  };
+  const resource = {
+    data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running' }],
+    loading: false, error: null, reload: async () => {},
+  };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+
+  invoke(stage, 'Stop');
+  assert.deepEqual(calls, [], 'opening stop confirmation performs no operation');
+  assert.equal(isDestructive(stage, 'Confirm stop'), true);
+  invoke(stage, 'Cancel');
+  assert.deepEqual(calls, [], 'cancelling stop is safe');
+  invoke(stage, 'Stop');
+  invoke(stage, 'Confirm stop');
+  await settled();
+  assert.deepEqual(calls, [['stop', 'container-one']]);
+
+  invoke(stage, 'Details');
+  invoke(stage, 'Kill');
+  assert.deepEqual(calls, [['stop', 'container-one']], 'opening kill confirmation performs no operation');
+  assert.equal(isDestructive(stage, 'Confirm kill'), true);
+  invoke(stage, 'Confirm kill');
+  await settled();
+  assert.deepEqual(calls.at(-1), ['kill', 'container-one', 'SIGKILL']);
+});
+
+test('volume and network mutations expose danger only on final confirm and cancel safely', async () => {
+  const calls = [];
+  const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
+  const controlled = {
+    volumes: {
+      inspect: async () => ({}), create: async () => ({}),
+      remove: async (...args) => calls.push(['volume.remove', ...args]),
+    },
+    networks: {
+      inspect: async () => ({}), create: async () => '', connect: async () => {},
+      disconnect: async (...args) => calls.push(['network.disconnect', ...args]),
+      remove: async (...args) => calls.push(['network.remove', ...args]),
+    },
+  };
+
+  const volumes = host();
+  volumes.render(h(Volumes, { api: controlled, resource: resource([{ name: 'cache', driver: 'local' }]) }));
+  invoke(volumes, 'Remove');
+  assert.deepEqual(calls, []);
+  assert.equal(isDestructive(volumes, 'Confirm remove'), true);
+  invoke(volumes, 'Cancel');
+  assert.deepEqual(calls, []);
+  invoke(volumes, 'Remove');
+  invoke(volumes, 'Confirm remove');
+  await settled();
+  assert.deepEqual(calls, [['volume.remove', 'cache']]);
+
+  const networks = host();
+  networks.render(h(Networks, { api: controlled, resource: resource([{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }]) }));
+  change(networks, 'Container ID for connect/disconnect', 'c1');
+  invoke(networks, 'Disconnect');
+  assert.equal(isDestructive(networks, 'Confirm disconnect'), true);
+  assert.equal(calls.some(([name]) => name === 'network.disconnect'), false);
+  invoke(networks, 'Confirm disconnect');
+  await settled();
+  assert.deepEqual(calls.at(-1), ['network.disconnect', 'n1', 'c1']);
+  invoke(networks, 'Remove');
+  assert.equal(calls.some(([name]) => name === 'network.remove'), false);
+  invoke(networks, 'Cancel');
+  assert.equal(calls.some(([name]) => name === 'network.remove'), false);
+});
+
+test('a failed final confirmation stays visible and retryable', async () => {
+  let attempts = 0;
+  const controlled = { volumes: {
+    inspect: async () => ({}), create: async () => ({}),
+    remove: async () => { attempts += 1; throw new Error('volume remains in use'); },
+  } };
+  const resource = { data: [{ name: 'cache', driver: 'local' }], loading: false, error: null, reload: async () => {} };
+  const stage = host();
+  stage.render(h(Volumes, { api: controlled, resource }));
+  invoke(stage, 'Remove');
+  invoke(stage, 'Confirm remove');
+  await settled();
+
+  assert.equal(attempts, 1);
+  assert.ok(labelled(stage, 'volume remains in use'), 'the semantic tree carries the bounded failure');
+  assert.equal(isDestructive(stage, 'Confirm remove'), true, 'the final action remains available for retry');
+  invoke(stage, 'Cancel');
+  assert.equal(attempts, 1, 'cancelling after failure does not retry');
+});
+
+function labelled(stage, label) {
+  return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value?.Text === label).at(-1);
+}
+
+function invoke(stage, label) {
+  const node = labelled(stage, label)?.SetProp.id;
+  assert.notEqual(node, undefined, `${label} is visible`);
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }), `${label} invokes`);
+}
+
+function change(stage, placeholder, value) {
+  const node = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder).at(-1)?.SetProp.id;
+  assert.notEqual(node, undefined, `${placeholder} field is visible`);
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }), `${placeholder} changes`);
+}
+
+function isDestructive(stage, label) {
+  const node = labelled(stage, label)?.SetProp.id;
+  return stage.frames.flatMap((frame) => frame.patches).some((patch) =>
+    'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Destructive' && patch.SetProp.value?.Flag === true);
+}
+
+const settled = () => new Promise((resolve) => setImmediate(resolve));

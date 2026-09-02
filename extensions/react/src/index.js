@@ -6,6 +6,7 @@ import { PROPS, TRIGGERS } from './protocol.js';
 
 export { ExtensionError, Session, SOCKET, PROTOCOL };
 export * from './components.js';
+export * from './hooks.js';
 
 /** Surface handles awaiting a slot or registered by their owned slot. */
 const attached = new WeakMap();
