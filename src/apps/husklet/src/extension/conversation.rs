@@ -82,8 +82,17 @@ impl Queue {
     /// panicked mid-deposit leaves it stale at worst, never unsound.
     fn deposit(&self, frames: Vec<SurfaceFrame>, mutations: Vec<SurfaceMutation>) -> Result<(), Fault> {
         let mut held = self.hold();
-        let incoming = frames.len().saturating_add(mutations.len());
-        let occupied = held.frames.len().saturating_add(held.mutations.len());
+        let cost = |frames: &[SurfaceFrame], mutations: &[SurfaceMutation]| {
+            frames
+                .iter()
+                // Empty frames still consume sequencing and a GTK commit.
+                .fold(0usize, |total, frame| {
+                    total.saturating_add(frame.frame.patches.len().max(1))
+                })
+                .saturating_add(mutations.len())
+        };
+        let incoming = cost(&frames, &mutations);
+        let occupied = cost(&held.frames, &held.mutations);
         if incoming > Self::LIMIT.saturating_sub(occupied) {
             return Err(Fault::Malformed(format!(
                 "more than {} interface operations without letting the window catch up",
@@ -1673,6 +1682,41 @@ mod tests {
                 Vec::new(),
             )
             .expect("another extension owns an independent budget");
+        assert_eq!(healthy.collect().frames.len(), 1);
+    }
+
+    #[test]
+    fn one_oversized_frame_cannot_hide_unbounded_gtk_work_inside_one_queue_entry() {
+        let noisy = Queue::new();
+        let healthy = Queue::new();
+        let oversized = hl_gui::Frame {
+            sequence: 1,
+            patches: (0..=Queue::LIMIT)
+                .map(|_| hl_gui::Patch::Remove {
+                    id: hl_gui::NodeId::new(1),
+                })
+                .collect(),
+        };
+
+        let overflow = noisy.deposit(
+            vec![hl_extension::SurfaceFrame {
+                slot: "noisy".into(),
+                frame: oversized,
+            }],
+            Vec::new(),
+        );
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
+        assert!(noisy.is_empty(), "an oversized frame is rejected atomically");
+
+        healthy
+            .deposit(
+                vec![hl_extension::SurfaceFrame {
+                    slot: "healthy".into(),
+                    frame: hl_gui::Frame::new(1),
+                }],
+                Vec::new(),
+            )
+            .expect("a sibling extension retains its independent render budget");
         assert_eq!(healthy.collect().frames.len(), 1);
     }
 
