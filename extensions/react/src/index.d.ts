@@ -3263,6 +3263,41 @@ export interface EventStreamProps extends NodeProps {
   onContext?: (report: Report) => void;
 }
 
+export interface FileBrowserProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** table columns: key, title, width as a Length, align, sortable */
+  schema?: ColumnSpec[];
+  /** identity of the windowed row source backing a collection */
+  source?: number;
+  onSelect?: (report: Report) => void;
+  onScroll?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
+}
+
 export interface TablePaginationProps extends NodeProps {
   children?: ReactNode;
   /** marks an action as irreversible so automation requires confirmation */
@@ -4722,6 +4757,7 @@ export const DataTable: ComponentType<DataTableProps>;
 export const KeyValueTable: ComponentType<KeyValueTableProps>;
 export const TreeTable: ComponentType<TreeTableProps>;
 export const EventStream: ComponentType<EventStreamProps>;
+export const FileBrowser: ComponentType<FileBrowserProps>;
 export const TablePagination: ComponentType<TablePaginationProps>;
 export const Tree: ComponentType<TreeProps>;
 export const TreeItem: ComponentType<TreeItemProps>;
@@ -4814,6 +4850,7 @@ export interface WorkspaceTerminal {
   cursor_blink: boolean | null;
 }
 export interface WorkspaceConfiguration extends WorkspaceInfo {
+  generation?: string;
   storage: string | null;
   shell: string | null;
   cpus: number | null;
@@ -4944,8 +4981,10 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  update(name: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  delete(name: string): Promise<void>;
+  /** Assign identity to the exact still-unchanged generation-less legacy record. */
+  adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;
@@ -4983,7 +5022,7 @@ export interface WorkspaceApi {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
-    remove(name: string): Promise<void>;
+    remove(name: string, imageDigest: string): Promise<void>;
   };
   networks: {
     list(): Promise<NetworkSummary[]>;

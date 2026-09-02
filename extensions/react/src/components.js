@@ -120,6 +120,7 @@ export const {
   KeyValueTable,
   TreeTable,
   EventStream,
+  FileBrowser,
   TablePagination,
   Tree,
   TreeItem,

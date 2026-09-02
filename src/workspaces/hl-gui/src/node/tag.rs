@@ -284,6 +284,7 @@ catalogue! {
     KeyValueTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     TreeTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     EventStream: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
+    FileBrowser: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     TablePagination: children, props[Value, Label, Gap], triggers[],
 
     // Trees: a hierarchy described as nodes rather than windowed as rows.

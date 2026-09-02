@@ -365,6 +365,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::KeyValueTable
         | Tag::TreeTable
         | Tag::EventStream
+        | Tag::FileBrowser
         | Tag::TablePagination => "tables",
         Tag::Tree | Tag::TreeItem => "trees",
         Tag::Tabs

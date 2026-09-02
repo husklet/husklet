@@ -134,12 +134,23 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         stack_frames_project_function_and_location();
         hex_view_projects_binary_text_into_semantics();
         sparkline_projects_bounded_samples_into_semantics();
+        file_browser_keeps_its_semantic_role();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn file_browser_keeps_its_semantic_role() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::file_browser());
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let browser = &tree.root.children[0];
+    assert_eq!(browser.role, "FileBrowser");
+    assert!(browser.actions.is_empty());
 }
 
 fn json_preserves_source_in_semantics() {

@@ -82,6 +82,7 @@ const BY_TAG = {
   DataTable: { columns: 2 },
   TreeTable: { columns: 2 },
   EventStream: { columns: 3 },
+  FileBrowser: { columns: 3 },
   TableCell: { label: 'Cell' },
   TablePagination: { label: '1–10 of 40' },
   Pagination: { label: '1 of 4' },

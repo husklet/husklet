@@ -126,7 +126,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::DataTable
         | Tag::KeyValueTable
         | Tag::TreeTable
-        | Tag::EventStream => table::widget(tag),
+        | Tag::EventStream
+        | Tag::FileBrowser => table::widget(tag),
         Tag::Tabs
         | Tag::TabPage
         | Tag::Breadcrumb
