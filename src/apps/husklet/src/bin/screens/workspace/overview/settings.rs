@@ -67,7 +67,7 @@ impl Overview<'_> {
         main.append(&sections);
 
         Self::populate(&form, workspace);
-        let save = Self::save_row(Rc::clone(&form), workspace.clone());
+        let save = Self::save_row(Rc::clone(&form), workspace.clone(), semantics);
         main.append(&save.0);
         Self::register_semantics(semantics, &form, &save.1, workspace);
 
@@ -184,7 +184,13 @@ impl Overview<'_> {
         scrollback.map_or_else(|| "unlimited".to_owned(), |lines| lines.to_string())
     }
 
-    fn save_row(form: Rc<Form>, initial: WorkspaceConfig) -> (gtk::Box, gtk::Button) {
+    fn save_row(
+        form: Rc<Form>,
+        initial: WorkspaceConfig,
+        semantics: &screens::workspace::semantic::Registry,
+    ) -> (gtk::Box, gtk::Button) {
+        use screens::workspace::semantic::Value;
+
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("settings-save-row");
         let status = gtk::Label::new(Some("No unsaved changes."));
@@ -197,6 +203,14 @@ impl Overview<'_> {
         save.add_css_class("primary");
         save.set_halign(gtk::Align::End);
         save.set_sensitive(false);
+        semantics.register(
+            "settings/status",
+            "status",
+            Some("Settings status"),
+            Some(Value::Public("No unsaved changes.")),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         let saved = Rc::new(RefCell::new(initial));
         let dirty = Rc::new(Cell::new(false));
         {
@@ -205,6 +219,7 @@ impl Overview<'_> {
             let form = Rc::clone(&form);
             let saved = Rc::clone(&saved);
             let dirty = Rc::clone(&dirty);
+            let semantics = semantics.clone();
             save.connect_clicked(move |_| {
                 let result = form.configuration().and_then(|workspace| {
                     WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace.clone())?;
@@ -217,10 +232,17 @@ impl Overview<'_> {
                         save_button.set_sensitive(false);
                         status.remove_css_class("err");
                         status.set_text("Saved — applies to newly-opened tabs (⌘T) and future launches.");
+                        semantics.update(
+                            "settings/status",
+                            Value::Public("Saved — applies to newly-opened tabs and future launches."),
+                            false,
+                        );
                     }
                     Err(error) => {
+                        let error = error.to_string();
                         status.add_css_class("err");
-                        status.set_text(&error.to_string());
+                        status.set_text(&error);
+                        semantics.update("settings/status", Value::Public(&error), false);
                     }
                 }
             });
@@ -228,6 +250,7 @@ impl Overview<'_> {
         {
             let save = save.downgrade();
             let status = status.clone();
+            let semantics = semantics.clone();
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
                 let Some(save) = save.upgrade() else {
                     return gtk::glib::ControlFlow::Break;
@@ -237,11 +260,13 @@ impl Overview<'_> {
                     dirty.set(changed);
                     save.set_sensitive(changed);
                     status.remove_css_class("err");
-                    status.set_text(if changed {
+                    let message = if changed {
                         "Unsaved changes."
                     } else {
                         "No unsaved changes."
-                    });
+                    };
+                    status.set_text(message);
+                    semantics.update("settings/status", Value::Public(message), false);
                 }
                 gtk::glib::ControlFlow::Continue
             });
@@ -705,6 +730,9 @@ mod tests {
             assert!(labels.contains(&"CPU cores"));
             assert!(labels.contains(&"Docker socket"));
             assert!(labels.contains(&"Save changes"));
+            assert!(snapshot.root.children.iter().any(|node| {
+                node.label.as_deref() == Some("Settings status") && node.value.as_deref() == Some("No unsaved changes.")
+            }));
             let editable_contract = [
                 ("Default shell", "textbox", ActionKind::Change, false),
                 ("Scrollback", "textbox", ActionKind::Change, false),
@@ -917,6 +945,50 @@ mod tests {
             assert!(
                 changed_save.actions.contains(&ActionKind::Invoke),
                 "an enabled save action advertises the operation the host accepts"
+            );
+            assert!(changed.root.children.iter().any(|node| {
+                node.label.as_deref() == Some("Settings status") && node.value.as_deref() == Some("Unsaved changes.")
+            }));
+
+            let scrollback = changed
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Scrollback"))
+                .expect("scrollback is semantically editable");
+            registry
+                .act(&Action {
+                    revision: changed.revision,
+                    node: scrollback.id,
+                    action: ActionKind::Change,
+                    value: Some("not-a-line-count".to_owned()),
+                })
+                .unwrap();
+            let before_save = registry.snapshot();
+            let save_node = before_save
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Save changes"))
+                .unwrap();
+            registry
+                .act(&Action {
+                    revision: before_save.revision,
+                    node: save_node.id,
+                    action: ActionKind::Invoke,
+                    value: None,
+                })
+                .unwrap();
+            let invalid = registry.snapshot();
+            assert!(
+                invalid.root.children.iter().any(|node| {
+                    node.label.as_deref() == Some("Settings status")
+                        && node
+                            .value
+                            .as_deref()
+                            .is_some_and(|value| value != "Unsaved changes." && !value.is_empty())
+                }),
+                "validation failure replaces generic dirty status with an actionable explanation"
             );
             window.close();
         }) {
