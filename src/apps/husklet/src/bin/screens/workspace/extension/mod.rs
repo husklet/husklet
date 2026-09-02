@@ -41,6 +41,7 @@ pub struct Interface {
     banner: Banner,
     deliveries: Deliveries,
     sink: Rc<dyn Sink>,
+    faulted: Rc<dyn Fn(u32)>,
     /// Monotonic tick count, which is the clock the row models age against.
     clock: u64,
 }
@@ -50,6 +51,14 @@ impl Interface {
     /// drives it.
     #[must_use]
     pub fn new(deliveries: Deliveries, sink: Rc<dyn Sink>) -> (gtk::Box, Self) {
+        Self::with_faults(deliveries, sink, Rc::new(|_| {}))
+    }
+
+    /// Builds a page that also publishes structured crash-loop state on the
+    /// toolkit thread. The callback may therefore update GTK and the roster;
+    /// the background host never touches either one.
+    #[must_use]
+    pub fn with_faults(deliveries: Deliveries, sink: Rc<dyn Sink>, faulted: Rc<dyn Fn(u32)>) -> (gtk::Box, Self) {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.set_hexpand(true);
         widget.set_vexpand(true);
@@ -64,6 +73,7 @@ impl Interface {
             banner,
             deliveries,
             sink,
+            faulted,
             clock: 0,
         };
         (widget, interface)
@@ -124,6 +134,7 @@ impl Interface {
             Delivery::Frame(frame) => self.draw(&frame),
             Delivery::Source(mutation) => self.feed(&mutation),
             Delivery::Loss(reason) => self.banner.show(&reason),
+            Delivery::Fault { restarts } => (self.faulted)(restarts),
         }
     }
 

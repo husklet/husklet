@@ -67,6 +67,9 @@ pub enum Report {
     Source(hl_gui::SourceMutation),
     /// The extension is not speaking any more, and why.
     Loss(String),
+    /// The restart policy has latched a crash loop. Structured rather than
+    /// parsed from `Loss`, so settings never guesses state from prose.
+    Fault { restarts: u32 },
 }
 
 /// Where the page sends what a person did.
@@ -490,6 +493,7 @@ fn faulted(installation: &mut Installation, hall: &Hall, plan: &Plan, restarts: 
         "{} stopped {restarts} times and will not be started again until you retry it",
         plan.record.name
     ));
+    hall.deliver(Report::Fault { restarts });
     hall.retried().is_some() && installation.retry(&plan.record.name).is_ok()
 }
 
@@ -604,21 +608,21 @@ fn moment() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
 
     use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
         TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Capability, ExtensionName, Grant, Hello, Manifest, Record, RelativePath, Request, Resources, Services,
-        Transit, Wire, WorkspaceInfo, PROTOCOL,
+        codec, Capability, ExtensionName, Grant, Hello, Installation, Manifest, Record, RelativePath, Request,
+        Resources, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::super::sidecar::Image;
+    use super::{enrol, faulted, Hall, Host, Order, Plan, Report, SidecarSpec, Standing, Supply, VACANCY};
     use super::{Conversation, UnixStream};
-    use super::{Host, Order, Plan, Report, SidecarSpec, Standing, Supply, VACANCY};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -663,6 +667,16 @@ mod tests {
                 .into_iter()
                 .filter_map(|report| match report {
                     Report::Loss(reason) => Some(reason),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn faults(&self) -> Vec<u32> {
+            self.reports()
+                .into_iter()
+                .filter_map(|report| match report {
+                    Report::Fault { restarts } => Some(restarts),
                     _ => None,
                 })
                 .collect()
@@ -1041,6 +1055,30 @@ mod tests {
 
         assert_eq!(host.standing(), Standing::Duty);
         host.close().expect("closed");
+    }
+
+    #[test]
+    fn a_latched_crash_loop_reports_structured_state_before_retrying() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let plan = plan(&temporary.path().join("extension.sock"));
+        let gallery = Gallery::default();
+        let (orders, inbox) = mpsc::channel();
+        orders.send(Order::Retry).expect("retry queued");
+        let standing = Arc::new(Mutex::new(Standing::Duty));
+        let hall = Hall {
+            audience: gallery.audience(),
+            inbox,
+            standing: Arc::clone(&standing),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        let mut installation = Installation::new();
+        enrol(&mut installation, &plan).expect("enrolled");
+
+        assert!(faulted(&mut installation, &hall, &plan, 5));
+
+        assert_eq!(gallery.faults(), [5]);
+        assert!(gallery.losses()[0].contains("stopped 5 times"));
+        assert_eq!(installation.stage(&plan.record.name), hl_extension::Stage::Duty);
     }
 
     #[test]

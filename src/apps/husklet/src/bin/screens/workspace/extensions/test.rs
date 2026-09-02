@@ -37,6 +37,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_sidebar_lists_exactly_what_the_workspace_recorded();
         selecting_an_extension_shows_the_surface_it_draws();
         the_settings_page_says_where_an_extension_stands();
+        a_live_host_fault_reaches_central_settings_and_can_retry();
         the_settings_actions_drive_the_installation();
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
@@ -288,6 +289,29 @@ fn the_settings_page_says_where_an_extension_stands() {
     assert!(
         fixture.extension_tagged("zulu", settings::ENABLE).is_some(),
         "a disabled extension is offered an enable"
+    );
+}
+
+fn a_live_host_fault_reaches_central_settings_and_can_retry() {
+    let fixture = Fixture::new(&[("alpha", true)]);
+
+    fixture.shelf.fault(&named("alpha"), 5);
+
+    assert_eq!(fixture.stage("alpha"), Stage::Fault { restarts: 5 });
+    let standing = fixture
+        .extension_tagged("alpha", settings::STANDING)
+        .and_downcast::<gtk::Label>()
+        .expect("central settings standing");
+    assert_eq!(standing.text(), "faulted after 5 restarts");
+    assert!(fixture.extension_tagged("alpha", settings::RETRY).is_some());
+
+    fixture.act("alpha", settings::RETRY);
+
+    assert_eq!(fixture.stage("alpha"), Stage::Duty);
+    assert!(fixture.view.holds("alpha"), "retry remounts the extension surface");
+    assert!(
+        fixture.extension_tagged("alpha", settings::REMOVE).is_some(),
+        "retry did not remove it"
     );
 }
 

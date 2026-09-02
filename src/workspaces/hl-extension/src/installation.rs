@@ -150,9 +150,9 @@ pub enum Disposition {
     },
 }
 
-/// Restart bookkeeping for one record. Not persisted: a host restart is a
-/// fresh start, and a fault a person never saw should not outlive the process
-/// that produced it.
+/// Restart bookkeeping for one record. This shape is not serialized in a
+/// consent [`Record`]; an application may restore a host-observed terminal
+/// fault from separate durable lifecycle state.
 #[derive(Clone, Copy, Debug, Default)]
 struct Restarts {
     count: u32,
@@ -455,6 +455,28 @@ impl Installation {
         Ok(&entry.record)
     }
 
+    /// Restores a fault observed by the live host into this policy.
+    ///
+    /// The host owns restart timing because it observes exits; a roster owns
+    /// durable presentation because it survives page and process rebuilds.
+    /// This is the narrow bridge between them: it cannot start, stop, remove,
+    /// or widen the grant of an extension.
+    ///
+    /// # Errors
+    /// Returns `Objection::Absence` when nothing is recorded under `name`.
+    pub fn fault(&mut self, name: &ExtensionName, restarts: u32) -> Result<&Record, Objection> {
+        let entry = self
+            .entries
+            .get_mut(name)
+            .ok_or_else(|| Objection::Absence(name.clone()))?;
+        entry.restarts = Restarts {
+            count: restarts,
+            window_start: 0,
+            faulted: true,
+        };
+        Ok(&entry.record)
+    }
+
     /// Delay before restart number `attempt`, doubling from the base and held
     /// at the cap.
     fn backoff_ms(attempt: u32) -> u64 {
@@ -554,6 +576,22 @@ mod tests {
         assert!(installation
             .install(&manifest, "sha256:b", &manifest.capabilities, 20)
             .is_err());
+    }
+
+    #[test]
+    fn an_observed_host_fault_is_structured_and_retry_is_its_only_reset() {
+        let mut installation = Installation::new();
+        let manifest = manifest(&[Capability::Interface]);
+        installation
+            .install(&manifest, "sha256:a", &manifest.capabilities, 10)
+            .expect("installed");
+        installation.enable(&manifest.name).expect("enabled");
+
+        installation.fault(&manifest.name, 7).expect("fault recorded");
+        assert_eq!(installation.stage(&manifest.name), Stage::Fault { restarts: 7 });
+
+        installation.retry(&manifest.name).expect("retried");
+        assert_eq!(installation.stage(&manifest.name), Stage::Duty);
     }
 
     #[test]

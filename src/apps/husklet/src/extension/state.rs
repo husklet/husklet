@@ -1,10 +1,9 @@
 //! Where a workspace keeps what it recorded about its extensions.
 //!
-//! [`Installation`](hl_extension::Installation) owns the lifecycle policy and
-//! holds it in memory; this module is only its durable half. A [`Record`] is the
-//! written form of a person's consent, so it has to outlive the process that
-//! took it: without this, every restart would either ask again or — far worse —
-//! start from whatever the current manifest happens to request.
+//! [`Installation`](hl_extension::Installation) owns the lifecycle policy.
+//! This module persists both its consent [`Record`] and a separate terminal
+//! crash-loop marker. Keeping those records separate lets retry clear a host
+//! fault without rewriting or removing what the person approved.
 //!
 //! Nothing here interprets a record. A grant that was narrowed on disk comes
 //! back narrow, because the only thing this module does is serialize and
@@ -15,6 +14,9 @@ use hl_ws::storage::{Key, Storage};
 
 /// Storage prefix every extension record lives below.
 pub const PREFIX: &str = "state/extensions";
+/// Durable crash-loop state is separate from consent records: retrying a
+/// process must not rewrite or remove the grant a person approved.
+pub const FAULT_PREFIX: &str = "state/extension-faults";
 
 /// Why a record could not be read or written.
 #[derive(Debug)]
@@ -53,6 +55,7 @@ impl std::error::Error for Fault {
 pub struct Records<S> {
     storage: S,
     prefix: Key,
+    faults: Key,
 }
 
 impl<S: Storage> Records<S> {
@@ -63,7 +66,12 @@ impl<S: Storage> Records<S> {
     /// which can only happen if [`PREFIX`] is changed to something invalid.
     pub fn open(storage: S) -> Result<Self, Fault> {
         let prefix = Key::parse(PREFIX).map_err(|error| Fault::Storage(Box::new(error)))?;
-        Ok(Self { storage, prefix })
+        let faults = Key::parse(FAULT_PREFIX).map_err(|error| Fault::Storage(Box::new(error)))?;
+        Ok(Self {
+            storage,
+            prefix,
+            faults,
+        })
     }
 
     /// Every record this workspace has, in key order.
@@ -108,12 +116,54 @@ impl<S: Storage> Records<S> {
     /// Returns `Fault::Storage` when the removal fails.
     pub fn forget(&self, name: &ExtensionName) -> Result<(), Fault> {
         let key = self.key(name)?;
+        self.storage.remove(&key).map_err(fault)?;
+        self.clear_fault(name)
+    }
+
+    /// The restart count of a fault the live host reported, if one was saved.
+    pub fn fault(&self, name: &ExtensionName) -> Result<Option<u32>, Fault> {
+        let key = self.fault_key(name)?;
+        let present = self
+            .storage
+            .list(Some(&self.faults))
+            .map_err(fault)?
+            .into_iter()
+            .any(|candidate| candidate == key);
+        if !present {
+            return Ok(None);
+        }
+        let bytes = self.storage.get(&key).map_err(fault)?;
+        serde_json::from_slice(&bytes).map(Some).map_err(|error| Fault::Format {
+            key: key.to_string(),
+            detail: error.to_string(),
+        })
+    }
+
+    /// Persists only crash-loop state, leaving consent and enablement intact.
+    pub fn save_fault(&self, name: &ExtensionName, restarts: u32) -> Result<(), Fault> {
+        let key = self.fault_key(name)?;
+        let bytes = serde_json::to_vec(&restarts).map_err(|error| Fault::Format {
+            key: key.to_string(),
+            detail: error.to_string(),
+        })?;
+        self.storage.put(&key, &bytes).map_err(fault)
+    }
+
+    /// Clears a recovered fault. Removing an absent marker succeeds.
+    pub fn clear_fault(&self, name: &ExtensionName) -> Result<(), Fault> {
+        let key = self.fault_key(name)?;
         self.storage.remove(&key).map_err(fault)
     }
 
     /// The key one extension's record is stored under.
     fn key(&self, name: &ExtensionName) -> Result<Key, Fault> {
         self.prefix
+            .join(name.as_str())
+            .map_err(|error| Fault::Storage(Box::new(error)))
+    }
+
+    fn fault_key(&self, name: &ExtensionName) -> Result<Key, Fault> {
+        self.faults
             .join(name.as_str())
             .map_err(|error| Fault::Storage(Box::new(error)))
     }
@@ -134,7 +184,7 @@ fn parse(key: &Key, bytes: &[u8]) -> Result<Record, Fault> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fault, PREFIX, Records};
+    use super::{Fault, Records, PREFIX};
     use hl_extension::{Capability, ExtensionName, Grant, Installation, Manifest, Record};
     use hl_ws::storage::{Directory, Key, Storage as _};
 

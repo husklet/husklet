@@ -225,6 +225,15 @@ impl Shelf {
         &self.roster
     }
 
+    /// Records a crash loop reported by the live host, then redraws central
+    /// Settings. This runs on the GTK tick, never on the host thread.
+    pub fn fault(&self, name: &ExtensionName, restarts: u32) {
+        if let Err(refusal) = self.roster.borrow_mut().fault(name, restarts) {
+            hl_log::hl_error!(hl_log::tag::RUNTIME, "recording extension fault for {name}: {refusal}");
+        }
+        self.redraw();
+    }
+
     /// The shell these pages sit on, while it is still open.
     #[must_use]
     pub fn view(&self) -> Option<Rc<View>> {

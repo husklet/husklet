@@ -103,6 +103,9 @@ impl<S: Storage> Roster<S> {
         let mut installation = Installation::new();
         for record in records.all()? {
             enrol(&mut installation, &record)?;
+            if let Some(restarts) = records.fault(&record.name)? {
+                installation.fault(&record.name, restarts)?;
+            }
         }
         Ok(Self { records, installation })
     }
@@ -174,6 +177,15 @@ impl<S: Storage> Roster<S> {
     pub fn retry(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
         let record = self.installation.retry(name)?.clone();
         self.records.save(&record)?;
+        self.records.clear_fault(name)?;
+        Ok(())
+    }
+
+    /// Records a crash loop observed by the live host and makes it visible to
+    /// every central Settings page, including after an application restart.
+    pub fn fault(&mut self, name: &ExtensionName, restarts: u32) -> Result<(), Refusal> {
+        self.installation.fault(name, restarts)?;
+        self.records.save_fault(name, restarts)?;
         Ok(())
     }
 
@@ -299,6 +311,30 @@ mod tests {
 
         roster.disable(&asked.name).expect("disabled");
         assert_eq!(opened(temporary.path()).stage(&asked.name), Stage::Standby);
+    }
+
+    #[test]
+    fn a_host_fault_survives_reopen_and_retry_clears_only_the_fault() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut roster = opened(temporary.path());
+        roster
+            .register(&asked, "sha256:aaaa", &asked.capabilities, 7)
+            .expect("registered");
+        roster.enable(&asked.name).expect("enabled");
+
+        roster.fault(&asked.name, 6).expect("fault persisted");
+        assert_eq!(
+            opened(temporary.path()).stage(&asked.name),
+            Stage::Fault { restarts: 6 }
+        );
+
+        roster.retry(&asked.name).expect("retried");
+        let reopened = opened(temporary.path());
+        assert_eq!(reopened.stage(&asked.name), Stage::Duty);
+        let entry = &reopened.entries()[0];
+        assert_eq!(entry.image_digest, "sha256:aaaa", "retry keeps the installed image");
+        assert!(entry.granted.holds(Capability::Interface), "retry keeps consent");
     }
 
     #[test]
