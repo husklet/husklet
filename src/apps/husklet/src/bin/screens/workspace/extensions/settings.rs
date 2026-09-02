@@ -38,7 +38,7 @@ pub struct Settings;
 impl Settings {
     /// Builds the page for one extension as the roster currently describes it.
     #[must_use]
-    pub fn page(shelf: &Rc<Shelf>, entry: &Entry) -> gtk::Box {
+    pub fn page(shelf: &Rc<Shelf>, entry: &Entry, semantics: &super::super::semantic::Registry) -> gtk::Box {
         let main = gtk::Box::new(gtk::Orientation::Vertical, 12);
         main.add_css_class("dmain");
         main.add_css_class(CARD);
@@ -60,8 +60,25 @@ impl Settings {
         main.append(&capabilities(entry));
         let refusal = line("", REFUSAL);
         refusal.set_visible(false);
-        main.append(&actions(shelf, entry, &refusal, &standing));
+        main.append(&actions(shelf, entry, &refusal, &standing, semantics));
         main.append(&refusal);
+        let prefix = format!("extensions/installed/{}/", entry.name);
+        semantics.register(
+            &format!("{prefix}status"),
+            "status",
+            Some(entry.name.as_str()),
+            Some(super::super::semantic::Value::Public(standing.text().as_str())),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        semantics.register(
+            &format!("{prefix}digest"),
+            "text",
+            Some("Image digest"),
+            Some(super::super::semantic::Value::Public(&entry.image_digest)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         main
     }
 }
@@ -107,17 +124,39 @@ fn capabilities(entry: &Entry) -> gtk::Box {
 }
 
 /// The actions the current stage allows.
-fn actions(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label, standing: &gtk::Label) -> gtk::Box {
+fn actions(
+    shelf: &Rc<Shelf>,
+    entry: &Entry,
+    refusal: &gtk::Label,
+    standing: &gtk::Label,
+    semantics: &super::super::semantic::Registry,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     if entry.stage.is_fault() {
-        row.append(&action(shelf, entry, refusal, "Retry", RETRY, Deed::Retry));
+        row.append(&action(shelf, entry, refusal, "Retry", RETRY, Deed::Retry, semantics));
     }
     if entry.stage == Stage::Duty {
-        row.append(&action(shelf, entry, refusal, "Disable", DISABLE, Deed::Disable));
+        row.append(&action(
+            shelf,
+            entry,
+            refusal,
+            "Disable",
+            DISABLE,
+            Deed::Disable,
+            semantics,
+        ));
     } else {
-        row.append(&action(shelf, entry, refusal, "Enable", ENABLE, Deed::Enable));
+        row.append(&action(
+            shelf,
+            entry,
+            refusal,
+            "Enable",
+            ENABLE,
+            Deed::Enable,
+            semantics,
+        ));
     }
-    row.append(&removal(shelf, entry, refusal, standing));
+    row.append(&removal(shelf, entry, refusal, standing, semantics));
     row
 }
 
@@ -130,13 +169,32 @@ enum Deed {
 }
 
 /// One action, wired to the roster and to the shelf that redraws after it.
-fn action(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label, label: &str, class: &str, deed: Deed) -> gtk::Button {
+fn action(
+    shelf: &Rc<Shelf>,
+    entry: &Entry,
+    refusal: &gtk::Label,
+    label: &str,
+    class: &str,
+    deed: Deed,
+    semantics: &super::super::semantic::Registry,
+) -> gtk::Button {
     let button = gtk::Button::with_label(label);
     button.add_css_class(class);
+    let semantic_shelf = Rc::clone(shelf);
+    let semantic_refusal = refusal.clone();
     let shelf = Rc::clone(shelf);
     let name = entry.name.clone();
     let refusal = refusal.clone();
     button.connect_clicked(move |_| commit(&shelf, &name, deed, &refusal));
+    let name = entry.name.clone();
+    semantics.register(
+        &format!("extensions/installed/{}/{label}", entry.name),
+        "button",
+        Some(label),
+        None,
+        &[super::super::semantic::ActionKind::Invoke],
+        Rc::new(move |_, _| commit(&semantic_shelf, &name, deed, &semantic_refusal)),
+    );
     button
 }
 
@@ -167,7 +225,13 @@ fn apply(shelf: &Rc<Shelf>, name: &ExtensionName, deed: Deed) -> Result<(), Refu
 
 /// A destructive removal is a separate, confirmed transaction. Runtime
 /// cleanup finishes first; only its success forgets the durable grant.
-fn removal(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label, standing: &gtk::Label) -> gtk::Box {
+fn removal(
+    shelf: &Rc<Shelf>,
+    entry: &Entry,
+    refusal: &gtk::Label,
+    standing: &gtk::Label,
+    semantics: &super::super::semantic::Registry,
+) -> gtk::Box {
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class(REMOVE);
@@ -180,6 +244,21 @@ fn removal(shelf: &Rc<Shelf>, entry: &Entry, refusal: &gtk::Label, standing: &gt
     controls.append(&remove);
     controls.append(&confirm);
     controls.append(&cancel);
+    for (label, button) in [
+        ("Remove", &remove),
+        ("Confirm removal", &confirm),
+        ("Cancel removal", &cancel),
+    ] {
+        let button = button.clone();
+        semantics.register(
+            &format!("extensions/installed/{}/{label}", entry.name),
+            "button",
+            Some(label),
+            None,
+            &[super::super::semantic::ActionKind::Invoke],
+            Rc::new(move |_, _| button.emit_clicked()),
+        );
+    }
 
     {
         let remove = remove.clone();

@@ -270,10 +270,11 @@ impl<'a> Overview<'a> {
             (WorkspacePage::Networks, networks.widget.clone().upcast()),
             (WorkspacePage::Processes, ppane.upcast()),
         ];
-        let view = Rc::new(screens::workspace::View::new([
-            (WorkspacePage::Settings, self.settings().upcast()),
+        let semantics = screens::workspace::semantic::Registry::new("workspace");
+        let view = Rc::new(screens::workspace::View::with_semantics([
+            (WorkspacePage::Settings, self.settings(&semantics).upcast()),
             (WorkspacePage::Extensions, shelf.clone().upcast()),
-        ]));
+        ], semantics));
         let fallback = Rc::new(Fallback {
             view: Rc::downgrade(&view),
             pages: fallback_pages,

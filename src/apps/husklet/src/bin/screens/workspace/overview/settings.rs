@@ -3,7 +3,7 @@ use crate::components::layout::Panel;
 
 impl Overview<'_> {
     /// Editable workspace settings. Identity remains fixed after workspace creation.
-    pub(super) fn settings(&self) -> gtk::ScrolledWindow {
+    pub(super) fn settings(&self, semantics: &screens::workspace::semantic::Registry) -> gtk::ScrolledWindow {
         let workspace = self.workspace;
         let form = Rc::new(Form::new());
         let terminal = workspace.terminal_config();
@@ -67,7 +67,9 @@ impl Overview<'_> {
         main.append(&sections);
 
         Self::populate(&form, workspace);
-        main.append(&Self::save_row(form));
+        let save = Self::save_row(Rc::clone(&form));
+        main.append(&save.0);
+        Self::register_semantics(semantics, &form, &save.1, workspace);
 
         gtk::ScrolledWindow::builder()
             .child(&main)
@@ -181,7 +183,7 @@ impl Overview<'_> {
         scrollback.map_or_else(|| "unlimited".to_owned(), |lines| lines.to_string())
     }
 
-    fn save_row(form: Rc<Form>) -> gtk::Box {
+    fn save_row(form: Rc<Form>) -> (gtk::Box, gtk::Button) {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("settings-save-row");
         let status = gtk::Label::new(None);
@@ -214,8 +216,211 @@ impl Overview<'_> {
 
         row.append(&status);
         row.append(&save);
-        row
+        (row, save)
     }
+
+    fn register_semantics(
+        semantics: &screens::workspace::semantic::Registry,
+        form: &Rc<Form>,
+        save: &gtk::Button,
+        workspace: &WorkspaceConfig,
+    ) {
+        use screens::workspace::semantic::{ActionKind, Value};
+
+        register_text(semantics, "settings/shell", "Default shell", &form.shell, false);
+        register_text(semantics, "settings/scrollback", "Scrollback", &form.scrollback, false);
+        register_text(semantics, "settings/vpn", "VPN or proxy", &form.features.vpn, true);
+        register_spin(semantics, "settings/cpus", "CPU cores", &form.cpus);
+        register_spin(semantics, "settings/memory", "Memory MB", &form.mem);
+        register_spin(semantics, "settings/font-size", "Font size", &form.font_size);
+        register_switch(semantics, "settings/cursor-blink", "Cursor blink", &form.cursor_blink);
+        register_switch(semantics, "settings/docker", "Docker socket", &form.features.docker);
+
+        semantics.register(
+            "settings/workspace-name",
+            "text",
+            Some("Workspace name"),
+            Some(Value::Public(&workspace.name)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        semantics.register(
+            "settings/image",
+            "text",
+            Some("Workspace image"),
+            Some(Value::Public(&workspace.image)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        for (index, (key, value)) in form.env_rows.borrow().iter().enumerate() {
+            register_text(
+                semantics,
+                &format!("settings/environment/{index}/key"),
+                "Environment key",
+                key,
+                false,
+            );
+            register_text(
+                semantics,
+                &format!("settings/environment/{index}/value"),
+                "Environment value",
+                value,
+                true,
+            );
+        }
+        for (index, (host, container, read_only)) in form.mount_rows.borrow().iter().enumerate() {
+            register_text(
+                semantics,
+                &format!("settings/mount/{index}/host"),
+                "Host path",
+                host,
+                true,
+            );
+            register_text(
+                semantics,
+                &format!("settings/mount/{index}/container"),
+                "Container path",
+                container,
+                false,
+            );
+            register_toggle(
+                semantics,
+                &format!("settings/mount/{index}/read-only"),
+                "Read only",
+                read_only,
+            );
+        }
+        let button = save.clone();
+        semantics.register(
+            "settings/save",
+            "button",
+            Some("Save changes"),
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(move |_, _| button.emit_clicked()),
+        );
+    }
+}
+
+fn register_text(
+    semantics: &screens::workspace::semantic::Registry,
+    path: &str,
+    label: &str,
+    input: &gtk::Entry,
+    secret: bool,
+) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.text();
+    let value = if secret {
+        Value::Secret
+    } else {
+        Value::Public(initial.as_str())
+    };
+    let changed = input.clone();
+    let focused = input.clone();
+    semantics.register(
+        path,
+        "textbox",
+        Some(label),
+        Some(value),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => changed.set_text(value.unwrap_or_default()),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.connect_changed(move |input| {
+        let text = input.text();
+        registry.update(
+            &path,
+            if secret {
+                Value::Secret
+            } else {
+                Value::Public(text.as_str())
+            },
+            !input.is_sensitive(),
+        );
+    });
+}
+
+fn register_spin(semantics: &screens::workspace::semantic::Registry, path: &str, label: &str, input: &gtk::SpinButton) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.value().to_string();
+    let changed = input.clone();
+    semantics.register(
+        path,
+        "spinbutton",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Change, ActionKind::Focus],
+        Rc::new(move |action, value| match action {
+            ActionKind::Change => {
+                if let Some(value) = value.and_then(|value| value.parse().ok()) {
+                    changed.set_value(value);
+                }
+            }
+            ActionKind::Focus => {
+                changed.grab_focus();
+            }
+            _ => {}
+        }),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.connect_value_changed(move |input| {
+        let value = input.value().to_string();
+        registry.update(&path, Value::Public(&value), !input.is_sensitive());
+    });
+}
+
+fn register_switch(semantics: &screens::workspace::semantic::Registry, path: &str, label: &str, input: &gtk::Switch) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.is_active().to_string();
+    let changed = input.clone();
+    semantics.register(
+        path,
+        "switch",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Toggle],
+        Rc::new(move |_, _| changed.set_active(!changed.is_active())),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.connect_active_notify(move |input| {
+        let value = input.is_active().to_string();
+        registry.update(&path, Value::Public(&value), !input.is_sensitive());
+    });
+}
+
+fn register_toggle(
+    semantics: &screens::workspace::semantic::Registry,
+    path: &str,
+    label: &str,
+    input: &gtk::CheckButton,
+) {
+    use screens::workspace::semantic::{ActionKind, Value};
+    let initial = input.is_active().to_string();
+    let changed = input.clone();
+    semantics.register(
+        path,
+        "checkbox",
+        Some(label),
+        Some(Value::Public(&initial)),
+        &[ActionKind::Toggle],
+        Rc::new(move |_, _| changed.set_active(!changed.is_active())),
+    );
+    let registry = semantics.clone();
+    let path = path.to_owned();
+    input.connect_toggled(move |input| {
+        let value = input.is_active().to_string();
+        registry.update(&path, Value::Public(&value), !input.is_sensitive());
+    });
 }
 
 #[cfg(test)]
@@ -234,7 +439,8 @@ mod tests {
     fn settings_present_identity_apply_semantics_and_responsive_cards() {
         if !crate::test_support::on_the_toolkit_thread(|| {
             let workspace = WorkspaceConfig::new("design system", "ghcr.io/acme/dev:2026.09", Arch::Amd64);
-            let page = Overview::new(&workspace, None).settings();
+            let page = Overview::new(&workspace, None)
+                .settings(&crate::screens::workspace::semantic::Registry::new("workspace"));
             let widgets = descendants(page.upcast_ref());
 
             let text: Vec<String> = widgets
@@ -267,6 +473,61 @@ mod tests {
             assert!(
                 widgets.iter().any(|widget| widget.has_css_class("settings-save-row")),
                 "save action is visually separated from editable cards"
+            );
+        }) {
+            eprintln!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn settings_owner_registers_live_controls_and_redacts_sensitive_values() {
+        if !crate::test_support::on_the_toolkit_thread(|| {
+            use crate::screens::workspace::semantic::{Action, ActionKind, Registry};
+            let workspace = WorkspaceConfig::new("semantic", "alpine:3.20", Arch::Amd64);
+            let registry = Registry::new("workspace");
+            let _page = Overview::new(&workspace, None).settings(&registry);
+            let snapshot = registry.snapshot();
+            let labels: Vec<_> = snapshot
+                .root
+                .children
+                .iter()
+                .filter_map(|node| node.label.as_deref())
+                .collect();
+            assert!(labels.contains(&"Default shell"));
+            assert!(labels.contains(&"CPU cores"));
+            assert!(labels.contains(&"Docker socket"));
+            assert!(labels.contains(&"Save changes"));
+            let vpn = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("VPN or proxy"))
+                .unwrap();
+            assert_eq!(vpn.value.as_deref(), Some("[redacted]"));
+            let shell = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Default shell"))
+                .unwrap();
+            registry
+                .act(&Action {
+                    revision: snapshot.revision,
+                    node: shell.id,
+                    action: ActionKind::Change,
+                    value: Some("/bin/zsh -l".to_owned()),
+                })
+                .unwrap();
+            let changed = registry.snapshot();
+            assert!(changed.revision > snapshot.revision);
+            assert_eq!(
+                changed
+                    .root
+                    .children
+                    .iter()
+                    .find(|node| node.id == shell.id)
+                    .and_then(|node| node.value.as_deref()),
+                Some("/bin/zsh -l")
             );
         }) {
             eprintln!("skipped: no display connection");

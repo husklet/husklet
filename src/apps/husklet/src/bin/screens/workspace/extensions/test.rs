@@ -39,6 +39,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
         the_settings_actions_drive_the_installation();
+        native_extension_cards_are_semantic_and_actionable();
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
@@ -67,6 +68,40 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     if !ran {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
     }
+}
+
+fn native_extension_cards_are_semantic_and_actionable() {
+    use super::super::semantic::{Action, ActionKind};
+    let fixture = Fixture::new(&[("semantic", false)]);
+    let snapshot = fixture.view.semantic_snapshot();
+    let enable = snapshot
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Enable"))
+        .expect("the disabled extension's owner registered Enable");
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: snapshot.revision,
+            node: enable.id,
+            action: ActionKind::Invoke,
+            value: None,
+        })
+        .unwrap();
+    assert_eq!(fixture.stage("semantic"), Stage::Duty);
+    let refreshed = fixture.view.semantic_snapshot();
+    assert!(refreshed.revision > snapshot.revision);
+    assert!(refreshed
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Disable")));
+    assert!(refreshed
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Read manifest")));
 }
 
 /// One shell, one roster, and the shelf between them.
