@@ -1579,6 +1579,7 @@ mod panes {
                     Capability::TerminalRead,
                     Capability::TerminalOutput,
                     Capability::TerminalControl,
+                    Capability::PaneObserve,
                     Capability::PaneSemanticRead,
                     Capability::PaneSemanticControl,
                 ]),
