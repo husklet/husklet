@@ -48,6 +48,10 @@ pub const EVENTS: ChannelId = ChannelId::new(3);
 /// visible as lag on a click.
 const POLL: Duration = Duration::from_millis(20);
 
+/// The longest a connected extension may hold a sidecar without producing its
+/// first interface frame.
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// What is shown when the workspace has no extension installed.
 ///
 /// An absence is stated rather than left blank: a page that renders nothing and
@@ -263,6 +267,15 @@ pub trait Supply: Send + Sync + 'static {
     /// # Errors
     /// Returns why the conversation ended early.
     fn attend(&self, plan: &Plan, conversation: &mut Conversation) -> Result<(), String>;
+
+    /// How long a newly connected generation may take to draw its first frame.
+    ///
+    /// Supplies normally use the product deadline. The hook exists so the
+    /// socket lifecycle can be tested deterministically without a ten-second
+    /// sleep.
+    fn ready_timeout(&self) -> Duration {
+        READY_TIMEOUT
+    }
 
     /// Takes the extension's container down.
     fn halt(&self, plan: &Plan);
@@ -524,6 +537,9 @@ enum Passage {
     Stopped,
     /// A person asked for the extension to be started again.
     Renewal,
+    /// The conversation connected but never produced an interface frame. Its
+    /// sidecar must be stopped before recovery can start a fresh generation.
+    Unready(String),
     /// The conversation, or the attempt to open one, ended. Carries what a
     /// person is shown.
     End(String),
@@ -565,6 +581,7 @@ fn run<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) {
         match session(supply, hall, plan) {
             Passage::Stopped => break,
             Passage::Renewal => continue,
+            Passage::Unready(reason) => hall.loss(reason),
             Passage::End(reason) => hall.loss(reason),
         }
         if !recover(&mut installation, hall, plan) {
@@ -630,7 +647,14 @@ fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
         Err(error) => return Passage::End(error.to_string()),
     };
     hall.duty();
-    let passage = pump(hall, &queue, &voice, &ended);
+    let extension = plan.record.name.to_string();
+    let passage = pump(hall, &queue, &voice, &ended, supply.ready_timeout(), &extension);
+    if matches!(passage, Passage::Unready(_)) {
+        // Stop the process before joining the conversation that process owns;
+        // reversing this order can make listener teardown wait on a peer that
+        // has no reason to close its end of the socket.
+        supply.halt(plan);
+    }
     dismiss(listener);
     passage
 }
@@ -691,9 +715,18 @@ fn exchange<S: Supply>(supply: &Arc<S>, plan: &Plan, conversation: &mut Conversa
 }
 
 /// Carries interface work out and orders in until the session ends.
-fn pump(hall: &Hall, queue: &Queue, voice: &Voice, ended: &mpsc::Receiver<String>) -> Passage {
+fn pump(
+    hall: &Hall,
+    queue: &Queue,
+    voice: &Voice,
+    ended: &mpsc::Receiver<String>,
+    ready_timeout: Duration,
+    extension: &str,
+) -> Passage {
+    let ready_deadline = Instant::now() + ready_timeout;
+    let mut ready = false;
     loop {
-        collect(hall, queue);
+        ready |= collect(hall, queue);
         if let Some(passage) = hall.orders(voice) {
             return passage;
         }
@@ -703,19 +736,27 @@ fn pump(hall: &Hall, queue: &Queue, voice: &Voice, ended: &mpsc::Receiver<String
             collect(hall, queue);
             return Passage::End(reason);
         }
+        if !ready && Instant::now() >= ready_deadline {
+            return Passage::Unready(format!(
+                "{extension} did not render its first interface within {} ms; its sidecar was stopped and will be retried",
+                ready_timeout.as_millis()
+            ));
+        }
         std::thread::sleep(POLL);
     }
 }
 
 /// Moves everything the conversation collected to the page.
-fn collect(hall: &Hall, queue: &Queue) {
+fn collect(hall: &Hall, queue: &Queue) -> bool {
     let interface = queue.collect();
+    let rendered = !interface.frames.is_empty();
     for frame in interface.frames {
         hall.deliver(Report::Frame(frame));
     }
     for mutation in interface.mutations {
         hall.deliver(Report::Source(mutation));
     }
+    rendered
 }
 
 /// Now, in milliseconds since the epoch, which is the clock
@@ -727,6 +768,7 @@ fn moment() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Shutdown;
     use std::process::{Child, Command};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
@@ -742,7 +784,9 @@ mod tests {
 
     use super::super::roster::Roster;
     use super::super::sidecar::Image;
-    use super::{enrol, faulted, Hall, Host, Order, Plan, Report, SidecarSpec, Standing, Supply, VACANCY};
+    use super::{
+        enrol, faulted, Hall, Host, Order, Plan, Report, SidecarSpec, Standing, Supply, READY_TIMEOUT, VACANCY,
+    };
     use super::{Conversation, UnixStream};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -984,6 +1028,8 @@ mod tests {
     struct Script {
         /// The sequence number of the frame it draws.
         sequence: u64,
+        /// Whether this generation ever draws its first frame.
+        draw: bool,
         /// Whether it stays connected after drawing.
         linger: bool,
     }
@@ -996,6 +1042,9 @@ mod tests {
         ensures: AtomicUsize,
         peers: Mutex<Vec<std::thread::JoinHandle<()>>>,
         token: Arc<()>,
+        ready_timeout: Duration,
+        halts: AtomicUsize,
+        live: Arc<Mutex<Vec<UnixStream>>>,
     }
 
     impl Bench {
@@ -1008,11 +1057,23 @@ mod tests {
                 ensures: AtomicUsize::new(0),
                 peers: Mutex::new(Vec::new()),
                 token: Arc::clone(token),
+                ready_timeout: READY_TIMEOUT,
+                halts: AtomicUsize::new(0),
+                live: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn with_ready_timeout(mut self, ready_timeout: Duration) -> Self {
+            self.ready_timeout = ready_timeout;
+            self
         }
 
         fn ensures(&self) -> usize {
             self.ensures.load(Ordering::Acquire)
+        }
+
+        fn halts(&self) -> usize {
+            self.halts.load(Ordering::Acquire)
         }
     }
 
@@ -1028,8 +1089,9 @@ mod tests {
             };
             let socket = self.socket.clone();
             let token = Arc::clone(&self.token);
+            let live = Arc::clone(&self.live);
             let peer = std::thread::spawn(move || {
-                play(&socket, script);
+                play(&socket, script, &live);
                 drop(token);
             });
             self.peers.lock().expect("peers").push(peer);
@@ -1058,7 +1120,15 @@ mod tests {
             conversation.serve(&services).map_err(|fault| fault.to_string())
         }
 
+        fn ready_timeout(&self) -> Duration {
+            self.ready_timeout
+        }
+
         fn halt(&self, _plan: &Plan) {
+            self.halts.fetch_add(1, Ordering::Release);
+            for stream in self.live.lock().expect("live streams").drain(..) {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
             for peer in self.peers.lock().expect("peers").drain(..) {
                 let _ = peer.join();
             }
@@ -1066,15 +1136,20 @@ mod tests {
     }
 
     /// One fake extension: connect, handshake, draw, then answer row requests.
-    fn play(socket: &Path, script: Script) {
+    fn play(socket: &Path, script: Script, live: &Mutex<Vec<UnixStream>>) {
         let Some(stream) = connect(socket) else {
             return;
         };
+        if script.linger {
+            if let Ok(shutdown) = stream.try_clone() {
+                live.lock().expect("live streams").push(shutdown);
+            }
+        }
         let mut wire = Wire::new(stream);
         if shake(&mut wire).is_err() {
             return;
         }
-        if describe(&mut wire, script.sequence).is_err() {
+        if script.draw && describe(&mut wire, script.sequence).is_err() {
             return;
         }
         if script.linger {
@@ -1293,6 +1368,7 @@ mod tests {
             &socket,
             &[Script {
                 sequence: 1,
+                draw: true,
                 linger: true,
             }],
             &token,
@@ -1337,6 +1413,7 @@ mod tests {
             &socket,
             &[Script {
                 sequence: 1,
+                draw: true,
                 linger: true,
             }],
             &token,
@@ -1363,6 +1440,7 @@ mod tests {
             &socket,
             &[Script {
                 sequence: 1,
+                draw: true,
                 linger: false,
             }],
             &token,
@@ -1389,10 +1467,12 @@ mod tests {
             &[
                 Script {
                     sequence: 1,
+                    draw: true,
                     linger: true,
                 },
                 Script {
                     sequence: 2,
+                    draw: true,
                     linger: true,
                 },
             ],
@@ -1409,6 +1489,54 @@ mod tests {
     }
 
     #[test]
+    fn a_generation_that_never_draws_is_stopped_before_its_retry_publishes() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let token = Arc::new(());
+        let gallery = Gallery::default();
+        let bench = Arc::new(
+            Bench::new(
+                &socket,
+                &[
+                    Script {
+                        sequence: 1,
+                        draw: false,
+                        linger: true,
+                    },
+                    Script {
+                        sequence: 2,
+                        draw: true,
+                        linger: true,
+                    },
+                ],
+                &token,
+            )
+            .with_ready_timeout(Duration::from_millis(80)),
+        );
+        let host = Host::open(Attendance(Arc::clone(&bench)), gallery.audience());
+
+        assert!(
+            until(|| gallery.losses().iter().any(|loss| loss.contains("did not render"))),
+            "the bounded deadline becomes a visible, actionable loss"
+        );
+        assert!(gallery.frames().is_empty(), "the unready generation never publishes UI");
+        assert_eq!(bench.halts(), 1, "the failed generation is stopped before recovery");
+        assert!(
+            until(|| gallery.frames() == vec![2]),
+            "a fresh socket generation draws after automatic recovery"
+        );
+        assert_eq!(bench.ensures(), 2, "recovery starts exactly one replacement");
+        assert_eq!(
+            bench.halts(),
+            1,
+            "the live replacement was not stopped by stale cleanup"
+        );
+
+        host.close().expect("closed");
+        assert!(!socket.exists(), "closing retires the replacement socket");
+    }
+
+    #[test]
     fn closing_the_host_ends_its_threads_and_leaves_no_socket() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let socket = temporary.path().join("run/extension.sock");
@@ -1419,6 +1547,7 @@ mod tests {
             &socket,
             &[Script {
                 sequence: 1,
+                draw: true,
                 linger: true,
             }],
             &token,
@@ -1441,6 +1570,7 @@ mod tests {
             &socket,
             &[Script {
                 sequence: 1,
+                draw: true,
                 linger: true,
             }],
             &token,
@@ -1520,6 +1650,10 @@ mod tests {
 
         fn attend(&self, plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
             self.0.attend(plan, conversation)
+        }
+
+        fn ready_timeout(&self) -> Duration {
+            self.0.ready_timeout()
         }
 
         fn halt(&self, plan: &Plan) {
