@@ -9,6 +9,7 @@ export * from './components.js';
 
 /** Surfaces awaiting events, per session. */
 const attached = new WeakMap();
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -41,6 +42,10 @@ export function workspace(session) {
     return reply.with;
   };
   const done = async (name, argument) => expect(await session.call(name, argument), 'done');
+  const subscription = (call, topic) => {
+    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    return done(call, { topic });
+  };
   return {
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
@@ -54,14 +59,42 @@ export function workspace(session) {
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
       inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
+      processes: async (id) => expect(await session.call('container_processes', { id }), 'processes'),
+      logs: async (id, { stdout = true, stderr = true } = {}) => expect(
+        await session.call('container_logs', { id, stdout, stderr }), 'logs',
+      ),
+      execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
       create: async (image, name) => expect(await session.call('container_create', { image, name }), 'identity'),
       start: (id) => done('container_start', { id }),
       stop: (id) => done('container_stop', { id }),
       remove: (id) => done('container_remove', { id }),
+      pause: (id) => done('container_pause', { id }),
+      unpause: (id) => done('container_unpause', { id }),
+      restart: (id) => done('container_restart', { id }),
+      kill: (id, signal) => done('container_kill', { id, signal }),
+      exec: async (id, { command, user, workingDirectory } = {}) => expect(
+        await session.call('container_exec', {
+          id, command, user: user ?? null, working_directory: workingDirectory ?? null,
+        }), 'identity',
+      ),
     },
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+    },
+    volumes: {
+      list: async () => expect(await session.call('volume_list'), 'volumes'),
+      inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
+      create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
+      remove: (name) => done('volume_remove', { name }),
+    },
+    networks: {
+      list: async () => expect(await session.call('network_list'), 'networks'),
+      inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
+      create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
+      remove: (reference) => done('network_remove', { reference }),
+      connect: (reference, container) => done('network_connect', { reference, container }),
+      disconnect: (reference, container) => done('network_disconnect', { reference, container }),
     },
     terminal: {
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
@@ -90,6 +123,8 @@ export function workspace(session) {
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
     },
+    subscribe: (topic) => subscription('event_subscribe', topic),
+    unsubscribe: (topic) => subscription('event_unsubscribe', topic),
   };
 }
 
@@ -149,12 +184,15 @@ function interpret(payload) {
     // Externally tagged: {"Invoke":{"node":2,"id":"2:Invoke"}}
     const [trigger, inner] = Object.entries(body)[0] ?? [];
     if (!inner || typeof inner !== 'object' || typeof inner.id !== 'string') return null;
-    return { trigger, node: inner.node, id: inner.id, value: inner.value ?? null };
+    return { ...inner, trigger, value: inner.value ?? null };
   }
   if (typeof body !== 'object' || typeof body.id !== 'string') return null;
-  const trigger = body.trigger ?? named;
+  const legacy = typeof body.interaction === 'string'
+    ? `${body.interaction[0].toUpperCase()}${body.interaction.slice(1)}`
+    : undefined;
+  const trigger = body.trigger ?? named ?? legacy;
   if (trigger === undefined) return null;
-  return { trigger, node: body.node, id: body.id, value: body.value ?? null };
+  return { ...body, trigger, value: body.value ?? null };
 }
 
 /** Every prop and handler name a component accepts, for tooling and tests. */
@@ -167,16 +205,19 @@ export const vocabulary = {
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'create', 'start', 'stop', 'remove'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
     images: ['list', 'pull'],
+    volumes: ['list', 'inspect', 'create', 'remove'],
+    networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
     files: ['list', 'read', 'write'],
-    interfaceEvents: ['invoke', 'submit', 'change', 'select'],
+    interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
+    snapshotTopics: SNAPSHOT_TOPICS,
   }),
   unavailable: Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
-    containers: ['processes', 'exec', 'logs', 'pause', 'unpause', 'restart', 'kill'],
+    containers: [],
     terminal: ['switchOccupant'],
-    events: ['hostSnapshots', 'keyboard', 'focus', 'pointer', 'drag', 'drop'],
+    events: ['extensions', 'globalKeyboard', 'globalFocus', 'globalPointer', 'drag', 'drop'],
   }),
 });

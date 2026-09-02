@@ -1,0 +1,16 @@
+{
+  "name": "@husklet/workspace-manager",
+  "version": "0.1.0",
+  "description": "First-party workspace resources and container operations for Husklet.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "test": "node --test 'test/*.test.js'"
+  },
+  "dependencies": {
+    "@husklet/react": "file:../react",
+    "react": "^18.3.1"
+  },
+  "engines": { "node": ">=20" }
+}

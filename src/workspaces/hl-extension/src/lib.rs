@@ -35,10 +35,10 @@ pub use installation::{Consent, Disposition, Installation, Objection, Record, St
 pub use manifest::{
     Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
 };
-pub use port::{WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
+pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
-pub use subscription::{NetworkSummary, Snapshot, Subscriptions, VolumeSummary};
+pub use subscription::{Snapshot, Subscriptions};
 
 /// The host's opening frame, carrying this domain's grant.
 pub type Welcome = hl_rpc::Welcome<Capability>;

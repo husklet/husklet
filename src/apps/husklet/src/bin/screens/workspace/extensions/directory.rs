@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate};
-use hl_extension::{Stage, Summary};
+use hl_extension::Summary;
 
 use super::{moment, Inspection, Shelf};
 
@@ -43,6 +43,7 @@ pub struct Catalogue {
     inspection: Inspection,
     listing: gtk::Box,
     reference: gtk::Entry,
+    inspect: gtk::Button,
     proposal: gtk::Box,
     notice: gtk::Label,
     progress: gtk::ProgressBar,
@@ -73,6 +74,7 @@ impl Catalogue {
             inspection,
             listing: gtk::Box::new(gtk::Orientation::Vertical, 4),
             reference: gtk::Entry::new(),
+            inspect: gtk::Button::with_label("Read manifest"),
             proposal,
             notice,
             progress,
@@ -80,6 +82,12 @@ impl Catalogue {
             candidate: RefCell::new(None),
         });
         page.assemble();
+        let weak = Rc::downgrade(&page);
+        shelf.redraw_with(Rc::new(move || {
+            if let Some(page) = weak.upgrade() {
+                page.refresh();
+            }
+        }));
         page.refresh();
         page
     }
@@ -102,7 +110,7 @@ impl Catalogue {
         }
         for entry in entries {
             self.listing
-                .append(&text(&format!("{}  ·  {}", entry.name, said(entry.stage)), "fhint"));
+                .append(&super::settings::Settings::page(&self.shelf, &entry));
         }
     }
 
@@ -117,6 +125,9 @@ impl Catalogue {
         }
         self.forget();
         self.say(&format!("reading {reference}"));
+        self.reference.set_sensitive(false);
+        self.inspect.set_sensitive(false);
+        self.inspect.set_label("Reading…");
         *self.pending.borrow_mut() = Some((self.inspection)(&reference));
     }
 
@@ -140,11 +151,17 @@ impl Catalogue {
             Acquisition::Ready(candidate) => {
                 *self.pending.borrow_mut() = None;
                 self.progress.set_visible(false);
+                self.reference.set_sensitive(true);
+                self.inspect.set_sensitive(true);
+                self.inspect.set_label("Read another image");
                 self.propose(&candidate);
             }
             Acquisition::Failed(reason) => {
                 *self.pending.borrow_mut() = None;
                 self.progress.set_visible(false);
+                self.reference.set_sensitive(true);
+                self.inspect.set_sensitive(true);
+                self.inspect.set_label("Retry");
                 self.say(&reason);
             }
         }
@@ -295,11 +312,10 @@ impl Catalogue {
         self.reference.add_css_class(REFERENCE);
         self.reference.set_placeholder_text(Some("image reference"));
         self.widget.append(&self.reference);
-        let read = gtk::Button::with_label("Read manifest");
-        read.add_css_class(INSPECT);
+        self.inspect.add_css_class(INSPECT);
         let page = Rc::clone(self);
-        read.connect_clicked(move |_| page.inspect());
-        self.widget.append(&read);
+        self.inspect.connect_clicked(move |_| page.inspect());
+        self.widget.append(&self.inspect);
         self.widget.append(&self.progress);
         self.widget.append(&self.proposal);
         self.widget.append(&self.notice);
@@ -316,16 +332,6 @@ impl Catalogue {
             page.poll();
             gtk::glib::ControlFlow::Continue
         });
-    }
-}
-
-/// Where an extension stands, in the words the listing uses.
-fn said(stage: Stage) -> String {
-    match stage {
-        Stage::Vacancy => "not installed".to_owned(),
-        Stage::Standby => "disabled".to_owned(),
-        Stage::Duty => "enabled".to_owned(),
-        Stage::Fault { restarts } => format!("faulted after {restarts} restarts"),
     }
 }
 

@@ -9,7 +9,7 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, TerminalSurface,
+    pane_lines, ContainerControl, ContainerInventory, Division, GridSize, ImageStore, NetworkStore, TerminalSurface, VolumeStore,
     WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
@@ -26,6 +26,8 @@ pub struct Services<'a> {
     pub containers: &'a dyn ContainerInventory,
     pub control: &'a dyn ContainerControl,
     pub images: &'a dyn ImageStore,
+    pub volumes: &'a dyn VolumeStore,
+    pub networks: &'a dyn NetworkStore,
     pub terminal: &'a dyn TerminalSurface,
     pub files: &'a dyn WorkspaceFiles,
 }
@@ -112,6 +114,9 @@ impl Session {
             | Request::ContainerKill { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList | Request::ImagePull { .. } => self.images(request, services),
+            Request::VolumeList | Request::VolumeInspect { .. } | Request::VolumeCreate { .. } | Request::VolumeRemove { .. } => self.volumes(request, services),
+            Request::NetworkList | Request::NetworkInspect { .. } | Request::NetworkCreate { .. }
+            | Request::NetworkRemove { .. } | Request::NetworkConnect { .. } | Request::NetworkDisconnect { .. } => self.networks(request, services),
             Request::TerminalTabs
             | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
@@ -196,6 +201,32 @@ impl Session {
         }
         let port = self.peer.authority().port(Capability::ImageRead, services.images)?;
         Ok(Reply::Images(port.list()?))
+    }
+
+    fn volumes(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        let capability = request.capability();
+        let port = self.peer.authority().port(capability, services.volumes)?;
+        match request {
+            Request::VolumeList => Ok(Reply::Volumes(port.list()?)),
+            Request::VolumeInspect { name } => Ok(Reply::Volume(port.inspect(name)?)),
+            Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
+            Request::VolumeRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            _ => unreachable!(),
+        }
+    }
+
+    fn networks(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        let capability = request.capability();
+        let port = self.peer.authority().port(capability, services.networks)?;
+        match request {
+            Request::NetworkList => Ok(Reply::Networks(port.list()?)),
+            Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
+            Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
+            Request::NetworkRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::NetworkConnect { reference, container } => port.connect(reference, container).map(|()| Reply::Done).map_err(Failure::from),
+            Request::NetworkDisconnect { reference, container } => port.disconnect(reference, container).map(|()| Reply::Done).map_err(Failure::from),
+            _ => unreachable!(),
+        }
     }
 
     /// Every workspace the host knows of.

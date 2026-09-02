@@ -102,20 +102,96 @@ impl Data {
         }
     }
 
-    fn poll_forever(workspace: &str, shell: &str, data: &std::sync::Mutex<Self>, stop: &std::sync::atomic::AtomicBool) {
+    fn poll_forever(workspace: &str, shell: &str, data: &std::sync::Mutex<Self>, control: &PollControl) {
         let mut socket_cache = DaemonSocketCache::default();
-        loop {
-            if stop.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-
+        while control.running() {
             let mut snapshot = Self::poll();
             let socket = socket_cache.resolve_with(|| Self::daemon_socket(workspace));
             snapshot.merge_resources(&socket);
             snapshot.merge_processes(workspace, shell);
-            *data.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            // A management extension may have taken ownership while an
+            // already-started query was finishing. Do not publish that stale
+            // fallback snapshot, and do no further daemon work until resumed.
+            if control.is_running() {
+                *data.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
+            }
+            if !control.delay(std::time::Duration::from_secs(2)) {
+                return;
+            }
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PollState {
+    Running,
+    Suspended,
+    Stopped,
+}
+
+struct PollControl {
+    state: std::sync::Mutex<PollState>,
+    changed: std::sync::Condvar,
+}
+
+impl PollControl {
+    fn suspended() -> Self {
+        Self {
+            state: std::sync::Mutex::new(PollState::Suspended),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn set(&self, state: PollState) {
+        *self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = state;
+        self.changed.notify_all();
+    }
+
+    fn is_running(&self) -> bool {
+        *self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == PollState::Running
+    }
+
+    fn running(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *state == PollState::Suspended {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *state == PollState::Running
+    }
+
+    fn delay(&self, duration: std::time::Duration) -> bool {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *state != PollState::Running {
+            return *state != PollState::Stopped;
+        }
+        let (state, _) = self
+            .changed
+            .wait_timeout(state, duration)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *state != PollState::Stopped
+    }
+}
+
+/// Handle for the fallback poller. It starts suspended so discovering an
+/// installed management extension never races an unnecessary first query.
+pub(super) struct OverviewPoller {
+    control: std::sync::Arc<PollControl>,
+}
+
+impl OverviewPoller {
+    pub(super) fn resume(&self) {
+        self.control.set(PollState::Running);
+    }
+
+    pub(super) fn suspend(&self) {
+        self.control.set(PollState::Suspended);
+    }
+
+    pub(super) fn stop(&self) {
+        self.control.set(PollState::Stopped);
     }
 }
 
@@ -124,14 +200,16 @@ pub(super) fn spawn_overview_poller(
     workspace: String,
     shell: String,
     data: std::sync::Arc<std::sync::Mutex<Data>>,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) {
-    std::thread::spawn(move || Data::poll_forever(&workspace, &shell, &data, &stop));
+) -> OverviewPoller {
+    let control = std::sync::Arc::new(PollControl::suspended());
+    let worker_control = std::sync::Arc::clone(&control);
+    std::thread::spawn(move || Data::poll_forever(&workspace, &shell, &data, &worker_control));
+    OverviewPoller { control }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonSocketCache, Data};
+    use super::{DaemonSocketCache, Data, PollControl, PollState};
 
     #[test]
     fn initial_overview_never_claims_backend_results_are_empty() {
@@ -178,5 +256,39 @@ mod tests {
             Ok(socket)
         );
         assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn suspended_poller_does_no_work_until_resumed_and_stops_promptly() {
+        let control = std::sync::Arc::new(PollControl::suspended());
+        let cycles = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_control = std::sync::Arc::clone(&control);
+        let worker_cycles = std::sync::Arc::clone(&cycles);
+        let worker = std::thread::spawn(move || {
+            while worker_control.running() {
+                worker_cycles.fetch_add(1, std::sync::atomic::Ordering::Release);
+                if !worker_control.delay(std::time::Duration::from_millis(10)) {
+                    break;
+                }
+            }
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(cycles.load(std::sync::atomic::Ordering::Acquire), 0);
+        control.set(PollState::Running);
+        while cycles.load(std::sync::atomic::Ordering::Acquire) == 0 {
+            std::thread::yield_now();
+        }
+        control.set(PollState::Suspended);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let paused = cycles.load(std::sync::atomic::Ordering::Acquire);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(cycles.load(std::sync::atomic::Ordering::Acquire), paused);
+        control.set(PollState::Running);
+        while cycles.load(std::sync::atomic::Ordering::Acquire) == paused {
+            std::thread::yield_now();
+        }
+        control.set(PollState::Stopped);
+        worker.join().expect("controlled poll worker exits");
     }
 }

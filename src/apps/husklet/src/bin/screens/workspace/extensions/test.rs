@@ -39,8 +39,10 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         the_settings_page_says_where_an_extension_stands();
         the_settings_actions_drive_the_installation();
         removing_an_extension_takes_its_pages_with_it();
+        management_extension_reconciles_native_fallback_pages();
         an_image_is_read_before_anybody_is_asked();
         remote_image_progress_precedes_the_consent_prompt();
+        a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
@@ -50,6 +52,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
+        panes::disabling_an_extension_restores_its_nonfocused_surface_pane();
+        panes::removing_an_extension_restores_its_nonfocused_surface_pane();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::splitting_an_interface_again_moves_its_one_surface();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
@@ -66,6 +70,7 @@ struct Fixture {
     view: Rc<View>,
     roster: Shared,
     shelf: Rc<Shelf>,
+    _catalogue: Rc<Catalogue>,
 }
 
 impl Fixture {
@@ -89,11 +94,18 @@ impl Fixture {
         });
         let shelf = Shelf::new(&view, &roster, surfaces);
         shelf.install();
+        let inspection: Inspection = Rc::new(|_| std::sync::mpsc::channel().1);
+        let catalogue = Catalogue::new(&shelf, inspection);
+        view.page(Page::Extensions.title())
+            .and_downcast::<gtk::Box>()
+            .expect("extensions page")
+            .append(catalogue.widget());
         Self {
             _storage: storage,
             view,
             roster,
             shelf,
+            _catalogue: catalogue,
         }
     }
 
@@ -112,11 +124,31 @@ impl Fixture {
 
     /// Clicks the action on a settings page carrying a style class.
     fn act(&self, name: &str, class: &str) {
-        self.tagged(&super::settings_title(&named(name)), class)
-            .unwrap_or_else(|| panic!("{class} is offered on {name}'s settings page"))
+        self.extension_tagged(name, class)
+            .unwrap_or_else(|| panic!("{class} is offered on {name}'s card"))
             .downcast::<gtk::Button>()
             .expect("an action is a button")
             .emit_clicked();
+    }
+
+    fn extension_tagged(&self, name: &str, class: &str) -> Option<gtk::Widget> {
+        let page = self.view.page(Page::Extensions.title())?;
+        descendants(&page)
+            .into_iter()
+            .filter(|widget| widget.has_css_class(settings::CARD))
+            .find(|card| {
+                descendants(card).iter().any(|widget| {
+                    widget.has_css_class("dhead")
+                        && widget
+                            .downcast_ref::<gtk::Label>()
+                            .is_some_and(|label| label.text() == name)
+                })
+            })
+            .and_then(|card| {
+                descendants(&card)
+                    .into_iter()
+                    .find(|widget| widget.has_css_class(class))
+            })
     }
 }
 
@@ -184,8 +216,11 @@ fn the_sidebar_lists_exactly_what_the_workspace_recorded() {
     let listed = fixture.view.entries();
 
     assert!(listed.contains(&"alpha".to_owned()), "got {listed:?}");
-    assert!(listed.contains(&"alpha settings".to_owned()), "got {listed:?}");
     assert!(listed.contains(&"zulu".to_owned()), "got {listed:?}");
+    assert!(
+        !listed.iter().any(|entry| entry.ends_with(" settings")),
+        "lifecycle cards do not duplicate the sidebar: {listed:?}"
+    );
     assert!(
         !listed.contains(&"other".to_owned()),
         "only this workspace's extensions are listed"
@@ -207,32 +242,29 @@ fn selecting_an_extension_shows_the_surface_it_draws() {
         fixture.tagged("alpha", SURFACE).is_some(),
         "the extension's own surface is the page"
     );
-    assert!(
-        fixture.tagged("alpha settings", SURFACE).is_none(),
-        "our settings page is not the extension's surface"
-    );
+    assert_eq!(fixture.view.entries(), ["Overview", "Extensions", "alpha"]);
 }
 
 fn the_settings_page_says_where_an_extension_stands() {
     let fixture = Fixture::new(&[("alpha", true), ("zulu", false)]);
 
     let duty = fixture
-        .tagged("alpha settings", settings::STANDING)
+        .extension_tagged("alpha", settings::STANDING)
         .and_downcast::<gtk::Label>()
         .expect("a standing");
     let standby = fixture
-        .tagged("zulu settings", settings::STANDING)
+        .extension_tagged("zulu", settings::STANDING)
         .and_downcast::<gtk::Label>()
         .expect("a standing");
 
     assert_eq!(duty.text(), "enabled");
     assert_eq!(standby.text(), "disabled");
     assert!(
-        fixture.tagged("alpha settings", settings::DISABLE).is_some(),
+        fixture.extension_tagged("alpha", settings::DISABLE).is_some(),
         "an enabled extension is offered a disable"
     );
     assert!(
-        fixture.tagged("zulu settings", settings::ENABLE).is_some(),
+        fixture.extension_tagged("zulu", settings::ENABLE).is_some(),
         "a disabled extension is offered an enable"
     );
 }
@@ -247,7 +279,7 @@ fn the_settings_actions_drive_the_installation() {
     fixture.act("alpha", settings::DISABLE);
     assert_eq!(fixture.stage("alpha"), Stage::Standby, "and told again");
     assert!(
-        fixture.tagged("alpha settings", settings::ENABLE).is_some(),
+        fixture.extension_tagged("alpha", settings::ENABLE).is_some(),
         "the page was rebuilt from what the policy now says"
     );
 }
@@ -259,10 +291,76 @@ fn removing_an_extension_takes_its_pages_with_it() {
 
     assert_eq!(fixture.stage("alpha"), Stage::Vacancy, "the record is forgotten");
     assert!(!fixture.view.holds("alpha"), "its surface is off the shell");
-    assert!(!fixture.view.holds("alpha settings"), "and so is its settings page");
+    assert!(
+        fixture.extension_tagged("alpha", settings::STANDING).is_none(),
+        "its lifecycle card is gone"
+    );
     assert!(
         !fixture.view.entries().contains(&"alpha".to_owned()),
         "and its sidebar entry is gone"
+    );
+}
+
+fn management_extension_reconciles_native_fallback_pages() {
+    let storage = tempfile::tempdir().expect("temporary directory");
+    let roster = Rc::new(RefCell::new(
+        Roster::open(Directory::open(storage.path()).expect("storage")).expect("roster"),
+    ));
+    record(&roster, super::MANAGEMENT_EXTENSION, true);
+    let overview = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let containers = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let view = Rc::new(View::new([
+        (Page::Settings, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+        (Page::Extensions, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+    ]));
+    let fallback = [
+        (Page::Overview, overview.upcast::<gtk::Widget>()),
+        (Page::Containers, containers.upcast()),
+    ];
+    for (page, widget) in &fallback {
+        view.attach(page.title(), widget);
+    }
+    let weak = Rc::downgrade(&view);
+    let reconcile = Rc::new(move |managed: bool| {
+        let Some(view) = weak.upgrade() else { return };
+        for (page, widget) in &fallback {
+            if managed {
+                view.detach(page.title());
+            } else if !view.holds(page.title()) {
+                view.attach(page.title(), widget);
+            }
+        }
+    });
+    let surfaces: Surfaces = Rc::new(|_| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
+    let shelf = Shelf::with_reconciliation(&view, &roster, surfaces, reconcile);
+    shelf.install();
+
+    assert_eq!(
+        view.entries(),
+        ["Settings", "Extensions", super::MANAGEMENT_EXTENSION],
+        "the management extension has no duplicate native operational pages"
+    );
+
+    roster
+        .borrow_mut()
+        .remove(&named(super::MANAGEMENT_EXTENSION))
+        .expect("removed management extension");
+    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
+    assert!(view.holds(Page::Overview.title()));
+    assert!(view.holds(Page::Containers.title()));
+
+    record(&roster, "containers", true);
+    let legacy = roster
+        .borrow()
+        .entries()
+        .into_iter()
+        .find(|entry| entry.name.as_str() == "containers")
+        .expect("legacy reference extension");
+    shelf.mount(&legacy);
+    assert!(view.holds(Page::Overview.title()));
+    assert!(
+        view.holds(Page::Containers.title()),
+        "legacy containers cannot suppress views it does not replace"
     );
 }
 
@@ -293,6 +391,14 @@ fn typed(page: &Rc<Catalogue>, reference: &str) {
         .and_downcast::<gtk::Entry>()
         .expect("a field to type the image into")
         .set_text(reference);
+}
+
+fn inspect_action(page: &Rc<Catalogue>) -> gtk::Button {
+    descendants(page.widget().clone().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::INSPECT))
+        .and_downcast::<gtk::Button>()
+        .expect("an image inspection action")
 }
 
 fn candidate() -> Candidate {
@@ -332,7 +438,13 @@ fn an_image_is_read_before_anybody_is_asked() {
         fixture.view.holds("sample"),
         "and it is on the sidebar without a restart"
     );
-    assert!(fixture.view.holds("sample settings"));
+    assert!(!fixture.view.entries().iter().any(|entry| entry.ends_with(" settings")));
+    assert!(
+        descendants(page.widget().upcast_ref())
+            .iter()
+            .any(|widget| widget.has_css_class(settings::STANDING)),
+        "the central catalogue gained the lifecycle card"
+    );
 }
 
 fn a_declined_image_records_nothing() {
@@ -391,6 +503,53 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     assert!(
         fixture.roster.borrow().entries().is_empty(),
         "a ready image still awaits consent"
+    );
+}
+
+fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
+    let fixture = Fixture::new(&[]);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let answers = Mutex::new(vec![
+        Acquisition::Ready(candidate()),
+        Acquisition::Failed("registry temporarily unavailable".to_owned()),
+    ]);
+    let recorded = Arc::clone(&attempts);
+    let inspection: Inspection = Rc::new(move |reference| {
+        recorded.lock().expect("attempts").push(reference.to_owned());
+        let (sent, received) = std::sync::mpsc::channel();
+        if let Some(answer) = answers.lock().expect("answers").pop() {
+            sent.send(answer).expect("catalogue is listening");
+        }
+        received
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    typed(&page, "team/tool:latest");
+
+    page.inspect();
+    let action = inspect_action(&page);
+    assert!(
+        !action.is_sensitive(),
+        "a second pull cannot be started while one is pending"
+    );
+    assert_eq!(action.label().as_deref(), Some("Reading…"));
+    assert!(page.poll());
+    assert!(action.is_sensitive());
+    assert_eq!(action.label().as_deref(), Some("Retry"));
+    assert!(page.notice().contains("temporarily unavailable"));
+
+    page.inspect();
+    assert!(!action.is_sensitive());
+    assert!(page.poll());
+    assert_eq!(action.label().as_deref(), Some("Read another image"));
+    page.consent();
+    assert!(
+        fixture.view.holds("sample"),
+        "retry reaches the ordinary consent lifecycle"
+    );
+    assert_eq!(
+        *attempts.lock().expect("attempts"),
+        ["team/tool:latest", "team/tool:latest"],
+        "only the two explicit attempts reached the registry"
     );
 }
 
@@ -583,6 +742,8 @@ mod ports {
 
     /// The one value every port of this fake host is served from.
     pub(super) struct Ports;
+    impl hl_extension::port::VolumeStore for Ports {}
+    impl hl_extension::port::NetworkStore for Ports {}
 
     impl ContainerInventory for Ports {
         fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -700,6 +861,8 @@ mod ports {
             containers: &PORTS,
             control: &PORTS,
             images: &PORTS,
+            volumes: &PORTS,
+            networks: &PORTS,
             terminal: &PORTS,
             files: &PORTS,
         }
@@ -727,7 +890,8 @@ mod panes {
         Window, WindowSession, ABSENCE,
     };
     use super::super::Console;
-    use super::super::Gallery;
+    use super::super::{Gallery, Shelf, Surfaces};
+    use super::Fixture;
     use hl::config::WorkspaceConfig;
     use vte4::prelude::TerminalExt as _;
 
@@ -1019,6 +1183,83 @@ mod panes {
             ["Terminal", "Postgres"],
             "an old tab reads the live catalogue"
         );
+    }
+
+    fn lifecycle_withdrawal(remove: bool) {
+        let fixture = Fixture::new(&[("postgres", true)]);
+        let bench = Bench::new();
+        let (first, first_slot) = bench.shell();
+        let (_second, second_slot) = bench.beside(&first);
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
+        Window::exhibit(&bench.window, gallery.clone());
+        assert!(Panes::focus(&bench.window, &first_slot));
+        PaneChooser::provider(&bench.window, "postgres", "database");
+        assert_eq!(
+            Panes::at(&bench.window, &first_slot).expect("provider pane").occupant,
+            Occupant::Surface
+        );
+        assert!(
+            Panes::focus(&bench.window, &second_slot),
+            "a different split leaf is selected"
+        );
+
+        let window = Rc::downgrade(&bench.window);
+        let withdrawn = gallery.clone();
+        let withdraw = Rc::new(move |name: &ExtensionName| {
+            if let Some(window) = window.upgrade() {
+                PaneChooser::withdraw(&window, name.as_str());
+            }
+            withdrawn.withdraw(name.as_str());
+        });
+        let surfaces: Surfaces = Rc::new(|_| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
+        let shelf = Shelf::with_lifecycle(&fixture.view, &fixture.roster, surfaces, Rc::new(|_| {}), withdraw);
+        let name = ExtensionName::new("postgres").expect("extension name");
+        if remove {
+            fixture.roster.borrow_mut().remove(&name).expect("removed");
+        } else {
+            fixture.roster.borrow_mut().disable(&name).expect("disabled");
+        }
+        shelf.refresh(&name);
+
+        let restored = Panes::at(&bench.window, &first_slot).expect("restored pane identity");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
+        assert_eq!(
+            Panes::at(&bench.window, &second_slot).expect("unrelated pane").slot,
+            second_slot,
+            "the selected sibling keeps its identity"
+        );
+        assert!(
+            gallery.providers().is_empty(),
+            "withdrawal disappears from every chooser immediately"
+        );
+        assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+        assert!(
+            Slots::new(&bench.window).surface(&restored.content).is_none(),
+            "the removed provider identity is no longer a live surface registration"
+        );
+    }
+
+    pub(super) fn disabling_an_extension_restores_its_nonfocused_surface_pane() {
+        lifecycle_withdrawal(false);
+    }
+
+    pub(super) fn removing_an_extension_restores_its_nonfocused_surface_pane() {
+        lifecycle_withdrawal(true);
     }
 
     pub(super) fn every_split_leaf_owns_its_chooser_and_topology_is_nested() {

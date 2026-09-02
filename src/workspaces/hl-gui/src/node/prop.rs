@@ -237,6 +237,9 @@ pub enum Trigger {
     Scroll,
     Close,
     Context,
+    Key,
+    Focus,
+    Pointer,
 }
 
 /// Stable producer-owned identity for a reaction, echoed back on every event.

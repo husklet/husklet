@@ -43,10 +43,18 @@ impl Session {
             let offered = vec![Choice::new("all", "All"), Choice::new("running", "Running")];
             self.producer.set(node, Prop::Choices, PropValue::Choices(offered));
         }
+        if tag.accepts(Prop::Source) {
+            self.producer.set(node, Prop::Source, PropValue::Source(hl_gui::SourceId::new(1)));
+        }
         let frame = self.producer.frame();
         self.tree
             .apply(&frame, &mut self.canvas)
             .expect("a bound component renders");
+        if tag.accepts(Prop::Source) {
+            self.canvas
+                .resize(hl_gui::SourceId::new(1), hl_gui::Version::new(1), 1)
+                .expect("a selectable source has one row");
+        }
         let class = format!("hl-{}", tag.as_str().to_ascii_lowercase());
         self.widgets()
             .into_iter()
@@ -76,7 +84,16 @@ impl Session {
 
 fn identified(event: &Event) -> bool {
     match event {
-        Event::Invoke { id, .. } | Event::Change { id, .. } => id.as_str() == "reported",
+        Event::Invoke { id, .. }
+        | Event::Change { id, .. }
+        | Event::Submit { id, .. }
+        | Event::Select { id, .. }
+        | Event::Scroll { id, .. }
+        | Event::Close { id, .. }
+        | Event::Context { id, .. }
+        | Event::Key { id, .. }
+        | Event::Focus { id, .. }
+        | Event::Pointer { id, .. } => id.as_str() == "reported",
         _ => false,
     }
 }
@@ -101,7 +118,7 @@ fn unreported(tag: Tag) -> Vec<String> {
     for trigger in tag.triggers() {
         let mut session = Session::new();
         let widget = session.bound(tag, *trigger);
-        worked(&widget);
+        worked(&widget, *trigger);
         if !session.reported() {
             silent.push(format!("  {} declares {trigger:?}", tag.as_str()));
         }
@@ -115,7 +132,34 @@ fn unreported(tag: Tag) -> Vec<String> {
 /// property is applied by the adapter and an interaction is not: a value the
 /// producer sends is not news to it, and only what the widget itself emits
 /// proves the connection exists.
-fn worked(widget: &gtk::Widget) {
+fn worked(widget: &gtk::Widget, trigger: Trigger) {
+    if controlled(widget, trigger) {
+        return;
+    }
+    if trigger == Trigger::Close {
+        widget.emit_by_name::<()>("closed", &[]);
+        return;
+    }
+    if trigger == Trigger::Select {
+        if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
+            drop.set_selected(1);
+            return;
+        }
+        if let Some(view) = widget
+            .downcast_ref::<gtk::ScrolledWindow>()
+            .and_then(gtk::ScrolledWindow::child)
+            .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
+        {
+            if let Some(selection) = view.model().and_then(|model| model.downcast::<gtk::MultiSelection>().ok()) {
+                selection.select_item(0, true);
+                return;
+            }
+        }
+    }
+    if trigger == Trigger::Submit {
+        widget.emit_by_name::<()>("activate", &[]);
+        return;
+    }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         button.emit_by_name::<()>("clicked", &[]);
         return;
@@ -135,8 +179,53 @@ fn worked(widget: &gtk::Widget) {
     valued(widget);
 }
 
+fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
+    let controllers = widget.observe_controllers();
+    for index in 0..controllers.n_items() {
+        let Some(controller) = controllers.item(index) else { continue };
+        match trigger {
+            Trigger::Key if controller.is::<gtk::EventControllerKey>() => {
+                controller.emit_by_name::<bool>(
+                    "key-pressed",
+                    &[&gtk::gdk::Key::a, &38_u32, &gtk::gdk::ModifierType::CONTROL_MASK],
+                );
+                return true;
+            }
+            Trigger::Focus if controller.is::<gtk::EventControllerFocus>() => {
+                controller.emit_by_name::<()>("enter", &[]);
+                return true;
+            }
+            Trigger::Scroll if controller.is::<gtk::EventControllerScroll>() => {
+                controller.emit_by_name::<bool>("scroll", &[&1.0_f64, &2.0_f64]);
+                return true;
+            }
+            Trigger::Pointer if controller.is::<gtk::EventControllerMotion>() => {
+                controller.emit_by_name::<()>("motion", &[&2.0_f64, &3.0_f64]);
+                return true;
+            }
+            Trigger::Context if controller.is::<gtk::GestureClick>() => {
+                let gesture = controller.downcast_ref::<gtk::GestureClick>().expect("checked");
+                if gesture.button() == 3 {
+                    controller.emit_by_name::<()>("pressed", &[&1_i32, &2.0_f64, &3.0_f64]);
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// The components whose interaction is a value changing.
 fn valued(widget: &gtk::Widget) {
+    if let Some(view) = widget
+        .downcast_ref::<gtk::ScrolledWindow>()
+        .and_then(gtk::ScrolledWindow::child)
+        .and_then(|child| child.downcast::<gtk::TextView>().ok())
+    {
+        view.buffer().set_text("typed");
+        return;
+    }
     if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
         drop.set_selected(1);
         return;

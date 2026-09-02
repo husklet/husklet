@@ -96,14 +96,14 @@ pub(crate) fn model(widget: &gtk::Widget, source: SourceId) -> Option<Rows> {
     let view = component::table::columns(widget)?;
     if let Some(existing) = view
         .model()
-        .and_then(|model| model.downcast::<gtk::NoSelection>().ok())
+        .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
         .and_then(|selection| selection.model())
         .and_then(|inner| inner.downcast::<Rows>().ok())
     {
         return Some(existing);
     }
     let rows = Rows::new(source);
-    view.set_model(Some(&gtk::NoSelection::new(Some(rows.clone()))));
+    view.set_model(Some(&gtk::MultiSelection::new(Some(rows.clone()))));
     Some(rows)
 }
 

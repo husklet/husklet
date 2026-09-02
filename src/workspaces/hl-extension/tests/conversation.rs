@@ -63,6 +63,8 @@ fn connected_pair() -> (Stream, Stream) {
 struct Host {
     tabs: RefCell<Vec<String>>,
 }
+impl hl_extension::port::VolumeStore for Host {}
+impl hl_extension::port::NetworkStore for Host {}
 
 impl Host {
     fn new() -> Self {
@@ -197,6 +199,8 @@ fn services(host: &Host) -> Services<'_> {
         containers: host,
         control: host,
         images: host,
+        volumes: host,
+        networks: host,
         terminal: host,
         files: host,
     }

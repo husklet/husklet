@@ -5,27 +5,11 @@
 
 use hl_rpc::{Coding, Frame};
 
-use crate::port::{ContainerSummary, ImageSummary, TabSummary};
+use crate::port::{ContainerSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
 use crate::request::Topic;
 
 /// Which channel each followed topic is delivered on.
 pub type Subscriptions = hl_rpc::Subscriptions<Topic>;
-
-/// A volume as an extension sees it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct VolumeSummary {
-    pub name: String,
-    pub driver: String,
-    pub size: u64,
-}
-
-/// A network as an extension sees it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct NetworkSummary {
-    pub name: String,
-    pub driver: String,
-    pub scope: String,
-}
 
 /// The whole current listing behind one topic.
 ///

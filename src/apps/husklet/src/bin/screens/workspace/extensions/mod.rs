@@ -1,10 +1,8 @@
 //! Every extension a workspace has, as pages on the workspace shell.
 //!
-//! One extension gets two pages: the interface it draws itself, which is
-//! [`super::extension::Interface`] over a host, and a settings page this
-//! product writes. The settings page is ours on purpose — an extension must not
-//! be the thing that offers to remove itself — and every action on it goes
-//! through [`Roster`], which is where the lifecycle policy already lives.
+//! One extension gets one sidebar page: the interface it draws itself. Husklet
+//! owns lifecycle controls and keeps them together on the central Extensions
+//! page, so installing an extension does not double the sidebar.
 //!
 //! What a page is built from is injected rather than reached for: the surface
 //! builder and the image inspection are both handed in. That is what lets the
@@ -48,9 +46,20 @@ pub type Surfaces = Rc<dyn Fn(&Entry) -> gtk::Widget>;
 /// container daemon, and the main loop must keep drawing while that happens.
 pub type Inspection = Rc<dyn Fn(&str) -> Receiver<Acquisition>>;
 
-/// The word that separates an extension's name from the page of ours that is
-/// about it. Used to build the sidebar label and nothing else.
-const SETTINGS: &str = "settings";
+/// The bundled extension replacing Husklet's legacy operational pages.
+///
+/// This is the canonical identity of the base workspace-management image.
+/// The older `containers` reference extension deliberately does not suppress
+/// pages it cannot replace.
+pub const MANAGEMENT_EXTENSION: &str = "workspace-manager";
+
+/// Reconciles native operational fallback pages. `true` means the management
+/// extension owns them and native duplicates must be absent.
+pub type Reconcile = Rc<dyn Fn(bool)>;
+
+/// Restores terminal panes before one extension's interface page is rebuilt or
+/// removed. The shelf names lifecycle intent; the terminal owns pane mechanics.
+pub type Withdraw = Rc<dyn Fn(&ExtensionName)>;
 
 /// Where a workspace's extensions live on the shell.
 pub struct Shelf {
@@ -60,16 +69,38 @@ pub struct Shelf {
     view: std::rc::Weak<View>,
     roster: Shared,
     surfaces: Surfaces,
+    reconcile: Reconcile,
+    withdraw: Withdraw,
+    redraw: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl Shelf {
     /// Binds a shelf to a shell and the roster its pages act on.
     #[must_use]
     pub fn new(view: &Rc<View>, roster: &Shared, surfaces: Surfaces) -> Rc<Self> {
+        Self::with_lifecycle(view, roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}))
+    }
+
+    #[must_use]
+    pub fn with_reconciliation(view: &Rc<View>, roster: &Shared, surfaces: Surfaces, reconcile: Reconcile) -> Rc<Self> {
+        Self::with_lifecycle(view, roster, surfaces, reconcile, Rc::new(|_| {}))
+    }
+
+    #[must_use]
+    pub fn with_lifecycle(
+        view: &Rc<View>,
+        roster: &Shared,
+        surfaces: Surfaces,
+        reconcile: Reconcile,
+        withdraw: Withdraw,
+    ) -> Rc<Self> {
         Rc::new(Self {
             view: Rc::downgrade(view),
             roster: Rc::clone(roster),
             surfaces,
+            reconcile,
+            withdraw,
+            redraw: RefCell::new(None),
         })
     }
 
@@ -78,6 +109,7 @@ impl Shelf {
         for entry in self.roster.borrow().entries() {
             self.mount(&entry);
         }
+        self.reconcile_fallback();
     }
 
     /// Puts one extension on the shell, replacing whatever was there under its
@@ -89,17 +121,19 @@ impl Shelf {
         };
         self.unmount(&entry.name);
         view.attach(&entry.name.to_string(), &(self.surfaces)(entry));
-        let page = settings::Settings::page(self, entry);
-        view.attach(&settings_title(&entry.name), &page);
+        self.reconcile_fallback();
+        self.redraw();
     }
 
     /// Takes one extension off the shell, which is what drops its host.
     pub fn unmount(&self, name: &ExtensionName) {
+        (self.withdraw)(name);
         let Some(view) = self.view() else {
             return;
         };
         view.detach(&name.to_string());
-        view.detach(&settings_title(name));
+        self.reconcile_fallback();
+        self.redraw();
     }
 
     /// Rebuilds one extension's pages from what the roster now says, and shows
@@ -117,8 +151,9 @@ impl Shelf {
         };
         self.mount(&entry);
         if let Some(view) = self.view() {
-            view.select_name(&settings_title(name));
+            view.select_name(super::Page::Extensions.title());
         }
+        self.redraw();
     }
 
     /// The roster every page on this shelf acts on.
@@ -132,6 +167,26 @@ impl Shelf {
     pub fn view(&self) -> Option<Rc<View>> {
         self.view.upgrade()
     }
+
+    pub fn reconcile_fallback(&self) {
+        let managed = self
+            .roster
+            .borrow()
+            .entries()
+            .iter()
+            .any(|entry| entry.name.as_str() == MANAGEMENT_EXTENSION);
+        (self.reconcile)(managed);
+    }
+
+    pub fn redraw_with(&self, redraw: Rc<dyn Fn()>) {
+        self.redraw.replace(Some(redraw));
+    }
+
+    fn redraw(&self) {
+        if let Some(redraw) = self.redraw.borrow().as_ref() {
+            redraw();
+        }
+    }
 }
 
 impl std::fmt::Debug for Shelf {
@@ -141,12 +196,6 @@ impl std::fmt::Debug for Shelf {
             .field("installed", &self.roster.borrow().entries().len())
             .finish_non_exhaustive()
     }
-}
-
-/// The sidebar label of the settings page belonging to one extension.
-#[must_use]
-pub fn settings_title(name: &ExtensionName) -> String {
-    format!("{name} {SETTINGS}")
 }
 
 /// Now, in milliseconds since the epoch, which is the moment a record is

@@ -104,6 +104,14 @@ test('the inspector follows the selected component contract and shows its intera
   assert.equal(node(patches, 'Text', 'label'), null, '<Switch> exposes Button-only label editing');
 });
 
+test('the inspector exposes only the genuine extended interactions', () => {
+  const triggers = tags.find((tag) => tag.name === 'IconButton').triggers;
+  for (const interaction of ['onKey', 'onFocus', 'onPointer', 'onContext']) {
+    assert.ok(triggers.includes(interaction.slice(2)), `<IconButton> does not expose ${interaction}`);
+  }
+  assert.equal(triggers.includes('Scroll'), false, '<IconButton> invents scrolling');
+});
+
 test('editing a property re-renders the preview with the new value', () => {
   const stage = host();
   const first = stage.render(h(Playground));

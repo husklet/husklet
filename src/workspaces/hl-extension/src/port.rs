@@ -84,6 +84,24 @@ pub struct ImageSummary {
     pub created: i64,
 }
 
+/// A local volume as an extension sees it. The daemon does not calculate
+/// recursive disk usage during inventory, so this deliberately carries no
+/// synthetic size.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct VolumeSummary {
+    pub name: String,
+    pub driver: String,
+}
+
+/// A workspace-local network as an extension sees it.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct NetworkSummary {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+}
+
 /// A terminal tab and what occupies it.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TabSummary {
@@ -375,6 +393,24 @@ pub trait ImageStore {
     /// # Errors
     /// Returns a host failure.
     fn pull(&self, reference: &str) -> Result<ImageSummary, HostError>;
+}
+
+/// Reading and safely changing local volumes.
+pub trait VolumeStore {
+    fn list(&self) -> Result<Vec<VolumeSummary>, HostError> { Err(HostError::Unsupported("volume inventory is unavailable".into())) }
+    fn inspect(&self, _name: &str) -> Result<VolumeSummary, HostError> { Err(HostError::Unsupported("volume inspection is unavailable".into())) }
+    fn create(&self, _name: &str) -> Result<VolumeSummary, HostError> { Err(HostError::Unsupported("volume creation is unavailable".into())) }
+    fn remove(&self, _name: &str) -> Result<(), HostError> { Err(HostError::Unsupported("volume removal is unavailable".into())) }
+}
+
+/// Reading and safely changing workspace-local networks.
+pub trait NetworkStore {
+    fn list(&self) -> Result<Vec<NetworkSummary>, HostError> { Err(HostError::Unsupported("network inventory is unavailable".into())) }
+    fn inspect(&self, _reference: &str) -> Result<NetworkSummary, HostError> { Err(HostError::Unsupported("network inspection is unavailable".into())) }
+    fn create(&self, _name: &str) -> Result<String, HostError> { Err(HostError::Unsupported("network creation is unavailable".into())) }
+    fn remove(&self, _reference: &str) -> Result<(), HostError> { Err(HostError::Unsupported("network removal is unavailable".into())) }
+    fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { Err(HostError::Unsupported("network connection is unavailable".into())) }
+    fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> { Err(HostError::Unsupported("network disconnection is unavailable".into())) }
 }
 
 /// The workspace's terminal surface.

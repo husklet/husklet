@@ -25,11 +25,11 @@ use hl_extension::{Authority, ChannelId, Disposition, Installation, Manifest, Re
 mod voice;
 mod workspace;
 
-use super::Listener;
 use super::conversation::{Conversation, Queue};
 use super::sidecar::SidecarSpec;
+use super::Listener;
 use crate::config::WorkspaceConfig;
-use voice::{Voice, speak};
+use voice::{speak, Voice};
 
 pub use workspace::Workspace;
 
@@ -612,8 +612,8 @@ mod tests {
         TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        Capability, ExtensionName, Grant, Hello, Manifest, PROTOCOL, Record, RelativePath, Request, Resources,
-        Services, Transit, Wire, WorkspaceInfo, codec,
+        codec, Capability, ExtensionName, Grant, Hello, Manifest, Record, RelativePath, Request, Resources, Services,
+        Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::super::sidecar::Image;
@@ -686,6 +686,8 @@ mod tests {
 
     /// In-memory ports: no container runtime and no window.
     struct Ports;
+    impl hl_extension::port::VolumeStore for Ports {}
+    impl hl_extension::port::NetworkStore for Ports {}
 
     impl ContainerInventory for Ports {
         fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -904,6 +906,8 @@ mod tests {
                 containers: &ports,
                 control: &ports,
                 images: &ports,
+                volumes: &ports,
+                networks: &ports,
                 terminal: &ports,
                 files: &ports,
             };

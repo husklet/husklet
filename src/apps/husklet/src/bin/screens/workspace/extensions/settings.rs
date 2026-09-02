@@ -1,9 +1,10 @@
-//! The page this product writes about one extension.
+//! The lifecycle card this product writes about one extension.
 //!
 //! Deliberately not the extension's own interface: what it is, what it was
 //! granted, where it stands, and the four things a person may do to it. An
 //! extension cannot draw this page, because an extension offering to remove
-//! itself is not an offer anyone should have to trust.
+//! itself is not an offer anyone should have to trust. Cards live together on
+//! the central Extensions page; they are not extra sidebar destinations.
 
 use std::rc::Rc;
 
@@ -25,16 +26,19 @@ pub const RETRY: &str = "hl-extension-retry-fault";
 pub const STANDING: &str = "hl-extension-standing";
 /// Style class on the line saying why an action was refused.
 pub const REFUSAL: &str = "hl-extension-refusal";
+/// Style class identifying one lifecycle card in the central catalogue.
+pub const CARD: &str = "hl-extension-card";
 
-/// One extension's settings page.
+/// One extension's lifecycle card.
 pub struct Settings;
 
 impl Settings {
     /// Builds the page for one extension as the roster currently describes it.
     #[must_use]
-    pub fn page(shelf: &Rc<Shelf>, entry: &Entry) -> gtk::ScrolledWindow {
+    pub fn page(shelf: &Rc<Shelf>, entry: &Entry) -> gtk::Box {
         let main = gtk::Box::new(gtk::Orientation::Vertical, 12);
         main.add_css_class("dmain");
+        main.add_css_class(CARD);
         main.append(&heading(&entry.name));
         main.append(&line(&format!("image  ·  {}", entry.image_digest), "fhint"));
         main.append(&standing(entry.stage));
@@ -43,11 +47,7 @@ impl Settings {
         refusal.set_visible(false);
         main.append(&actions(shelf, entry, &refusal));
         main.append(&refusal);
-        gtk::ScrolledWindow::builder()
-            .child(&main)
-            .hexpand(true)
-            .vexpand(true)
-            .build()
+        main
     }
 }
 

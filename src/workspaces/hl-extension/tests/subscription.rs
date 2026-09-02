@@ -17,6 +17,8 @@ use hl_extension::{
 /// subject is routing, and the services exist only so a subscribe can be made
 /// through `dispatch` rather than around it.
 struct Host;
+impl hl_extension::port::VolumeStore for Host {}
+impl hl_extension::port::NetworkStore for Host {}
 
 impl ContainerInventory for Host {
     fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -137,6 +139,8 @@ fn services(host: &Host) -> Services<'_> {
         containers: host,
         control: host,
         images: host,
+        volumes: host,
+        networks: host,
         terminal: host,
         files: host,
     }

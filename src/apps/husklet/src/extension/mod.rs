@@ -21,6 +21,7 @@ mod host;
 mod image;
 mod inventory;
 mod listener;
+mod resource;
 mod registration;
 mod roster;
 mod sidecar;
@@ -31,7 +32,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hl_extension::port::{ContainerControl, ContainerInventory, HostError, ImageStore, WorkspaceFiles};
+use hl_extension::port::{ContainerControl, ContainerInventory, HostError, ImageStore, NetworkStore, VolumeStore, WorkspaceFiles};
 
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
@@ -40,8 +41,9 @@ pub use host::{Audience, Host, Order, Overrun, Plan, Report, Standing, Supply};
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
+pub use resource::Resources;
 pub use registration::{Acquisition, Candidate};
-pub use roster::{Entry, Refusal, Roster, described};
+pub use roster::{described, Entry, Refusal, Roster};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
 pub use terminal::{Answer, Errand, Errands, Relay, Request};
@@ -122,6 +124,7 @@ pub struct Extensions {
     containers: ContainerCatalog,
     control: ContainerLifecycle,
     images: ImageLibrary,
+    resources: Resources,
     files: WorkspaceDirectory,
 }
 
@@ -138,7 +141,8 @@ impl Extensions {
         Ok(Self {
             containers: ContainerCatalog::new(Arc::clone(&bridge)),
             control: ContainerLifecycle::new(Arc::clone(&bridge)),
-            images: ImageLibrary::new(bridge),
+            images: ImageLibrary::new(Arc::clone(&bridge)),
+            resources: Resources::new(bridge),
             files: WorkspaceDirectory::new(root)?,
         })
     }
@@ -160,6 +164,12 @@ impl Extensions {
     pub fn images(&self) -> &dyn ImageStore {
         &self.images
     }
+
+    #[must_use]
+    pub fn volumes(&self) -> &dyn VolumeStore { &self.resources }
+
+    #[must_use]
+    pub fn networks(&self) -> &dyn NetworkStore { &self.resources }
 
     /// The workspace file port.
     #[must_use]
