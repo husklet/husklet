@@ -13,6 +13,16 @@ const client = new Client({ name: 'husklet-native-e2e', version: '1' });
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
+const listed = await client.callTool({ name: 'husklet_pane_list', arguments: {} });
+if (listed.isError) throw new Error(`pane discovery failed: ${listed.content?.[0]?.text}`);
+const inventory = JSON.parse(listed.content[0].text);
+if (!inventory.panes?.some((pane) => pane.slot === 'workspace' && pane.kind === 'native')) {
+  throw new Error(`native workspace absent from pane discovery: ${listed.content[0].text}`);
+}
+if (!inventory.panes?.some((pane) => pane.slot === terminalSlot && pane.kind === 'terminal')) {
+  throw new Error(`real terminal absent from pane discovery: ${listed.content[0].text}`);
+}
+
 const snapshot = await client.callTool({
   name: 'husklet_pane_snapshot',
   arguments: { slot: 'workspace' },
