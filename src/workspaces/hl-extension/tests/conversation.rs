@@ -169,6 +169,8 @@ impl WorkspaceInventory for Host {
     }
 }
 
+impl hl_extension::port::WorkspaceControl for Host {}
+
 impl WorkspaceFiles for Host {
     fn list(&self, _path: &RelativePath) -> Result<Vec<Entry>, HostError> {
         Ok(Vec::new())
@@ -191,6 +193,7 @@ fn services(host: &Host) -> Services<'_> {
             image: "alpine:3.20".into(),
         },
         workspaces: host,
+        workspace_control: host,
         containers: host,
         control: host,
         images: host,

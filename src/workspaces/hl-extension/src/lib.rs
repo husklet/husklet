@@ -32,7 +32,10 @@ pub use hl_rpc::{
     Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire, PROTOCOL,
 };
 pub use installation::{Consent, Disposition, Installation, Objection, Record, Stage, Summary};
-pub use manifest::{Activation, ExtensionName, Invalid, Manifest, Presentation, Resources};
+pub use manifest::{
+    Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
+};
+pub use port::{WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
 pub use subscription::{NetworkSummary, Snapshot, Subscriptions, VolumeSummary};

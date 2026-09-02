@@ -6,6 +6,181 @@ fn page_owns_focus<T: PartialEq>(focused: Option<&T>, page: &[T]) -> bool {
 
 pub(super) struct PaneFocus;
 
+/// The small control that selects what the current pane draws.
+pub(crate) struct PaneChooser;
+
+impl PaneChooser {
+    /// A chooser whose contents are rebuilt when it opens.
+    ///
+    /// The button exists even before an extension is installed, so tabs that
+    /// predate an installation immediately see its providers without being
+    /// rebuilt. Re-reading the gallery on every opening also removes disabled
+    /// or uninstalled providers without leaving stale actions behind.
+    pub(crate) fn button(window: &Rc<TermWin>) -> gtk::MenuButton {
+        let button = gtk::MenuButton::new();
+        button.set_icon_name("view-more-symbolic");
+        button.set_tooltip_text(Some("Choose pane content"));
+        button.add_css_class("flat");
+        button.set_halign(gtk::Align::End);
+        button.set_valign(gtk::Align::Start);
+        Self::populate(window, &button);
+        let weak = Rc::downgrade(window);
+        button.connect_notify_local(Some("active"), move |button, _| {
+            if !button.is_active() {
+                return;
+            }
+            let Some(window) = weak.upgrade() else { return };
+            Self::populate(&window, button);
+        });
+        button
+    }
+
+    pub(crate) fn populate(window: &Rc<TermWin>, button: &gtk::MenuButton) {
+        let choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let terminal = gtk::Button::with_label("Terminal");
+        {
+            let window = window.clone();
+            terminal.connect_clicked(move |_| Self::terminal(&window));
+        }
+        choices.append(&terminal);
+        for provider in Window::gallery(window).map_or_else(Vec::new, |gallery| gallery.providers()) {
+            let choice = gtk::Button::with_label(&provider.title);
+            choice.set_tooltip_text(Some(&format!("{} · {}", provider.extension, provider.id)));
+            let window = window.clone();
+            let extension = provider.extension;
+            let id = provider.id;
+            choice.connect_clicked(move |_| Self::provider(&window, &extension, &id));
+            choices.append(&choice);
+        }
+        let popover = gtk::Popover::new();
+        popover.set_child(Some(&choices));
+        button.set_popover(Some(&popover));
+    }
+
+    fn selected(window: &Rc<TermWin>) -> Option<Occupancy> {
+        if let Some(terminal) = window.focused.borrow().as_ref() {
+            if let Some(slot) = Slots::new(window).of(terminal) {
+                if let Some(pane) = Panes::at(window, &slot) {
+                    return Some(pane);
+                }
+            }
+        }
+        Panes::under(window, &window.stack.visible_child()?).into_iter().next()
+    }
+
+    pub(crate) fn provider(window: &Rc<TermWin>, extension: &str, provider: &str) {
+        let Some(gallery) = Window::gallery(window) else { return };
+        if !gallery.offers(extension, provider) {
+            return;
+        }
+        let Some(current) = Self::selected(window) else { return };
+        if !PaneSwap::can_replace(&current.widget) {
+            return;
+        }
+        let previous_surface = (current.occupant == hl_extension::port::Occupant::Surface)
+            .then(|| {
+                Slots::new(window)
+                    .surface(&current.widget)
+                    .map(|(_, extension)| extension)
+            })
+            .flatten();
+        let displaced = current.widget.clone().downcast::<vte4::Terminal>().ok();
+        // A shell is kept locally until replacement succeeds: a failed swap
+        // must leave both layout and displaced-shell registry alone.
+        if current.occupant == hl_extension::port::Occupant::Surface {
+            Surface::retire(window, &current.widget);
+            Slots::new(window).release(&current.widget);
+        }
+        let surface = Surface::build(window, extension, current.slot.clone());
+        if PaneSwap::replace(&current.widget, &surface) {
+            if let Some(terminal) = displaced {
+                window.displaced.borrow_mut().insert(current.slot, terminal);
+            }
+            gallery.select(extension, provider);
+            return;
+        }
+        // The parent changed between preflight and replacement. Undo every
+        // borrow/registration and put the old interface back exactly where it
+        // was; the terminal case never entered the displaced registry.
+        Surface::discard(window, &surface);
+        if let Some(previous) = previous_surface {
+            Slots::new(window).enrol(&current.widget, current.slot, previous.clone());
+            Surface::restore(window, &previous, &current.widget);
+        }
+    }
+
+    pub(crate) fn terminal(window: &Rc<TermWin>) {
+        let Some(current) = Self::selected(window) else { return };
+        if current.occupant != hl_extension::port::Occupant::Surface {
+            return;
+        }
+        if !PaneSwap::can_replace(&current.widget) {
+            return;
+        }
+        let extension = Slots::new(window)
+            .surface(&current.widget)
+            .map(|(_, extension)| extension);
+        let Some(terminal) = window.displaced.borrow_mut().remove(&current.slot) else {
+            return;
+        };
+        Surface::retire(window, &current.widget);
+        Slots::new(window).release(&current.widget);
+        if PaneSwap::replace(&current.widget, terminal.upcast_ref()) {
+            terminal.grab_focus();
+            return;
+        }
+        if let Some(extension) = extension {
+            Slots::new(window).enrol(&current.widget, current.slot.clone(), extension.clone());
+            Surface::restore(window, &extension, &current.widget);
+        }
+        window.displaced.borrow_mut().insert(current.slot, terminal);
+    }
+}
+
+struct PaneSwap;
+
+impl PaneSwap {
+    fn can_replace(old: &gtk::Widget) -> bool {
+        let Some(parent) = old.parent() else { return false };
+        if parent.is::<gtk::Box>() {
+            return true;
+        }
+        if let Some(overlay) = parent.downcast_ref::<gtk::Overlay>() {
+            return overlay.child().as_ref() == Some(old);
+        }
+        parent
+            .downcast_ref::<gtk::Paned>()
+            .is_some_and(|paned| paned.start_child().as_ref() == Some(old) || paned.end_child().as_ref() == Some(old))
+    }
+
+    fn replace(old: &gtk::Widget, new: &gtk::Widget) -> bool {
+        if !Self::can_replace(old) {
+            return false;
+        }
+        let Some(parent) = old.parent() else { return false };
+        if let Some(container) = parent.downcast_ref::<gtk::Box>() {
+            container.remove(old);
+            container.append(new);
+            return true;
+        }
+        if let Some(overlay) = parent.downcast_ref::<gtk::Overlay>() {
+            overlay.set_child(Some(new));
+            return true;
+        }
+        let Some(paned) = parent.downcast_ref::<gtk::Paned>() else {
+            return false;
+        };
+        if paned.start_child().as_ref() == Some(old) {
+            paned.set_start_child(Some(new));
+        } else if paned.end_child().as_ref() == Some(old) {
+            paned.set_end_child(Some(new));
+        } else {
+            return false;
+        }
+        true
+    }
+}
+
 impl PaneFocus {
     pub(super) fn wire(tw: &Rc<TermWin>, terminal: &vte4::Terminal) {
         let tw = tw.clone();
@@ -177,7 +352,7 @@ impl<'a> Tabs<'a> {
         let tw = self.window;
         let n = tw.shell_no.get() + 1;
         tw.shell_no.set(n);
-        let paneroot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let paneroot = gtk::Overlay::new();
         paneroot.set_hexpand(true);
         paneroot.set_vexpand(true);
         // OSC-7: open the new tab in the currently-focused shell's cwd. A brand-new tab gets a fresh slot
@@ -188,7 +363,8 @@ impl<'a> Tabs<'a> {
             .as_ref()
             .and_then(|terminal| Terminal::new(terminal).working_directory());
         let (term, pid) = make_terminal_ex(tw, cwd, None, &Slots::new(tw).allocate());
-        paneroot.append(&term);
+        paneroot.set_child(Some(&term));
+        paneroot.add_overlay(&PaneChooser::button(tw));
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
         tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
@@ -427,6 +603,12 @@ impl PaneSplit {
             container.remove(old);
             Self::fill(&paned, old, new);
             container.append(&paned);
+            return true;
+        }
+        if let Some(overlay) = parent.downcast_ref::<gtk::Overlay>() {
+            overlay.set_child(gtk::Widget::NONE);
+            Self::fill(&paned, old, new);
+            overlay.set_child(Some(&paned));
             return true;
         }
         let Some(outer) = parent.downcast_ref::<gtk::Paned>() else {

@@ -88,6 +88,27 @@ pub struct Presentation {
     pub icon: Option<String>,
 }
 
+/// One named view an extension offers to a terminal pane chooser.
+///
+/// The identifier is stable program identity; the title and icon are only
+/// presentation. A provider does not grant another interface capability: it
+/// is discoverable only when the manifest already requests `interface`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneProvider {
+    pub id: ExtensionName,
+    pub title: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// Host event sent when a person chooses one of an extension's pane providers.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaneSelection {
+    pub pane_provider: ExtensionName,
+}
+
 /// Everything an extension declares, parsed from its image label.
 ///
 /// Unknown fields are refused rather than ignored: an extension asking for
@@ -107,6 +128,9 @@ pub struct Manifest {
     pub activation: Activation,
     #[serde(default)]
     pub interface: Option<Presentation>,
+    /// Named views this extension makes available in terminal panes.
+    #[serde(default)]
+    pub pane_providers: Vec<PaneProvider>,
     #[serde(default)]
     pub resources: Resources,
     #[serde(default)]
@@ -148,6 +172,17 @@ impl Manifest {
         if manifest.interface.is_some() && !manifest.capabilities.holds(Capability::Interface) {
             return Err(Invalid::Undeclared(Capability::Interface));
         }
+        if !manifest.pane_providers.is_empty() && !manifest.capabilities.holds(Capability::Interface) {
+            return Err(Invalid::Undeclared(Capability::Interface));
+        }
+        let mut providers = std::collections::BTreeSet::new();
+        if manifest
+            .pane_providers
+            .iter()
+            .any(|provider| provider.title.trim().is_empty() || !providers.insert(provider.id.clone()))
+        {
+            return Err(Invalid::PaneProviders);
+        }
         if !manifest.filesystem_roots.is_empty()
             && !manifest.capabilities.holds(Capability::FilesystemRead)
             && !manifest.capabilities.holds(Capability::FilesystemWrite)
@@ -180,6 +215,7 @@ pub enum Invalid {
     Malformed(String),
     Protocol { declared: u32, supported: u32 },
     Undeclared(Capability),
+    PaneProviders,
 }
 
 impl std::fmt::Display for Invalid {
@@ -207,6 +243,7 @@ impl std::fmt::Display for Invalid {
             Self::Undeclared(capability) => {
                 write!(formatter, "manifest uses {} without declaring it", capability.as_str())
             }
+            Self::PaneProviders => formatter.write_str("pane provider ids must be unique and titles must not be empty"),
         }
     }
 }

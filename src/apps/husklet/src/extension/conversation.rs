@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, Reply, Services,
-    Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome, Wire, PROTOCOL,
+    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, Reply,
+    Services, Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -411,8 +411,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
-        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Fault, Queue};
@@ -563,6 +563,8 @@ mod tests {
         }
     }
 
+    impl hl_extension::port::WorkspaceControl for Host {}
+
     impl WorkspaceFiles for Host {
         fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError> {
             self.ledger.note("files.list");
@@ -592,6 +594,7 @@ mod tests {
                 image: "alpine:3.20".to_owned(),
             },
             workspaces: host,
+            workspace_control: host,
             containers: host,
             control: host,
             images: host,

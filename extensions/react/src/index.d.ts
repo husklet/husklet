@@ -4035,6 +4035,28 @@ export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
+export interface WorkspaceMount { host: string; container: string; read_only: boolean }
+export interface WorkspaceTerminal {
+  font_family: string | null;
+  font_size: number | null;
+  foreground: string | null;
+  background: string | null;
+  cursor_shape: string | null;
+  cursor_blink: boolean | null;
+}
+export interface WorkspaceConfiguration extends WorkspaceInfo {
+  storage: string | null;
+  shell: string | null;
+  cpus: number | null;
+  memory_mb: number | null;
+  environment: [string, string][];
+  mounts: WorkspaceMount[];
+  docker_socket: boolean;
+  scrollback: number | null;
+  vpn: string | null;
+  execution_lifetime: 'persisted' | 'live' | 'ephemeral';
+  terminal: WorkspaceTerminal;
+}
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
 export interface PaneSummary {
@@ -4078,6 +4100,13 @@ export function connect(options?: ConnectOptions): Promise<Session>;
 export interface WorkspaceApi {
   info(): Promise<WorkspaceInfo>;
   list(): Promise<WorkspaceState[]>;
+  inspect(name: string): Promise<WorkspaceConfiguration>;
+  create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  update(name: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  delete(name: string): Promise<void>;
+  start(name: string): Promise<void>;
+  stop(name: string): Promise<void>;
+  restart(name: string): Promise<void>;
   containers: {
     list(): Promise<ContainerSummary[]>;
     inspect(id: string): Promise<ContainerSummary>;
@@ -4108,7 +4137,7 @@ export function workspace(session: Session): WorkspaceApi;
 /** Current protocol coverage. Names under `unavailable` deliberately have no methods. */
 export const protocolCoverage: Readonly<{
   available: Readonly<{
-    workspace: readonly ('info' | 'list')[];
+    workspace: readonly ('info' | 'list' | 'inspect' | 'create' | 'update' | 'delete' | 'start' | 'stop' | 'restart')[];
     containers: readonly ('list' | 'inspect' | 'create' | 'start' | 'stop' | 'remove')[];
     images: readonly ('list' | 'pull')[];
     terminal: readonly ('tabs' | 'openTab' | 'split' | 'spawn' | 'read' | 'close' | 'focus' | 'ratio')[];
@@ -4116,7 +4145,7 @@ export const protocolCoverage: Readonly<{
     interfaceEvents: readonly ('invoke' | 'submit' | 'change' | 'select')[];
   }>;
   unavailable: Readonly<{
-    workspace: readonly ('create' | 'delete' | 'updateConfiguration' | 'start' | 'stop' | 'restart')[];
+    workspace: readonly ('renameWhileUpdating' | 'mutateWhileRunning' | 'controlHostingWorkspace')[];
     containers: readonly ('processes' | 'exec' | 'logs' | 'pause' | 'unpause' | 'restart' | 'kill')[];
     terminal: readonly ('writeInput' | 'resizeGrid' | 'switchOccupant' | 'paneProviders')[];
     events: readonly ('hostSnapshots' | 'keyboard' | 'focus' | 'pointer' | 'drag' | 'drop')[];

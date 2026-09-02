@@ -66,6 +66,8 @@ pub struct Entry {
     pub granted: Grant,
     /// Where the extension stands under the lifecycle policy.
     pub stage: Stage,
+    /// Named views this installed image offers to terminal panes.
+    pub pane_providers: Vec<hl_extension::PaneProvider>,
 }
 
 /// Every extension recorded for one workspace, with its policy loaded.
@@ -115,6 +117,7 @@ impl<S: Storage> Roster<S> {
                 image_digest: record.image_digest.clone(),
                 granted: record.granted.clone(),
                 stage: self.installation.stage(&record.name),
+                pane_providers: record.pane_providers.clone(),
             })
             .collect()
     }
@@ -214,6 +217,7 @@ pub fn described(record: &Record) -> Manifest {
         entrypoint: None,
         activation: hl_extension::Activation::default(),
         interface: None,
+        pane_providers: record.pane_providers.clone(),
         resources: hl_extension::Resources::default(),
         filesystem_roots: Vec::new(),
     }
@@ -249,6 +253,7 @@ mod tests {
             entrypoint: None,
             activation: hl_extension::Activation::default(),
             interface: None,
+            pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
             filesystem_roots: Vec::new(),
         }

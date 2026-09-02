@@ -85,19 +85,56 @@ test('an event returns credit only after delivery', async () => {
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('workspace lifecycle methods use the typed control calls', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const configuration = {
+    name: 'other', image: 'alpine:3.20', architecture: 'arm64', storage: null, shell: null,
+    cpus: null, memory_mb: null, environment: [], mounts: [], docker_socket: true,
+    scrollback: 100000, vpn: null, execution_lifetime: 'persisted', terminal: {
+      font_family: null, font_size: null, foreground: null, background: null,
+      cursor_shape: null, cursor_blink: null,
+    },
+  };
+  const operations = [
+    api.inspect('other'), api.create(configuration), api.update('other', configuration),
+    api.delete('other'), api.start('other'), api.stop('other'), api.restart('other'),
+  ];
+  const calls = [];
+  for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
+  assert.deepEqual(calls.map((call) => call.call), [
+    'workspace_inspect', 'workspace_create', 'workspace_update', 'workspace_delete',
+    'workspace_start', 'workspace_stop', 'workspace_restart',
+  ]);
+  for (let index = 0; index < operations.length; index += 1) {
+    const payload = index < 3
+      ? { reply: 'workspace_configuration', with: configuration }
+      : { reply: 'done' };
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
+  }
+  const results = await Promise.all(operations);
+  assert.deepEqual(results.slice(0, 3), [configuration, configuration, configuration]);
+  assert.deepEqual(results.slice(3), [undefined, undefined, undefined, undefined]);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('coverage names deep-control protocol gaps without exposing fake methods', () => {
-  assert.deepEqual(protocolCoverage.available.workspace, ['info', 'list']);
+  assert.deepEqual(protocolCoverage.available.workspace, [
+    'info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart',
+  ]);
   assert.ok(protocolCoverage.available.containers.includes('create'));
   assert.ok(protocolCoverage.available.containers.includes('remove'));
   assert.ok(protocolCoverage.available.terminal.includes('read'));
   assert.ok(protocolCoverage.available.terminal.includes('split'));
-  assert.ok(protocolCoverage.unavailable.workspace.includes('updateConfiguration'));
+  assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.unavailable.containers.includes('processes'));
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(protocolCoverage.unavailable.events.includes('hostSnapshots'));
   assert.ok(protocolCoverage.unavailable.events.includes('keyboard'));
   const api = workspace({ call() { throw new Error('not called'); } });
-  assert.equal(api.createWorkspace, undefined);
+  assert.equal(api.renameWorkspace, undefined);
   assert.equal(api.containers.processes, undefined);
   assert.equal(api.terminal.writeInput, undefined);
 });

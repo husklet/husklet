@@ -19,7 +19,7 @@ use hl_client::model::{CreateContainer, DockerMount, HostConfig, InspectImage};
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{failure, Bridge};
+use super::{Bridge, failure};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -395,7 +395,7 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
+    use super::{Image, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, SidecarSpec};
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
@@ -408,6 +408,7 @@ mod tests {
             entrypoint: None,
             activation: hl_extension::Activation::default(),
             interface: None,
+            pane_providers: Vec::new(),
             resources,
             filesystem_roots: Vec::new(),
         }

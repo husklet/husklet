@@ -159,6 +159,41 @@ fn a_manifest_cannot_use_a_capability_it_did_not_declare() {
 }
 
 #[test]
+fn pane_providers_are_named_and_require_interface_authority() {
+    let providers = "[[pane_providers]]\nid = \"database\"\ntitle = \"Postgres\"\nicon = \"database-symbolic\"\n";
+    assert_eq!(
+        Manifest::parse(&manifest_document(providers), PROTOCOL),
+        Err(Invalid::Undeclared(Capability::Interface))
+    );
+
+    let document = manifest_document(providers).replace(
+        "capabilities = [\"container-read\"]",
+        "capabilities = [\"container-read\", \"interface\"]",
+    );
+    let manifest = Manifest::parse(&document, PROTOCOL).expect("provider manifest");
+    assert_eq!(manifest.pane_providers[0].id.as_str(), "database");
+    assert_eq!(manifest.pane_providers[0].title, "Postgres");
+    assert_eq!(manifest.pane_providers[0].icon.as_deref(), Some("database-symbolic"));
+}
+
+#[test]
+fn duplicate_or_untitled_pane_providers_are_refused() {
+    let prefix = "[[pane_providers]]\nid = \"database\"\ntitle = \"Postgres\"\n";
+    let duplicate = format!("{prefix}[[pane_providers]]\nid = \"database\"\ntitle = \"Logs\"\n");
+    let document = manifest_document(&duplicate).replace(
+        "capabilities = [\"container-read\"]",
+        "capabilities = [\"container-read\", \"interface\"]",
+    );
+    assert_eq!(Manifest::parse(&document, PROTOCOL), Err(Invalid::PaneProviders));
+
+    let blank = manifest_document("[[pane_providers]]\nid = \"database\"\ntitle = \"  \"\n").replace(
+        "capabilities = [\"container-read\"]",
+        "capabilities = [\"container-read\", \"interface\"]",
+    );
+    assert_eq!(Manifest::parse(&blank, PROTOCOL), Err(Invalid::PaneProviders));
+}
+
+#[test]
 fn a_manifest_path_that_escapes_is_refused_with_the_manifest() {
     let label = format!(
         "{{\"name\":\"x\",\"display_name\":\"X\",\"version\":\"1\",\"protocol\":{PROTOCOL},\

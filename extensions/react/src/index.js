@@ -44,6 +44,13 @@ export function workspace(session) {
   return {
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
+    inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
+    create: async (configuration) => expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
+    update: async (name, configuration) => expect(await session.call('workspace_update', { name, configuration }), 'workspace_configuration'),
+    delete: (name) => done('workspace_delete', { name }),
+    start: (name) => done('workspace_start', { name }),
+    stop: (name) => done('workspace_stop', { name }),
+    restart: (name) => done('workspace_restart', { name }),
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
       inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
@@ -147,7 +154,7 @@ export const vocabulary = {
 /** Honest inventory of the current host contract; gaps are not callable APIs. */
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
-    workspace: ['info', 'list'],
+    workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'create', 'start', 'stop', 'remove'],
     images: ['list', 'pull'],
     terminal: ['tabs', 'openTab', 'split', 'spawn', 'read', 'close', 'focus', 'ratio'],
@@ -155,7 +162,7 @@ export const protocolCoverage = Object.freeze({
     interfaceEvents: ['invoke', 'submit', 'change', 'select'],
   }),
   unavailable: Object.freeze({
-    workspace: ['create', 'delete', 'updateConfiguration', 'start', 'stop', 'restart'],
+    workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: ['processes', 'exec', 'logs', 'pause', 'unpause', 'restart', 'kill'],
     terminal: ['writeInput', 'resizeGrid', 'switchOccupant', 'paneProviders'],
     events: ['hostSnapshots', 'keyboard', 'focus', 'pointer', 'drag', 'drop'],

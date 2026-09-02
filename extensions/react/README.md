@@ -43,16 +43,23 @@ import { connect, workspace } from '@husklet/react';
 
 const session = await connect({ timeout: 10_000, pendingLimit: 32 });
 const host = workspace(session);
+const configuration = await host.inspect('backend');
+await host.stop('backend');
+await host.update('backend', { ...configuration, memory_mb: 4096 });
+await host.start('backend');
 const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);
 ```
 
 `protocolCoverage` is the machine-readable inventory of what this protocol
-version really supports. Its `unavailable` section names planned deep-control
-areas such as workspace configuration, process inspection, host-published
-snapshots, terminal input and keyboard events; those names deliberately are not
-callable methods. `Session.onEvent` is low-level transport plumbing for events
-the host does send, not a promise that global workspace snapshots are published.
+version really supports. Workspace creation, configuration and lifecycle are
+available under the explicit `workspace-control` grant. A running workspace
+must be stopped before it is updated, and an extension cannot stop, restart or
+delete the workspace hosting it. The `unavailable` section names remaining
+areas such as host-published snapshots, terminal input and keyboard events;
+those names deliberately are not callable methods. `Session.onEvent` is
+low-level transport plumbing for events the host does send, not a promise that
+global workspace snapshots are published.
 
 ## Props
 

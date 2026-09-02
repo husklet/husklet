@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hl_extension::port::{
-    Division, HostError, PaneText, TabSummary, TerminalSurface, WorkspaceInventory, WorkspaceState,
+    Division, HostError, PaneText, TabSummary, TerminalSurface, WorkspaceConfiguration, WorkspaceControl,
+    WorkspaceInventory, WorkspaceMount, WorkspaceState, WorkspaceTerminal,
 };
 use hl_extension::{ExtensionName, Record, Services, WorkspaceInfo};
 
@@ -175,6 +176,7 @@ impl Supply for Workspace {
         let services = Services {
             workspace: self.describe(),
             workspaces: &store,
+            workspace_control: &store,
             containers: extensions.containers(),
             control: extensions.control(),
             images: extensions.images(),
@@ -232,6 +234,220 @@ impl WorkspaceInventory for Store {
                 current: workspace.name == self.current,
             })
             .collect())
+    }
+}
+
+impl Store {
+    fn path() -> PathBuf {
+        crate::paths::hl_root().join("workspaces.conf")
+    }
+
+    fn configuration(workspace: &WorkspaceConfig) -> WorkspaceConfiguration {
+        WorkspaceConfiguration {
+            name: workspace.name.clone(),
+            image: workspace.image.clone(),
+            architecture: workspace.arch.as_str().to_owned(),
+            storage: workspace
+                .storage
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            shell: workspace.shell.clone(),
+            cpus: workspace.cpus,
+            memory_mb: workspace.memory_mb,
+            environment: workspace.env.clone(),
+            mounts: workspace
+                .mounts
+                .iter()
+                .map(|mount| WorkspaceMount {
+                    host: mount.host.clone(),
+                    container: mount.container.clone(),
+                    read_only: mount.ro,
+                })
+                .collect(),
+            docker_socket: workspace.docker_sock,
+            scrollback: workspace.scrollback,
+            vpn: workspace.vpn.as_ref().map(crate::config::VpnConfig::to_spec),
+            execution_lifetime: workspace.execution_lifetime.as_str().to_owned(),
+            terminal: WorkspaceTerminal {
+                font_family: workspace.terminal.font_family.clone(),
+                font_size: workspace.terminal.font_size,
+                foreground: workspace.terminal.foreground.clone(),
+                background: workspace.terminal.background.clone(),
+                cursor_shape: workspace.terminal.cursor_shape.clone(),
+                cursor_blink: workspace.terminal.cursor_blink,
+            },
+        }
+    }
+
+    fn configured(value: &WorkspaceConfiguration) -> Result<WorkspaceConfig, HostError> {
+        if value.name.trim().is_empty() || value.image.trim().is_empty() {
+            return Err(HostError::Conflict("workspace name and image must not be empty".into()));
+        }
+        let arch = hl_ws::Arch::parse(&value.architecture)
+            .ok_or_else(|| HostError::Conflict(format!("unsupported architecture {}", value.architecture)))?;
+        let mut workspace = WorkspaceConfig::new(&value.name, &value.image, arch);
+        workspace.storage = value.storage.as_ref().map(PathBuf::from);
+        workspace.shell.clone_from(&value.shell);
+        workspace.cpus = value.cpus;
+        workspace.memory_mb = value.memory_mb;
+        workspace.env.clone_from(&value.environment);
+        workspace.mounts = value
+            .mounts
+            .iter()
+            .map(|mount| hl_ws::Mount {
+                host: mount.host.clone(),
+                container: mount.container.clone(),
+                ro: mount.read_only,
+            })
+            .collect();
+        workspace.docker_sock = value.docker_socket;
+        workspace.scrollback = value.scrollback;
+        workspace.vpn = value.vpn.as_deref().and_then(crate::config::VpnConfig::parse);
+        if value.vpn.is_some() && workspace.vpn.is_none() {
+            return Err(HostError::Conflict("invalid VPN configuration".into()));
+        }
+        workspace.execution_lifetime = crate::config::ExecutionLifetime::parse(&value.execution_lifetime)
+            .ok_or_else(|| HostError::Conflict("invalid execution lifetime".into()))?;
+        workspace.terminal.font_family.clone_from(&value.terminal.font_family);
+        workspace.terminal.font_size = value.terminal.font_size;
+        workspace.terminal.foreground.clone_from(&value.terminal.foreground);
+        workspace.terminal.background.clone_from(&value.terminal.background);
+        workspace.terminal.cursor_shape.clone_from(&value.terminal.cursor_shape);
+        workspace.terminal.cursor_blink = value.terminal.cursor_blink;
+        Ok(workspace)
+    }
+
+    fn find(&self, name: &str) -> Result<WorkspaceConfig, HostError> {
+        crate::config::WorkspaceStore::load(Self::path())
+            .map_err(|error| HostError::Failed(error.to_string()))?
+            .get(name)
+            .cloned()
+            .ok_or_else(|| HostError::Absent(format!("workspace {name}")))
+    }
+
+    fn mutable(&self, name: &str) -> Result<WorkspaceConfig, HostError> {
+        if name == self.current {
+            return Err(HostError::Conflict(
+                "an extension cannot stop or delete the workspace hosting it".into(),
+            ));
+        }
+        self.find(name)
+    }
+}
+
+impl WorkspaceControl for Store {
+    fn inspect(&self, name: &str) -> Result<WorkspaceConfiguration, HostError> {
+        self.find(name).map(|workspace| Self::configuration(&workspace))
+    }
+
+    fn create(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        let workspace = Self::configured(configuration)?;
+        let mut store =
+            crate::config::WorkspaceStore::load(Self::path()).map_err(|error| HostError::Failed(error.to_string()))?;
+        if store.get(&workspace.name).is_some() {
+            return Err(HostError::Conflict(format!(
+                "workspace {} already exists",
+                workspace.name
+            )));
+        }
+        store
+            .upsert(workspace.clone())
+            .map_err(|error| HostError::Failed(error.to_string()))?;
+        Ok(Self::configuration(&workspace))
+    }
+
+    fn update(&self, name: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        let old = self.find(name)?;
+        if configuration.name != name {
+            return Err(HostError::Conflict("renaming a workspace is not supported".into()));
+        }
+        if Self::running(&old) {
+            return Err(HostError::Conflict(
+                "stop the workspace before changing its configuration".into(),
+            ));
+        }
+        let workspace = Self::configured(configuration)?;
+        crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| store.upsert(workspace.clone()))
+            .map_err(|error| HostError::Failed(error.to_string()))?;
+        Ok(Self::configuration(&workspace))
+    }
+
+    fn delete(&self, name: &str) -> Result<(), HostError> {
+        let workspace = self.mutable(name)?;
+        crate::runtime::domain::Domain::new(&workspace)
+            .close(crate::runtime::domain::Close::Kill)
+            .map_err(|error| HostError::Failed(error.to_string()))?;
+        let removed = crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| store.remove(name))
+            .map_err(|error| HostError::Failed(error.to_string()))?;
+        if removed {
+            Ok(())
+        } else {
+            Err(HostError::Absent(format!("workspace {name}")))
+        }
+    }
+
+    fn start(&self, name: &str) -> Result<(), HostError> {
+        let workspace = self.find(name)?;
+        crate::runtime::domain::Domain::new(&workspace)
+            .ensure(&workspace)
+            .map(|_| ())
+            .map_err(|error| HostError::Failed(error.to_string()))
+    }
+
+    fn stop(&self, name: &str) -> Result<(), HostError> {
+        let workspace = self.mutable(name)?;
+        crate::runtime::domain::Domain::new(&workspace)
+            .close(crate::runtime::domain::Close::Kill)
+            .map_err(|error| HostError::Failed(error.to_string()))
+    }
+
+    fn restart(&self, name: &str) -> Result<(), HostError> {
+        self.stop(name)?;
+        self.start(name)
+    }
+}
+
+#[cfg(test)]
+mod workspace_control_tests {
+    use super::Store;
+
+    #[test]
+    fn extension_configuration_round_trips_every_persisted_core_field() {
+        let mut workspace = crate::config::WorkspaceConfig::new("other", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some("/var/tmp/other".into());
+        workspace.shell = Some("/bin/bash -l".into());
+        workspace.cpus = Some(4);
+        workspace.memory_mb = Some(4096);
+        workspace.env = vec![("MODE".into(), "dev".into())];
+        workspace.mounts = vec![hl_ws::Mount {
+            host: "/source".into(),
+            container: "/workspace".into(),
+            ro: true,
+        }];
+        workspace.docker_sock = false;
+        workspace.scrollback = None;
+        workspace.vpn = Some(crate::config::VpnConfig::socks5("127.0.0.1:1080"));
+        workspace.execution_lifetime = crate::config::ExecutionLifetime::Live;
+        workspace.terminal.font_family = Some("Mono".into());
+        workspace.terminal.font_size = Some(13);
+        workspace.terminal.cursor_blink = Some(false);
+
+        let carried = Store::configuration(&workspace);
+        let restored = Store::configured(&carried).expect("valid configuration");
+        assert_eq!(restored, workspace);
+    }
+
+    #[test]
+    fn malformed_architecture_and_vpn_are_rejected_before_persistence() {
+        let workspace = crate::config::WorkspaceConfig::new("other", "alpine", hl_ws::Arch::Arm64);
+        let mut carried = Store::configuration(&workspace);
+        carried.architecture = "mips".into();
+        assert!(Store::configured(&carried).is_err());
+        carried.architecture = "arm64".into();
+        carried.vpn = Some("not a proxy".into());
+        assert!(Store::configured(&carried).is_err());
     }
 }
 

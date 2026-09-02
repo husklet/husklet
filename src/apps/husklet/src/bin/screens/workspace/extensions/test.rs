@@ -48,6 +48,9 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
+        panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
+        panes::an_existing_pane_chooser_discovers_a_later_provider();
+        panes::a_failed_pane_swap_preserves_the_terminal_and_provider_home();
         panes::splitting_an_interface_again_moves_its_one_surface();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
         panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
@@ -142,6 +145,7 @@ fn manifest(name: &str) -> Manifest {
         entrypoint: None,
         activation: hl_extension::Activation::default(),
         interface: None,
+        pane_providers: Vec::new(),
         resources: hl_extension::Resources::default(),
         filesystem_roots: Vec::new(),
     }
@@ -411,6 +415,7 @@ impl hl::extension::Supply for Bench {
             granted: manifest.capabilities.clone(),
             enabled: true,
             installed_at: 1,
+            pane_providers: manifest.pane_providers.clone(),
         };
         let image = hl::extension::Image {
             reference: "extension:1".to_owned(),
@@ -665,6 +670,8 @@ mod ports {
         }
     }
 
+    impl hl_extension::port::WorkspaceControl for Ports {}
+
     impl WorkspaceFiles for Ports {
         fn list(&self, _path: &RelativePath) -> Result<Vec<Entry>, HostError> {
             Ok(Vec::new())
@@ -689,6 +696,7 @@ mod ports {
                 image: "alpine:3.20".to_owned(),
             },
             workspaces: &PORTS,
+            workspace_control: &PORTS,
             containers: &PORTS,
             control: &PORTS,
             images: &PORTS,
@@ -705,16 +713,18 @@ mod ports {
 /// every one of them is about the widget tree and the pane registries rather
 /// than about a presented window or a running workspace.
 mod panes {
+    use std::cell::RefCell;
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
     use hl_extension::port::{Division, HostError, Occupant};
+    use hl_extension::ExtensionName;
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin, Window,
-        WindowSession, ABSENCE,
+        Adjustment, PaneChooser, PaneSplit, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin,
+        Window, WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::Gallery;
@@ -876,7 +886,7 @@ mod panes {
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         interface.add_css_class(super::SURFACE);
         home.append(&interface);
-        gallery.enrol("sample", &interface, &home);
+        gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
         Window::exhibit(&bench.window, gallery.clone());
 
         let slot = Window::slot(&bench.window);
@@ -912,6 +922,134 @@ mod panes {
         drop(first);
     }
 
+    pub(super) fn a_pane_chooser_switches_to_a_provider_and_back_to_its_shell() {
+        let bench = Bench::new();
+        let (terminal, slot) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        let selected = Rc::new(RefCell::new(None));
+        let selection = Rc::clone(&selected);
+        gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: None,
+            }],
+            Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
+        );
+        Window::exhibit(&bench.window, gallery.clone());
+
+        assert_eq!(gallery.providers()[0].title, "Postgres");
+        PaneChooser::provider(&bench.window, "postgres", "database");
+        assert_eq!(
+            Panes::at(&bench.window, &slot).expect("switched pane").occupant,
+            Occupant::Surface
+        );
+        assert!(
+            gallery.holds("postgres"),
+            "the overview remains registered while its interface is borrowed"
+        );
+        assert_eq!(
+            selected
+                .borrow()
+                .as_ref()
+                .map(|selection| selection.pane_provider.as_str()),
+            Some("database"),
+            "the extension is told which named view it should render"
+        );
+
+        PaneChooser::terminal(&bench.window);
+        let restored = Panes::at(&bench.window, &slot).expect("restored pane");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert_eq!(restored.widget, terminal.upcast::<gtk::Widget>());
+        assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+    }
+
+    pub(super) fn an_existing_pane_chooser_discovers_a_later_provider() {
+        let bench = Bench::new();
+        let chooser = PaneChooser::button(&bench.window);
+        let labels = || {
+            chooser
+                .popover()
+                .into_iter()
+                .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+                .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+                .filter_map(|button| button.label())
+                .map(|label| label.to_string())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(labels(), ["Terminal"], "the chooser exists before providers do");
+
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
+        Window::exhibit(&bench.window, gallery);
+        PaneChooser::populate(&bench.window, &chooser);
+        assert_eq!(
+            labels(),
+            ["Terminal", "Postgres"],
+            "an old tab reads the live catalogue"
+        );
+    }
+
+    pub(super) fn a_failed_pane_swap_preserves_the_terminal_and_provider_home() {
+        let bench = Bench::new();
+        let (terminal, slot) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: None,
+            }],
+            Rc::new(|_| panic!("a failed swap cannot select the provider")),
+        );
+        Window::exhibit(&bench.window, gallery);
+
+        // A Grid is deliberately not a terminal-layout parent. The pane stays
+        // discoverable, but replacement must refuse it without borrowing the
+        // provider interface or recording a displaced shell.
+        let old_parent = terminal.parent().expect("shell parent");
+        old_parent
+            .downcast_ref::<gtk::Box>()
+            .expect("bench page")
+            .remove(&terminal);
+        let grid = gtk::Grid::new();
+        grid.attach(&terminal, 0, 0, 1, 1);
+        old_parent.downcast_ref::<gtk::Box>().expect("bench page").append(&grid);
+
+        PaneChooser::provider(&bench.window, "postgres", "database");
+        assert_eq!(
+            Panes::at(&bench.window, &slot).expect("same pane").widget,
+            terminal.upcast::<gtk::Widget>()
+        );
+        assert_eq!(Window::displaced(&bench.window), 0);
+        assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+    }
+
     pub(super) fn splitting_an_interface_again_moves_its_one_surface() {
         let bench = Bench::new();
         let (first, one) = bench.shell();
@@ -921,7 +1059,7 @@ mod panes {
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         interface.add_css_class(super::SURFACE);
         home.append(&interface);
-        gallery.enrol("sample", &interface, &home);
+        gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
         Window::exhibit(&bench.window, gallery);
 
         let old = Console::surface(&bench.window, Some("sample"), &one, Division::Below).expect("the first surface");
@@ -955,7 +1093,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol("sample", &interface, &home);
+        gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
         Window::exhibit(&bench.window, gallery);
         let old = Console::surface(&bench.window, Some("sample"), &one, Division::Beside).expect("the first surface");
         let before = interface.parent();

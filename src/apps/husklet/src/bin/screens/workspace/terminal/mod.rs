@@ -19,6 +19,7 @@ pub(crate) struct TermWin {
     /// a registry of one thing that is sometimes another is a registry nobody
     /// can read.
     pub(crate) surfaces: RefCell<Vec<SurfaceRegistration>>,
+    pub(crate) displaced: RefCell<HashMap<String, vte4::Terminal>>,
     /// Where an extension's interface widget is found, so a pane can hold the
     /// one that already exists rather than starting a second of it.
     gallery: RefCell<Option<screens::workspace::extensions::Gallery>>,
@@ -295,6 +296,12 @@ impl Window {
         window.gallery.borrow().clone()
     }
 
+    /// Number of live shells retained behind provider surfaces.
+    #[cfg(test)]
+    pub(crate) fn displaced(window: &Rc<TermWin>) -> usize {
+        window.displaced.borrow().len()
+    }
+
     /// A window with no application behind it, for scenarios about panes.
     ///
     /// Every pane operation is about the widget tree and the two registries,
@@ -323,6 +330,7 @@ impl Window {
             slot_ctr: Cell::new(0),
             panes: RefCell::new(Vec::new()),
             surfaces: RefCell::new(Vec::new()),
+            displaced: RefCell::new(HashMap::new()),
             gallery: RefCell::new(None),
             search: Search::new(),
             copymode: CopyMode::new(),
@@ -395,6 +403,7 @@ impl Window {
             slot_ctr: Cell::new(0),
             panes: RefCell::new(Vec::new()),
             surfaces: RefCell::new(Vec::new()),
+            displaced: RefCell::new(HashMap::new()),
             gallery: RefCell::new(None),
             search,
             zoom: Zoom::new(),

@@ -7,7 +7,10 @@
 use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
-use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, PaneText, TabSummary, WorkspaceState};
+use crate::port::{
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageSummary, PaneText,
+    ProcessList, TabSummary, WorkspaceConfiguration, WorkspaceState,
+};
 
 /// A call from an extension.
 ///
@@ -22,31 +25,134 @@ use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, Pa
 pub enum Request {
     WorkspaceInfo,
     WorkspaceList,
+    WorkspaceInspect {
+        name: String,
+    },
+    WorkspaceCreate {
+        configuration: WorkspaceConfiguration,
+    },
+    WorkspaceUpdate {
+        name: String,
+        configuration: WorkspaceConfiguration,
+    },
+    WorkspaceDelete {
+        name: String,
+    },
+    WorkspaceStart {
+        name: String,
+    },
+    WorkspaceStop {
+        name: String,
+    },
+    WorkspaceRestart {
+        name: String,
+    },
     ContainerList,
-    ContainerInspect { id: String },
-    ContainerCreate { image: String, name: String },
-    ContainerStart { id: String },
-    ContainerStop { id: String },
-    ContainerRemove { id: String },
+    ContainerInspect {
+        id: String,
+    },
+    ContainerProcesses {
+        id: String,
+    },
+    ContainerLogs {
+        id: String,
+        stdout: bool,
+        stderr: bool,
+    },
+    ExecutionInspect {
+        id: String,
+    },
+    ContainerCreate {
+        image: String,
+        name: String,
+    },
+    ContainerStart {
+        id: String,
+    },
+    ContainerStop {
+        id: String,
+    },
+    ContainerRemove {
+        id: String,
+    },
+    ContainerPause {
+        id: String,
+    },
+    ContainerUnpause {
+        id: String,
+    },
+    ContainerRestart {
+        id: String,
+    },
+    ContainerKill {
+        id: String,
+        signal: String,
+    },
+    ContainerExec {
+        id: String,
+        command: Vec<String>,
+        user: Option<String>,
+        working_directory: Option<String>,
+    },
     ImageList,
-    ImagePull { reference: String },
+    ImagePull {
+        reference: String,
+    },
     TerminalTabs,
-    TerminalOpenTab { title: String },
-    TerminalSplit { slot: String, division: Division },
-    TerminalSpawn { slot: String, command: Vec<String> },
-    TerminalReadPane { slot: String, lines: Option<usize> },
-    TerminalClosePane { slot: String },
-    TerminalFocusPane { slot: String },
-    TerminalRatio { slot: String, ratio: f64 },
-    FilesystemList { path: RelativePath },
-    FilesystemRead { path: RelativePath },
-    FilesystemWrite { path: RelativePath, contents: Vec<u8> },
-    InterfaceOpenTab { title: String },
-    InterfaceSplit { slot: String, division: Division },
-    InterfaceRender { frame: hl_gui::Frame },
-    SourceResize { mutation: hl_gui::SourceMutation },
-    EventSubscribe { topic: Topic },
-    EventUnsubscribe { topic: Topic },
+    TerminalOpenTab {
+        title: String,
+    },
+    TerminalSplit {
+        slot: String,
+        division: Division,
+    },
+    TerminalSpawn {
+        slot: String,
+        command: Vec<String>,
+    },
+    TerminalReadPane {
+        slot: String,
+        lines: Option<usize>,
+    },
+    TerminalClosePane {
+        slot: String,
+    },
+    TerminalFocusPane {
+        slot: String,
+    },
+    TerminalRatio {
+        slot: String,
+        ratio: f64,
+    },
+    FilesystemList {
+        path: RelativePath,
+    },
+    FilesystemRead {
+        path: RelativePath,
+    },
+    FilesystemWrite {
+        path: RelativePath,
+        contents: Vec<u8>,
+    },
+    InterfaceOpenTab {
+        title: String,
+    },
+    InterfaceSplit {
+        slot: String,
+        division: Division,
+    },
+    InterfaceRender {
+        frame: hl_gui::Frame,
+    },
+    SourceResize {
+        mutation: hl_gui::SourceMutation,
+    },
+    EventSubscribe {
+        topic: Topic,
+    },
+    EventUnsubscribe {
+        topic: Topic,
+    },
 }
 
 impl Request {
@@ -55,12 +161,27 @@ impl Request {
     #[must_use]
     pub const fn capability(&self) -> Capability {
         match self {
-            Self::WorkspaceInfo | Self::WorkspaceList => Capability::WorkspaceRead,
-            Self::ContainerList | Self::ContainerInspect { .. } => Capability::ContainerRead,
+            Self::WorkspaceInfo | Self::WorkspaceList | Self::WorkspaceInspect { .. } => Capability::WorkspaceRead,
+            Self::WorkspaceCreate { .. }
+            | Self::WorkspaceUpdate { .. }
+            | Self::WorkspaceDelete { .. }
+            | Self::WorkspaceStart { .. }
+            | Self::WorkspaceStop { .. }
+            | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
+            Self::ContainerList
+            | Self::ContainerInspect { .. }
+            | Self::ContainerProcesses { .. }
+            | Self::ContainerLogs { .. }
+            | Self::ExecutionInspect { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
             | Self::ContainerStop { .. }
-            | Self::ContainerRemove { .. } => Capability::ContainerControl,
+            | Self::ContainerRemove { .. }
+            | Self::ContainerPause { .. }
+            | Self::ContainerUnpause { .. }
+            | Self::ContainerRestart { .. }
+            | Self::ContainerKill { .. }
+            | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList => Capability::ImageRead,
             Self::ImagePull { .. } => Capability::ImageWrite,
             Self::TerminalTabs => Capability::TerminalRead,
@@ -156,9 +277,13 @@ pub struct WorkspaceInfo {
 #[serde(tag = "reply", content = "with", rename_all = "snake_case")]
 pub enum Reply {
     Workspace(WorkspaceInfo),
+    WorkspaceConfiguration(WorkspaceConfiguration),
     Workspaces(Vec<WorkspaceState>),
     Containers(Vec<ContainerSummary>),
     Container(ContainerSummary),
+    Processes(ProcessList),
+    Logs(ContainerOutput),
+    Execution(ExecutionSummary),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
     Tabs(Vec<TabSummary>),
@@ -190,6 +315,7 @@ impl From<HostError> for Failure {
             HostError::Absent(detail) => Self::Absent { detail },
             HostError::Conflict(detail) => Self::Conflict { detail },
             HostError::Failed(detail) => Self::Failed { detail },
+            HostError::Unsupported(call) => Self::Unsupported { call },
         }
     }
 }
@@ -256,6 +382,10 @@ mod tests {
             Capability::Interface
         );
         assert_eq!(Request::WorkspaceList.capability(), Capability::WorkspaceRead);
+        assert_eq!(
+            Request::WorkspaceDelete { name: "other".into() }.capability(),
+            Capability::WorkspaceControl
+        );
     }
 
     #[test]

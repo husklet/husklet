@@ -8,12 +8,13 @@
 use std::cell::RefCell;
 
 use hl_extension::port::{
-    ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
-    Occupant, PaneSummary, PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
+    HostError, ImageStore, ImageSummary, Occupant, PaneSummary, PaneText, ProcessList, TabSummary, TerminalSurface,
+    WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
-    WorkspaceInfo,
+    WorkspaceConfiguration, WorkspaceInfo, WorkspaceTerminal,
 };
 
 /// Records what was actually reached, so a refusal that still touched a service
@@ -68,6 +69,36 @@ impl ContainerInventory for Host {
         }
         Err(HostError::Absent(id.into()))
     }
+
+    fn processes(&self, _id: &str) -> Result<ProcessList, HostError> {
+        self.ledger.note("containers.processes");
+        Ok(ProcessList {
+            titles: vec!["PID".into(), "CMD".into()],
+            processes: vec![vec!["7".into(), "server".into()]],
+        })
+    }
+
+    fn logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
+        self.ledger.note("containers.logs");
+        Ok(ContainerOutput {
+            stdout: b"ready\n".to_vec(),
+            stderr: Vec::new(),
+            truncated: false,
+        })
+    }
+
+    fn execution(&self, id: &str) -> Result<ExecutionSummary, HostError> {
+        self.ledger.note("executions.inspect");
+        Ok(ExecutionSummary {
+            id: id.into(),
+            container_id: "c1".into(),
+            running: true,
+            exit_code: 0,
+            pid: 8,
+            command: vec!["worker".into()],
+            user: "root".into(),
+        })
+    }
 }
 
 impl ContainerControl for Host {
@@ -89,6 +120,37 @@ impl ContainerControl for Host {
     fn remove(&self, _id: &str) -> Result<(), HostError> {
         self.ledger.note("containers.remove");
         Ok(())
+    }
+
+    fn pause(&self, _id: &str) -> Result<(), HostError> {
+        self.ledger.note("containers.pause");
+        Ok(())
+    }
+
+    fn unpause(&self, _id: &str) -> Result<(), HostError> {
+        self.ledger.note("containers.unpause");
+        Ok(())
+    }
+
+    fn restart(&self, _id: &str) -> Result<(), HostError> {
+        self.ledger.note("containers.restart");
+        Ok(())
+    }
+
+    fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+        self.ledger.note("containers.kill");
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _id: &str,
+        _command: &[String],
+        _user: Option<&str>,
+        _working_directory: Option<&str>,
+    ) -> Result<String, HostError> {
+        self.ledger.note("containers.exec");
+        Ok("e1".into())
     }
 }
 
@@ -175,6 +237,37 @@ impl WorkspaceInventory for Host {
     }
 }
 
+impl hl_extension::port::WorkspaceControl for Host {
+    fn inspect(&self, _name: &str) -> Result<WorkspaceConfiguration, HostError> {
+        self.ledger.note("workspace.inspect");
+        Ok(workspace_configuration())
+    }
+    fn create(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        self.ledger.note("workspace.create");
+        Ok(configuration.clone())
+    }
+    fn update(&self, _name: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+        self.ledger.note("workspace.update");
+        Ok(configuration.clone())
+    }
+    fn delete(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("workspace.delete");
+        Ok(())
+    }
+    fn start(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("workspace.start");
+        Ok(())
+    }
+    fn stop(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("workspace.stop");
+        Ok(())
+    }
+    fn restart(&self, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("workspace.restart");
+        Ok(())
+    }
+}
+
 impl WorkspaceFiles for Host {
     fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError> {
         self.ledger.note("files.list");
@@ -204,6 +297,7 @@ fn services(host: &Host) -> Services<'_> {
             image: "alpine:3.20".into(),
         },
         workspaces: host,
+        workspace_control: host,
         containers: host,
         control: host,
         images: host,
@@ -227,12 +321,78 @@ fn path(value: &str) -> RelativePath {
     RelativePath::new(value).expect("path")
 }
 
+fn workspace_configuration() -> WorkspaceConfiguration {
+    WorkspaceConfiguration {
+        name: "other".into(),
+        image: "alpine:3.20".into(),
+        architecture: "arm64".into(),
+        storage: None,
+        shell: None,
+        cpus: None,
+        memory_mb: None,
+        environment: Vec::new(),
+        mounts: Vec::new(),
+        docker_socket: true,
+        scrollback: Some(100_000),
+        vpn: None,
+        execution_lifetime: "persisted".into(),
+        terminal: WorkspaceTerminal::default(),
+    }
+}
+
 /// Every call, paired with the capability that must permit it.
 fn calls() -> Vec<(Request, Capability)> {
     vec![
         (Request::WorkspaceInfo, Capability::WorkspaceRead),
+        (Request::WorkspaceList, Capability::WorkspaceRead),
+        (
+            Request::WorkspaceInspect { name: "other".into() },
+            Capability::WorkspaceRead,
+        ),
+        (
+            Request::WorkspaceCreate {
+                configuration: workspace_configuration(),
+            },
+            Capability::WorkspaceControl,
+        ),
+        (
+            Request::WorkspaceUpdate {
+                name: "other".into(),
+                configuration: workspace_configuration(),
+            },
+            Capability::WorkspaceControl,
+        ),
+        (
+            Request::WorkspaceDelete { name: "other".into() },
+            Capability::WorkspaceControl,
+        ),
+        (
+            Request::WorkspaceStart { name: "other".into() },
+            Capability::WorkspaceControl,
+        ),
+        (
+            Request::WorkspaceStop { name: "other".into() },
+            Capability::WorkspaceControl,
+        ),
+        (
+            Request::WorkspaceRestart { name: "other".into() },
+            Capability::WorkspaceControl,
+        ),
         (Request::ContainerList, Capability::ContainerRead),
         (Request::ContainerInspect { id: "c1".into() }, Capability::ContainerRead),
+        (
+            Request::ContainerProcesses { id: "c1".into() },
+            Capability::ContainerRead,
+        ),
+        (
+            Request::ContainerLogs {
+                id: "c1".into(),
+                stdout: true,
+                stderr: true,
+            },
+            Capability::ContainerRead,
+        ),
+        (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
         (
             Request::ContainerCreate {
                 image: "alpine".into(),
@@ -247,6 +407,34 @@ fn calls() -> Vec<(Request, Capability)> {
         (Request::ContainerStop { id: "c1".into() }, Capability::ContainerControl),
         (
             Request::ContainerRemove { id: "c1".into() },
+            Capability::ContainerControl,
+        ),
+        (
+            Request::ContainerPause { id: "c1".into() },
+            Capability::ContainerControl,
+        ),
+        (
+            Request::ContainerUnpause { id: "c1".into() },
+            Capability::ContainerControl,
+        ),
+        (
+            Request::ContainerRestart { id: "c1".into() },
+            Capability::ContainerControl,
+        ),
+        (
+            Request::ContainerKill {
+                id: "c1".into(),
+                signal: "SIGTERM".into(),
+            },
+            Capability::ContainerControl,
+        ),
+        (
+            Request::ContainerExec {
+                id: "c1".into(),
+                command: vec!["worker".into()],
+                user: None,
+                working_directory: None,
+            },
             Capability::ContainerControl,
         ),
         (Request::ImageList, Capability::ImageRead),
@@ -385,7 +573,74 @@ fn holding_read_never_permits_the_matching_write() {
     assert!(session
         .dispatch(&Request::ContainerStop { id: "c1".into() }, &services(&host))
         .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ContainerKill {
+                id: "c1".into(),
+                signal: "SIGKILL".into(),
+            },
+            &services(&host),
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ContainerExec {
+                id: "c1".into(),
+                command: vec!["sh".into()],
+                user: None,
+                working_directory: None,
+            },
+            &services(&host),
+        )
+        .is_err());
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+
+    let processes = session
+        .dispatch(&Request::ContainerProcesses { id: "c1".into() }, &services(&host))
+        .expect("process table");
+    assert!(matches!(processes, Reply::Processes(table) if table.titles == ["PID", "CMD"]));
+
+    let logs = session
+        .dispatch(
+            &Request::ContainerLogs {
+                id: "c1".into(),
+                stdout: true,
+                stderr: false,
+            },
+            &services(&host),
+        )
+        .expect("logs");
+    assert!(matches!(logs, Reply::Logs(output) if output.stdout == b"ready\n" && !output.truncated));
+
+    let execution = session
+        .dispatch(&Request::ExecutionInspect { id: "e1".into() }, &services(&host))
+        .expect("execution");
+    assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
+}
+
+#[test]
+fn container_exec_returns_the_real_execution_identity() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    let reply = session
+        .dispatch(
+            &Request::ContainerExec {
+                id: "c1".into(),
+                command: vec!["worker".into()],
+                user: Some("1000".into()),
+                working_directory: Some("/work".into()),
+            },
+            &services(&host),
+        )
+        .expect("exec starts");
+    assert_eq!(reply, Reply::Identity("e1".into()));
+    assert_eq!(host.ledger.reached(), vec!["containers.exec"]);
 }
 
 #[test]
