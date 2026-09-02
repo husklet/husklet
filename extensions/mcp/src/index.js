@@ -18,6 +18,10 @@ const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'work
 const extensionGrant = z.array(extensionCapability).max(24);
 const acquisitionRevision = z.number().int().nonnegative().safe();
 const path = z.string().min(1).max(4096);
+const fileContents = z.string().max(64 * 1024).refine(
+  (value) => new TextEncoder().encode(value).byteLength <= 64 * 1024,
+  'file contents exceed 65536 UTF-8 bytes',
+);
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
 const imagePullJob = z.string().min(1).max(20).regex(/^[1-9][0-9]*$/, 'image pull job must be a positive decimal identity');
@@ -184,7 +188,7 @@ export function tools(api) {
     define('husklet_file_list', 'List a workspace-relative directory.', z.object({ path }).strict(), ({ path: value }) => api.files.list(value)),
     define('husklet_file_stat', 'Read bounded metadata for one workspace-relative path without reading contents.', z.object({ path }).strict(), ({ path: value }) => api.files.stat(value)),
     define('husklet_file_read', 'Read one bounded workspace-relative file.', z.object({ path }).strict(), ({ path: value }) => api.files.read(value)),
-    define('husklet_file_write', 'Write bounded UTF-8 contents to a workspace-relative file.', z.object({ path, contents: z.string().max(64 * 1024) }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
+    define('husklet_file_write', 'Write at most 65536 UTF-8 bytes to a workspace-relative file.', z.object({ path, contents: fileContents }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
     define('husklet_file_mkdir', 'Create one workspace-relative directory.', z.object({ path }).strict(), async ({ path: value }) => { await api.files.mkdir(value); return { done: true }; }),
     define('husklet_file_rename', 'Rename one workspace-relative entry without overwriting.', z.object({ from: path, to: path }).strict(), async ({ from, to }) => { await api.files.rename(from, to); return { done: true }; }),
     define('husklet_file_remove', 'Remove one file or empty directory after explicit confirmation.', z.object({ path, confirm: z.literal(true) }).strict(), async ({ path: value }) => { await api.files.remove(value); return { done: true }; }),

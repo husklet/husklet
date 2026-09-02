@@ -223,6 +223,8 @@ test('filesystem controls are strict and removal requires explicit confirmation'
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt' }).success, false);
   assert.equal(byName('husklet_file_rename').inputSchema.safeParse({ from: 'a', to: 'b', extra: true }).success, false);
+  assert.equal(byName('husklet_file_write').inputSchema.safeParse({ path: 'full.txt', contents: 'é'.repeat(32_768) }).success, true);
+  assert.equal(byName('husklet_file_write').inputSchema.safeParse({ path: 'large.txt', contents: '😀'.repeat(16_385) }).success, false);
   await byName('husklet_file_stat').run({ path: 'logs/app.log' });
   await byName('husklet_file_mkdir').run({ path: 'logs/new' });
   await byName('husklet_file_rename').run({ from: 'logs/a', to: 'logs/b' });

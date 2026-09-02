@@ -107,6 +107,23 @@ test('admin workflow confines files to socket workspace and cleans success and f
     'filesystem_read', 'filesystem_remove', 'filesystem_remove', 'event_subscribe', 'workspace_stop',
     'event_unsubscribe', 'event_subscribe', 'workspace_delete', 'event_unsubscribe',
   ]);
+
+  const exactContents = 'é'.repeat(32_768);
+  const exactStart = calls.length;
+  const exact = await client.callTool({ name: 'husklet_file_write', arguments: { path: 'exact.txt', contents: exactContents } });
+  assert.notEqual(exact.isError, true);
+  assert.deepEqual(calls.slice(exactStart), [{
+    call: 'filesystem_write',
+    with: { path: 'exact.txt', contents: [...new TextEncoder().encode(exactContents)] },
+  }]);
+
+  const oversizedStart = calls.length;
+  const oversized = await client.callTool({
+    name: 'husklet_file_write',
+    arguments: { path: 'oversized.txt', contents: '😀'.repeat(16_385) },
+  });
+  assert.equal(oversized.isError, true);
+  assert.equal(calls.length, oversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 
