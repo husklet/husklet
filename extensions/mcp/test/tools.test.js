@@ -627,18 +627,42 @@ test('pane wait returns only bounded invalidation metadata and releases its subs
   let disposed = 0;
   api.watchPaneChanges = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_pane_wait');
-  const pending = wait.run({ slot: 'pane-2', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ slot: 'pane-2', after_generation: 2, timeout_ms: 10 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ after_generation: 2, after_revision: 8, timeout_ms: 10 }).success, false);
+  const pending = wait.run({ slot: 'pane-2', after_generation: 2, after_revision: 8, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
   listener({ slot: 'pane-1', kind: 'terminal', revision: 0, generation: 1, coalesced: 0 });
   listener({ slot: 'pane-2', kind: 'native', revision: 8, generation: 2, coalesced: 6 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the initial scan at the observed cursor must not settle the wait');
+  listener({ slot: 'pane-2', kind: 'native', revision: 0, generation: 3, coalesced: 0 });
   const answer = await pending;
   assert.deepEqual(JSON.parse(answer.content[0].text), {
     changed: true,
-    change: { slot: 'pane-2', kind: 'native', revision: 8, generation: 2, coalesced: 6 },
+    change: { slot: 'pane-2', kind: 'native', revision: 0, generation: 3, coalesced: 0 },
   });
   assert.equal(disposed, 1);
   assert(!answer.content[0].text.includes('lines'));
   assert(!answer.content[0].text.includes('value'));
+});
+
+test('concurrent pane waits advance independently from exact generation and revision cursors', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchPaneChanges = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_pane_wait');
+  const first = wait.run({ slot: 'pane-2', after_generation: 2, after_revision: 7, timeout_ms: 1000 });
+  const second = wait.run({ slot: 'pane-2', after_generation: 2, after_revision: 8, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener({ slot: 'pane-2', kind: 'native', generation: 2, revision: 8, coalesced: 0 });
+  assert.equal(JSON.parse((await first).content[0].text).change.revision, 8);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener({ slot: 'pane-2', kind: 'native', generation: 2, revision: 9, coalesced: 0 });
+  assert.equal(JSON.parse((await second).content[0].text).change.revision, 9);
+  assert.equal(disposed, 2);
+  assert.equal(listeners.size, 0);
 });
 
 test('workspace event wait filters one bounded batch and always disposes', async () => {

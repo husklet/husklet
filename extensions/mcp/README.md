@@ -105,6 +105,11 @@ only a strictly newer revision, so clients can arm before acting without accepti
 queued old state. Acquisition notifications never carry manifest contents; clients fetch
 status only after an invalidation, and coalescing is reported explicitly.
 
+`husklet_pane_wait` applies the same rule to a specific pane: pass the last
+observed generation and revision, and the wait ignores the host's unchanged
+initial scan. A replacement generation is newer even when its content revision
+starts again at zero.
+
 Container creation accepts only a bounded image reference and name, while exec
 accepts an argv vector rather than shell text. Stopping or signaling the owning
 container requires literal `confirm: true`; the signal remains explicit and is

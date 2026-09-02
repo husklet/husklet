@@ -246,8 +246,12 @@ export function tools(api) {
   if (typeof api.watchPaneChanges === 'function') definitions.push(define(
     'husklet_pane_wait',
     'Wait for bounded pane-change metadata; fetch a snapshot after notification.',
-    z.object({ slot: id.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
-    ({ slot: wanted, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    z.object({ slot: id.optional(), after_generation: acquisitionRevision.optional(), after_revision: acquisitionRevision.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+      .superRefine(({ slot, after_generation, after_revision }, context) => {
+        const cursor = after_generation != null || after_revision != null;
+        if (cursor && (slot == null || after_generation == null || after_revision == null)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'slot-specific pane waits require slot, after_generation, and after_revision together' });
+      }),
+    ({ slot: wanted, after_generation, after_revision, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop;
       let settled = false;
       const finish = (value, error) => {
@@ -258,7 +262,10 @@ export function tools(api) {
       };
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       api.watchPaneChanges((change) => {
-        if (wanted == null || change.slot === wanted) finish({ changed: true, change });
+        const newer = after_generation == null
+          || change.generation > after_generation
+          || (change.generation === after_generation && change.revision > after_revision);
+        if ((wanted == null || change.slot === wanted) && newer) finish({ changed: true, change });
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
