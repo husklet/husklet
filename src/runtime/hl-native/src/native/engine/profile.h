@@ -21,6 +21,14 @@ typedef struct hl_dispatch_profile {
     uint64_t stw_ns;
     uint64_t block_ns;
     uint64_t reason_ns;
+    uint64_t stw_before_attempts;
+    uint64_t stw_before_single_bypass;
+    uint64_t stw_before_success;
+    uint64_t stw_before_stale;
+    uint64_t stw_before_collisions;
+    uint64_t stw_after_calls;
+    uint64_t stw_after_single_bypass;
+    uint64_t stw_gate_waits;
 } hl_dispatch_profile;
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -83,6 +91,10 @@ static inline int hl_dispatch_profile_sample(const hl_dispatch_profile *profile)
 
 static inline uint64_t hl_dispatch_profile_load(const uint64_t *value) {
     return __atomic_load_n(value, __ATOMIC_RELAXED);
+}
+
+static inline void hl_dispatch_profile_increment(hl_dispatch_profile *profile, uint64_t *value) {
+    if (profile->enabled) __atomic_fetch_add(value, 1, __ATOMIC_RELAXED);
 }
 
 static inline void hl_dispatch_profile_map(hl_dispatch_profile *profile, int hit) {

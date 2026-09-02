@@ -343,7 +343,8 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 "block_ns=%llu reason_ns=%llu map_hit=%llu map_miss=%llu threaded=%llu stw_retry=%llu "
                 "pending_irq=%llu reason_total=%llu r0=%llu r1=%llu r2=%llu r3=%llu r4=%llu r5=%llu "
                 "r6=%llu r7=%llu r8=%llu r9=%llu r10=%llu r11=%llu r12=%llu r13=%llu r14=%llu r15=%llu "
-                "r_stw_retry=%llu r_other=%llu\n",
+                "r_stw_retry=%llu r_other=%llu stw_before=%llu stw_single_bypass=%llu stw_success=%llu "
+                "stw_stale=%llu stw_collision=%llu stw_after=%llu stw_after_single_bypass=%llu stw_gate_wait=%llu\n",
                 (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.sampled),
                 (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.poll_ns),
                 (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.resolve_ns),
@@ -374,7 +375,15 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.reason[15]),
                 (unsigned long long)hl_dispatch_profile_load(
                     &g_dispatch_profile.reason[HL_DISPATCH_REASON_STW_RETRY]),
-                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.reason[HL_DISPATCH_REASON_OTHER]));
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.reason[HL_DISPATCH_REASON_OTHER]),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_before_attempts),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_before_single_bypass),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_before_success),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_before_stale),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_before_collisions),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_after_calls),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_after_single_bypass),
+                (unsigned long long)hl_dispatch_profile_load(&g_dispatch_profile.stw_gate_waits));
             if (boundary_size > 0) {
                 size_t bounded = (size_t)boundary_size < sizeof boundary ? (size_t)boundary_size : sizeof boundary - 1;
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, boundary, bounded);

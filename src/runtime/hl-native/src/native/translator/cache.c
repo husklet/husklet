@@ -2842,6 +2842,7 @@ static void stw_dispatch_safepoint_slot(int slot) {
        this load: the peer then parks with a stale ack forever. Q keeps the
        active request stable until the gate is released. */
     while (atomic_load_explicit(&g_dispatch_gate, memory_order_seq_cst)) {
+        hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_gate_waits);
         uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
         atomic_store_explicit(&g_stw_threads[slot].dispatch_ack, request, memory_order_release);
         jit_backoff_ns(UINT64_C(50000));
@@ -2881,11 +2882,22 @@ static void stw_quiesce_lock(void) {
 }
 
 static int stw_before_translated(struct cpu *cpu, uint64_t selected_epoch) {
+    hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_attempts);
+    if (!g_threaded) {
+        hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_single_bypass);
+        return 1;
+    }
     int slot = STW_SLOT(cpu);
-    if (slot < 0) return 1;
+    if (slot < 0) {
+        hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_success);
+        return 1;
+    }
     for (;;) {
         stw_dispatch_safepoint_slot(slot);
-        if (atomic_load_explicit(&g_dispatch_request, memory_order_acquire) != selected_epoch) return 0;
+        if (atomic_load_explicit(&g_dispatch_request, memory_order_acquire) != selected_epoch) {
+            hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_stale);
+            return 0;
+        }
         /* seq_cst, not release/acquire: this store and the gate load below form a
            StoreLoad handshake with a quiescing peer's store-gate-then-load-
            in_translated.  Under release/acquire BOTH sides may miss -- we enter
@@ -2895,14 +2907,25 @@ static int stw_before_translated(struct cpu *cpu, uint64_t selected_epoch) {
         /* Close activation's phase-transition race: once the gate is visible we
            withdraw from translated execution and acknowledge at the dispatcher. */
         if (!atomic_load_explicit(&g_dispatch_gate, memory_order_seq_cst) &&
-            atomic_load_explicit(&g_dispatch_request, memory_order_acquire) == selected_epoch)
+            atomic_load_explicit(&g_dispatch_request, memory_order_acquire) == selected_epoch) {
+            hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_success);
             return 1;
+        }
+        hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_collisions);
         atomic_store_explicit(&g_stw_threads[slot].in_translated, 0, memory_order_release);
-        if (atomic_load_explicit(&g_dispatch_request, memory_order_acquire) != selected_epoch) return 0;
+        if (atomic_load_explicit(&g_dispatch_request, memory_order_acquire) != selected_epoch) {
+            hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_before_stale);
+            return 0;
+        }
     }
 }
 
 static void stw_after_translated(struct cpu *cpu) {
+    hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_after_calls);
+    if (!g_threaded) {
+        hl_dispatch_profile_increment(&g_dispatch_profile, &g_dispatch_profile.stw_after_single_bypass);
+        return;
+    }
     int slot = STW_SLOT(cpu);
     if (slot >= 0) {
         atomic_store_explicit(&g_stw_threads[slot].in_translated, 0, memory_order_release);
@@ -3353,13 +3376,26 @@ static void stw_after_fork(void) {
    whose only source is g_my_stw_slot. */
 static int stw_cpu_slot_lifecycle_test(void) {
     struct cpu cpu = { .stw_slot = -1 };
+    int saved_threaded = g_threaded;
     stw_register(&cpu);
     int slot = cpu.stw_slot;
     if (slot < 0 || g_my_stw_slot != slot || g_stw_threads[slot].cpu != &cpu) return 30;
 
-    /* A bound dispatcher must not consult TLS: make the two sources disagree. */
-    g_my_stw_slot = -1;
+    /* A single-thread dispatcher has no peer to quiesce and must not publish
+       translated ownership merely to run a block. */
+    g_threaded = 0;
     uint64_t epoch = atomic_load_explicit(&g_dispatch_request, memory_order_relaxed);
+    if (!stw_before_translated(&cpu, epoch) ||
+        atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed))
+        return 37;
+    atomic_store_explicit(&g_stw_threads[slot].exec_gen, UINT64_C(123), memory_order_relaxed);
+    stw_after_translated(&cpu);
+    if (atomic_load_explicit(&g_stw_threads[slot].exec_gen, memory_order_relaxed) != UINT64_C(123)) return 38;
+
+    /* Once threading authority is published, the full handshake remains. A
+       bound dispatcher must not consult TLS: make the two sources disagree. */
+    g_threaded = 1;
+    g_my_stw_slot = -1;
     if (!stw_before_translated(&cpu, epoch) ||
         !atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_relaxed))
         return 31;
@@ -3381,6 +3417,7 @@ static int stw_cpu_slot_lifecycle_test(void) {
     stw_after_fork();
     if (cpu.stw_slot != 0 || g_my_stw_slot != 0 || g_stw_threads[0].cpu != &cpu) return 34;
     stw_unregister(&cpu);
+    g_threaded = saved_threaded;
     if (cpu.stw_slot != -1 || g_my_stw_slot != -1 ||
         atomic_load_explicit(&g_stw_threads[0].used, memory_order_relaxed))
         return 35;
