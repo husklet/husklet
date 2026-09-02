@@ -124,7 +124,10 @@ inspection. Process PIDs are point-in-time display values and may be reused;
 by inventory or inspection; `signalExecution` likewise requires an immutable
 execution ID. Names, prefixes, and snapshot PIDs remain useful only for bounded
 lookup and display. The explicit control grant covers pause,
-unpause, restart, kill, and detached `exec`. The host currently publishes changed full snapshots for `containers`,
+unpause, restart, kill, and detached `exec`. Image inspection and pulls may use
+human tags, but removal requires the complete `sha256:` digest returned by
+inventory so a moved tag cannot select a different image after confirmation.
+The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`.

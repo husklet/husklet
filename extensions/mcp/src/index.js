@@ -9,6 +9,7 @@ export { paneXml, semanticXml } from './panes.js';
 const id = z.string().min(1).max(256);
 const containerIdentity = z.string().regex(/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/, 'complete immutable container ID is required');
 const executionIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable execution ID is required');
+const imageDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/, 'complete immutable image sha256 digest is required');
 const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
@@ -159,7 +160,7 @@ export function tools(api) {
       return status;
     }),
     define('husklet_image_pull_cancel', 'Cancel one active image-pull job; cancellation is safe and does not require destructive confirmation.', z.object({ job: imagePullJob }).strict(), async ({ job }) => { await api.images.cancelPull(job); return { done: true, job }; }),
-    define('husklet_image_remove', 'Remove one image after explicit confirmation.', z.object({ reference: id, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
+    define('husklet_image_remove', 'Remove one immutable image digest after explicit confirmation; mutable tags and partial digests are refused.', z.object({ reference: imageDigest, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
     define('husklet_image_prune', 'Prune unused images after explicit confirmation.', z.object({ confirm: z.literal(true) }).strict(), () => api.images.prune()),
     define('husklet_terminal_tabs', 'List terminal tabs.', empty, () => api.terminal.tabs()),
     define('husklet_terminal_topology', 'Read terminal split topology.', empty, () => api.terminal.topology()),

@@ -34,6 +34,9 @@ try {
     for (const name of ['husklet_workspace_create', 'husklet_workspace_update', 'husklet_container_execution', 'husklet_execution_list', 'husklet_execution_logs', 'husklet_execution_wait', 'husklet_execution_signal', 'husklet_execution_remove', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_pull_start', 'husklet_image_pull_status', 'husklet_image_pull_cancel', 'husklet_image_remove', 'husklet_image_prune']) {
       if (!names.has(name)) process.exit(1);
     }
+    const imageRemove = tools({ images: { remove: async () => {} } }).find(({ name }) => name === 'husklet_image_remove');
+    if (imageRemove.inputSchema.safeParse({ reference: 'moving:tag', confirm: true }).success) process.exit(1);
+    if (!imageRemove.inputSchema.safeParse({ reference: 'sha256:' + 'a'.repeat(64), confirm: true }).success) process.exit(1);
     if (!tools({ watchExecutions: async () => async () => {} }).some(({ name }) => name === 'husklet_execution_change_wait')) process.exit(1);
     if (!tools({ watchContainers: async () => async () => {} }).some(({ name }) => name === 'husklet_container_change_wait')) process.exit(1);
     if (!tools({ watchImagePulls: async () => async () => {} }).some(({ name }) => name === 'husklet_image_pull_wait')) process.exit(1);

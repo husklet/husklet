@@ -897,7 +897,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ImageRemove {
-                reference: "alpine".into(),
+                reference: format!("sha256:{}", "a".repeat(64)),
             },
             Capability::ImageWrite,
         ),
@@ -1179,6 +1179,26 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     session.dispatch(&Request::ContainerKill { id: "a".repeat(64), signal: "SIGTERM".into() }, &services(&host)).unwrap();
     session.dispatch(&Request::ExecutionKill { id: "b".repeat(32), signal: "SIGTERM".into() }, &services(&host)).unwrap();
     assert_eq!(host.ledger.reached(), ["containers.stop", "containers.remove", "containers.kill", "executions.kill"]);
+}
+
+#[test]
+fn image_removal_refuses_mutable_tags_and_partial_digests_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ImageWrite], &[]);
+    for reference in ["alpine:latest".to_owned(), "sha256:abc".to_owned(), "a".repeat(64)] {
+        assert!(matches!(
+            session.dispatch(&Request::ImageRemove { reference }, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+    session
+        .dispatch(
+            &Request::ImageRemove { reference: format!("sha256:{}", "a".repeat(64)) },
+            &services(&host),
+        )
+        .unwrap();
+    assert_eq!(host.ledger.reached(), ["images.remove"]);
 }
 
 #[test]

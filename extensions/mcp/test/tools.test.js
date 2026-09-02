@@ -335,17 +335,19 @@ test('image tools use typed reads and require confirmation for destructive contr
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_image_inspect').inputSchema.safeParse({ reference: 'a'.repeat(257) }).success, false);
   assert.equal(byName('husklet_image_remove').inputSchema.safeParse({ reference: 'alpine:3.20' }).success, false);
+  assert.equal(byName('husklet_image_remove').inputSchema.safeParse({ reference: 'sha256:abc', confirm: true }).success, false);
   assert.equal(byName('husklet_image_prune').inputSchema.safeParse({ confirm: false }).success, false);
   await byName('husklet_image_list').run({});
   await byName('husklet_image_inspect').run({ reference: 'sha256:abc' });
   await byName('husklet_image_pull').run({ reference: 'alpine:3.20' });
-  await byName('husklet_image_remove').run({ reference: 'old:tag', confirm: true });
+  const digest = `sha256:${'a'.repeat(64)}`;
+  await byName('husklet_image_remove').run({ reference: digest, confirm: true });
   await byName('husklet_image_prune').run({ confirm: true });
   assert.deepEqual(calls, [
     ['images.list'],
     ['images.inspect', 'sha256:abc'],
     ['images.pull', 'alpine:3.20'],
-    ['images.remove', 'old:tag'],
+    ['images.remove', digest],
     ['images.prune'],
   ]);
 });

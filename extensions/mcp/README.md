@@ -61,6 +61,9 @@ signaling does not signal the owning container or parse a shell.
 Execution output replay reports stdout and stderr truncation independently and
 sets `eof` only when the process was already complete before replay; an empty
 running response is therefore not presented as end-of-stream.
+Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
+complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
+re-resolved to a different image between inspection and removal.
 Container process inspection is a timestamped, bounded snapshot of the initial
 process only. Its PID is explicitly snapshot-local and may be reused; the host
 does not expose argv or environment values, and does not claim child-process,

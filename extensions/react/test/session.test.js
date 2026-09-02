@@ -378,12 +378,14 @@ test('image inspection and destructive calls preserve explicit request shapes', 
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
-  const operations = [api.images.inspect('alpine:3.20'), api.images.remove('alpine:3.20'), api.images.prune()];
+  const digest = `sha256:${'a'.repeat(64)}`;
+  assert.throws(() => api.images.remove('alpine:3.20'), /complete immutable sha256 digest/);
+  const operations = [api.images.inspect('alpine:3.20'), api.images.remove(digest), api.images.prune()];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'image_inspect', with: { reference: 'alpine:3.20' } },
-    { call: 'image_remove', with: { reference: 'alpine:3.20' } },
+    { call: 'image_remove', with: { reference: digest } },
     { call: 'image_prune' },
   ]);
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: { id: 'i1' } } }));

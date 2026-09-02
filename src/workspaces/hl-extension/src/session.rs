@@ -355,7 +355,10 @@ impl Session {
             Request::ImagePullStatus { job } => Ok(Reply::ImagePull(port.pull_status(job)?)),
             Request::ImagePullCancel { job } => port.pull_cancel(job).map(|()| Reply::Done).map_err(Failure::from),
             Request::ImageInspect { reference } => Ok(Reply::ImageDetails(port.inspect(reference)?)),
-            Request::ImageRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ImageRemove { reference } => {
+                immutable_digest(reference, "image")?;
+                port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ImagePrune => Ok(Reply::ImagePrune(port.prune()?)),
             _ => Err(Failure::Unsupported {
                 call: "image operation".into(),
@@ -728,6 +731,18 @@ fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Fail
     }
     Err(Failure::Conflict {
         detail: format!("{noun} signaling requires the complete immutable ID returned by inspection"),
+    })
+}
+
+fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
+    let digest = value.strip_prefix("sha256:").unwrap_or_default();
+    if digest.len() == 64
+        && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: format!("{noun} removal requires the complete immutable sha256 digest returned by inventory"),
     })
 }
 

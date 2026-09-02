@@ -6,7 +6,7 @@ import {
 } from '@husklet/react';
 import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
-const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
+const { createElement: h, useCallback, useEffect, useMemo, useRef, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
 
 export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
@@ -371,6 +371,8 @@ export function Images({ api, resource, imageDetails }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
+  const currentImages = useRef(new Set());
+  currentImages.current = new Set((resource.data ?? []).map((item) => item.id));
   const [pull, setPull] = useState(null);
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const run = async (name, operation) => {
@@ -411,7 +413,8 @@ export function Images({ api, resource, imageDetails }) {
     }
   });
   const remove = (item) => run(`remove:${item.id}`, async () => {
-    await api.images.remove(item.reference || item.id); setConfirm('');
+    if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
+    await api.images.remove(item.id); setConfirm('');
     if (detail?.id === item.id) setDetail(null);
     await resource.reload();
   });
@@ -446,7 +449,7 @@ export function Images({ api, resource, imageDetails }) {
                 ? h(KeyValueTable, { source: IMAGE_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 12 }, maximum: { step: 40 } } })
                 : null),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === item.id && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
-        ? h(React.Fragment, {}, h(Text, { label: 'Remove this local image?', color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
+        ? h(React.Fragment, {}, h(Text, { label: `Remove immutable image ${item.id}?`, color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
     h(Omitted, { count: view.omitted }));
 }

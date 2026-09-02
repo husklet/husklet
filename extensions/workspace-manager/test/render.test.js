@@ -82,12 +82,14 @@ test('execution observation is scoped to its page and replaces inventory without
 
 test('image removal and prune require an explicit confirmation step', async () => {
   const calls = [];
+  const originalDigest = `sha256:${'a'.repeat(64)}`;
+  const refreshedDigest = `sha256:${'b'.repeat(64)}`;
   const controlled = { images: {
     ...api.images,
     remove: async (...args) => calls.push(['remove', ...args]),
     prune: async () => { calls.push(['prune']); return { deleted: 0, space_reclaimed: 0 }; },
   } };
-  const resource = { data: [{ id: 'sha256:one', reference: 'alpine:3.20', size: 7, created: 0 }], loading: false, error: null, reload: async () => {} };
+  const resource = { data: [{ id: originalDigest, reference: 'alpine:3.20', size: 7, created: 0 }], loading: false, error: null, reload: async () => {} };
   const stage = host();
   const frame = stage.render(h(Images, { api: controlled, resource }));
   const labels = () => stage.frames.flatMap((current) => current.patches).filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label');
@@ -95,19 +97,29 @@ test('image removal and prune require an explicit confirmation step', async () =
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: remove, id: `${remove}:Invoke`, value: null }));
   assert.deepEqual(calls, [], 'opening image removal performs no operation');
   assert.ok(labels().some((patch) => patch.SetProp.value.Text === 'Confirm remove'));
+  assert.ok(labelled(stage, `Remove immutable image ${originalDigest}?`));
+  const staleConfirm = labels().filter((patch) => patch.SetProp.value.Text === 'Confirm remove').at(-1).SetProp.id;
   assert.equal(frame.patches.some((patch) => 'SetProp' in patch && patch.SetProp.value?.Text === 'Confirm remove'), false);
-  invoke(stage, 'Cancel');
-  assert.deepEqual(calls, [], 'cancelling image removal is safe');
+  const refreshed = { ...resource, data: [{ ...resource.data[0], id: refreshedDigest }] };
+  stage.render(h(Images, { api: controlled, resource: refreshed }));
+  stage.surface.dispatch({ trigger: 'Invoke', node: staleConfirm, id: `${staleConfirm}:Invoke`, value: null });
+  await settled();
+  assert.deepEqual(calls, [], 'stale digest consent cannot reach removal authority after refresh');
+  assert.ok(labelled(stage, `Image ${originalDigest} changed or disappeared; inspect and confirm again.`));
+  invoke(stage, 'Remove');
+  assert.ok(labelled(stage, `Remove immutable image ${refreshedDigest}?`));
+  invoke(stage, 'Confirm remove'); await settled();
+  assert.deepEqual(calls, [['remove', refreshedDigest]]);
 
   const pruneStage = host();
   const pruneFrame = pruneStage.render(h(Images, { api: controlled, resource }));
   const prune = pruneFrame.patches.find((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value.Text === 'Prune unused images').SetProp.id;
   assert.ok(pruneStage.surface.dispatch({ trigger: 'Invoke', node: prune, id: `${prune}:Invoke`, value: null }));
-  assert.deepEqual(calls, [], 'opening image prune performs no operation');
+  assert.deepEqual(calls, [['remove', refreshedDigest]], 'opening image prune performs no operation');
   assert.ok(pruneStage.frames.flatMap((current) => current.patches).some((patch) => 'SetProp' in patch && patch.SetProp.value?.Text === 'Confirm prune'));
   invoke(pruneStage, 'Confirm prune');
   await settled();
-  assert.deepEqual(calls, [['prune']]);
+  assert.deepEqual(calls, [['remove', refreshedDigest], ['prune']]);
 });
 
 test('image inspect renders real typed details through a bounded source and retries failures', async () => {

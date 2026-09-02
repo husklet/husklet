@@ -21,6 +21,11 @@ function immutableIdentity(id, widths, noun) {
   throw new TypeError(`${noun} signaling requires the complete immutable ID returned by inspection`);
 }
 
+function immutableDigest(value, noun) {
+  if (!/^sha256:[0-9a-f]{64}$/.test(value)) throw new TypeError(`${noun} removal requires the complete immutable sha256 digest returned by inventory`);
+  return value;
+}
+
 /**
  * Connects to the workspace this extension runs in.
  *
@@ -171,7 +176,7 @@ export function workspace(session) {
       pullStatus: async (job) => expect(await session.call('image_pull_status', { job }), 'image_pull'),
       cancelPull: (job) => done('image_pull_cancel', { job }),
       inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
-      remove: (reference) => done('image_remove', { reference }),
+      remove: (reference) => done('image_remove', { reference: immutableDigest(reference, 'image') }),
       prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
