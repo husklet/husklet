@@ -45,6 +45,13 @@ Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
 
+`husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
+event batch under the distinct `WorkspaceEvents` grant. It subscribes with one
+unit of host credit, reports the host's dropped/coalesced count, and always
+unsubscribes on a match or timeout. It observes window-level input only; owned
+surface interactions remain addressed to their owning extension and are queued
+without blocking the native UI.
+
 Execution inspection and execution signaling use distinct typed calls: signaling
 targets one existing execution ID under `ContainerControl` and accepts only a
 1..=32 byte signal name. It does not signal the owning container or parse a shell.

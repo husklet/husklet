@@ -204,6 +204,23 @@ export function tools(api) {
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
+  if (typeof api.watchWorkspaceEvents === 'function') definitions.push(define(
+    'husklet_workspace_event_wait',
+    'Wait once for a bounded permission-gated workspace keyboard, focus, or pointer event batch.',
+    z.object({ kind: z.enum(['key', 'focus', 'pointer']).optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ kind, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ observed: false }), timeout);
+      api.watchWorkspaceEvents((batch) => {
+        const event = batch?.events?.find((candidate) => kind == null || candidate?.event === kind);
+        if (event) finish({ observed: true, event, dropped: batch.dropped ?? 0 });
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
   if (typeof api.watchExecutions === 'function') definitions.push(define(
     'husklet_execution_change_wait',
     'Wait for a bounded execution catalogue change matching one immutable exec identity.',

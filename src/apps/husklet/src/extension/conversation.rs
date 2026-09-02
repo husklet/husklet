@@ -164,6 +164,7 @@ pub struct Conversation {
     pane_cursor: usize,
     workspace_lifecycle_revision: Option<u64>,
     events: Option<super::host::Events>,
+    voice: Option<super::host::Voice>,
 }
 
 impl Conversation {
@@ -203,11 +204,16 @@ impl Conversation {
             pane_cursor: 0,
             workspace_lifecycle_revision: None,
             events: None,
+            voice: None,
         })
     }
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
         self.events = Some(events);
+    }
+
+    pub(crate) fn with_voice(&mut self, voice: super::host::Voice) {
+        self.voice = Some(voice);
     }
 
     /// Composes the native producer now; the protocol adapter drains it once
@@ -293,6 +299,7 @@ impl Conversation {
     /// report that resources disappeared. `publish` retains the existing
     /// capability check, channel credit, and latest-snapshot coalescing.
     fn observe(&mut self, services: &Services<'_>) -> Result<(), Fault> {
+        self.flush_interactions()?;
         let mut snapshots = Vec::new();
         if self.session.may_emit(Topic::Containers) {
             if let Ok(containers) = services.containers.list() {
@@ -378,6 +385,14 @@ impl Conversation {
             }
         }
         self.observe_panes(services)?;
+        Ok(())
+    }
+
+    fn flush_interactions(&mut self) -> Result<(), Fault> {
+        let frames = self.voice.as_ref().map_or_else(Vec::new, super::host::Voice::drain);
+        for frame in frames {
+            self.wire.send(&frame).map_err(fault)?;
+        }
         Ok(())
     }
 
@@ -534,6 +549,7 @@ impl Conversation {
 
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
+        self.flush_interactions()?;
         if frame.kind == Kind::Credit {
             if let Some(topic) = self.replenish(frame) {
                 self.carry(topic)?;
@@ -1011,6 +1027,34 @@ mod tests {
             conversation.drain_extension_events().is_none(),
             "the adapter drains rather than polls history"
         );
+    }
+
+    #[test]
+    fn queued_ui_interaction_crosses_one_framed_writer_with_slot_identity() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let mut wire = Wire::new(theirs);
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let voice = super::super::host::Voice::default();
+        voice.hold();
+        conversation.with_voice(voice.clone());
+        super::super::host::speak_at(
+            &voice,
+            &hl_extension::SurfaceEvent {
+                slot: "surface-9".into(),
+                event: hl_gui::Event::Focus {
+                    node: hl_gui::NodeId::new(4),
+                    id: hl_gui::EventId::new("editor"),
+                    focused: true,
+                },
+            },
+        );
+
+        conversation.flush_interactions().expect("single writer flush");
+        let frame = wire.receive().expect("framed event");
+        assert_eq!(frame.kind, Kind::Event);
+        let event: serde_json::Value = serde_json::from_slice(&frame.payload).expect("event json");
+        assert_eq!(event["slot"], "surface-9");
+        assert_eq!(event["interaction"], "focus");
     }
 
     #[test]

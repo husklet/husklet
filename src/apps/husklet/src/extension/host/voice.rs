@@ -1,17 +1,18 @@
 //! The host's half of the conversation: what it says, and what it says it on.
 //!
-//! An extension is read on the thread serving its socket and spoken to on the
-//! driver's thread, so the writing end lives here as a second descriptor rather
-//! than inside the conversation that owns the reading end.
+//! Native callbacks must not wait for an extension socket. They enqueue into a
+//! bounded mailbox here; the conversation thread drains it through its sole
+//! framed writer.
 //!
 //! The protocol models no interaction message of its own yet, so what a person
 //! did is encoded here: a row request as itself, because that is the shape both
 //! ends already agree on, and everything else in an envelope naming it.
 
-use std::os::unix::net::UnixStream;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use hl_extension::{Frame, Kind, Wire};
+use hl_extension::{Frame, Kind};
 
 use super::EVENTS;
 
@@ -28,7 +29,7 @@ pub(super) fn speak(voice: &Voice, event: &hl_gui::Event) {
 }
 
 /// Tells the extension what happened and which owned surface produced it.
-pub(super) fn speak_at(voice: &Voice, event: &hl_extension::SurfaceEvent) {
+pub(crate) fn speak_at(voice: &Voice, event: &hl_extension::SurfaceEvent) {
     let Some(payload) = carriage(&event.event, Some(&event.slot)) else {
         return;
     };
@@ -133,48 +134,122 @@ fn details(
 }
 
 
-/// The host's writing end of the live conversation.
-///
-/// A second descriptor for the same socket, because [`Conversation`] owns the
-/// stream and answers calls on the thread serving it, while interaction is
-/// handed over on the driver's thread.
 #[derive(Clone, Default)]
-pub(super) struct Voice {
-    held: Arc<Mutex<Option<Wire<UnixStream>>>>,
+pub(crate) struct Voice {
+    held: Arc<Mutex<Pending>>,
+    contended: Arc<AtomicU64>,
+}
+
+#[derive(Default)]
+struct Pending {
+    active: bool,
+    frames: VecDeque<Frame>,
+    dropped: u64,
 }
 
 impl Voice {
-    /// Takes the writing end of a connection that has just been accepted.
-    pub(super) fn hold(&self, stream: UnixStream) {
-        self.wire().replace(Wire::new(stream));
+    const LIMIT: usize = 256;
+
+    /// Starts accepting events for a connected conversation.
+    pub(crate) fn hold(&self) {
+        let mut pending = self.pending();
+        pending.active = true;
+        pending.frames.clear();
+        pending.dropped = 0;
+        self.contended.store(0, Ordering::Relaxed);
     }
 
     /// Gives it up when the conversation ends.
     pub(super) fn release(&self) {
-        self.wire().take();
+        let mut pending = self.pending();
+        pending.active = false;
+        pending.frames.clear();
     }
 
-    /// Writes one frame, if there is anyone to write to.
-    ///
-    /// A failed write is dropped rather than reported: the conversation on the
-    /// other thread is reading the same socket and will report the ending, and
-    /// two reports of one hangup would show a person the second one.
+    /// Queues without ever waiting for the socket or the conversation thread.
     pub(super) fn say(&self, frame: &Frame) {
-        let mut held = self.wire();
-        let Some(wire) = held.as_mut() else {
+        let Ok(mut pending) = self.held.try_lock() else {
+            self.contended.fetch_add(1, Ordering::Relaxed);
             return;
         };
-        let _ = wire.send(frame);
+        if !pending.active {
+            return;
+        }
+        if pending.frames.len() == Self::LIMIT {
+            pending.frames.pop_front();
+            pending.dropped = pending.dropped.saturating_add(1);
+        }
+        pending.frames.push_back(frame.clone());
     }
 
-    fn wire(&self) -> std::sync::MutexGuard<'_, Option<Wire<UnixStream>>> {
+    pub(crate) fn drain(&self) -> Vec<Frame> {
+        let mut pending = self.pending();
+        let dropped = pending
+            .dropped
+            .saturating_add(self.contended.swap(0, Ordering::Relaxed));
+        pending.dropped = 0;
+        let mut frames: Vec<_> = pending.frames.drain(..).collect();
+        if dropped > 0 {
+            if let Some(first) = frames.first_mut() {
+                if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&first.payload) {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("dropped".into(), dropped.into());
+                        if let Ok(payload) = serde_json::to_vec(&value) {
+                            first.payload = payload;
+                        }
+                    }
+                }
+            }
+        }
+        frames
+    }
+
+    fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{carriage, Frame};
+    use super::{carriage, Frame, Kind, Voice};
+
+    #[test]
+    fn ui_event_flood_is_bounded_without_writing_a_socket() {
+        let voice = Voice::default();
+        voice.hold();
+        for index in 0..Voice::LIMIT + 7 {
+            voice.say(&Frame::new(super::EVENTS, Kind::Event, serde_json::to_vec(&serde_json::json!({
+                "interaction": "pointer", "id": "motion", "node": 1, "x": index,
+            })).unwrap()));
+        }
+        let drained = voice.drain();
+        assert_eq!(drained.len(), Voice::LIMIT);
+        let first: serde_json::Value = serde_json::from_slice(&drained[0].payload).unwrap();
+        assert_eq!(first["dropped"], 7);
+    }
+
+    #[test]
+    fn a_contended_callback_drops_instead_of_waiting() {
+        let voice = Voice::default();
+        voice.hold();
+        let held = voice.held.lock().unwrap();
+        voice.say(&Frame::new(
+            super::EVENTS,
+            Kind::Event,
+            br#"{"interaction":"focus","id":"editor","node":1}"#.to_vec(),
+        ));
+        drop(held);
+        voice.say(&Frame::new(
+            super::EVENTS,
+            Kind::Event,
+            br#"{"interaction":"focus","id":"editor","node":1}"#.to_vec(),
+        ));
+
+        let drained = voice.drain();
+        assert_eq!(drained.len(), 1);
+        let event: serde_json::Value = serde_json::from_slice(&drained[0].payload).unwrap();
+        assert_eq!(event["dropped"], 1);
+    }
 
     #[test]
     fn an_addressed_interaction_carries_its_surface_slot() {

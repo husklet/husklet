@@ -278,6 +278,12 @@ export function workspace(session) {
     try { await api.subscribe('workspace-lifecycle'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('workspace-lifecycle'); };
   };
+  api.watchWorkspaceEvents = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('workspace event listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_events') listener(event.of); });
+    try { await api.subscribe('workspace-events'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('workspace-events'); };
+  };
   return api;
 }
 

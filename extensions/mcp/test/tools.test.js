@@ -522,6 +522,19 @@ test('pane wait returns only bounded invalidation metadata and releases its subs
   assert(!answer.content[0].text.includes('value'));
 });
 
+test('workspace event wait filters one bounded batch and always disposes', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchWorkspaceEvents = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_workspace_event_wait');
+  const pending = wait.run({ kind: 'key', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener({ events: [{ event: 'pointer', phase: 'move', x: 1, y: 2, button: null }], dropped: 2 });
+  listener({ events: [{ event: 'key', key: 'Enter', modifiers: [], pressed: true }], dropped: 4 });
+  const answer = JSON.parse((await pending).content[0].text);
+  assert.equal(answer.observed, true); assert.equal(answer.event.event, 'key'); assert.equal(answer.dropped, 4);
+  assert.equal(disposed, 1);
+});
+
 test('execution change wait filters immutable identity and returns subscription credit', async () => {
   const { api } = fake();
   let listener; let disposed = 0;

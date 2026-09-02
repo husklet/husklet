@@ -227,6 +227,25 @@ test('workspace lifecycle watcher uses its WorkspaceRead-gated exact topic', asy
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('workspace input watcher uses its separate grant topic, returns credit, and disposes', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const batches = [];
+  const opening = api.watchWorkspaceEvents((value) => batches.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'workspace-events' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'workspace_events', of: {
+    events: [{ event: 'key', key: 'Enter', modifiers: [], pressed: true }], dropped: 3,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.equal(batches[0].dropped, 3);
+  const stopping = stop();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-events' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const seen = [];

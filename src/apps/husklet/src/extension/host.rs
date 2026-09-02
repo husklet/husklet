@@ -30,7 +30,9 @@ use super::conversation::{Conversation, Queue};
 use super::sidecar::SidecarSpec;
 use super::Listener;
 use crate::config::WorkspaceConfig;
-use voice::{speak, Voice};
+use voice::speak;
+pub(crate) use voice::Voice;
+pub(crate) use voice::speak_at;
 
 pub use workspace::Workspace;
 
@@ -523,7 +525,7 @@ impl Hall {
             match order {
                 Order::Retry => return Some(Passage::Renewal),
                 Order::Interaction(event) => speak(voice, &event),
-                Order::InteractionAt(event) => voice::speak_at(voice, &event),
+                Order::InteractionAt(event) => speak_at(voice, &event),
                 Order::PaneProvider(selection) => voice::speak_provider(voice, &selection),
             }
         }
@@ -689,14 +691,12 @@ fn attendant<S: Supply>(
 
 /// Serves one connection and reports how it ended.
 fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voice, stream: UnixStream) -> String {
-    let Ok(writer) = stream.try_clone() else {
-        return "the extension's socket could not be duplicated".to_owned();
-    };
     let opened = Conversation::new(stream, plan.authority(), plan.workspace.clone(), queue.clone());
     let Ok(mut conversation) = opened else {
         return "the extension's socket could not be duplicated".to_owned();
     };
-    voice.hold(writer);
+    conversation.with_voice(voice.clone());
+    voice.hold();
     let reason = exchange(supply, plan, &mut conversation);
     voice.release();
     reason

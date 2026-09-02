@@ -4532,7 +4532,7 @@ export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number
 export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }
 export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {
-  interaction: I; trigger: T; node: number; id: string; slot?: string;
+  interaction: I; trigger: T; node: number; id: string; slot?: string; dropped?: number;
 }
 export type InterfaceEvent =
   | InterfaceEventBase<'invoke', 'Invoke'>
@@ -4695,6 +4695,7 @@ export interface WorkspaceApi {
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
   watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
+  watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;
