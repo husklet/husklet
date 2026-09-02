@@ -12,6 +12,8 @@ function fake() {
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), logs: record('containers.logs'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
+    volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
+    networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write') },
   }};
@@ -78,6 +80,31 @@ test('image tools use typed reads and require confirmation for destructive contr
     ['images.pull', 'alpine:3.20'],
     ['images.remove', 'old:tag'],
     ['images.prune'],
+  ]);
+});
+
+test('volume and network tools preserve typed read/control operations and confirmations', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_volume_remove').inputSchema.safeParse({ name: 'cache' }).success, false);
+  assert.equal(byName('husklet_network_remove').inputSchema.safeParse({ reference: 'private' }).success, false);
+  assert.equal(byName('husklet_network_disconnect').inputSchema.safeParse({ reference: 'private', container: 'c1' }).success, false);
+  assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: 'private', container: 'c1', extra: true }).success, false);
+  await byName('husklet_volume_list').run({});
+  await byName('husklet_volume_inspect').run({ name: 'cache' });
+  await byName('husklet_volume_create').run({ name: 'build' });
+  await byName('husklet_volume_remove').run({ name: 'old', confirm: true });
+  await byName('husklet_network_list').run({});
+  await byName('husklet_network_inspect').run({ reference: 'private' });
+  await byName('husklet_network_create').run({ name: 'backend' });
+  await byName('husklet_network_remove').run({ reference: 'old-net', confirm: true });
+  await byName('husklet_network_connect').run({ reference: 'backend', container: 'c1' });
+  await byName('husklet_network_disconnect').run({ reference: 'backend', container: 'c1', confirm: true });
+  assert.deepEqual(calls, [
+    ['volumes.list'], ['volumes.inspect', 'cache'], ['volumes.create', 'build'], ['volumes.remove', 'old'],
+    ['networks.list'], ['networks.inspect', 'private'], ['networks.create', 'backend'], ['networks.remove', 'old-net'],
+    ['networks.connect', 'backend', 'c1'], ['networks.disconnect', 'backend', 'c1'],
   ]);
 });
 
@@ -233,6 +260,8 @@ test('a real MCP client lists strict tools and calls through the React session c
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
       if (name === 'image_list') return { reply: 'images', with: [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }] };
+      if (name === 'volume_list') return { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] };
+      if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: argument.slot, revision: 11, truncated: false,
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
@@ -256,6 +285,8 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
   assert(listed.tools.some(({ name }) => name === 'husklet_image_list'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_volume_list'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_network_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_snapshot'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_read'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
@@ -268,6 +299,10 @@ test('a real MCP client lists strict tools and calls through the React session c
   });
   const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
   assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
+  const volumes = await client.callTool({ name: 'husklet_volume_list', arguments: {} });
+  assert.deepEqual(JSON.parse(volumes.content[0].text), [{ name: 'cache', driver: 'local' }]);
+  const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
+  assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
   await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
@@ -279,6 +314,8 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['workspace_info', undefined],
     ['execution_inspect', { id: 'exec-live' }],
     ['image_list', undefined],
+    ['volume_list', undefined],
+    ['network_list', undefined],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],

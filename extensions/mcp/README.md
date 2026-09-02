@@ -17,6 +17,11 @@ unrestricted shell shortcut. Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
 
+Volume and network inventory/inspection use the host's separate `VolumeRead`
+and `NetworkRead` grants. Creation and attachment controls retain their
+`VolumeWrite` or `NetworkWrite` grants. Volume/network removal and network
+disconnect additionally require an explicit `confirm: true` MCP argument.
+
 Image tools list and inspect local images under `ImageRead`, and pull under
 `ImageWrite`. Removing an image or pruning unused images additionally requires
 an explicit `confirm: true` MCP argument; the host still enforces `ImageWrite`.
