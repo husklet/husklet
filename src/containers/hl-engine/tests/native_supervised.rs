@@ -348,7 +348,7 @@ fn supervised_checkpoint_idle_wait_has_no_periodic_wakeups() {
         )
         .unwrap();
     plan.arguments.push(b"checkpoint-idle".to_vec());
-    let store = Arc::new(Checkpoints);
+    let store = Arc::new(Checkpoints::default());
     assert!(matches!(
         Engine::with_checkpoint(GuestIsa::X86_64, plan, StandardStreams::default(), store.clone(), store),
         Err(hl_engine::engine::EngineError::CompositionFailed(
@@ -1245,141 +1245,90 @@ fn supervised_clone3_enosys_falls_back_for_pthread_create_and_join() {
     assert_eq!(output, b"pthread");
 }
 
-struct Checkpoints;
+#[derive(Default)]
+struct Checkpoints(std::sync::atomic::AtomicUsize);
+
+impl Checkpoints {
+    fn touched(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl CheckpointSink for Checkpoints {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        self.touched();
         Ok(())
     }
     fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        self.touched();
         Ok(NonZeroU64::MIN)
     }
     fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        self.touched();
         Ok(())
     }
     fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        self.touched();
         Ok(())
     }
     fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        self.touched();
         Ok(())
     }
 }
 impl CheckpointSource for Checkpoints {
     fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        self.touched();
         Ok(Vec::new())
     }
     fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        self.touched();
         Ok(Vec::new())
     }
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        self.touched();
         Ok(Vec::new())
     }
 }
 
-#[allow(dead_code)]
-fn checkpoint_phase1(mode: &str, expected_receipt: &str, rounds: usize) {
+#[test]
+fn supervised_checkpoint_lifecycle_refuses_before_launch_or_storage_access() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    let ready = work.path().join("ready");
-    let release = work.path().join("release");
-    let progress = work.path().join("progress");
-    let receipt = work.path().join("receipt");
-    let mut plan = selected_plan(&executable);
-    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
-    plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
-    std::fs::write(&receipt, b"").unwrap();
-    plan.options
-        .set_bytes(
-            "HL_NATIVE_CKPT_TEST_RECEIPT",
-            receipt.as_os_str().as_encoded_bytes(),
-            true,
-        )
-        .unwrap();
-    plan.arguments = [executable.as_path(), Path::new(mode), &ready, &release, &progress]
-        .into_iter()
-        .map(|value| value.as_os_str().as_encoded_bytes().to_vec())
-        .collect();
-    let output = Arc::new(Output::default());
-    let store = Arc::new(Checkpoints);
-    let engine = Engine::with_checkpoint(
-        GuestIsa::X86_64,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-        store.clone(),
-        store,
-    )
-    .unwrap();
-    for _ in 0..rounds {
-        for path in [&ready, &release, &progress] {
-            let _ = std::fs::remove_file(path);
+    for scenario in ["fresh-capture", "restore", "checkpoint-mode", "checkpoint-policy"] {
+        let mut plan = selected_plan(&executable);
+        match scenario {
+            "fresh-capture" => {}
+            "restore" => plan.options.set("HL_RESTORE", "1", true).unwrap(),
+            "checkpoint-mode" => plan.box_policy.checkpoint_mode = 1,
+            "checkpoint-policy" => plan.box_policy.checkpoint_policy = 1,
+            _ => unreachable!(),
         }
-        std::fs::write(&receipt, b"").unwrap();
-        engine.start().unwrap();
-        for _ in 0..5000 {
-            if ready.exists() && progress.exists() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        if !ready.exists() || !progress.exists() {
-            panic!("retained checkpoint run never became ready: {:?}", engine.wait());
-        }
-        let before: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
-        let capture = engine.capture_checkpoint();
-        assert!(capture.is_err(), "phase 1 must refuse image capture");
-        for _ in 0..5000 {
-            let after = std::fs::read_to_string(&progress)
-                .ok()
-                .and_then(|value| value.trim().parse::<u32>().ok());
-            if after.is_some_and(|value| value > before) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        let after: u32 = std::fs::read_to_string(&progress).unwrap().trim().parse().unwrap();
-        assert!(after > before, "workload did not continue after bounded thaw");
-        std::fs::write(&release, b"release").unwrap();
-        assert_eq!(engine.wait().unwrap().guest_status, 0);
-        assert!(
-            std::fs::read_to_string(&receipt).unwrap().contains(expected_receipt),
-            "capture result {capture:?} did not reach native receipt"
-        );
-    }
-    engine.destroy().unwrap();
-}
-
-#[test]
-fn supervised_checkpoint_phase1_registers_freezes_and_resumes_one_workload() {
-    checkpoint_selection_refuses_before_launch();
-}
-
-#[test]
-fn supervised_checkpoint_phase1_resets_generation_and_registration_across_retained_runs() {
-    checkpoint_selection_refuses_before_launch();
-}
-
-#[test]
-fn supervised_checkpoint_phase1_refuses_descendants_and_multiple_threads() {
-    checkpoint_selection_refuses_before_launch();
-}
-
-fn checkpoint_selection_refuses_before_launch() {
-    let work = TempDir::new().unwrap();
-    let executable = fixture(work.path());
-    let store = Arc::new(Checkpoints);
-    assert!(matches!(
-        Engine::with_checkpoint(
+        let store = Arc::new(Checkpoints::default());
+        let result = Engine::with_checkpoint(
             GuestIsa::X86_64,
-            selected_plan(&executable),
+            plan,
             StandardStreams::default(),
             store.clone(),
-            store,
-        ),
-        Err(hl_engine::engine::EngineError::CompositionFailed(
-            hl_engine::composition::CompositionError::NativeSupervisedRefused(
-                hl_engine::runtime::NativeSupervisedRefusal::Checkpoint,
+            store.clone(),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(hl_engine::engine::EngineError::CompositionFailed(
+                    hl_engine::composition::CompositionError::NativeSupervisedRefused(
+                        hl_engine::runtime::NativeSupervisedRefusal::Checkpoint,
+                    ),
+                ),)
             ),
-        )),
-    ));
+            "native supervised admitted unsupported {scenario} lifecycle"
+        );
+        assert_eq!(
+            store.0.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "native supervised touched checkpoint storage while refusing {scenario}",
+        );
+    }
 }
 
 fn selected_plan(executable: &Path) -> RuntimePlan {
@@ -1485,7 +1434,7 @@ fn supervised_listener_handoff_wakes_a_waiting_parent() {
 fn supervised_mode_refuses_checkpoint_roles_and_restore_before_launch() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    let store = Arc::new(Checkpoints);
+    let store = Arc::new(Checkpoints::default());
     let mut restore = selected_plan(&executable);
     restore.options.set("HL_RESTORE", "1", true).unwrap();
     assert!(Engine::with_streams(GuestIsa::X86_64, restore, StandardStreams::default()).is_err());
