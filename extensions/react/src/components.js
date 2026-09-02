@@ -155,6 +155,7 @@ export const {
   Drawer,
   DrawerPanel,
   CodeView,
+  MarkdownView,
   LogView,
   Video,
   Chart,

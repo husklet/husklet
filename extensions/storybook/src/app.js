@@ -35,6 +35,7 @@ import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibi
 import { STREAMING_LOG_STORY, StreamingLogStory } from './streaming-log.js';
 import { EVENT_STREAM_STORY, EventStreamStory } from './event-stream.js';
 import { KEY_VALUE_STORY, KeyValueInspectorStory } from './key-value-inspector.js';
+import { MARKDOWN_STORY, MarkdownReviewStory } from './markdown-review.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 import { DIFF_STORY, DiffReviewStory } from './diff-review.js';
 
@@ -50,7 +51,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, initia
 
   const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
     || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
-    || selected === KEY_VALUE_STORY || selected === DIFF_STORY;
+    || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -118,6 +119,12 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(KEY_VALUE_STORY),
       }),
       h(ListItemButton, {
+        key: MARKDOWN_STORY,
+        label: MARKDOWN_STORY,
+        selected: selected === MARKDOWN_STORY,
+        onInvoke: () => onSelect(MARKDOWN_STORY),
+      }),
+      h(ListItemButton, {
         key: FORM_STORY,
         label: FORM_STORY,
         selected: selected === FORM_STORY,
@@ -179,6 +186,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
         ? h(EventStreamStory, { source: timelineSource })
         : name === KEY_VALUE_STORY && keyValueSource
         ? h(KeyValueInspectorStory, { source: keyValueSource })
+        : name === MARKDOWN_STORY
+        ? h(MarkdownReviewStory)
         : name === NAVIGATION_STORY
         ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource

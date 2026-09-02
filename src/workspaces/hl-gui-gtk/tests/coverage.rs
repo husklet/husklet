@@ -92,6 +92,7 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
         eprintln!("skipped: no display connection");
         return;
     }
+    markdown_is_safe_selectable_and_structured();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
@@ -223,7 +224,13 @@ fn portrait(tag: Tag, prop: Prop, value: Option<&PropValue>) -> String {
         session.producer.set(node, prop, value.clone());
     }
     session.flush().expect("a declared property must render");
-    session.widgets().iter().map(traced).collect::<Vec<String>>().join("\n")
+    session
+        .widgets()
+        .iter()
+        .flat_map(subtree)
+        .map(|widget| traced(&widget))
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 /// Where the probed component is placed.
@@ -625,6 +632,9 @@ fn holds(widget: &gtk::Widget, text: &str) -> bool {
 }
 
 fn kept(widget: &gtk::Widget, text: &str) -> bool {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        return label.text() == text;
+    }
     if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
         return entry.text() == text;
     }
@@ -804,9 +814,30 @@ fn principal(tag: Tag) -> Aspect {
         | Tag::PasswordEntry
         | Tag::TextField
         | Tag::CodeView
+        | Tag::MarkdownView
         | Tag::LogView => Aspect::Value,
         _ => structural(tag),
     }
+}
+
+fn markdown_is_safe_selectable_and_structured() {
+    let mut session = Session::new();
+    let document = session.producer.create(Tag::MarkdownView);
+    session.producer.append(NodeId::ROOT, document);
+    session.producer.set(
+        document,
+        Prop::Value,
+        PropValue::text("# Release <unsafe>\n- bounded\n```\nlet x = 1;\n```"),
+    );
+    session.flush().expect("markdown renders");
+    let scroller = session.tagged(Tag::MarkdownView).expect("markdown widget");
+    let label = subtree(&scroller)
+        .into_iter()
+        .find_map(|child| child.downcast::<gtk::Label>().ok())
+        .expect("markdown owns a text label");
+    assert!(label.is_selectable(), "document text must be copyable");
+    assert_eq!(label.text(), "Release <unsafe>\n• bounded\nlet x = 1;");
+    assert!(!label.text().contains("```"), "fence syntax is presentation, not content");
 }
 
 /// The families whose principal property is how they arrange what they hold.

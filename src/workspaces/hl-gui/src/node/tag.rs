@@ -327,6 +327,7 @@ catalogue! {
 
     // Content: long-form text and media.
     CodeView: leaf, props[Value, Monospace], triggers[],
+    MarkdownView: leaf, props[Value], triggers[],
     LogView: leaf, props[Value, Monospace], triggers[],
     Video: leaf, props[Uri], triggers[],
     Chart: leaf, props[Label, Tone], triggers[],

@@ -98,6 +98,9 @@ fn plotted(widget: &gtk::Widget, tag: Tag, content: &str) -> bool {
 /// The widgets that hold a value of their own.
 fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     let content = value.as_text().unwrap_or_default();
+    if tag == Tag::MarkdownView {
+        return content::markdown(widget, content);
+    }
     if tag == Tag::LogView {
         return content::append(widget, content);
     }

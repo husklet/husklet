@@ -6,6 +6,12 @@ use crate::node::{Prop, PropValue, Tag};
 
 /// Marks and imagery.
 impl Element {
+    /// A safe, selectable Markdown document. HTML is never interpreted.
+    #[must_use]
+    pub fn markdown_view(value: impl Into<String>) -> Self {
+        Self::new(Tag::MarkdownView).value(value)
+    }
+
     /// A run of monospaced text.
     #[must_use]
     pub fn code(value: impl Into<String>) -> Self {

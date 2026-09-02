@@ -129,6 +129,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         tag_input_exposes_value_actions_and_authored_tags();
         validation_summary_is_readable_and_keeps_corrective_actions();
         diff_lines_project_status_and_bounded_text();
+        markdown_preserves_bounded_source_in_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
@@ -189,6 +190,17 @@ fn tag_input_exposes_value_actions_and_authored_tags() {
             hl_extension::SemanticActionKind::Submit,
         ]
     );
+}
+
+fn markdown_preserves_bounded_source_in_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::markdown_view("# Review\n- safe <html>"));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let document = &tree.root.children[0];
+    assert_eq!(document.role, "MarkdownView");
+    assert_eq!(document.value.as_deref(), Some("# Review\n- safe <html>"));
+    assert!(document.actions.is_empty(), "a document is readable, not actionable");
 }
 
 fn command_palette_exposes_typed_semantic_actions() {
