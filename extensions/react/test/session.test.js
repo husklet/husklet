@@ -244,7 +244,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
     api.containers.execution('e1'), api.containers.pause('c1'), api.containers.unpause('c1'),
-    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'),
+    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
@@ -258,6 +258,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_unpause', with: { id: 'c1' } },
     { call: 'container_restart', with: { id: 'c1' } },
     { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
+    { call: 'execution_kill', with: { id: 'e1', signal: 'SIGHUP' } },
     { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
@@ -265,7 +266,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'processes', with: { titles: [], processes: [] } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
     { reply: 'execution', with: { id: 'e1' } },
-    ...Array(4).fill({ reply: 'done' }),
+    ...Array(5).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
     { reply: 'done' },
   ];
@@ -273,7 +274,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
-  assert.equal(results[7], 'e2');
+  assert.equal(results[8], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

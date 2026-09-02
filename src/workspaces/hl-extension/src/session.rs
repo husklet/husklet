@@ -118,6 +118,7 @@ impl Session {
             | Request::ContainerUnpause { .. }
             | Request::ContainerRestart { .. }
             | Request::ContainerKill { .. }
+            | Request::ExecutionKill { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList
             | Request::ImagePull { .. }
@@ -223,7 +224,16 @@ impl Session {
             Request::ContainerPause { id } => port.pause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerUnpause { id } => port.unpause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerKill { id, signal } => port.kill(id, signal).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerKill { id, signal } => {
+                bounded_signal(signal)?;
+                port.kill(id, signal).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ExecutionKill { id, signal } => {
+                bounded_signal(signal)?;
+                port.execution_kill(id, signal)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             Request::ContainerExec {
                 id,
                 command,
@@ -503,4 +513,13 @@ impl Session {
         self.tab = Some(id.clone());
         Ok(Reply::Identity(id))
     }
+}
+
+fn bounded_signal(signal: &str) -> Result<(), Failure> {
+    if !signal.is_empty() && signal.len() <= 32 {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "signal must contain 1..=32 bytes".into(),
+    })
 }

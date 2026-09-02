@@ -63,6 +63,10 @@ pub enum Request {
     ExecutionInspect {
         id: String,
     },
+    ExecutionKill {
+        id: String,
+        signal: String,
+    },
     ContainerCreate {
         image: String,
         name: String,
@@ -244,6 +248,7 @@ impl Request {
             | Self::ContainerUnpause { .. }
             | Self::ContainerRestart { .. }
             | Self::ContainerKill { .. }
+            | Self::ExecutionKill { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePull { .. } | Self::ImageRemove { .. } | Self::ImagePrune => Capability::ImageWrite,

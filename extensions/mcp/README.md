@@ -18,6 +18,10 @@ Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
 
+Execution inspection and execution signaling use distinct typed calls: signaling
+targets one existing execution ID under `ContainerControl` and accepts only a
+1..=32 byte signal name. It does not signal the owning container or parse a shell.
+
 Workspace creation and update carry the complete typed configuration: identity,
 architecture, storage, resources, environment, mounts, Docker access, terminal,
 VPN, scrollback, and execution lifetime. Every collection and string is bounded.

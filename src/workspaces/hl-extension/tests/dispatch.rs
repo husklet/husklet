@@ -206,6 +206,11 @@ impl ContainerControl for Host {
         Ok(())
     }
 
+    fn execution_kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+        self.ledger.note("executions.kill");
+        Ok(())
+    }
+
     fn execute(
         &self,
         _id: &str,
@@ -648,6 +653,13 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
+            Request::ExecutionKill {
+                id: "e1".into(),
+                signal: "SIGTERM".into(),
+            },
+            Capability::ContainerControl,
+        ),
+        (
             Request::ContainerExec {
                 id: "c1".into(),
                 command: vec!["worker".into()],
@@ -809,6 +821,25 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
         session.dispatch(&invalid, &services(&host)),
         Err(Failure::Conflict { .. })
     ));
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn execution_signals_are_bounded_before_the_container_port_is_reached() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    for signal in [String::new(), "x".repeat(33)] {
+        assert!(matches!(
+            session.dispatch(
+                &Request::ExecutionKill {
+                    id: "e1".into(),
+                    signal,
+                },
+                &services(&host),
+            ),
+            Err(Failure::Conflict { .. })
+        ));
+    }
     assert!(host.ledger.reached().is_empty());
 }
 

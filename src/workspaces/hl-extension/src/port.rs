@@ -436,6 +436,14 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Delivers a validated signal to one additional execution, without
+    /// signaling its owning container.
+    fn execution_kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "execution signaling is unsupported by this host".into(),
+        ))
+    }
+
     /// Starts an additional process detached from the extension connection and
     /// returns its durable exec identity.
     fn execute(
