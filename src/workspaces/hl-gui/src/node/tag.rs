@@ -217,6 +217,7 @@ catalogue! {
     Banner: children, props[Label, Icon, Expanded, Tone, Variant], triggers[],
     AlertTitle: leaf, props[Label, Value, Scale, Tone], triggers[],
     InlineMessage: children, props[Label, Icon, Gap, Tone], triggers[],
+    ValidationSummary: children, props[Label, Detail, Icon, Gap, Tone], triggers[],
 
     // Buttons: every shape of invocation.
     Button: children, props[Label, Icon, Enabled, Variant, Tone], triggers[Invoke, Key, Focus, Pointer, Context],
@@ -233,6 +234,8 @@ catalogue! {
     // Fields: value entry.
     Entry: leaf, props[Value, Placeholder, Secret, Enabled, Tone], triggers[Change, Submit, Key, Focus, Context],
     Search: leaf, props[Value, Placeholder, Enabled], triggers[Change, Submit, Key, Focus, Context],
+    CommandPalette: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
+    TagInput: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
     NumberEntry: leaf, props[Value, Minimum, Maximum, Step, Enabled], triggers[Change, Key, Focus, Context],
     TextArea: leaf, props[Value, Monospace, Enabled], triggers[Change, Key, Focus, Context],
     PasswordEntry: leaf, props[Value, Placeholder, Secret, Enabled], triggers[Change, Key, Focus, Context],
@@ -324,14 +327,17 @@ catalogue! {
 
     // Content: long-form text and media.
     CodeView: leaf, props[Value, Monospace], triggers[],
+    MarkdownView: leaf, props[Value], triggers[],
     LogView: leaf, props[Value, Monospace], triggers[],
     Video: leaf, props[Uri], triggers[],
     Chart: leaf, props[Label, Tone], triggers[],
+    DiffViewer: children, props[Gap, Orientation], triggers[],
+    DiffLine: leaf, props[Label, Value, Tone], triggers[],
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Prop, Tag, Trigger, EVERY};
+    use super::{EVERY, Prop, Tag, Trigger};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

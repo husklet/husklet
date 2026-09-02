@@ -68,7 +68,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::Toast
         | Tag::Banner
         | Tag::AlertTitle
-        | Tag::InlineMessage => feedback::widget(tag),
+        | Tag::InlineMessage
+        | Tag::ValidationSummary => feedback::widget(tag),
         Tag::Button
         | Tag::IconButton
         | Tag::ToggleButton
@@ -85,6 +86,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::FilePicker => button::widget(tag),
         Tag::Entry
         | Tag::Search
+        | Tag::CommandPalette
+        | Tag::TagInput
         | Tag::NumberEntry
         | Tag::TextArea
         | Tag::PasswordEntry

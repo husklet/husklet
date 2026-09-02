@@ -44,7 +44,8 @@ impl Session {
             self.producer.set(node, Prop::Choices, PropValue::Choices(offered));
         }
         if tag.accepts(Prop::Source) {
-            self.producer.set(node, Prop::Source, PropValue::Source(hl_gui::SourceId::new(1)));
+            self.producer
+                .set(node, Prop::Source, PropValue::Source(hl_gui::SourceId::new(1)));
         }
         let frame = self.producer.frame();
         self.tree
@@ -133,7 +134,8 @@ fn unreported(tag: Tag) -> Vec<String> {
 /// producer sends is not news to it, and only what the widget itself emits
 /// proves the connection exists.
 fn worked(widget: &gtk::Widget, trigger: Trigger) {
-    if controlled(widget, trigger) {
+    let widget = editable(widget).unwrap_or_else(|| widget.clone());
+    if controlled(&widget, trigger) {
         return;
     }
     if trigger == Trigger::Close {
@@ -150,7 +152,10 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
             .and_then(gtk::ScrolledWindow::child)
             .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
         {
-            if let Some(selection) = view.model().and_then(|model| model.downcast::<gtk::MultiSelection>().ok()) {
+            if let Some(selection) = view
+                .model()
+                .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+            {
                 selection.select_item(0, true);
                 return;
             }
@@ -176,13 +181,30 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
         expander.set_expanded(true);
         return;
     }
-    valued(widget);
+    valued(&widget);
+}
+
+fn editable(widget: &gtk::Widget) -> Option<gtk::Widget> {
+    let mut pending = vec![widget.clone()];
+    while let Some(parent) = pending.pop() {
+        let mut child = parent.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if current.has_css_class("hl-field") {
+                return Some(current);
+            }
+            pending.push(current);
+        }
+    }
+    None
 }
 
 fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
     let controllers = widget.observe_controllers();
     for index in 0..controllers.n_items() {
-        let Some(controller) = controllers.item(index) else { continue };
+        let Some(controller) = controllers.item(index) else {
+            continue;
+        };
         match trigger {
             Trigger::Key if controller.is::<gtk::EventControllerKey>() => {
                 controller.emit_by_name::<bool>(

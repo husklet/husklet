@@ -5,7 +5,10 @@
 
 use hl_rpc::{Coding, Frame};
 
-use crate::port::{ContainerSummary, ExecutionList, ExtensionSummary, ImageSummary, NetworkSummary, TabSummary, VolumeSummary};
+use crate::port::{
+    ContainerSummary, ExecutionList, ExtensionSummary, ImagePullChange, ImageSummary, NetworkSummary, TabSummary,
+    VolumeSummary,
+};
 use crate::request::Topic;
 
 /// What produced a pane notification. Contents remain behind their separate
@@ -116,6 +119,7 @@ pub enum Snapshot {
     Containers(Vec<ContainerSummary>),
     Executions(ExecutionList),
     Images(Vec<ImageSummary>),
+    ImagePulls(ImagePullChange),
     Volumes(Vec<VolumeSummary>),
     Networks(Vec<NetworkSummary>),
     Terminal(Vec<TabSummary>),
@@ -136,6 +140,7 @@ impl Snapshot {
             Self::Containers(_) => Topic::Containers,
             Self::Executions(_) => Topic::Executions,
             Self::Images(_) => Topic::Images,
+            Self::ImagePulls(_) => Topic::ImagePulls,
             Self::Volumes(_) => Topic::Volumes,
             Self::Networks(_) => Topic::Networks,
             Self::Terminal(_) => Topic::Terminal,

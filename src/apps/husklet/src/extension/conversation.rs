@@ -20,9 +20,9 @@ use std::time::{Duration, Instant};
 
 use hl_extension::port::Occupant;
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
+    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -82,8 +82,29 @@ impl Queue {
     /// panicked mid-deposit leaves it stale at worst, never unsound.
     fn deposit(&self, frames: Vec<SurfaceFrame>, mutations: Vec<SurfaceMutation>) -> Result<(), Fault> {
         let mut held = self.hold();
-        let incoming = frames.len().saturating_add(mutations.len());
-        let occupied = held.frames.len().saturating_add(held.mutations.len());
+        if mutations.iter().any(|mutation| {
+            matches!(&mutation.mutation, hl_gui::SourceMutation::Window(window) if !window.text_is_bounded())
+        }) {
+            return Err(Fault::Malformed("a row window exceeded the text payload limit".into()));
+        }
+        let cost = |frames: &[SurfaceFrame], mutations: &[SurfaceMutation]| {
+            frames
+                .iter()
+                // Empty frames still consume sequencing and a GTK commit.
+                .fold(0usize, |total, frame| {
+                    total.saturating_add(frame.frame.patches.len().max(1))
+                })
+                .saturating_add(mutations.iter().fold(0usize, |total, mutation| {
+                    let work = match &mutation.mutation {
+                        hl_gui::SourceMutation::Open { columns, .. } => columns.len().max(1),
+                        hl_gui::SourceMutation::Window(window) => window.rows.len().max(1),
+                        _ => 1,
+                    };
+                    total.saturating_add(work)
+                }))
+        };
+        let incoming = cost(&frames, &mutations);
+        let occupied = cost(&held.frames, &held.mutations);
         if incoming > Self::LIMIT.saturating_sub(occupied) {
             return Err(Fault::Malformed(format!(
                 "more than {} interface operations without letting the window catch up",
@@ -164,6 +185,7 @@ pub struct Conversation {
     pane_cursor: usize,
     workspace_lifecycle_revision: Option<u64>,
     events: Option<super::host::Events>,
+    voice: Option<super::host::Voice>,
 }
 
 impl Conversation {
@@ -203,11 +225,16 @@ impl Conversation {
             pane_cursor: 0,
             workspace_lifecycle_revision: None,
             events: None,
+            voice: None,
         })
     }
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
         self.events = Some(events);
+    }
+
+    pub(crate) fn with_voice(&mut self, voice: super::host::Voice) {
+        self.voice = Some(voice);
     }
 
     /// Composes the native producer now; the protocol adapter drains it once
@@ -293,6 +320,7 @@ impl Conversation {
     /// report that resources disappeared. `publish` retains the existing
     /// capability check, channel credit, and latest-snapshot coalescing.
     fn observe(&mut self, services: &Services<'_>) -> Result<(), Fault> {
+        self.flush_interactions()?;
         let mut snapshots = Vec::new();
         if self.session.may_emit(Topic::Containers) {
             if let Ok(containers) = services.containers.list() {
@@ -308,6 +336,9 @@ impl Conversation {
             if let Ok(images) = services.images.list() {
                 snapshots.push(Snapshot::Images(images));
             }
+        }
+        if self.session.may_emit(Topic::ImagePulls) {
+            snapshots.extend(services.images.pull_changes().into_iter().map(Snapshot::ImagePulls));
         }
         if self.session.may_emit(Topic::Volumes) {
             if let Ok(volumes) = services.volumes.list() {
@@ -363,7 +394,10 @@ impl Conversation {
         }
         for snapshot in snapshots {
             let topic = snapshot.topic();
-            if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle && self.observed.get(&topic) == Some(&snapshot) {
+            if topic != Topic::WorkspaceEvents
+                && topic != Topic::WorkspaceLifecycle
+                && self.observed.get(&topic) == Some(&snapshot)
+            {
                 continue;
             }
             self.publish(&snapshot)?;
@@ -372,6 +406,14 @@ impl Conversation {
             }
         }
         self.observe_panes(services)?;
+        Ok(())
+    }
+
+    fn flush_interactions(&mut self) -> Result<(), Fault> {
+        let frames = self.voice.as_ref().map_or_else(Vec::new, super::host::Voice::drain);
+        for frame in frames {
+            self.wire.send(&frame).map_err(fault)?;
+        }
         Ok(())
     }
 
@@ -528,6 +570,7 @@ impl Conversation {
 
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
+        self.flush_interactions()?;
         if frame.kind == Kind::Credit {
             if let Some(topic) = self.replenish(frame) {
                 self.carry(topic)?;
@@ -564,10 +607,14 @@ impl Conversation {
         let answer = self.session.dispatch(&request, services);
         if answer.is_ok() {
             match request {
-                hl_extension::Request::EventSubscribe { topic: Topic::WorkspaceLifecycle } => {
+                hl_extension::Request::EventSubscribe {
+                    topic: Topic::WorkspaceLifecycle,
+                } => {
                     self.workspace_lifecycle_revision = Some(services.workspace_control.lifecycle_revision());
                 }
-                hl_extension::Request::EventUnsubscribe { topic: Topic::WorkspaceLifecycle } => {
+                hl_extension::Request::EventUnsubscribe {
+                    topic: Topic::WorkspaceLifecycle,
+                } => {
                     self.workspace_lifecycle_revision = None;
                 }
                 _ => {}
@@ -664,8 +711,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
-        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -720,8 +767,13 @@ mod tests {
             self.ledger.note("executions.list");
             Ok(hl_extension::port::ExecutionList {
                 executions: vec![hl_extension::port::ExecutionSummary {
-                    id: "e1".into(), container_id: "c1".into(), running: false,
-                    exit_code: 7, pid: 42, command: vec!["worker".into()], user: "root".into(),
+                    id: "e1".into(),
+                    container_id: "c1".into(),
+                    running: false,
+                    exit_code: 7,
+                    pid: 42,
+                    command: vec!["worker".into()],
+                    user: "root".into(),
                 }],
                 truncated: false,
             })
@@ -808,6 +860,8 @@ mod tests {
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
                 lines: vec![format!("at most {lines}")],
+                cursor_column: 12,
+                cursor_row: 3,
                 truncated: false,
             })
         }
@@ -873,7 +927,12 @@ mod tests {
         }
 
         fn lifecycle_since(&self, revision: u64) -> Result<Vec<hl_extension::WorkspaceLifecycleChange>, HostError> {
-            Ok(self.0.iter().filter(|change| change.revision > revision).cloned().collect())
+            Ok(self
+                .0
+                .iter()
+                .filter(|change| change.revision > revision)
+                .cloned()
+                .collect())
         }
     }
 
@@ -902,6 +961,11 @@ mod tests {
         fn read(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
             self.ledger.note("files.read");
             Ok(b"contents".to_vec())
+        }
+
+        fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
+            self.ledger.note("files.stat");
+            Ok(Entry { path: path.clone(), directory: false, size: 8 })
         }
 
         fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
@@ -986,6 +1050,34 @@ mod tests {
             conversation.drain_extension_events().is_none(),
             "the adapter drains rather than polls history"
         );
+    }
+
+    #[test]
+    fn queued_ui_interaction_crosses_one_framed_writer_with_slot_identity() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let mut wire = Wire::new(theirs);
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let voice = super::super::host::Voice::default();
+        voice.hold();
+        conversation.with_voice(voice.clone());
+        super::super::host::speak_at(
+            &voice,
+            &hl_extension::SurfaceEvent {
+                slot: "surface-9".into(),
+                event: hl_gui::Event::Focus {
+                    node: hl_gui::NodeId::new(4),
+                    id: hl_gui::EventId::new("editor"),
+                    focused: true,
+                },
+            },
+        );
+
+        conversation.flush_interactions().expect("single writer flush");
+        let frame = wire.receive().expect("framed event");
+        assert_eq!(frame.kind, Kind::Event);
+        let event: serde_json::Value = serde_json::from_slice(&frame.payload).expect("event json");
+        assert_eq!(event["slot"], "surface-9");
+        assert_eq!(event["interaction"], "focus");
     }
 
     #[test]
@@ -1108,14 +1200,18 @@ mod tests {
         let ledger = Arc::new(Ledger::default());
         let (ours, theirs) = UnixStream::pair().expect("socket pair");
         let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
-        let host = Host { ledger: Arc::clone(&ledger) };
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
         conversation.observe(&services(&host)).expect("idle observation");
         assert!(!ledger.reached().contains(&"executions.list"));
         conversation.session.follow(hl_extension::Topic::Executions);
         conversation.observe(&services(&host)).expect("subscribed observation");
         let event = Wire::new(theirs).receive().expect("execution snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
-        assert!(matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e1" && !list.executions[0].running));
+        assert!(
+            matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e1" && !list.executions[0].running)
+        );
     }
 
     #[test]
@@ -1137,9 +1233,22 @@ mod tests {
         assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
         let event = wire.receive().expect("initial extension snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
-        assert!(matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager"));
-        assert_eq!(wire.receive(), Err(Transit::Pending), "unchanged inventory is coalesced");
-        assert!(ledger.reached().iter().filter(|call| **call == "extensions.list").count() > 1);
+        assert!(
+            matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager")
+        );
+        assert_eq!(
+            wire.receive(),
+            Err(Transit::Pending),
+            "unchanged inventory is coalesced"
+        );
+        assert!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "extensions.list")
+                .count()
+                > 1
+        );
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
@@ -1216,22 +1325,29 @@ mod tests {
 
     #[test]
     fn workspace_lifecycle_observation_uses_read_authority_and_preserves_revisions() {
-        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
         let lifecycle = LifecycleHost(vec![
             hl_extension::WorkspaceLifecycleChange {
-                workspace: "other".into(), action: hl_extension::WorkspaceLifecycleAction::Create,
-                revision: 4, coalesced: 0,
+                workspace: "other".into(),
+                action: hl_extension::WorkspaceLifecycleAction::Create,
+                revision: 4,
+                coalesced: 0,
             },
             hl_extension::WorkspaceLifecycleChange {
-                workspace: "target".into(), action: hl_extension::WorkspaceLifecycleAction::Start,
-                revision: 5, coalesced: 0,
+                workspace: "target".into(),
+                action: hl_extension::WorkspaceLifecycleAction::Start,
+                revision: 5,
+                coalesced: 0,
             },
         ]);
         let (ours, peer) = UnixStream::pair().expect("socket pair");
         peer.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
         let authority = Authority::new(
             ExtensionName::new("observer").expect("name"),
-            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
         );
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
@@ -1242,25 +1358,31 @@ mod tests {
         let mut wire = Wire::new(peer);
         let first: Snapshot = serde_json::from_slice(&wire.receive().expect("first").payload).expect("snapshot");
         let second: Snapshot = serde_json::from_slice(&wire.receive().expect("second").payload).expect("snapshot");
-        assert!(matches!(first, Snapshot::WorkspaceLifecycle(change) if change.workspace == "other" && change.revision == 4));
-        assert!(matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5));
+        assert!(
+            matches!(first, Snapshot::WorkspaceLifecycle(change) if change.workspace == "other" && change.revision == 4)
+        );
+        assert!(
+            matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5)
+        );
     }
 
     #[test]
     fn a_native_store_mutation_reaches_the_same_subscriber_as_an_mcp_mutation() {
-        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
         let lifecycle = SharedLifecycleHost;
         let (ours, peer) = UnixStream::pair().expect("socket pair");
         peer.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
         let authority = Authority::new(
             ExtensionName::new("observer").expect("name"),
-            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
         );
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
-        conversation.workspace_lifecycle_revision = Some(
-            hl_extension::port::WorkspaceControl::lifecycle_revision(&lifecycle),
-        );
+        conversation.workspace_lifecycle_revision =
+            Some(hl_extension::port::WorkspaceControl::lifecycle_revision(&lifecycle));
 
         let name = format!("native-observed-{}", std::process::id());
         let path = std::env::temp_dir().join(format!("husklet-{name}.conf"));
@@ -1284,13 +1406,18 @@ mod tests {
             matches!(event, Snapshot::WorkspaceLifecycle(change)
                 if change.workspace == name && change.action == hl_extension::WorkspaceLifecycleAction::Create)
         });
-        assert!(observed, "native mutation was delivered through the shared lifecycle ledger");
+        assert!(
+            observed,
+            "native mutation was delivered through the shared lifecycle ledger"
+        );
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn a_from_now_lifecycle_subscription_does_not_replay_the_hosts_prior_revision() {
-        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
         let lifecycle = LifecycleHost(vec![hl_extension::WorkspaceLifecycleChange {
             workspace: "before-subscribe".into(),
             action: hl_extension::WorkspaceLifecycleAction::Create,
@@ -1301,19 +1428,28 @@ mod tests {
         peer.set_nonblocking(true).expect("nonblocking peer");
         let authority = Authority::new(
             ExtensionName::new("observer").expect("name"),
-            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
         );
         let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
         let mut ports = services(&host);
         ports.workspace_control = &lifecycle;
         let subscribe = codec::request(&Request::EventSubscribe {
             topic: hl_extension::Topic::WorkspaceLifecycle,
-        }).expect("subscribe request");
+        })
+        .expect("subscribe request");
         conversation.exchange(&subscribe, &ports).expect("subscribe");
         let mut wire = Wire::new(peer);
-        assert_eq!(codec::read_reply(&wire.receive().expect("reply")).expect("done"), Reply::Done);
+        assert_eq!(
+            codec::read_reply(&wire.receive().expect("reply")).expect("done"),
+            Reply::Done
+        );
         conversation.observe(&ports).expect("observe from now");
-        assert_eq!(wire.receive(), Err(Transit::Pending), "history is not replayed to a new subscriber");
+        assert_eq!(
+            wire.receive(),
+            Err(Transit::Pending),
+            "history is not replayed to a new subscriber"
+        );
     }
 
     #[test]
@@ -1387,11 +1523,7 @@ mod tests {
             .subscriptions
             .channel(hl_extension::Topic::PaneChanges)
             .expect("pane event channel");
-        let credit = Frame::new(
-            channel,
-            Kind::Credit,
-            serde_json::to_vec(&2_u32).expect("credit"),
-        );
+        let credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&2_u32).expect("credit"));
         conversation
             .exchange(&credit, &services(&host))
             .expect("event credit accepted");
@@ -1547,7 +1679,11 @@ mod tests {
             Vec::new(),
         );
         assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
-        assert_eq!(noisy.collect().frames.len(), Queue::LIMIT, "overflow is rejected atomically");
+        assert_eq!(
+            noisy.collect().frames.len(),
+            Queue::LIMIT,
+            "overflow is rejected atomically"
+        );
 
         healthy
             .deposit(
@@ -1559,6 +1695,85 @@ mod tests {
             )
             .expect("another extension owns an independent budget");
         assert_eq!(healthy.collect().frames.len(), 1);
+    }
+
+    #[test]
+    fn one_oversized_frame_cannot_hide_unbounded_gtk_work_inside_one_queue_entry() {
+        let noisy = Queue::new();
+        let healthy = Queue::new();
+        let oversized = hl_gui::Frame {
+            sequence: 1,
+            patches: (0..=Queue::LIMIT)
+                .map(|_| hl_gui::Patch::Remove {
+                    id: hl_gui::NodeId::new(1),
+                })
+                .collect(),
+        };
+
+        let overflow = noisy.deposit(
+            vec![hl_extension::SurfaceFrame {
+                slot: "noisy".into(),
+                frame: oversized,
+            }],
+            Vec::new(),
+        );
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
+        assert!(noisy.is_empty(), "an oversized frame is rejected atomically");
+
+        healthy
+            .deposit(
+                vec![hl_extension::SurfaceFrame {
+                    slot: "healthy".into(),
+                    frame: hl_gui::Frame::new(1),
+                }],
+                Vec::new(),
+            )
+            .expect("a sibling extension retains its independent render budget");
+        assert_eq!(healthy.collect().frames.len(), 1);
+    }
+
+    #[test]
+    fn one_row_window_cannot_hide_unbounded_gtk_work_inside_one_mutation() {
+        let queue = Queue::new();
+        let rows = (0..=Queue::LIMIT)
+            .map(|index| hl_gui::Row::new(index as u64, [hl_gui::Cell::text(index.to_string())]))
+            .collect();
+        let mutation = hl_extension::SurfaceMutation {
+            slot: "table-pane".into(),
+            mutation: hl_gui::SourceMutation::Window(hl_gui::RowWindow {
+                source: hl_gui::SourceId::new(1),
+                version: hl_gui::Version::new(1),
+                request: hl_gui::RequestId::new(1),
+                range: hl_gui::RowRange::new(0, hl_gui::RowRange::BLOCK),
+                rows,
+            }),
+        };
+
+        let overflow = queue.deposit(Vec::new(), vec![mutation]);
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
+        assert!(queue.is_empty(), "the oversized source answer is rejected atomically");
+    }
+
+    #[test]
+    fn an_oversized_cell_faults_before_the_row_window_is_queued() {
+        let queue = Queue::new();
+        let mutation = hl_extension::SurfaceMutation {
+            slot: "table-pane".into(),
+            mutation: hl_gui::SourceMutation::Window(hl_gui::RowWindow {
+                source: hl_gui::SourceId::new(1),
+                version: hl_gui::Version::new(1),
+                request: hl_gui::RequestId::new(1),
+                range: hl_gui::RowRange::new(0, 1),
+                rows: vec![hl_gui::Row::new(
+                    0,
+                    [hl_gui::Cell::text("x".repeat(hl_gui::Cell::MAX_TEXT_BYTES + 1))],
+                )],
+            }),
+        };
+
+        let overflow = queue.deposit(Vec::new(), vec![mutation]);
+        assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("text payload")));
+        assert!(queue.is_empty(), "invalid text never becomes pending GTK work");
     }
 
     #[test]

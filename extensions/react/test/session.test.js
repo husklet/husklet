@@ -172,7 +172,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
@@ -227,6 +227,25 @@ test('workspace lifecycle watcher uses its WorkspaceRead-gated exact topic', asy
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('workspace input watcher uses its separate grant topic, returns credit, and disposes', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const batches = [];
+  const opening = api.watchWorkspaceEvents((value) => batches.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'workspace-events' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'workspace_events', of: {
+    events: [{ event: 'key', key: 'Enter', modifiers: [], pressed: true }], dropped: 3,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.equal(batches[0].dropped, 3);
+  const stopping = stop();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-events' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const seen = [];
@@ -255,11 +274,28 @@ test('container watcher uses existing snapshot topic and returns credit after de
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('image pull jobs and progress watcher preserve exact typed wire shapes', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const opening = api.watchImagePulls(() => {});
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'image-pulls' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); const stop = await opening;
+  const operations = [api.images.startPull('alpine:3.20'), api.images.pullStatus('7'), api.images.cancelPull('7')];
+  assert.deepEqual((await next()).payload, { call: 'image_pull_start', with: { reference: 'alpine:3.20' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull_job', with: { job: '7' } } }));
+  assert.deepEqual((await next()).payload, { call: 'image_pull_status', with: { job: '7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull', with: { job: '7' } } }));
+  assert.deepEqual((await next()).payload, { call: 'image_pull_cancel', with: { job: '7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await Promise.all(operations);
+  const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'image-pulls' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('extension acquisition preserves job revision and explicit grant identity', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1'), api.extensions.install('job-1', 7, ['interface']),
+    api.extensions.cancelAcquisition('job-1'), api.extensions.install('job-1', 7, ['interface', 'container-attach']),
     api.extensions.update('job-2', 8, ['container-read'])];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
@@ -267,7 +303,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1' } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface'] } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface', 'container-attach'] } },
     { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['container-read'] } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
@@ -311,10 +347,14 @@ test('volume and network facades preserve safe request shapes', async () => {
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
+  const networkId = 'a'.repeat(32);
+  const containerId = 'b'.repeat(64);
+  assert.throws(() => api.networks.remove('private'), /complete immutable ID/);
+  assert.throws(() => api.networks.connect(networkId, 'friendly'), /complete immutable ID/);
   const operations = [
-    api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache'),
+    api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache', 'a'.repeat(32)),
     api.networks.list(), api.networks.inspect('private'), api.networks.create('private'),
-    api.networks.remove('private'), api.networks.connect('private', 'c1'), api.networks.disconnect('private', 'c1'),
+    api.networks.remove(networkId), api.networks.connect(networkId, containerId), api.networks.disconnect(networkId, containerId),
     api.subscribe('volumes'), api.subscribe('networks'), api.subscribe('workspace-events'),
   ];
   const calls = [];
@@ -324,8 +364,9 @@ test('volume and network facades preserve safe request shapes', async () => {
     'network_create', 'network_remove', 'network_connect', 'network_disconnect', 'event_subscribe', 'event_subscribe',
     'event_subscribe',
   ]);
-  assert.deepEqual(calls[8].with, { reference: 'private', container: 'c1' });
-  assert.deepEqual(calls[9].with, { reference: 'private', container: 'c1' });
+  assert.deepEqual(calls[3].with, { name: 'cache', generation: 'a'.repeat(32) });
+  assert.deepEqual(calls[8].with, { reference: networkId, container: containerId });
+  assert.deepEqual(calls[9].with, { reference: networkId, container: containerId });
   const replies = [
     { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local' } },
     { reply: 'volume', with: { name: 'cache', driver: 'local' } }, { reply: 'done' },
@@ -342,12 +383,14 @@ test('image inspection and destructive calls preserve explicit request shapes', 
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
-  const operations = [api.images.inspect('alpine:3.20'), api.images.remove('alpine:3.20'), api.images.prune()];
+  const digest = `sha256:${'a'.repeat(64)}`;
+  assert.throws(() => api.images.remove('alpine:3.20'), /complete immutable sha256 digest/);
+  const operations = [api.images.inspect('alpine:3.20'), api.images.remove(digest), api.images.prune()];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'image_inspect', with: { reference: 'alpine:3.20' } },
-    { call: 'image_remove', with: { reference: 'alpine:3.20' } },
+    { call: 'image_remove', with: { reference: digest } },
     { call: 'image_prune' },
   ]);
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: { id: 'i1' } } }));
@@ -362,10 +405,16 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
+  const containerId = 'a'.repeat(64);
+  const executionId = 'b'.repeat(32);
+  assert.throws(() => api.containers.signalExecution('7', 'SIGTERM'), /complete immutable ID/);
+  assert.throws(() => api.containers.stop('friendly-name'), /complete immutable ID/);
+  assert.throws(() => api.containers.remove('abc123'), /complete immutable ID/);
+  assert.throws(() => api.containers.kill('friendly-name', 'SIGTERM'), /complete immutable ID/);
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
     api.containers.execution('e1'), api.containers.executions(), api.containers.executionLogs('e1', { stdout: true, stderr: false }), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.pause('c1'), api.containers.unpause('c1'),
-    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'), api.containers.removeExecution('e1'),
+    api.containers.restart('c1'), api.containers.stop(containerId), api.containers.remove(containerId), api.containers.kill(containerId, 'SIGTERM'), api.containers.signalExecution(executionId, 'SIGHUP'), api.containers.removeExecution('e1'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
@@ -381,20 +430,24 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_pause', with: { id: 'c1' } },
     { call: 'container_unpause', with: { id: 'c1' } },
     { call: 'container_restart', with: { id: 'c1' } },
-    { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
-    { call: 'execution_kill', with: { id: 'e1', signal: 'SIGHUP' } },
+    { call: 'container_stop', with: { id: containerId } },
+    { call: 'container_remove', with: { id: containerId } },
+    { call: 'container_kill', with: { id: containerId, signal: 'SIGTERM' } },
+    { call: 'execution_kill', with: { id: executionId, signal: 'SIGHUP' } },
     { call: 'execution_remove', with: { id: 'e1' } },
     { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
   const replies = [
-    { reply: 'processes', with: { titles: [], processes: [] } },
-    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
+    { reply: 'processes', with: { titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
+      processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
+      scope: 'initial', pid_identity: 'snapshot', truncated: false } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: false } },
     { reply: 'execution', with: { id: 'e1' } },
     { reply: 'executions', with: { executions: [], truncated: false } },
-    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } },
     { reply: 'execution', with: { id: 'e1', running: false, exit_code: 0 } },
-    ...Array(6).fill({ reply: 'done' }),
+    ...Array(8).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
     { reply: 'done' },
   ];
@@ -402,7 +455,16 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
-  assert.equal(results[12], 'e2');
+  assert.deepEqual(
+    { scope: results[0].scope, pidIdentity: results[0].pid_identity, truncated: results[0].truncated },
+    { scope: 'initial', pidIdentity: 'snapshot', truncated: false },
+  );
+  assert.equal(results[1].eof, false, 'empty output from a running initial process remains open');
+  assert.deepEqual(
+    { eof: results[4].eof, stdout: results[4].stdout_truncated, stderr: results[4].stderr_truncated },
+    { eof: true, stdout: false, stderr: false },
+  );
+  assert.equal(results[14], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -419,6 +481,19 @@ test('configured container creation preserves its bounded typed specification', 
   assert.deepEqual((await next()).payload, { call: 'container_create', with: { spec } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'c-rich' } }));
   assert.equal(await pending, 'c-rich');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('container terminal attachment preserves immutable identity and exact argv on the wire', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const id = 'a'.repeat(64);
+  const pending = workspace(stage.session).containers.attachTerminal(id, ['sh', '-lc', 'printf "%s" "$HOME"']);
+  assert.deepEqual((await next()).payload, {
+    call: 'container_attach_terminal', with: { id, command: ['sh', '-lc', 'printf "%s" "$HOME"'] },
+  });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'p7' } }));
+  assert.equal(await pending, 'p7');
+  assert.throws(() => workspace(stage.session).containers.attachTerminal('friendly', ['sh']), /complete immutable ID/);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -479,6 +554,22 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('terminal screen read preserves bounded text, truncation and cursor over framing', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const reading = workspace(stage.session).terminal.read('s1', 25);
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_read_pane', with: { slot: 's1', lines: 25 },
+  });
+  const screen = {
+    slot: 's1', lines: ['ready'], cursor_column: 5, cursor_row: 2, truncated: true,
+  };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen } }));
+  assert.deepEqual(await reading, screen);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pane discovery uses its distinct bounded inventory reply', async () => {
   const stage = await pair();
   const next = frames(stage.host);
@@ -496,14 +587,16 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   const next = frames(stage.host);
   await next();
   const files = workspace(stage.session).files;
-  const operations = [files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
+  const operations = [files.stat('logs/app.log'), files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
+  assert.deepEqual((await next()).payload, { call: 'filesystem_stat', with: { path: 'logs/app.log' } });
   assert.deepEqual((await next()).payload, { call: 'filesystem_mkdir', with: { path: 'logs/new' } });
   assert.deepEqual((await next()).payload, { call: 'filesystem_rename', with: { from: 'logs/a', to: 'logs/b' } });
   assert.deepEqual((await next()).payload, { call: 'filesystem_remove', with: { path: 'logs/b' } });
-  for (let index = 0; index < operations.length; index += 1) {
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'entry', with: { path: 'logs/app.log', directory: false, size: 4 } } }));
+  for (let index = 1; index < operations.length; index += 1) {
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   }
-  await Promise.all(operations);
+  const results = await Promise.all(operations); assert.equal(results[0].size, 4);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

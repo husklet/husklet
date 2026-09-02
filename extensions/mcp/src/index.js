@@ -7,14 +7,20 @@ import { paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
+const containerIdentity = z.string().regex(/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/, 'complete immutable container ID is required');
+const executionIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable execution ID is required');
+const imageDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/, 'complete immutable image sha256 digest is required');
+const networkIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable network ID is required');
+const volumeGeneration = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable volume generation is required');
 const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const extensionJob = z.string().min(1).max(128);
-const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
-const extensionGrant = z.array(extensionCapability).max(23);
+const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
+const extensionGrant = z.array(extensionCapability).max(24);
 const acquisitionRevision = z.number().int().nonnegative().safe();
 const path = z.string().min(1).max(4096);
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
+const imagePullJob = z.string().min(1).max(20).regex(/^[1-9][0-9]*$/, 'image pull job must be a positive decimal identity');
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
   if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
@@ -122,34 +128,42 @@ export function tools(api) {
     define('husklet_extension_update', 'Consent and atomically replace an installed extension with the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.update(job, revision, granted)),
     define('husklet_container_list', 'List containers.', empty, () => api.containers.list()),
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
-    define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
+    define('husklet_container_processes', 'Read a bounded timestamped initial-process snapshot; PIDs are snapshot-local and reusable.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
     define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
     define('husklet_execution_list', 'List the bounded durable execution catalogue for this workspace.', empty, () => api.containers.executions()),
     define('husklet_execution_logs', 'Replay bounded captured output for one execution.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr })),
     define('husklet_execution_wait', 'Wait up to 30 seconds for one execution to stop and return its final state.', z.object({ id, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ id: value, timeout_ms }) => api.containers.waitExecution(value, { timeoutMs: timeout_ms })),
-    define('husklet_execution_signal', 'Signal one execution without signaling its owning container.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
+    define('husklet_execution_signal', 'Signal one immutable execution ID without signaling its owning container; snapshot PIDs are never accepted.', z.object({ id: executionIdentity, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
     define('husklet_execution_remove', 'Remove one stopped execution record and its captured output after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.removeExecution(value); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
     define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, (spec) => api.containers.create(spec)),
     define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: z.string().min(1).max(256).optional(), working_directory: z.string().min(1).max(4096).startsWith('/').optional() }).strict(), ({ id: value, command: argv, user, working_directory: workingDirectory }) => api.containers.exec(value, { command: argv, user, workingDirectory })),
+    define('husklet_container_attach_terminal', 'Open an ephemeral GUI terminal running an exact bounded argv in a complete immutable container ID; the process is killed when the pane disconnects.', z.object({ id: containerIdentity, command }).strict(), ({ id: value, command: argv }) => api.containers.attachTerminal(value, argv)),
     ...['start', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
-    define('husklet_container_stop', 'Stop one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),
-    define('husklet_container_remove', 'Remove one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
-    define('husklet_container_kill', 'Signal one container after explicit confirmation; signal must be explicit.', z.object({ id, signal: z.string().min(1).max(32), confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
+    define('husklet_container_stop', 'Stop one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),
+    define('husklet_container_remove', 'Remove one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
+    define('husklet_container_kill', 'Signal one complete immutable container ID after explicit confirmation; names, prefixes and process PIDs are refused.', z.object({ id: containerIdentity, signal: z.string().min(1).max(32), confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
     define('husklet_volume_list', 'List bounded local volume summaries.', empty, () => api.volumes.list()),
     define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.inspect(name)),
     define('husklet_volume_create', 'Create one named local volume.', z.object({ name: id }).strict(), ({ name }) => api.volumes.create(name)),
-    define('husklet_volume_remove', 'Remove one volume after explicit confirmation.', z.object({ name: id, confirm: z.literal(true) }).strict(), async ({ name }) => { await api.volumes.remove(name); return { done: true }; }),
+    define('husklet_volume_remove', 'Remove one exact observed volume generation after explicit confirmation.', z.object({ name: id, generation: volumeGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.volumes.remove(name, generation); return { done: true }; }),
     define('husklet_network_list', 'List bounded local network summaries.', empty, () => api.networks.list()),
     define('husklet_network_inspect', 'Inspect one local network.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference)),
     define('husklet_network_create', 'Create one named local network.', z.object({ name: id }).strict(), ({ name }) => api.networks.create(name)),
-    define('husklet_network_remove', 'Remove one network after explicit confirmation.', z.object({ reference: id, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.networks.remove(reference); return { done: true }; }),
-    define('husklet_network_connect', 'Connect one container to a network.', z.object({ reference: id, container: id }).strict(), async ({ reference, container }) => { await api.networks.connect(reference, container); return { done: true }; }),
-    define('husklet_network_disconnect', 'Disconnect one container from a network after explicit confirmation.', z.object({ reference: id, container: id, confirm: z.literal(true) }).strict(), async ({ reference, container }) => { await api.networks.disconnect(reference, container); return { done: true }; }),
+    define('husklet_network_remove', 'Remove one immutable network ID after explicit confirmation; names and prefixes are refused.', z.object({ reference: networkIdentity, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.networks.remove(reference); return { done: true }; }),
+    define('husklet_network_connect', 'Connect one immutable container ID to one immutable network ID.', z.object({ reference: networkIdentity, container: containerIdentity }).strict(), async ({ reference, container }) => { await api.networks.connect(reference, container); return { done: true }; }),
+    define('husklet_network_disconnect', 'Disconnect one immutable container ID from one immutable network ID after explicit confirmation.', z.object({ reference: networkIdentity, container: containerIdentity, confirm: z.literal(true) }).strict(), async ({ reference, container }) => { await api.networks.disconnect(reference, container); return { done: true }; }),
     define('husklet_image_list', 'List bounded local image summaries.', empty, () => api.images.list()),
     define('husklet_image_inspect', 'Inspect one local image.', z.object({ reference: id }).strict(), ({ reference }) => api.images.inspect(reference)),
     define('husklet_image_pull', 'Pull one explicit image reference.', z.object({ reference: id }).strict(), ({ reference }) => api.images.pull(reference)),
-    define('husklet_image_remove', 'Remove one image after explicit confirmation.', z.object({ reference: id, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
+    define('husklet_image_pull_start', 'Start a bounded asynchronous image pull. Prefer this observable workflow over the synchronous compatibility tool.', z.object({ reference: imageReference }).strict(), ({ reference }) => api.images.startPull(reference)),
+    define('husklet_image_pull_status', 'Read the latest bounded status for one exact image-pull job.', z.object({ job: imagePullJob }).strict(), async ({ job }) => {
+      const status = await api.images.pullStatus(job);
+      if (status.job !== job) throw new Error(`host returned image pull job ${status.job}, expected ${job}`);
+      return status;
+    }),
+    define('husklet_image_pull_cancel', 'Cancel one active image-pull job; cancellation is safe and does not require destructive confirmation.', z.object({ job: imagePullJob }).strict(), async ({ job }) => { await api.images.cancelPull(job); return { done: true, job }; }),
+    define('husklet_image_remove', 'Remove one immutable image digest after explicit confirmation; mutable tags and partial digests are refused.', z.object({ reference: imageDigest, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
     define('husklet_image_prune', 'Prune unused images after explicit confirmation.', z.object({ confirm: z.literal(true) }).strict(), () => api.images.prune()),
     define('husklet_terminal_tabs', 'List terminal tabs.', empty, () => api.terminal.tabs()),
     define('husklet_terminal_topology', 'Read terminal split topology.', empty, () => api.terminal.topology()),
@@ -164,6 +178,7 @@ export function tools(api) {
     define('husklet_terminal_ratio', 'Set the pane share of its split.', z.object({ slot: id, ratio: z.number().min(0.05).max(0.95) }).strict(), async ({ slot: value, ratio }) => { await api.terminal.ratio(value, ratio); return { done: true }; }),
     define('husklet_terminal_close', 'Close one pane after explicit confirmation.', z.object({ slot: id, confirm: z.literal(true) }).strict(), async ({ slot: value }) => { await api.terminal.close(value); return { done: true }; }),
     define('husklet_file_list', 'List a workspace-relative directory.', z.object({ path }).strict(), ({ path: value }) => api.files.list(value)),
+    define('husklet_file_stat', 'Read bounded metadata for one workspace-relative path without reading contents.', z.object({ path }).strict(), ({ path: value }) => api.files.stat(value)),
     define('husklet_file_read', 'Read one bounded workspace-relative file.', z.object({ path }).strict(), ({ path: value }) => api.files.read(value)),
     define('husklet_file_write', 'Write bounded UTF-8 contents to a workspace-relative file.', z.object({ path, contents: z.string().max(64 * 1024) }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
     define('husklet_file_mkdir', 'Create one workspace-relative directory.', z.object({ path }).strict(), async ({ path: value }) => { await api.files.mkdir(value); return { done: true }; }),
@@ -192,6 +207,23 @@ export function tools(api) {
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       api.watchPaneChanges((change) => {
         if (wanted == null || change.slot === wanted) finish({ changed: true, change });
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
+  if (typeof api.watchWorkspaceEvents === 'function') definitions.push(define(
+    'husklet_workspace_event_wait',
+    'Wait once for a bounded permission-gated workspace keyboard, focus, or pointer event batch.',
+    z.object({ kind: z.enum(['key', 'focus', 'pointer']).optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ kind, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ observed: false }), timeout);
+      api.watchWorkspaceEvents((batch) => {
+        const event = batch?.events?.find((candidate) => kind == null || candidate?.event === kind);
+        if (event) finish({ observed: true, event, dropped: batch.dropped ?? 0 });
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
@@ -231,6 +263,27 @@ export function tools(api) {
         if ((absent && !container) || (!absent && container && (state == null || container.state === state))) {
           finish({ changed: true, container: container ?? null });
         }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
+  if (typeof api.watchImagePulls === 'function') definitions.push(define(
+    'husklet_image_pull_wait',
+    'Wait once for a revision of one exact image-pull job, then return its bounded full status without polling.',
+    z.object({ job: imagePullJob, after_revision: z.number().int().nonnegative().safe().default(0), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ job, after_revision: after, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false, job, after_revision: after }), timeout);
+      api.watchImagePulls(async (change) => {
+        if (change.job !== job || change.revision <= after || settled) return;
+        try {
+          const status = await api.images.pullStatus(job);
+          if (status.job !== job) throw new Error(`host returned image pull job ${status.job}, expected ${job}`);
+          finish({ changed: true, change, status });
+        } catch (error) { finish(undefined, error); }
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));

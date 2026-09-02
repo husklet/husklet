@@ -161,7 +161,7 @@ export interface WorkspaceInfo { name: string; architecture: string; image: stri
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
 export type ExtensionCapability =
   | 'workspace-read' | 'workspace-control' | 'workspace-events'
-  | 'container-read' | 'container-control' | 'image-read' | 'image-write'
+  | 'container-read' | 'container-control' | 'container-attach' | 'image-read' | 'image-write'
   | 'volume-read' | 'volume-write' | 'network-read' | 'network-write'
   | 'terminal-read' | 'terminal-control' | 'terminal-output' | 'pane-observe'
   | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
@@ -196,8 +196,14 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
-export interface ProcessList { titles: string[]; processes: string[][] }
-export interface ContainerOutput { stdout: number[]; stderr: number[]; truncated: boolean }
+export interface ProcessList {
+  titles: string[]; processes: string[][]; observed_at_ms: number;
+  scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
+}
+export interface ContainerOutput {
+  stdout: number[]; stderr: number[]; truncated: boolean;
+  stdout_truncated: boolean; stderr_truncated: boolean; eof: boolean;
+}
 export interface ExecutionSummary {
   id: string; container_id: string; running: boolean; exit_code: number; pid: number;
   command: string[]; user: string;
@@ -205,7 +211,7 @@ export interface ExecutionSummary {
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
-export interface VolumeSummary { name: string; driver: string }
+export interface VolumeSummary { name: string; driver: string; generation: string }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
 export interface PaneSummary {
   slot: string;
@@ -215,7 +221,7 @@ export interface PaneSummary {
   provider: { extension: string; provider: string } | null;
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface PaneText { slot: string; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
 export interface InspectablePane { slot: string; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
 export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
@@ -317,7 +323,7 @@ export interface WorkspaceApi {
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string): Promise<void>;
     disable(name: string): Promise<void>;
-    remove(name: string): Promise<void>;
+    remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     cancelAcquisition(job: string): Promise<void>;

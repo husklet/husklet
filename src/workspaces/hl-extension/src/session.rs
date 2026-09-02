@@ -9,8 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
@@ -153,6 +154,15 @@ impl Session {
             | Request::ExecutionList
             | Request::ExecutionLogs { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
+            Request::ContainerAttachTerminal { id, command } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                validate_terminal_command(command)?;
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::ContainerAttach, services.terminal)?;
+                Ok(Reply::Identity(port.attach_container(id, command)?))
+            }
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
             | Request::ContainerStop { .. }
@@ -166,6 +176,9 @@ impl Session {
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList
             | Request::ImagePull { .. }
+            | Request::ImagePullStart { .. }
+            | Request::ImagePullStatus { .. }
+            | Request::ImagePullCancel { .. }
             | Request::ImageInspect { .. }
             | Request::ImageRemove { .. }
             | Request::ImagePrune => self.images(request, services),
@@ -223,6 +236,7 @@ impl Session {
             }
             Request::FilesystemList { .. }
             | Request::FilesystemRead { .. }
+            | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
             | Request::FilesystemMkdir { .. }
             | Request::FilesystemRename { .. }
@@ -257,7 +271,11 @@ impl Session {
             Request::ExecutionInspect { id } => Ok(Reply::Execution(port.execution(id)?)),
             Request::ExecutionList => Ok(Reply::Executions(port.executions()?)),
             Request::ExecutionLogs { id, stdout, stderr } => {
-                if !stdout && !stderr { return Err(Failure::Conflict { detail: "execution logs require stdout or stderr".into() }); }
+                if !stdout && !stderr {
+                    return Err(Failure::Conflict {
+                        detail: "execution logs require stdout or stderr".into(),
+                    });
+                }
                 Ok(Reply::Logs(port.execution_logs(id, *stdout, *stderr)?))
             }
             Request::ExecutionWait { id, timeout_ms } => {
@@ -297,17 +315,25 @@ impl Session {
                 Ok(Reply::Identity(port.create_spec(spec)?))
             }
             Request::ContainerStart { id } => port.start(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerStop { id } => port.stop(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerRemove { id } => port.remove(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerStop { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.stop(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ContainerRemove { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.remove(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ContainerPause { id } => port.pause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerUnpause { id } => port.unpause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerKill { id, signal } => {
                 bounded_signal(signal)?;
+                immutable_identity(id, &[32, 64], "container")?;
                 port.kill(id, signal).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ExecutionKill { id, signal } => {
                 bounded_signal(signal)?;
+                immutable_identity(id, &[32], "execution")?;
                 port.execution_kill(id, signal)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
@@ -335,8 +361,14 @@ impl Session {
         match request {
             Request::ImageList => Ok(Reply::Images(port.list()?)),
             Request::ImagePull { reference } => Ok(Reply::Image(port.pull(reference)?)),
+            Request::ImagePullStart { reference } => Ok(Reply::ImagePullJob(port.pull_start(reference)?)),
+            Request::ImagePullStatus { job } => Ok(Reply::ImagePull(port.pull_status(job)?)),
+            Request::ImagePullCancel { job } => port.pull_cancel(job).map(|()| Reply::Done).map_err(Failure::from),
             Request::ImageInspect { reference } => Ok(Reply::ImageDetails(port.inspect(reference)?)),
-            Request::ImageRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ImageRemove { reference } => {
+                immutable_digest(reference, "image")?;
+                port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ImagePrune => Ok(Reply::ImagePrune(port.prune()?)),
             _ => Err(Failure::Unsupported {
                 call: "image operation".into(),
@@ -351,7 +383,10 @@ impl Session {
             Request::VolumeList => Ok(Reply::Volumes(port.list()?)),
             Request::VolumeInspect { name } => Ok(Reply::Volume(port.inspect(name)?)),
             Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
-            Request::VolumeRemove { name } => port.remove(name).map(|()| Reply::Done).map_err(Failure::from),
+            Request::VolumeRemove { name, generation } => {
+                immutable_identity(generation, &[32], "volume generation")?;
+                port.remove(name, generation).map(|()| Reply::Done).map_err(Failure::from)
+            }
             _ => unreachable!(),
         }
     }
@@ -363,13 +398,22 @@ impl Session {
             Request::NetworkList => Ok(Reply::Networks(port.list()?)),
             Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
             Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
-            Request::NetworkRemove { reference } => port.remove(reference).map(|()| Reply::Done).map_err(Failure::from),
+            Request::NetworkRemove { reference } => {
+                immutable_identity(reference, &[32], "network")?;
+                port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::NetworkConnect { reference, container } => port
-                .connect(reference, container)
+                .connect(
+                    immutable_reference(reference, &[32], "network")?,
+                    immutable_reference(container, &[32, 64], "container")?,
+                )
                 .map(|()| Reply::Done)
                 .map_err(Failure::from),
             Request::NetworkDisconnect { reference, container } => port
-                .disconnect(reference, container)
+                .disconnect(
+                    immutable_reference(reference, &[32], "network")?,
+                    immutable_reference(container, &[32, 64], "container")?,
+                )
                 .map(|()| Reply::Done)
                 .map_err(Failure::from),
             _ => unreachable!(),
@@ -469,18 +513,7 @@ impl Session {
             Request::TerminalOpenTab { title } => Ok(Reply::Identity(port.open_tab(title)?)),
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {
-                if command.is_empty()
-                    || command.len() > crate::port::TERMINAL_COMMAND_ARGUMENTS
-                    || command[0].is_empty()
-                    || command.iter().any(|argument| {
-                        argument.len() > crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES || argument.contains('\0')
-                    })
-                    || command.iter().map(String::len).sum::<usize>() > crate::port::TERMINAL_COMMAND_BYTES
-                {
-                    return Err(Failure::Conflict {
-                        detail: "terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate".into(),
-                    });
-                }
+                validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::TerminalWritePane { slot, contents } => {
@@ -528,7 +561,9 @@ impl Session {
             .peer
             .authority()
             .port(Capability::TerminalOutput, services.terminal)?;
-        Ok(Reply::Text(port.read(slot, pane_lines(lines))?))
+        Ok(Reply::Text(crate::port::bounded_pane_text(
+            port.read(slot, pane_lines(lines))?,
+        )))
     }
 
     fn files(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
@@ -540,6 +575,10 @@ impl Session {
             Request::FilesystemRead { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Contents(port.read(path)?))
+            }
+            Request::FilesystemStat { path } => {
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::Entry(port.stat(path)?))
             }
             Request::FilesystemWrite { path, contents } => {
                 let port = self
@@ -693,57 +732,151 @@ fn bounded_signal(signal: &str) -> Result<(), Failure> {
     })
 }
 
+fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Failure> {
+    if widths.contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: format!("{noun} signaling requires the complete immutable ID returned by inspection"),
+    })
+}
+
+fn immutable_reference<'a>(id: &'a str, widths: &[usize], noun: &str) -> Result<&'a str, Failure> {
+    immutable_identity(id, widths, noun)?;
+    Ok(id)
+}
+
+fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
+    let digest = value.strip_prefix("sha256:").unwrap_or_default();
+    if digest.len() == 64
+        && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: format!("{noun} removal requires the complete immutable sha256 digest returned by inventory"),
+    })
+}
+
+fn validate_terminal_command(command: &[String]) -> Result<(), Failure> {
+    if !command.is_empty()
+        && command.len() <= crate::port::TERMINAL_COMMAND_ARGUMENTS
+        && !command[0].is_empty()
+        && command
+            .iter()
+            .all(|argument| argument.len() <= crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES && !argument.contains('\0'))
+        && command.iter().map(String::len).sum::<usize>() <= crate::port::TERMINAL_COMMAND_BYTES
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate".into(),
+    })
+}
+
 fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<(), Failure> {
     use std::collections::BTreeSet;
 
     let identifier = |value: &str, limit: usize| {
-        !value.is_empty() && value.len() <= limit && value.trim() == value
-            && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+        !value.is_empty()
+            && value.len() <= limit
+            && value.trim() == value
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
     };
     let argv = |values: &[String], empty: bool| {
-        (empty || !values.is_empty()) && values.len() <= crate::port::TERMINAL_COMMAND_ARGUMENTS
+        (empty || !values.is_empty())
+            && values.len() <= crate::port::TERMINAL_COMMAND_ARGUMENTS
             && (values.is_empty() || !values[0].is_empty())
-            && values.iter().all(|value| value.len() <= crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES
-                && !value.contains('\0'))
+            && values
+                .iter()
+                .all(|value| value.len() <= crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES && !value.contains('\0'))
             && values.iter().map(String::len).sum::<usize>() <= crate::port::TERMINAL_COMMAND_BYTES
     };
     let absolute = |value: &str| {
-        value.starts_with('/') && value.len() <= 4096 && !value.contains('\0')
+        value.starts_with('/')
+            && value.len() <= 4096
+            && !value.contains('\0')
             && !value.split('/').any(|part| matches!(part, "." | ".."))
     };
-    let unique = |values: &[(String, String)]| values.iter().map(|(key, _)| key).collect::<BTreeSet<_>>().len() == values.len();
+    let unique =
+        |values: &[(String, String)]| values.iter().map(|(key, _)| key).collect::<BTreeSet<_>>().len() == values.len();
     let environment_name = |value: &str| {
-        value.len() <= 256 && value.as_bytes().first().is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        value.len() <= 256
+            && value
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
             && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
     };
     let valid = identifier(&spec.name, 128)
-        && !spec.image.is_empty() && spec.image.len() <= 512 && spec.image.trim() == spec.image
+        && !spec.image.is_empty()
+        && spec.image.len() <= 512
+        && spec.image.trim() == spec.image
         && !spec.image.chars().any(char::is_whitespace)
         && spec.entrypoint.as_ref().is_none_or(|values| argv(values, false))
         && argv(&spec.command, true)
-        && spec.entrypoint.as_ref().into_iter().flatten().chain(spec.command.iter())
-            .map(String::len).sum::<usize>() <= crate::port::TERMINAL_COMMAND_BYTES
-        && spec.environment.len() <= 256 && unique(&spec.environment)
-        && spec.environment.iter().all(|(name, value)| environment_name(name) && value.len() <= 8192 && !value.contains('\0'))
+        && spec
+            .entrypoint
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .chain(spec.command.iter())
+            .map(String::len)
+            .sum::<usize>()
+            <= crate::port::TERMINAL_COMMAND_BYTES
+        && spec.environment.len() <= 256
+        && unique(&spec.environment)
+        && spec
+            .environment
+            .iter()
+            .all(|(name, value)| environment_name(name) && value.len() <= 8192 && !value.contains('\0'))
         && spec.working_directory.as_deref().is_none_or(absolute)
-        && spec.user.as_ref().is_none_or(|value| !value.is_empty() && value.len() <= 256 && !value.contains('\0'))
-        && spec.labels.len() <= 128 && unique(&spec.labels)
-        && spec.labels.iter().all(|(name, value)| !name.is_empty() && name.len() <= 256 && !name.contains('\0')
-            && value.len() <= 4096 && !value.contains('\0'))
+        && spec
+            .user
+            .as_ref()
+            .is_none_or(|value| !value.is_empty() && value.len() <= 256 && !value.contains('\0'))
+        && spec.labels.len() <= 128
+        && unique(&spec.labels)
+        && spec.labels.iter().all(|(name, value)| {
+            !name.is_empty()
+                && name.len() <= 256
+                && !name.contains('\0')
+                && value.len() <= 4096
+                && !value.contains('\0')
+        })
         && spec.mounts.len() <= 64
-        && spec.mounts.iter().all(|mount| identifier(&mount.volume, 128) && absolute(&mount.target))
+        && spec
+            .mounts
+            .iter()
+            .all(|mount| identifier(&mount.volume, 128) && absolute(&mount.target))
         && spec.network.as_ref().is_none_or(|network| identifier(network, 256))
         && spec.ports.len() <= 64
-        && spec.ports.iter().all(|port| port.container != 0 && port.host != Some(0)
-            && matches!(port.protocol.as_str(), "tcp" | "udp"))
-        && spec.ports.iter().map(|port| (port.container, &port.protocol)).collect::<BTreeSet<_>>().len() == spec.ports.len()
+        && spec
+            .ports
+            .iter()
+            .all(|port| port.container != 0 && port.host != Some(0) && matches!(port.protocol.as_str(), "tcp" | "udp"))
+        && spec
+            .ports
+            .iter()
+            .map(|port| (port.container, &port.protocol))
+            .collect::<BTreeSet<_>>()
+            .len()
+            == spec.ports.len()
         && spec.memory_mb.is_none_or(|value| (1..=1_048_576).contains(&value))
         && spec.cpus.is_none_or(|value| (1..=256).contains(&value))
         && spec.pids_limit.is_none_or(|value| (1..=1_000_000).contains(&value));
     if valid {
         Ok(())
     } else {
-        Err(Failure::Conflict { detail: "container creation specification is invalid or exceeds its bound".into() })
+        Err(Failure::Conflict {
+            detail: "container creation specification is invalid or exceeds its bound".into(),
+        })
     }
 }
 

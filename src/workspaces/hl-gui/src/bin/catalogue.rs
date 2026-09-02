@@ -307,7 +307,8 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Toast
         | Tag::Banner
         | Tag::AlertTitle
-        | Tag::InlineMessage => "feedback",
+        | Tag::InlineMessage
+        | Tag::ValidationSummary => "feedback",
         Tag::Button
         | Tag::IconButton
         | Tag::ToggleButton
@@ -320,6 +321,8 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Overflow => "buttons",
         Tag::Entry
         | Tag::Search
+        | Tag::CommandPalette
+        | Tag::TagInput
         | Tag::NumberEntry
         | Tag::TextArea
         | Tag::PasswordEntry
@@ -395,7 +398,13 @@ fn family(tag: Tag) -> &'static str {
         | Tag::MenuItem
         | Tag::Drawer
         | Tag::DrawerPanel => "dialogs",
-        Tag::CodeView | Tag::LogView | Tag::Video | Tag::Chart => "content",
+        Tag::CodeView
+        | Tag::MarkdownView
+        | Tag::LogView
+        | Tag::Video
+        | Tag::Chart
+        | Tag::DiffViewer
+        | Tag::DiffLine => "content",
     }
 }
 
@@ -838,7 +847,7 @@ fn quoted(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalogue, escaped, family, text, FAMILIES, PROPS};
+    use super::{FAMILIES, PROPS, catalogue, escaped, family, text};
     use hl_gui::Tag;
 
     /// The document is JSON at all: quotes pair up outside of escapes and no

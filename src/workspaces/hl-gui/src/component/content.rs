@@ -6,6 +6,12 @@ use crate::node::{Prop, PropValue, Tag};
 
 /// Marks and imagery.
 impl Element {
+    /// A safe, selectable Markdown document. HTML is never interpreted.
+    #[must_use]
+    pub fn markdown_view(value: impl Into<String>) -> Self {
+        Self::new(Tag::MarkdownView).value(value)
+    }
+
     /// A run of monospaced text.
     #[must_use]
     pub fn code(value: impl Into<String>) -> Self {
@@ -122,6 +128,12 @@ impl Element {
     pub fn inline_message(label: impl Into<String>) -> Self {
         Self::new(Tag::InlineMessage).label(label)
     }
+
+    /// A bounded group of validation problems and their corrective actions.
+    #[must_use]
+    pub fn validation_summary(label: impl Into<String>) -> Self {
+        Self::new(Tag::ValidationSummary).label(label).icon("dialog-warning-symbolic")
+    }
 }
 
 /// Long-form content.
@@ -139,6 +151,18 @@ impl Element {
     #[must_use]
     pub fn log_view() -> Self {
         Self::new(Tag::LogView)
+    }
+
+    /// A bounded collection of unified lines or side-by-side diff regions.
+    #[must_use]
+    pub fn diff_viewer() -> Self {
+        Self::new(Tag::DiffViewer)
+    }
+
+    /// One independently readable diff line: status in `label`, content in `value`.
+    #[must_use]
+    pub fn diff_line(status: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::new(Tag::DiffLine).label(status).value(content)
     }
 
     /// A playable file.

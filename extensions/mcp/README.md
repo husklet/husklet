@@ -45,9 +45,35 @@ Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
 
+`husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
+event batch under the distinct `WorkspaceEvents` grant. It subscribes with one
+unit of host credit, reports the host's dropped/coalesced count, and always
+unsubscribes on a match or timeout. It observes window-level input only; owned
+surface interactions remain addressed to their owning extension and are queued
+without blocking the native UI.
+
 Execution inspection and execution signaling use distinct typed calls: signaling
-targets one existing execution ID under `ContainerControl` and accepts only a
-1..=32 byte signal name. It does not signal the owning container or parse a shell.
+targets one complete immutable execution ID under `ContainerControl` and accepts
+only a 1..=32 byte signal name. Container stop, removal, and signaling likewise
+require the complete 32- or 64-hex identity returned by inventory or inspection.
+Names, prefixes, and snapshot PIDs are refused before the socket call. Execution
+signaling does not signal the owning container or parse a shell.
+Execution output replay reports stdout and stderr truncation independently and
+sets `eof` only when the process was already complete before replay; an empty
+running response is therefore not presented as end-of-stream.
+Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
+complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
+re-resolved to a different image between inspection and removal.
+Network reads may use canonical names. Network removal, connect, and disconnect
+instead require the complete 32-hex network ID; attachment changes also require
+the complete immutable container ID, preventing name or prefix re-resolution.
+Volume removal requires the canonical name, its complete 32-hex observed
+generation, and confirmation. The host atomically rejects a generation that no
+longer names the current same-name volume.
+Container process inspection is a timestamped, bounded snapshot of the initial
+process only. Its PID is explicitly snapshot-local and may be reused; the host
+does not expose argv or environment values, and does not claim child-process,
+CPU, or memory coverage that its current daemon sampler cannot provide.
 
 Container creation accepts bounded entrypoint/argv, environment, working directory,
 user, labels, named-volume mounts, one workspace-local network, TCP/UDP exposure,
@@ -84,18 +110,25 @@ and `NetworkRead` grants. Creation and attachment controls retain their
 `VolumeWrite` or `NetworkWrite` grants. Volume/network removal and network
 disconnect additionally require an explicit `confirm: true` MCP argument.
 
-Image tools list and inspect local images under `ImageRead`, and pull under
-`ImageWrite`. Removing an image or pruning unused images additionally requires
-an explicit `confirm: true` MCP argument; the host still enforces `ImageWrite`.
+Image tools list and inspect local images under `ImageRead`. Prefer the bounded
+`husklet_image_pull_start` → `husklet_image_pull_wait` →
+`husklet_image_pull_status` workflow under `ImageWrite`: it exposes exact job
+identity and registry-provided layer/byte progress without polling. Wait is a
+filtered one-shot subscription and always releases it; cancel is safe and does
+not require destructive confirmation. `husklet_image_pull` remains as a
+synchronous compatibility tool. Removing an image or pruning unused images
+requires explicit `confirm: true`; the host still enforces `ImageWrite`.
 
 `husklet_pane_list` returns bounded discovery metadata for every inspectable
 terminal, extension surface, and native pane, including stable slot and provider
 identity without reading contents. It requires the host's `PaneObserve` grant.
 Use the returned slot with `husklet_pane_read`, which inspects the split topology and returns one bounded XML
-document: terminal panes include screen lines, focus, grid and tab metadata;
-extension surfaces and the native `workspace` pane include their semantic tree.
+document: terminal panes include screen lines, cursor column/row, focus, grid and tab metadata;
+extension surfaces and every inventoried native pane include their semantic tree.
 It uses stable slots and semantic IDs, never screenshots, coordinates, or GTK
-widget scraping. The older terminal-read and pane-snapshot tools remain for
+widget scraping. An inventoried kind without a typed projection, a surface
+without semantics, or a terminal absent from topology fails explicitly; it is
+never reported as empty text or silently substituted with a screenshot. The older terminal-read and pane-snapshot tools remain for
 consumers that need their specific typed result.
 
 Workspace filesystem controls create one directory, rename without overwriting,
@@ -165,6 +198,12 @@ observed revision. One-shot pane waits are armed before terminal input and UI
 action. A `finally` block uses confirmed container stop/removal and restores the
 original workspace configuration. It never accepts shell command text and does
 not retry a stale semantic action.
+
+`husklet_container_attach_terminal` is the interactive counterpart to detached
+exec. It accepts only the complete immutable container ID and a bounded argv
+array, opens an ephemeral Husklet tab, connects stdin/stdout/stderr through one
+TTY, and owns the process with kill-on-disconnect semantics. It requires the
+dedicated `container-attach` grant.
 
 ## Administrative lifecycle workflow
 

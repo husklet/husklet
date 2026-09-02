@@ -19,11 +19,25 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Stat => figure().upcast(),
         Tag::AlertTitle => title().upcast(),
         Tag::InlineMessage => strip().upcast(),
+        Tag::ValidationSummary => validation().upcast(),
         // Toast and Banner are the last feedback tags routed here. Both live in
         // libadwaita; a revealer over an icon and a message gives the behavior
         // — appear, carry text, dismiss — without taking that dependency.
         _ => notice().upcast(),
     }
+}
+
+fn validation() -> gtk::Box {
+    let widget = axis::row(8);
+    widget.add_css_class("error");
+    widget.append(&slot::emblem_image());
+    let body = axis::column(4);
+    body.add_css_class("hl-validation-body");
+    body.set_hexpand(true);
+    body.append(&slot::caption_label());
+    body.append(&slot::detail_label());
+    widget.append(&body);
+    widget
 }
 
 fn progress() -> gtk::ProgressBar {
@@ -116,6 +130,17 @@ fn column(revealer: &gtk::Revealer) -> Option<gtk::Box> {
 
 /// Attaches to a notice, placing a heading above the message it heads.
 pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bool {
+    if super::belongs(parent, Tag::ValidationSummary) {
+        let Some(body) = slot::offspring(parent)
+            .into_iter()
+            .find(|held| held.has_css_class("hl-validation-body"))
+            .and_then(|held| held.downcast::<gtk::Box>().ok())
+        else {
+            return false;
+        };
+        body.append(child);
+        return true;
+    }
     let Some(revealer) = parent.downcast_ref::<gtk::Revealer>() else {
         return false;
     };

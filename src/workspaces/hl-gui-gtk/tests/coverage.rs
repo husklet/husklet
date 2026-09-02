@@ -92,6 +92,7 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
         eprintln!("skipped: no display connection");
         return;
     }
+    markdown_is_safe_selectable_and_structured();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
@@ -223,7 +224,13 @@ fn portrait(tag: Tag, prop: Prop, value: Option<&PropValue>) -> String {
         session.producer.set(node, prop, value.clone());
     }
     session.flush().expect("a declared property must render");
-    session.widgets().iter().map(traced).collect::<Vec<String>>().join("\n")
+    session
+        .widgets()
+        .iter()
+        .flat_map(subtree)
+        .map(|widget| traced(&widget))
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 /// Where the probed component is placed.
@@ -625,6 +632,9 @@ fn holds(widget: &gtk::Widget, text: &str) -> bool {
 }
 
 fn kept(widget: &gtk::Widget, text: &str) -> bool {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        return label.text() == text;
+    }
     if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
         return entry.text() == text;
     }
@@ -798,13 +808,36 @@ fn principal(tag: Tag) -> Aspect {
         Tag::TimePicker => Aspect::Time,
         Tag::Entry
         | Tag::Search
+        | Tag::CommandPalette
+        | Tag::TagInput
         | Tag::TextArea
         | Tag::PasswordEntry
         | Tag::TextField
         | Tag::CodeView
+        | Tag::MarkdownView
         | Tag::LogView => Aspect::Value,
         _ => structural(tag),
     }
+}
+
+fn markdown_is_safe_selectable_and_structured() {
+    let mut session = Session::new();
+    let document = session.producer.create(Tag::MarkdownView);
+    session.producer.append(NodeId::ROOT, document);
+    session.producer.set(
+        document,
+        Prop::Value,
+        PropValue::text("# Release <unsafe>\n- bounded\n```\nlet x = 1;\n```"),
+    );
+    session.flush().expect("markdown renders");
+    let scroller = session.tagged(Tag::MarkdownView).expect("markdown widget");
+    let label = subtree(&scroller)
+        .into_iter()
+        .find_map(|child| child.downcast::<gtk::Label>().ok())
+        .expect("markdown owns a text label");
+    assert!(label.is_selectable(), "document text must be copyable");
+    assert_eq!(label.text(), "Release <unsafe>\n• bounded\nlet x = 1;");
+    assert!(!label.text().contains("```"), "fence syntax is presentation, not content");
 }
 
 /// The families whose principal property is how they arrange what they hold.
@@ -833,6 +866,8 @@ fn structural(tag: Tag) -> Aspect {
         | Tag::AccordionDetails
         | Tag::AccordionActions => Aspect::Gap,
         Tag::Dialog | Tag::DialogContent | Tag::DialogActions | Tag::Menu => Aspect::Gap,
+        Tag::DiffViewer => Aspect::Gap,
+        Tag::DiffLine => Aspect::Value,
         // Everything else names itself: a caption is what it carries.
         _ => Aspect::Label,
     }
@@ -852,6 +887,42 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_trailing_action_is_the_last_thing_in_its_row();
     a_tree_nests_an_item_inside_the_item_that_holds_it();
     a_drawer_panel_covers_the_content_instead_of_joining_it();
+    a_tag_input_keeps_retained_tags_before_its_editor();
+    a_validation_summary_keeps_actions_below_its_message();
+    diff_lines_are_selectable_and_keep_status_beside_content();
+}
+
+fn diff_lines_are_selectable_and_keep_status_beside_content() {
+    let session = placed(Tag::DiffViewer, &[Tag::DiffLine]);
+    let line = session.tagged(Tag::DiffLine).expect("a diff line renders");
+    let parts = offspring(&line);
+    let status = parts.first().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("status");
+    let content = parts.last().and_then(|part| part.downcast_ref::<gtk::Label>()).expect("content");
+    assert!(!status.is_selectable());
+    assert!(content.is_selectable(), "diff text cannot be selected and copied");
+    assert!(content.has_css_class("monospace"));
+}
+
+fn a_validation_summary_keeps_actions_below_its_message() {
+    let session = placed(Tag::ValidationSummary, &[Tag::Button]);
+    let summary = session.tagged(Tag::ValidationSummary).expect("a validation summary renders");
+    let body = offspring(&summary)
+        .into_iter()
+        .find(|part| part.has_css_class("hl-validation-body"))
+        .expect("validation summary message body");
+    assert!(
+        offspring(&body).last().is_some_and(|part| part.has_css_class("hl-button")),
+        "the corrective action is not grouped below the validation message"
+    );
+}
+
+fn a_tag_input_keeps_retained_tags_before_its_editor() {
+    let session = placed(Tag::TagInput, &[Tag::Chip, Tag::ToggleButton]);
+    let input = session.tagged(Tag::TagInput).expect("a tag input renders");
+    let parts = offspring(&input);
+    assert!(parts.first().is_some_and(|part| part.has_css_class("hl-chip")));
+    assert!(parts.get(1).is_some_and(|part| part.has_css_class("hl-togglebutton")));
+    assert!(parts.last().is_some_and(|part| part.has_css_class("hl-field")));
 }
 
 /// One parent, one part, rendered: the shape every slot scenario needs.

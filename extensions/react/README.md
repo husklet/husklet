@@ -110,6 +110,7 @@ await host.update('backend', { ...configuration, memory_mb: 4096 });
 await host.start('backend');
 const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);
+const pane = await host.containers.attachTerminal(containers[0].id, ['sh', '-i']);
 const processes = await host.containers.processes(containers[0].id);
 const output = await host.containers.logs(containers[0].id, { stderr: false });
 const files = await host.files.list('project');
@@ -118,9 +119,25 @@ await host.files.write('project/generated/config.json', new TextEncoder().encode
 await host.files.rename('project/generated/config.json', 'project/generated/app.json');
 ```
 
-Container reads include bounded logs, process tables, and execution inspection;
-the explicit control grant covers pause, unpause, restart, kill, and detached
-`exec`. The host currently publishes changed full snapshots for `containers`,
+Container reads include bounded logs, initial-process snapshots, and execution
+inspection. Process PIDs are point-in-time display values and may be reused;
+`stop`, `remove`, and `kill` accept only complete immutable container IDs returned
+by inventory or inspection; `signalExecution` likewise requires an immutable
+execution ID. Names, prefixes, and snapshot PIDs remain useful only for bounded
+lookup and display. The explicit control grant covers pause,
+unpause, restart, kill, and detached `exec`. Image inspection and pulls may use
+human tags, but removal requires the complete `sha256:` digest returned by
+inventory so a moved tag cannot select a different image after confirmation.
+Network inspection may use a canonical name, but remove, connect, and disconnect
+require the complete 32-hex network ID from inventory. Attachment mutations also
+require the complete immutable container ID.
+`attachTerminal` requires the separate `container-attach` grant, preserves argv
+boundaries, opens a non-restored GUI tab, and kills its interactive exec when that
+pane disconnects.
+Volume removal takes both its canonical name and the 32-hex `generation` returned
+by inventory or inspection. The host compares that generation atomically, so a
+removed and recreated same-name volume needs fresh consent.
+The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`.

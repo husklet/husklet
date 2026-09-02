@@ -61,6 +61,16 @@ impl<'a> Volumes<'a> {
             .await
     }
 
+    /// Remove only if the authoritative generation still matches inspection.
+    pub async fn remove_if_generation(&self, name: &str, generation: &str) -> Result<()> {
+        self.transport
+            .empty(
+                Method::DELETE,
+                &format!("/volumes/{}?generation={}", Component::opaque(name), Component::opaque(generation)),
+            )
+            .await
+    }
+
     /// Remove every unused local volume.
     ///
     /// # Errors

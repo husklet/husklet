@@ -191,6 +191,7 @@ pub(super) async fn inspect(State(state): State<DockerState>, Path(name): Path<S
 pub(super) struct RemoveQuery {
     #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     force: bool,
+    generation: Option<String>,
 }
 
 #[hl_design::adapter]
@@ -203,7 +204,11 @@ pub(super) async fn remove(
     // Docker accepts `force` for compatibility, but an attached volume remains
     // protected: removing it would leave persisted container mounts dangling.
     let _ = query.force;
-    let volume = volumes.remove(&name).await.map_err(ApiError::container)?;
+    let volume = match query.generation {
+        Some(generation) => volumes.remove_if_generation(&name, &generation).await,
+        None => volumes.remove(&name).await,
+    }
+    .map_err(ApiError::container)?;
     let mut attributes = volume.labels;
     attributes.insert("name".into(), volume.name.clone());
     attributes.insert("driver".into(), "local".into());
@@ -345,6 +350,7 @@ mod tests {
     fn volume(labels: BTreeMap<String, String>) -> Volume {
         Volume {
             name: "cache".into(),
+            generation: "a".repeat(32),
             path: PathBuf::from("/var/lib/docker/volumes/cache/_data"),
             created_at_ms: 0,
             labels,

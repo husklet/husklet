@@ -52,6 +52,33 @@ pub struct ContainerSummary {
 pub struct ProcessList {
     pub titles: Vec<String>,
     pub processes: Vec<Vec<String>>,
+    /// Host wall-clock time at which this point-in-time view was produced.
+    #[serde(default)]
+    pub observed_at_ms: u64,
+    /// This host currently exposes only the container's initial process, not a
+    /// complete namespace process tree.
+    #[serde(default)]
+    pub scope: ProcessScope,
+    /// PIDs identify rows only within this snapshot and may be reused later.
+    #[serde(default)]
+    pub pid_identity: ProcessPidIdentity,
+    /// Rows, columns, or cell bytes were omitted to preserve the wire bound.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessScope {
+    #[default]
+    Initial,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessPidIdentity {
+    #[default]
+    Snapshot,
 }
 
 /// Bounded captured output from a container's initial process.
@@ -61,6 +88,16 @@ pub struct ContainerOutput {
     pub stderr: Vec<u8>,
     /// At least one stream was shortened to the protocol limit.
     pub truncated: bool,
+    /// Standard output was shortened independently of standard error.
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    /// Standard error was shortened independently of standard output.
+    #[serde(default)]
+    pub stderr_truncated: bool,
+    /// The process was already complete when this replay began, so no later
+    /// bytes can appear. False is conservative for older hosts.
+    #[serde(default)]
+    pub eof: bool,
 }
 
 /// Bounded container creation authority with no host bind-mount path.
@@ -145,6 +182,36 @@ pub struct ImagePruneResult {
     pub space_reclaimed: u64,
 }
 
+/// Opaque identity returned when a bounded background image pull starts.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePullJob {
+    pub job: String,
+}
+
+/// Latest truthful state of one image pull. Byte totals are absent when the registry omits them.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePullStatus {
+    pub job: String,
+    pub reference: String,
+    pub revision: u64,
+    pub state: String,
+    pub status: Option<String>,
+    pub layer: Option<String>,
+    pub current: Option<u64>,
+    pub total: Option<u64>,
+    pub image: Option<ImageSummary>,
+    pub error: Option<String>,
+}
+
+/// Coalesced invalidation; callers read status for the bounded full snapshot.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImagePullChange {
+    pub job: String,
+    pub revision: u64,
+    pub state: String,
+    pub coalesced: u64,
+}
+
 /// A local volume as an extension sees it. The daemon does not calculate
 /// recursive disk usage during inventory, so this deliberately carries no
 /// synthetic size.
@@ -152,6 +219,7 @@ pub struct ImagePruneResult {
 pub struct VolumeSummary {
     pub name: String,
     pub driver: String,
+    pub generation: String,
 }
 
 /// A workspace-local network as an extension sees it.
@@ -208,6 +276,12 @@ pub enum Occupant {
 pub struct PaneText {
     pub slot: String,
     pub lines: Vec<String>,
+    /// Zero-based cursor column in the terminal's visible grid.
+    #[serde(default)]
+    pub cursor_column: u32,
+    /// Zero-based cursor row in the terminal's visible grid.
+    #[serde(default)]
+    pub cursor_row: u32,
     /// Whether older lines exist that this answer does not carry.
     pub truncated: bool,
 }
@@ -341,6 +415,8 @@ pub enum LayoutNode {
 /// in memory on the drawing thread before it is sent. The cap is what stops a
 /// single call from making the host allocate whatever a runaway command printed.
 pub const PANE_LINES: usize = 2000;
+/// Maximum UTF-8 payload carried by one terminal screen reply.
+pub const PANE_TEXT_BYTES: usize = 512 * 1024;
 
 /// How many lines a pane read actually returns.
 ///
@@ -349,6 +425,25 @@ pub const PANE_LINES: usize = 2000;
 #[must_use]
 pub fn pane_lines(requested: Option<usize>) -> usize {
     requested.unwrap_or(PANE_LINES).clamp(1, PANE_LINES)
+}
+
+/// Retains the newest complete terminal lines that fit one bounded reply.
+#[must_use]
+pub fn bounded_pane_text(mut text: PaneText) -> PaneText {
+    let mut used = 0usize;
+    let mut kept = Vec::new();
+    for line in text.lines.into_iter().rev() {
+        let needed = line.len().saturating_add(1);
+        if used.saturating_add(needed) > PANE_TEXT_BYTES {
+            text.truncated = true;
+            break;
+        }
+        used += needed;
+        kept.push(line);
+    }
+    kept.reverse();
+    text.lines = kept;
+    text
 }
 
 /// A workspace as an extension sees it from the outside.
@@ -541,16 +636,22 @@ pub trait ContainerInventory {
     }
 
     fn executions(&self) -> Result<ExecutionList, HostError> {
-        Err(HostError::Unsupported("execution listing is unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution listing is unsupported by this host".into(),
+        ))
     }
 
     fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
-        Err(HostError::Unsupported("execution logs are unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution logs are unsupported by this host".into(),
+        ))
     }
 
     /// Waits at most `timeout_ms` for an execution to stop, then returns its final state.
     fn execution_wait(&self, _id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
-        Err(HostError::Unsupported("execution waiting is unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution waiting is unsupported by this host".into(),
+        ))
     }
 }
 
@@ -562,14 +663,24 @@ pub trait ContainerControl {
     fn create(&self, image: &str, name: &str) -> Result<String, HostError>;
 
     fn create_spec(&self, spec: &ContainerCreateSpec) -> Result<String, HostError> {
-        if spec.entrypoint.is_none() && spec.command.is_empty() && spec.environment.is_empty()
-            && spec.working_directory.is_none() && spec.user.is_none() && spec.labels.is_empty()
-            && spec.mounts.is_empty() && spec.network.is_none() && spec.ports.is_empty()
-            && spec.memory_mb.is_none() && spec.cpus.is_none() && spec.pids_limit.is_none()
+        if spec.entrypoint.is_none()
+            && spec.command.is_empty()
+            && spec.environment.is_empty()
+            && spec.working_directory.is_none()
+            && spec.user.is_none()
+            && spec.labels.is_empty()
+            && spec.mounts.is_empty()
+            && spec.network.is_none()
+            && spec.ports.is_empty()
+            && spec.memory_mb.is_none()
+            && spec.cpus.is_none()
+            && spec.pids_limit.is_none()
         {
             self.create(&spec.image, &spec.name)
         } else {
-            Err(HostError::Unsupported("configured container creation is unavailable".into()))
+            Err(HostError::Unsupported(
+                "configured container creation is unavailable".into(),
+            ))
         }
     }
 
@@ -623,7 +734,9 @@ pub trait ContainerControl {
 
     /// Removes one stopped execution record and its captured output.
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
-        Err(HostError::Unsupported("execution removal is unsupported by this host".into()))
+        Err(HostError::Unsupported(
+            "execution removal is unsupported by this host".into(),
+        ))
     }
 
     /// Starts an additional process detached from the extension connection and
@@ -651,6 +764,19 @@ pub trait ImageStore {
     /// Returns a host failure.
     fn pull(&self, reference: &str) -> Result<ImageSummary, HostError>;
 
+    fn pull_start(&self, _reference: &str) -> Result<ImagePullJob, HostError> {
+        Err(HostError::Unsupported("image pull progress is unavailable".into()))
+    }
+    fn pull_status(&self, _job: &str) -> Result<ImagePullStatus, HostError> {
+        Err(HostError::Unsupported("image pull progress is unavailable".into()))
+    }
+    fn pull_cancel(&self, _job: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("image pull cancellation is unavailable".into()))
+    }
+    fn pull_changes(&self) -> Vec<ImagePullChange> {
+        Vec::new()
+    }
+
     fn inspect(&self, _reference: &str) -> Result<ImageDetails, HostError> {
         Err(HostError::Unsupported("image inspection is unavailable".into()))
     }
@@ -675,7 +801,7 @@ pub trait VolumeStore {
     fn create(&self, _name: &str) -> Result<VolumeSummary, HostError> {
         Err(HostError::Unsupported("volume creation is unavailable".into()))
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("volume removal is unavailable".into()))
     }
 }
@@ -704,6 +830,15 @@ pub trait NetworkStore {
 
 /// The workspace's terminal surface.
 pub trait TerminalSurface {
+    /// Opens a non-persisted terminal tab running `command` directly in the
+    /// immutable container identity. The attachment owns the process and must
+    /// kill it when the pane disconnects.
+    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+        Err(HostError::Unsupported(
+            "container terminal attachment is unavailable".into(),
+        ))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn tabs(&self) -> Result<Vec<TabSummary>, HostError>;
@@ -848,6 +983,11 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn read(&self, path: &RelativePath) -> Result<Vec<u8>, HostError>;
 
+    /// Reads metadata for exactly one confined workspace-relative path.
+    fn stat(&self, _path: &RelativePath) -> Result<Entry, HostError> {
+        Err(HostError::Unsupported("filesystem metadata is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
@@ -867,7 +1007,10 @@ pub trait WorkspaceFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{Division, LayoutNode, Occupant, PANE_LINES, PaneSummary, pane_lines};
+    use super::{
+        bounded_pane_text, pane_lines, Division, LayoutNode, Occupant, PaneSummary, PaneText, PANE_LINES,
+        PANE_TEXT_BYTES,
+    };
 
     #[test]
     fn a_pane_read_is_bounded_however_it_is_asked_for() {
@@ -875,6 +1018,49 @@ mod tests {
         assert_eq!(pane_lines(Some(10)), 10);
         assert_eq!(pane_lines(Some(usize::MAX)), PANE_LINES, "a huge tail is cut to it");
         assert_eq!(pane_lines(Some(0)), 1, "a pane read answers with something");
+    }
+
+    #[test]
+    fn terminal_text_retains_only_newest_complete_lines_within_the_wire_budget() {
+        let text = PaneText {
+            slot: "pane".into(),
+            lines: vec![
+                "old".repeat(PANE_TEXT_BYTES / 3),
+                "middle".repeat(PANE_TEXT_BYTES / 6),
+                "new".into(),
+            ],
+            cursor_column: 4,
+            cursor_row: 2,
+            truncated: false,
+        };
+        let bounded = bounded_pane_text(text);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.lines.last().map(String::as_str), Some("new"));
+        assert_eq!((bounded.cursor_column, bounded.cursor_row), (4, 2));
+        assert!(bounded.lines.iter().map(|line| line.len() + 1).sum::<usize>() <= PANE_TEXT_BYTES);
+    }
+
+    #[test]
+    fn legacy_output_decodes_without_claiming_eof_or_per_stream_completeness() {
+        let output: super::ContainerOutput = serde_json::from_value(serde_json::json!({
+            "stdout": [], "stderr": [], "truncated": false
+        }))
+        .expect("legacy output");
+        assert!(!output.eof);
+        assert!(!output.stdout_truncated);
+        assert!(!output.stderr_truncated);
+    }
+
+    #[test]
+    fn legacy_process_rows_decode_as_an_incomplete_snapshot_scoped_view() {
+        let processes: super::ProcessList = serde_json::from_value(serde_json::json!({
+            "titles": ["PID"], "processes": [["1"]]
+        }))
+        .expect("legacy process rows");
+        assert_eq!(processes.scope, super::ProcessScope::Initial);
+        assert_eq!(processes.pid_identity, super::ProcessPidIdentity::Snapshot);
+        assert_eq!(processes.observed_at_ms, 0);
+        assert!(!processes.truncated);
     }
 
     #[test]

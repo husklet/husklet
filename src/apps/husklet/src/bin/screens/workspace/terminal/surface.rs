@@ -99,26 +99,6 @@ impl Surface {
         }
         holder.append(&interface);
     }
-
-    /// Replaces a withdrawn interface with an explicit placeholder while
-    /// retaining the surface registration and any displaced terminal.
-    pub(crate) fn tombstone(window: &Rc<TermWin>, pane: &gtk::Widget) {
-        let Some((_, extension, _)) = Slots::new(window).surface(pane) else {
-            return;
-        };
-        let Some(holder) = pane.downcast_ref::<gtk::Box>() else {
-            return;
-        };
-        if let Some(child) = holder.first_child() {
-            holder.remove(&child);
-            if !child.has_css_class(ABSENCE) {
-                if let Some(gallery) = Window::gallery(window) {
-                    gallery.recover(&extension, &child);
-                }
-            }
-        }
-        holder.append(&Absence::widget(&extension));
-    }
 }
 
 /// The pane of an extension that is not drawing into it.

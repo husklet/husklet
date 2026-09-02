@@ -168,6 +168,20 @@ impl Registry {
         }
     }
 
+    /// Changes the accessible name of a stable node when its visible control
+    /// changes purpose without changing identity.
+    pub fn set_label(&self, path: &str, label: &str) {
+        let mut entries = self.entries.borrow_mut();
+        let Some(entry) = entries.get_mut(&stable_id(path)) else {
+            return;
+        };
+        let label = bounded(label);
+        if entry.node.label.as_deref() != Some(&label) {
+            entry.node.label = Some(label);
+            self.bump();
+        }
+    }
+
     pub fn set_destructive(&self, path: &str) {
         let mut entries = self.entries.borrow_mut();
         let Some(entry) = entries.get_mut(&stable_id(path)) else {

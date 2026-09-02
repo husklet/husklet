@@ -63,6 +63,40 @@ impl Diagnostics {
 }
 
 impl Worker {
+    pub fn attach_container(name: &str, container: &str, command: &[String]) -> ! {
+        if let Err(error) = ControllingTerminal::claim() {
+            eprintln!("container terminal unavailable: {error}");
+            std::process::exit(Status::TERMINAL_UNAVAILABLE);
+        }
+        if let Err(error) = OpenFiles::prepare() {
+            eprintln!("container terminal descriptor capacity unavailable: {error}");
+            std::process::exit(Status::DESCRIPTORS_UNAVAILABLE);
+        }
+        let store = match WorkspaceStore::load(Self::store()) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("workspace configuration unavailable: {error}");
+                std::process::exit(Status::WORKSPACE_MISSING);
+            }
+        };
+        let Some(workspace) = store.get_key(name).cloned() else {
+            eprintln!("workspace key {name:?} does not exist");
+            std::process::exit(Status::WORKSPACE_MISSING);
+        };
+        let (columns, rows) = terminal::size().unwrap_or((80, 24));
+        let interrupts = crate::ffi::InterruptMask::block();
+        let mut terminal =
+            match crate::runtime::execution::launch_container(&workspace, container, command, columns, rows) {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    eprintln!("container terminal launch failed: {error}");
+                    std::process::exit(Status::LAUNCH_FAILED);
+                }
+            };
+        let status = TerminalSession::run(&mut *terminal, interrupts);
+        std::process::exit(ProcessStatus::from_engine(status).0);
+    }
+
     pub fn launch(name: &str, cwd: Option<&str>, slot: Option<&str>, diagnostics: Option<&Path>) -> ! {
         let diagnostics = Diagnostics::new(diagnostics);
         diagnostics.record(format_args!("worker pid={} starting", std::process::id()));

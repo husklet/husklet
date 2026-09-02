@@ -33,6 +33,7 @@ struct Exhibit {
     action: Option<Rc<dyn Fn(&str, &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError>>>,
     pane: Option<Rc<dyn Fn(&str) -> gtk::Widget>>,
     retire: Option<Rc<dyn Fn(&str)>>,
+    shutdown: Option<Rc<dyn Fn()>>,
 }
 
 /// One choice shown by a terminal pane, tied to the extension that owns it.
@@ -136,6 +137,7 @@ impl Gallery {
             action: None,
             pane: None,
             retire: None,
+            shutdown: None,
         };
         self.0.borrow_mut().insert(extension.to_owned(), exhibit);
         generation
@@ -176,6 +178,14 @@ impl Gallery {
     pub fn enrol_retirement(&self, extension: &str, retire: Rc<dyn Fn(&str)>) {
         if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
             exhibit.retire = Some(retire);
+        }
+    }
+
+    /// Binds immediate authority invalidation to lifecycle withdrawal. The
+    /// callback must not wait; owned teardown continues on the host driver.
+    pub fn enrol_shutdown(&self, extension: &str, shutdown: Rc<dyn Fn()>) {
+        if let Some(exhibit) = self.0.borrow_mut().get_mut(extension) {
+            exhibit.shutdown = Some(shutdown);
         }
     }
 
@@ -225,7 +235,14 @@ impl Gallery {
     /// Pane restoration runs first, so any lent interface has already returned
     /// home before this final strong callback and provider list are forgotten.
     pub fn withdraw(&self, extension: &str) {
-        self.0.borrow_mut().remove(extension);
+        let exhibit = self.0.borrow_mut().remove(extension);
+        if let Some(exhibit) = exhibit {
+            // Keep the callbacks that own the host alive until its weak
+            // shutdown endpoint has invalidated the conversation.
+            if let Some(shutdown) = exhibit.shutdown.as_ref() {
+                shutdown();
+            }
+        }
     }
 
     /// Reports a provider choice to the extension that owns it.

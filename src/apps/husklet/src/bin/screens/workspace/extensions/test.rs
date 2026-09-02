@@ -51,10 +51,12 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
         remote_image_progress_precedes_the_consent_prompt();
         cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
+        closing_the_catalogue_cancels_its_exact_acquisition_before_reentry();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         stale_provider_generations_cannot_authorize_replacements();
+        failed_enable_has_no_socket_or_provider_until_durable_retry();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
@@ -66,15 +68,25 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
         panes::pane_chooser_groups_and_filters_many_extension_views();
-        panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
-        panes::removing_an_extension_tombstones_without_displacing_its_shell();
+        panes::disabling_an_extension_restores_its_surface_pane_terminal();
+        panes::removing_an_extension_restores_its_surface_pane_terminal();
         panes::every_split_leaf_owns_its_chooser_and_topology_is_nested();
         panes::two_same_extension_panes_render_independently_by_slot();
         panes::a_failed_interface_split_leaves_its_surface_where_it_was();
-        panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
+        panes::a_restored_surface_keeps_a_terminal_escape_hatch_while_its_provider_is_late();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
+    }
+}
+
+#[test]
+fn a_terminal_projection_carries_rendered_text_and_cursor() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| {
+        panes::reading_a_pane_hands_back_what_was_written_to_it();
+    });
+    if !ran {
+        eprintln!("skipped: no display connection, so a terminal pane cannot be rendered");
     }
 }
 
@@ -439,8 +451,8 @@ fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
             .collect::<Vec<_>>();
         assert_eq!(
             children.len(),
-            3,
-            "Retry, Enable and removal confirmation stay represented"
+            4,
+            "Retry, Enable, Update and removal confirmation stay represented"
         );
         assert!(
             children.iter().all(|child| {
@@ -571,6 +583,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         }),
         Err(Refusal::Disabled(id)) if id == confirm.id
     ));
+    let cancel = removal
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Cancel removal"))
+        .unwrap();
+    assert!(cancel.disabled, "hidden cancellation is not actionable");
     fixture
         .view
         .semantic_action(&Action {
@@ -588,6 +607,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .find(|node| node.label.as_deref() == Some("Confirm removal"))
         .unwrap();
     assert!(!confirm.disabled);
+    let remove = asking
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Remove"))
+        .unwrap();
+    assert!(remove.disabled, "the hidden first-step action cannot bypass confirmation state");
     fixture
         .view
         .semantic_action(&Action {
@@ -693,6 +719,24 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
                 .as_deref()
                 .is_some_and(|value| value.contains("foreign container"))
     }));
+    let retry = failed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Retry removal"))
+        .expect("the visible retry has the same accessible name");
+    assert!(!retry.disabled);
+    assert!(retry.destructive);
+    fixture
+        .view
+        .semantic_action(&super::super::semantic::Action {
+            revision: failed.revision,
+            node: retry.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        })
+        .expect("semantic retry invokes the visible cleanup authority");
+    assert!(until_gui(|| attempts.load(Ordering::Acquire) == 2));
     assert!(
         fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE).is_some(),
         "the same confirmed action becomes an explicit cleanup retry"
@@ -947,6 +991,14 @@ fn an_image_is_read_before_anybody_is_asked() {
     assert!(proposal.contains(&"Image: sample:1".to_owned()));
     assert!(proposal.contains(&"Digest: sha256:bbbb".to_owned()));
     let proposed = fixture.view.semantic_snapshot();
+    let requested = proposed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Requested capabilities"))
+        .expect("consent clients can inspect the exact requested grant");
+    assert_eq!(requested.role, "list");
+    assert_eq!(requested.value.as_deref(), Some("container-read, interface"));
     for label in ["Install", "Cancel"] {
         let action = proposed
             .root
@@ -985,6 +1037,27 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     let fixture = Fixture::new(&[("sample", true)]);
     let old_surface = fixture.view.page("sample").expect("installed surface");
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    let before = fixture.view.semantic_snapshot();
+    let update = before
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Update"))
+        .expect("installed cards expose their reviewed update path");
+    fixture
+        .view
+        .semantic_action(&super::super::semantic::Action {
+            revision: before.revision,
+            node: update.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        })
+        .expect("update guidance is semantically actionable");
+    assert!(page.notice().contains("newer image reference for sample"));
+    assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Extension status")
+            && node.value.as_deref().is_some_and(|value| value.contains("review the digest"))
+    }));
     typed(&page, "sample:2");
     page.inspect();
     assert!(page.poll());
@@ -1012,6 +1085,15 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         labels.iter().any(|line| line == "− container-read"),
         "authority the candidate dropped is called out explicitly: {labels:?}"
     );
+    let semantic = fixture.view.semantic_snapshot();
+    assert!(semantic.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Added capabilities")
+            && node.value.as_deref() == Some("container-control")
+    }));
+    assert!(semantic.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Removed capabilities")
+            && node.value.as_deref() == Some("container-read")
+    }));
     assert_eq!(
         fixture.view.page("sample").as_ref(),
         Some(&old_surface),
@@ -1251,6 +1333,47 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
     );
 }
 
+fn closing_the_catalogue_cancels_its_exact_acquisition_before_reentry() {
+    let fixture = Fixture::new(&[]);
+    let cancellations = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::clone(&cancellations);
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&attempts);
+    let inspection: Inspection = Rc::new(move |_| {
+        counted.fetch_add(1, Ordering::Release);
+        let token = hl::extension::Cancellation::default();
+        held.lock().expect("cancellations").push(token.clone());
+        PendingInspection {
+            events: std::sync::mpsc::channel().1,
+            cancellation: token,
+        }
+    });
+
+    let page = Catalogue::new(&fixture.shelf, Rc::clone(&inspection));
+    typed(&page, "team/tool:latest");
+    page.inspect();
+    let former = Rc::downgrade(&page);
+    drop(page);
+    assert!(
+        former.upgrade().is_none(),
+        "widget callbacks do not retain a closed catalogue"
+    );
+    assert!(
+        cancellations.lock().expect("cancellations")[0].is_cancelled(),
+        "closing propagates cancellation to the exact worker"
+    );
+
+    let retry = Catalogue::new(&fixture.shelf, inspection);
+    typed(&retry, "team/tool:latest");
+    retry.inspect();
+    assert_eq!(attempts.load(Ordering::Acquire), 2, "re-entry starts exactly one retry");
+    let tokens = cancellations.lock().expect("cancellations");
+    assert!(
+        !tokens[1].is_cancelled(),
+        "the new retry has independent live authority"
+    );
+}
+
 fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     let fixture = Fixture::new(&[]);
     let attempts = Arc::new(Mutex::new(Vec::new()));
@@ -1305,8 +1428,10 @@ type Heard = Arc<Mutex<Vec<String>>>;
 /// the host's own socket, speaks the handshake, and then listens.
 struct Bench {
     socket: std::path::PathBuf,
+    digest: String,
     heard: Heard,
     greeted: Arc<AtomicBool>,
+    ended: Arc<AtomicBool>,
     peers: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -1315,7 +1440,7 @@ impl hl::extension::Supply for Bench {
         let manifest = manifest("sample");
         let record = Record {
             name: manifest.name.clone(),
-            image_digest: "sha256:aaaa".to_owned(),
+            image_digest: self.digest.clone(),
             version: manifest.version.clone(),
             granted: manifest.capabilities.clone(),
             enabled: true,
@@ -1324,7 +1449,7 @@ impl hl::extension::Supply for Bench {
         };
         let image = hl::extension::Image {
             reference: "extension:1".to_owned(),
-            digest: "sha256:aaaa".to_owned(),
+            digest: self.digest.clone(),
             entrypoint: vec!["/usr/bin/extension".to_owned()],
             user: "1000:1000".to_owned(),
         };
@@ -1341,10 +1466,11 @@ impl hl::extension::Supply for Bench {
         let socket = self.socket.clone();
         let heard = Arc::clone(&self.heard);
         let greeted = Arc::clone(&self.greeted);
+        let ended = Arc::clone(&self.ended);
         self.peers
             .lock()
             .expect("peers")
-            .push(std::thread::spawn(move || listen(&socket, &heard, &greeted)));
+            .push(std::thread::spawn(move || listen(&socket, &heard, &greeted, &ended)));
         Ok(())
     }
 
@@ -1369,7 +1495,7 @@ impl hl::extension::Supply for Bench {
 
 /// The fake extension: connect, handshake, then write down every interaction
 /// the host sends.
-fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool) {
+fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool, ended: &AtomicBool) {
     let Some(stream) = connect(socket) else {
         return;
     };
@@ -1412,6 +1538,7 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool) {
         };
         heard.lock().expect("heard").push(id.to_owned());
     }
+    ended.store(true, Ordering::Release);
 }
 
 /// Connects to a socket the host may not have bound yet.
@@ -1445,13 +1572,16 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     let socket = temporary.path().join("run/extension.sock");
     let heard: Heard = Arc::default();
     let greeted = Arc::new(AtomicBool::new(false));
+    let ended = Arc::new(AtomicBool::new(false));
     let (post, deliveries) = channel();
     let delivered = post.clone();
     let host = Rc::new(hl::extension::Host::open(
         Bench {
             socket,
+            digest: "sha256:aaaa".to_owned(),
             heard: Arc::clone(&heard),
             greeted: Arc::clone(&greeted),
+            ended,
             peers: Mutex::new(Vec::new()),
         },
         Box::new(move |report| {
@@ -1628,6 +1758,255 @@ fn stale_provider_generations_cannot_authorize_replacements() {
     );
 }
 
+fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
+    use super::super::extension::{channel, Delivery, Interface, Signal};
+
+    let storage = tempfile::tempdir().expect("storage");
+    let root = storage.path().join("workspace");
+    std::fs::create_dir(&root).expect("storage root");
+    let mut described = manifest("sample");
+    described.pane_providers.push(hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    });
+    let roster = Rc::new(RefCell::new(
+        Roster::open(Directory::open(&root).expect("directory")).expect("roster"),
+    ));
+    roster
+        .borrow_mut()
+        .register(&described, "sha256:aaaa", &described.capabilities, 1)
+        .expect("registered standby record");
+    let view = Rc::new(View::new([(
+        Page::Extensions,
+        gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+    )]));
+    let gallery = Gallery::new();
+    let socket = storage.path().join("extension.sock");
+    let greeted = Arc::new(AtomicBool::new(false));
+    let ended = Arc::new(AtomicBool::new(false));
+    let heard: Heard = Arc::default();
+    let pages: Rc<RefCell<Vec<Rc<RefCell<Interface>>>>> = Rc::new(RefCell::new(Vec::new()));
+    let retained_pages = Rc::clone(&pages);
+    let shown = gallery.clone();
+    let connected = Arc::clone(&greeted);
+    let disconnected = Arc::clone(&ended);
+    let surfaces: Surfaces = Rc::new(move |entry| {
+        if entry.stage != Stage::Duty {
+            return gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
+        }
+        let (post, deliveries) = channel();
+        let host = Rc::new(hl::extension::Host::open(
+            Bench {
+                socket: socket.clone(),
+                digest: entry.image_digest.clone(),
+                heard: Arc::clone(&heard),
+                greeted: Arc::clone(&connected),
+                ended: Arc::clone(&disconnected),
+                peers: Mutex::new(Vec::new()),
+            },
+            Box::new(move |report| {
+                if let hl::extension::Report::Frame(frame) = report {
+                    drop(post.send(Delivery::Frame(frame.frame)));
+                }
+            }),
+        ));
+        let ordered = Rc::clone(&host);
+        let sink = Rc::new(move |signal: Signal| match signal {
+            Signal::Interaction(event) => ordered.accept(hl::extension::Order::Interaction(event)),
+            Signal::InteractionAt { slot, event } => {
+                ordered.accept(hl::extension::Order::InteractionAt(hl_extension::SurfaceEvent {
+                    slot,
+                    event,
+                }))
+            }
+            Signal::Retry => ordered.accept(hl::extension::Order::Retry),
+        });
+        let generation = Rc::new(Cell::new(None));
+        let publish = Rc::clone(&generation);
+        let ready_gallery = shown.clone();
+        let (widget, page) = Interface::with_lifecycle(
+            deliveries,
+            sink,
+            Rc::new(|_| {}),
+            Rc::new(move || {
+                if let Some(generation) = publish.get() {
+                    ready_gallery.ready("sample", generation);
+                }
+            }),
+        );
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.append(&widget);
+        let stopping = Rc::downgrade(&host);
+        let token = shown.enrol(
+            "sample",
+            &widget,
+            &holder,
+            &entry.pane_providers,
+            Rc::new(move |selection| host.accept(hl::extension::Order::PaneProvider(selection))),
+        );
+        shown.enrol_shutdown(
+            "sample",
+            Rc::new(move || {
+                if let Some(host) = stopping.upgrade() {
+                    host.request_stop();
+                }
+            }),
+        );
+        generation.set(Some(token));
+        let page = page.install();
+        retained_pages.borrow_mut().push(Rc::clone(&page));
+        let weak = Rc::downgrade(&page);
+        shown.enrol_semantics(
+            "sample",
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .ok_or_else(|| hl_extension::HostError::Absent("closed".into()))?
+                    .borrow()
+                    .semantics(slot)
+            }),
+            Rc::new(|_, _| Ok(())),
+        );
+        holder.upcast()
+    });
+    let withdrawn = gallery.clone();
+    let shelf = Shelf::with_lifecycle(
+        &view,
+        &roster,
+        surfaces,
+        Rc::new(|_| {}),
+        Rc::new(move |name| withdrawn.withdraw(name.as_str())),
+    );
+    shelf.install();
+
+    std::fs::remove_dir_all(&root).expect("remove durable root");
+    std::fs::write(&root, b"jammed").expect("jam durable root");
+    assert!(roster.borrow_mut().enable(&named("sample")).is_err());
+    assert_eq!(roster.borrow().stage(&named("sample")), Stage::Standby);
+    assert!(
+        !greeted.load(Ordering::Acquire),
+        "failed persistence starts no host connection"
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "failed persistence publishes no provider"
+    );
+
+    std::fs::remove_file(&root).expect("clear jam");
+    std::fs::create_dir(&root).expect("repair storage");
+    roster.borrow_mut().enable(&named("sample")).expect("durable retry");
+    shelf.refresh(&named("sample"));
+    assert!(
+        until(|| greeted.load(Ordering::Acquire)),
+        "retry opens the real Unix conversation"
+    );
+    assert!(
+        until(|| {
+            for page in pages.borrow().iter() {
+                page.borrow_mut().tick();
+            }
+            !gallery.providers().is_empty()
+        }),
+        "the accepted first frame publishes the provider only after durable retry; semantics={:?}",
+        gallery.semantics("sample", "")
+    );
+
+    let mut replacement = described.clone();
+    replacement.version = "2.0.0".to_owned();
+    replacement.pane_providers[0].title = "Dashboard v2".to_owned();
+    let pending = roster
+        .borrow()
+        .prepare_update(&replacement, "sha256:bbbb")
+        .expect("prepared update");
+    std::fs::remove_dir_all(&root).expect("remove durable root before update");
+    std::fs::write(&root, b"jammed").expect("jam update write");
+    assert!(
+        roster
+            .borrow_mut()
+            .commit_update(pending, &replacement.capabilities, 2)
+            .is_err(),
+        "failed durable replacement is visible"
+    );
+    assert_eq!(roster.borrow().entries()[0].image_digest, "sha256:aaaa");
+    assert_eq!(
+        gallery.providers()[0].title,
+        "Dashboard",
+        "failed update leaves old provider usable"
+    );
+    assert!(
+        !ended.load(Ordering::Acquire),
+        "failed update leaves the old digest socket live"
+    );
+
+    std::fs::remove_file(&root).expect("clear update jam");
+    std::fs::create_dir(&root).expect("repair storage for update");
+    let pending = roster
+        .borrow()
+        .prepare_update(&replacement, "sha256:bbbb")
+        .expect("prepare retry");
+    roster
+        .borrow_mut()
+        .commit_update(pending, &replacement.capabilities, 3)
+        .expect("durable replacement");
+    greeted.store(false, Ordering::Release);
+    shelf.refresh(&named("sample"));
+    assert!(
+        gallery.providers().is_empty(),
+        "replacement does not inherit old-generation readiness"
+    );
+    assert!(
+        until(|| greeted.load(Ordering::Acquire)),
+        "new digest opens its own Unix conversation"
+    );
+    assert!(
+        until(|| {
+            for page in pages.borrow().iter() {
+                page.borrow_mut().tick();
+            }
+            gallery
+                .providers()
+                .first()
+                .is_some_and(|provider| provider.title == "Dashboard v2")
+        }),
+        "only the new digest's first frame publishes its provider"
+    );
+    assert_eq!(roster.borrow().entries()[0].image_digest, "sha256:bbbb");
+    ended.store(false, Ordering::Release);
+
+    std::fs::remove_dir_all(&root).expect("remove durable root before disable");
+    std::fs::write(&root, b"jammed").expect("jam disable write");
+    assert!(roster.borrow_mut().disable(&named("sample")).is_err());
+    assert_eq!(roster.borrow().stage(&named("sample")), Stage::Duty);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "failed disable preserves the live provider generation"
+    );
+    assert!(
+        !ended.load(Ordering::Acquire),
+        "failed disable does not half-close the live socket"
+    );
+
+    std::fs::remove_file(&root).expect("clear disable jam");
+    std::fs::create_dir(&root).expect("repair storage for disable");
+    roster.borrow_mut().disable(&named("sample")).expect("durable disable");
+    shelf.refresh(&named("sample"));
+    assert!(
+        gallery.providers().is_empty(),
+        "successful disable withdraws provider authority immediately"
+    );
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !ended.load(Ordering::Acquire) && Instant::now() < deadline {
+        // Deliberately do not iterate GTK: teardown must not wait for the
+        // detached page's next toolkit tick.
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        ended.load(Ordering::Acquire),
+        "successful disable closes the old Unix conversation directly"
+    );
+}
+
 /// In-memory ports, so a conversation can be served with no container runtime
 /// and no window.
 mod ports {
@@ -1701,6 +2080,8 @@ mod ports {
             Ok(PaneText {
                 slot: slot.to_owned(),
                 lines: Vec::new(),
+                cursor_column: 0,
+                cursor_row: 0,
                 truncated: false,
             })
         }
@@ -1790,8 +2171,8 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneChooser, PaneChrome, Panes, ProductionPaneLauncher, Reading, Slots, Surface, Tabs, TermWin,
-        Window, WindowSession, ABSENCE,
+        Adjustment, PaneChooser, PaneChrome, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+        WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::{Gallery, Shelf, Surfaces};
@@ -2271,7 +2652,7 @@ mod panes {
     pub(super) fn reading_a_pane_hands_back_what_was_written_to_it() {
         let bench = Bench::new();
         let (terminal, slot) = bench.shell();
-        terminal.feed(b"the quick brown fox\r\n");
+        terminal.feed(b"the quick brown fox\r\n\x1b[4;13H");
 
         assert!(
             until(|| lines(&bench, &slot, 100)
@@ -2279,6 +2660,13 @@ mod panes {
                 .any(|line| line.contains("quick brown"))),
             "the pane hands back what was written to it, got {:?}",
             lines(&bench, &slot, 100)
+        );
+        assert!(
+            until(|| matches!(
+                Panes::read(&bench.window, &slot, 100),
+                Reading::Text(text) if (text.cursor_column, text.cursor_row) == (12, 3)
+            )),
+            "the typed pane projection carries the terminal's zero-based cursor"
         );
         assert_eq!(
             Panes::read(&bench.window, "no-such-pane", 100),
@@ -2852,14 +3240,9 @@ mod panes {
         }
         shelf.refresh(&name);
 
-        let frozen = Panes::at(&bench.window, &first_slot).expect("tombstoned pane identity");
-        assert_eq!(frozen.occupant, Occupant::Surface);
-        assert!(
-            super::descendants(&frozen.content)
-                .iter()
-                .any(|widget| widget.has_css_class(ABSENCE)),
-            "withdrawal leaves an explicit recovery placeholder"
-        );
+        let restored = Panes::at(&bench.window, &first_slot).expect("restored pane identity");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert_eq!(restored.content, first.clone().upcast::<gtk::Widget>());
         assert_eq!(
             Panes::at(&bench.window, &second_slot).expect("unrelated pane").slot,
             second_slot,
@@ -2870,10 +3253,19 @@ mod panes {
             "withdrawal disappears from every chooser immediately"
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
-        assert_eq!(
-            Slots::new(&bench.window).surface(&frozen.content),
-            Some((first_slot.clone(), "postgres".to_owned(), Some("database".to_owned()))),
-            "the persisted provider identity survives lifecycle withdrawal"
+        assert!(
+            Slots::new(&bench.window).surface(&restored.content).is_none(),
+            "withdrawal retires provider identity before layout persistence"
+        );
+        let storage = tempfile::tempdir().expect("layout storage");
+        let mut history = 0;
+        let persisted = WindowSession::new(&bench.window)
+            .snapshot_node(&restored.widget, storage.path(), "withdrawn", &mut history)
+            .expect("layout snapshot")
+            .expect("pane snapshot");
+        assert!(
+            matches!(persisted, PaneNode::Leaf(ref pane) if pane.slot.as_deref() == Some(first_slot.as_str())),
+            "persisted layout contains the restored terminal, not a stale provider: {persisted:?}"
         );
 
         if !remove {
@@ -2890,27 +3282,15 @@ mod panes {
             );
             readable(&gallery, "postgres");
             gallery.ready("postgres", generation);
-            PaneChooser::recover(&bench.window, "postgres");
-            assert_eq!(
-                interface.parent().as_ref(),
-                Some(frozen.content.upcast_ref::<gtk::Widget>())
-            );
-            PaneChooser::withdraw(&bench.window, "postgres");
             gallery.withdraw("postgres");
         }
-
-        assert!(Panes::focus(&bench.window, &first_slot));
-        PaneChooser::terminal(&bench.window);
-        let restored = Panes::at(&bench.window, &first_slot).expect("explicitly restored shell");
-        assert_eq!(restored.occupant, Occupant::Terminal);
-        assert_eq!(restored.content, first.upcast::<gtk::Widget>());
     }
 
-    pub(super) fn disabling_an_extension_tombstones_and_recovers_its_surface_pane() {
+    pub(super) fn disabling_an_extension_restores_its_surface_pane_terminal() {
         lifecycle_withdrawal(false);
     }
 
-    pub(super) fn removing_an_extension_tombstones_without_displacing_its_shell() {
+    pub(super) fn removing_an_extension_restores_its_surface_pane_terminal() {
         lifecycle_withdrawal(true);
     }
 
@@ -3041,7 +3421,22 @@ mod panes {
         drop(first);
     }
 
-    pub(super) fn a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell() {
+    pub(super) fn a_restored_surface_keeps_a_terminal_escape_hatch_while_its_provider_is_late() {
+        struct Offline;
+        impl PaneLauncher for Offline {
+            fn spawn(
+                &self,
+                _terminal: &vte4::Terminal,
+                _argv: &[&str],
+                _environment: &[&str],
+            ) -> std::io::Result<(i32, vte4::Pty)> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "offline test launcher",
+                ))
+            }
+        }
+
         let bench = Bench::new();
         let gallery = Gallery::new();
         Window::exhibit(&bench.window, gallery.clone());
@@ -3053,15 +3448,15 @@ mod panes {
         });
 
         let mut pids = Vec::new();
-        let (widget, terminal) = WindowSession::new(&bench.window).build_pane_widget(
-            &node,
-            storage.path(),
-            &mut pids,
-            &ProductionPaneLauncher,
-        );
+        let (widget, terminal) =
+            WindowSession::new(&bench.window).build_pane_widget(&node, storage.path(), &mut pids, &Offline);
         bench.page.append(&widget);
 
-        assert!(terminal.is_none(), "an absent extension is never replaced by a shell");
+        assert!(terminal.is_none(), "the hidden fallback does not steal initial focus");
+        assert!(
+            bench.window.displaced.borrow().contains_key("7"),
+            "a restored provider retains a terminal escape hatch"
+        );
         assert!(
             super::descendants(&widget)
                 .iter()
@@ -3080,6 +3475,15 @@ mod panes {
             interface.parent().as_ref(),
             Some(held.content.upcast_ref::<gtk::Widget>()),
             "re-enabling after restart rehydrates the preserved pane"
+        );
+        PaneChooser::withdraw(&bench.window, "departed");
+        gallery.withdraw("departed");
+        let restored = Panes::at(&bench.window, "7").expect("stable restored slot");
+        assert_eq!(restored.occupant, Occupant::Terminal);
+        assert!(bench.window.displaced.borrow().get("7").is_none());
+        assert!(
+            Slots::new(&bench.window).surface(&restored.content).is_none(),
+            "late-provider withdrawal cannot persist stale provider identity"
         );
     }
 }

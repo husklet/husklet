@@ -1376,6 +1376,42 @@ export interface InlineMessageProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface ValidationSummaryProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** named icon */
+  icon?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 export interface ButtonProps extends NodeProps {
   children?: ReactNode;
   /** marks an action as irreversible so automation requires confirmation */
@@ -1803,6 +1839,84 @@ export interface SearchProps extends NodeProps {
   value?: string | number;
   /** prompt shown by an empty field */
   placeholder?: string;
+  /** defaults to enabled when absent */
+  enabled?: boolean;
+  onChange?: (report: Report) => void;
+  onSubmit?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
+}
+
+export interface CommandPaletteProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** prompt shown by an empty field */
+  placeholder?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** defaults to enabled when absent */
+  enabled?: boolean;
+  onChange?: (report: Report) => void;
+  onSubmit?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
+}
+
+export interface TagInputProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** prompt shown by an empty field */
+  placeholder?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
@@ -4188,6 +4302,33 @@ export interface CodeViewProps extends NodeProps {
   monospace?: boolean;
 }
 
+export interface MarkdownViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+}
+
 export interface LogViewProps extends NodeProps {
   /** marks an action as irreversible so automation requires confirmation */
   destructive?: boolean;
@@ -4273,6 +4414,67 @@ export interface ChartProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface DiffViewerProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** axis of a container, a splitter or a divider */
+  orientation?: "horizontal" | "Horizontal" | "vertical" | "Vertical";
+}
+
+export interface DiffLineProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 
 import type { ComponentType } from 'react';
 
@@ -4319,6 +4521,7 @@ export const Toast: ComponentType<ToastProps>;
 export const Banner: ComponentType<BannerProps>;
 export const AlertTitle: ComponentType<AlertTitleProps>;
 export const InlineMessage: ComponentType<InlineMessageProps>;
+export const ValidationSummary: ComponentType<ValidationSummaryProps>;
 export const Button: ComponentType<ButtonProps>;
 export const IconButton: ComponentType<IconButtonProps>;
 export const ToggleButton: ComponentType<ToggleButtonProps>;
@@ -4331,6 +4534,8 @@ export const SpeedDialAction: ComponentType<SpeedDialActionProps>;
 export const Overflow: ComponentType<OverflowProps>;
 export const Entry: ComponentType<EntryProps>;
 export const Search: ComponentType<SearchProps>;
+export const CommandPalette: ComponentType<CommandPaletteProps>;
+export const TagInput: ComponentType<TagInputProps>;
 export const NumberEntry: ComponentType<NumberEntryProps>;
 export const TextArea: ComponentType<TextAreaProps>;
 export const PasswordEntry: ComponentType<PasswordEntryProps>;
@@ -4408,9 +4613,12 @@ export const MenuItem: ComponentType<MenuItemProps>;
 export const Drawer: ComponentType<DrawerProps>;
 export const DrawerPanel: ComponentType<DrawerPanelProps>;
 export const CodeView: ComponentType<CodeViewProps>;
+export const MarkdownView: ComponentType<MarkdownViewProps>;
 export const LogView: ComponentType<LogViewProps>;
 export const Video: ComponentType<VideoProps>;
 export const Chart: ComponentType<ChartProps>;
+export const DiffViewer: ComponentType<DiffViewerProps>;
+export const DiffLine: ComponentType<DiffLineProps>;
 
 /** Every tag name, in catalogue order. */
 export const tags: string[];
@@ -4429,13 +4637,13 @@ export const PROTOCOL: number;
 /** Maximum Unicode characters retained by a LogView; Value patches append. */
 export const LOG_VIEW_CHARACTER_LIMIT: 4096;
 
-export type Topic = 'containers' | 'executions' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
+export type Topic = 'containers' | 'executions' | 'images' | 'image-pulls' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
 export type ExtensionCapability =
   | 'workspace-read' | 'workspace-control' | 'workspace-events'
-  | 'container-read' | 'container-control' | 'image-read' | 'image-write'
+  | 'container-read' | 'container-control' | 'container-attach' | 'image-read' | 'image-write'
   | 'volume-read' | 'volume-write' | 'network-read' | 'network-write'
   | 'terminal-read' | 'terminal-control' | 'terminal-output' | 'pane-observe'
   | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
@@ -4470,8 +4678,14 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
-export interface ProcessList { titles: string[]; processes: string[][] }
-export interface ContainerOutput { stdout: number[]; stderr: number[]; truncated: boolean }
+export interface ProcessList {
+  titles: string[]; processes: string[][]; observed_at_ms: number;
+  scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
+}
+export interface ContainerOutput {
+  stdout: number[]; stderr: number[]; truncated: boolean;
+  stdout_truncated: boolean; stderr_truncated: boolean; eof: boolean;
+}
 export interface ContainerCreateSpec {
   image: string;
   name: string;
@@ -4494,9 +4708,12 @@ export interface ExecutionSummary {
 }
 export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface ImagePullJob { job: string }
+export interface ImagePullStatus { job: string; reference: string; revision: number; state: string; status: string | null; layer: string | null; current: number | null; total: number | null; image: ImageSummary | null; error: string | null }
+export interface ImagePullChange { job: string; revision: number; state: string; coalesced: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
-export interface VolumeSummary { name: string; driver: string }
+export interface VolumeSummary { name: string; driver: string; generation: string }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
 export interface PaneSummary {
   slot: string;
@@ -4506,7 +4723,7 @@ export interface PaneSummary {
   provider: { extension: string; provider: string } | null;
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; lines: string[]; truncated: boolean }
+export interface PaneText { slot: string; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
 export interface InspectablePane { slot: string; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
 export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
@@ -4529,7 +4746,7 @@ export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number
 export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }
 export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {
-  interaction: I; trigger: T; node: number; id: string; slot?: string;
+  interaction: I; trigger: T; node: number; id: string; slot?: string; dropped?: number;
 }
 export type InterfaceEvent =
   | InterfaceEventBase<'invoke', 'Invoke'>
@@ -4553,6 +4770,7 @@ export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'executions'; of: ExecutionList }
   | { snapshot: 'images'; of: ImageSummary[] }
+  | { snapshot: 'image_pulls'; of: ImagePullChange }
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
   | { snapshot: 'terminal'; of: TabSummary[] }
@@ -4572,12 +4790,10 @@ export interface ConnectOptions {
   path?: string;
   pendingLimit?: number;
   timeout?: number;
-  connectTimeout?: number;
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: HostEvent, channel: number) => void;
   onEventError?: (error: unknown) => void;
-  onClose?: (error: Error) => void;
 }
 
 export class Session {
@@ -4641,13 +4857,15 @@ export interface WorkspaceApi {
     restart(id: string): Promise<void>;
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
+    /** Open an ephemeral GUI terminal running an exact argv in this immutable container identity. */
+    attachTerminal(id: string, command: string[]): Promise<string>;
   };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
+  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
-    remove(name: string): Promise<void>;
+    remove(name: string, generation: string): Promise<void>;
   };
   networks: {
     list(): Promise<NetworkSummary[]>;
@@ -4675,6 +4893,7 @@ export interface WorkspaceApi {
   };
   files: {
     list(path: string): Promise<FileEntry[]>;
+    stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
     write(path: string, contents: Iterable<number>): Promise<void>;
     mkdir(path: string): Promise<void>;
@@ -4686,9 +4905,11 @@ export interface WorkspaceApi {
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
   watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
+  watchImagePulls(listener: (change: ImagePullChange) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
   watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
+  watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;

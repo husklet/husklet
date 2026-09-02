@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "PascalCase")]
 pub struct Volume {
     pub created_at: String,
+    #[serde(default)]
+    pub husklet_generation: String,
     pub driver: String,
     pub labels: BTreeMap<String, String>,
     pub mountpoint: String,
@@ -23,6 +25,7 @@ impl From<hl_container::Volume> for Volume {
                 .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
         Self {
             created_at,
+            husklet_generation: value.generation,
             driver: "local".into(),
             labels: value.labels,
             mountpoint: value.path.to_string_lossy().into_owned(),

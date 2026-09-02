@@ -59,15 +59,32 @@ impl Reports {
 }
 
 fn replaceable(event: &Event) -> bool {
-    matches!(event, Event::Scroll { .. } | Event::Pointer { phase: PointerPhase::Motion, .. })
+    matches!(
+        event,
+        Event::Scroll { .. }
+            | Event::Pointer {
+                phase: PointerPhase::Motion,
+                ..
+            }
+    )
 }
 
 fn same_observation(left: &Event, right: &Event) -> bool {
     match (left, right) {
         (Event::Scroll { node: a, id: ai, .. }, Event::Scroll { node: b, id: bi, .. }) => a == b && ai == bi,
         (
-            Event::Pointer { node: a, id: ai, phase: PointerPhase::Motion, .. },
-            Event::Pointer { node: b, id: bi, phase: PointerPhase::Motion, .. },
+            Event::Pointer {
+                node: a,
+                id: ai,
+                phase: PointerPhase::Motion,
+                ..
+            },
+            Event::Pointer {
+                node: b,
+                id: bi,
+                phase: PointerPhase::Motion,
+                ..
+            },
         ) => a == b && ai == bi,
         _ => false,
     }
@@ -143,18 +160,19 @@ impl Bindings {
 }
 
 fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, reports: &Reports) {
+    let target = crate::component::slot::editable(widget).unwrap_or_else(|| widget.clone());
     match trigger {
         Trigger::Invoke | Trigger::Activate => invoke(widget, node, slot, reports),
-        Trigger::Change => change(widget, node, slot, reports),
-        Trigger::Submit => submit(widget, node, slot, reports),
+        Trigger::Change => change(&target, node, slot, reports),
+        Trigger::Submit => submit(&target, node, slot, reports),
         Trigger::Toggle => toggle(widget, node, slot, reports),
         Trigger::Expand => expand(widget, node, slot, reports),
         Trigger::Select => select(widget, node, slot, reports),
         Trigger::Scroll => scroll(widget, node, slot, reports),
         Trigger::Close => close(widget, node, slot, reports),
-        Trigger::Context => context(widget, node, slot, reports),
-        Trigger::Key => key(widget, node, slot, reports),
-        Trigger::Focus => focus(widget, node, slot, reports),
+        Trigger::Context => context(&target, node, slot, reports),
+        Trigger::Key => key(&target, node, slot, reports),
+        Trigger::Focus => focus(&target, node, slot, reports),
         Trigger::Pointer => pointer(widget, node, slot, reports),
     }
 }
@@ -187,13 +205,19 @@ fn change(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
 }
 
 fn text_view(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    let Some(view) = crate::component::field::view(widget) else { return };
+    let Some(view) = crate::component::field::view(widget) else {
+        return;
+    };
     let buffer = view.buffer();
     let reports = reports.clone();
     let slot = slot.clone();
     buffer.connect_changed(move |buffer| {
         let Some(id) = slot.id() else { return };
-        reports.push(Event::Change { node, id, value: PropValue::text(buffer.text(&buffer.start_iter(), &buffer.end_iter(), false)) });
+        reports.push(Event::Change {
+            node,
+            id,
+            value: PropValue::text(buffer.text(&buffer.start_iter(), &buffer.end_iter(), false)),
+        });
     });
 }
 
@@ -212,11 +236,17 @@ fn select(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let reports = reports.clone();
         let slot = slot.clone();
         drop.connect_selected_notify(move |drop| {
-            identified(&reports, &slot, |id| Event::Select { node, id, rows: vec![u64::from(drop.selected())] });
+            identified(&reports, &slot, |id| Event::Select {
+                node,
+                id,
+                rows: vec![u64::from(drop.selected())],
+            });
         });
         return;
     }
-    let Some(view) = crate::component::table::columns(widget) else { return };
+    let Some(view) = crate::component::table::columns(widget) else {
+        return;
+    };
     connect_selection(&view, node, slot, reports);
     let reports = reports.clone();
     let slot = slot.clone();
@@ -224,7 +254,12 @@ fn select(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
 }
 
 fn connect_selection(view: &gtk::ColumnView, node: NodeId, slot: &Slot, reports: &Reports) {
-    let Some(selection) = view.model().and_then(|model| model.downcast::<gtk::MultiSelection>().ok()) else { return };
+    let Some(selection) = view
+        .model()
+        .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+    else {
+        return;
+    };
     let reports = reports.clone();
     let slot = slot.clone();
     selection.connect_selection_changed(move |selection, _, _| {
@@ -253,7 +288,9 @@ fn scroll(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
 }
 
 fn close(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    let Some(popover) = widget.downcast_ref::<gtk::Popover>() else { return };
+    let Some(popover) = widget.downcast_ref::<gtk::Popover>() else {
+        return;
+    };
     let reports = reports.clone();
     let slot = slot.clone();
     popover.connect_closed(move |_| identified(&reports, &slot, |id| Event::Close { node, id }));
@@ -288,20 +325,51 @@ fn key(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     widget.add_controller(controller);
 }
 
-fn key_event(reports: &Reports, slot: &Slot, node: NodeId, key: gtk::gdk::Key, keycode: u32, modifiers: gtk::gdk::ModifierType, pressed: bool) {
-    let Some(mut name) = key.name().map(|name| name.to_string()) else { return };
-    if name.len() > KEY_LIMIT { name.truncate(KEY_LIMIT); }
-    identified(reports, slot, |id| Event::Key { node, id, key: name, keycode, modifiers: modifiers.bits(), pressed });
+fn key_event(
+    reports: &Reports,
+    slot: &Slot,
+    node: NodeId,
+    key: gtk::gdk::Key,
+    keycode: u32,
+    modifiers: gtk::gdk::ModifierType,
+    pressed: bool,
+) {
+    let Some(mut name) = key.name().map(|name| name.to_string()) else {
+        return;
+    };
+    if name.len() > KEY_LIMIT {
+        name.truncate(KEY_LIMIT);
+    }
+    identified(reports, slot, |id| Event::Key {
+        node,
+        id,
+        key: name,
+        keycode,
+        modifiers: modifiers.bits(),
+        pressed,
+    });
 }
 
 fn focus(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     let controller = gtk::EventControllerFocus::new();
     let entered = reports.clone();
     let entered_slot = slot.clone();
-    controller.connect_enter(move |_| identified(&entered, &entered_slot, |id| Event::Focus { node, id, focused: true }));
+    controller.connect_enter(move |_| {
+        identified(&entered, &entered_slot, |id| Event::Focus {
+            node,
+            id,
+            focused: true,
+        })
+    });
     let left = reports.clone();
     let left_slot = slot.clone();
-    controller.connect_leave(move |_| identified(&left, &left_slot, |id| Event::Focus { node, id, focused: false }));
+    controller.connect_leave(move |_| {
+        identified(&left, &left_slot, |id| Event::Focus {
+            node,
+            id,
+            focused: false,
+        })
+    });
     widget.add_controller(controller);
 }
 
@@ -309,33 +377,103 @@ fn pointer(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     let motion = gtk::EventControllerMotion::new();
     let entered = reports.clone();
     let entered_slot = slot.clone();
-    motion.connect_enter(move |controller, x, y| pointer_event(&entered, &entered_slot, node, PointerPhase::Enter, Some((x, y)), 0, controller.current_event_state()));
+    motion.connect_enter(move |controller, x, y| {
+        pointer_event(
+            &entered,
+            &entered_slot,
+            node,
+            PointerPhase::Enter,
+            Some((x, y)),
+            0,
+            controller.current_event_state(),
+        )
+    });
     let moved = reports.clone();
     let moved_slot = slot.clone();
-    motion.connect_motion(move |controller, x, y| pointer_event(&moved, &moved_slot, node, PointerPhase::Motion, Some((x, y)), 0, controller.current_event_state()));
+    motion.connect_motion(move |controller, x, y| {
+        pointer_event(
+            &moved,
+            &moved_slot,
+            node,
+            PointerPhase::Motion,
+            Some((x, y)),
+            0,
+            controller.current_event_state(),
+        )
+    });
     let left = reports.clone();
     let left_slot = slot.clone();
-    motion.connect_leave(move |controller| pointer_event(&left, &left_slot, node, PointerPhase::Leave, None, 0, controller.current_event_state()));
+    motion.connect_leave(move |controller| {
+        pointer_event(
+            &left,
+            &left_slot,
+            node,
+            PointerPhase::Leave,
+            None,
+            0,
+            controller.current_event_state(),
+        )
+    });
     widget.add_controller(motion);
     let click = gtk::GestureClick::new();
     click.set_button(0);
     let pressed = reports.clone();
     let pressed_slot = slot.clone();
-    click.connect_pressed(move |gesture, _, x, y| pointer_event(&pressed, &pressed_slot, node, PointerPhase::Press, Some((x, y)), gesture.current_button(), gesture.current_event_state()));
+    click.connect_pressed(move |gesture, _, x, y| {
+        pointer_event(
+            &pressed,
+            &pressed_slot,
+            node,
+            PointerPhase::Press,
+            Some((x, y)),
+            gesture.current_button(),
+            gesture.current_event_state(),
+        )
+    });
     let released = reports.clone();
     let released_slot = slot.clone();
-    click.connect_released(move |gesture, _, x, y| pointer_event(&released, &released_slot, node, PointerPhase::Release, Some((x, y)), gesture.current_button(), gesture.current_event_state()));
+    click.connect_released(move |gesture, _, x, y| {
+        pointer_event(
+            &released,
+            &released_slot,
+            node,
+            PointerPhase::Release,
+            Some((x, y)),
+            gesture.current_button(),
+            gesture.current_event_state(),
+        )
+    });
     widget.add_controller(click);
 }
 
-fn pointer_event(reports: &Reports, slot: &Slot, node: NodeId, phase: PointerPhase, position: Option<(f64, f64)>, button: u32, modifiers: gtk::gdk::ModifierType) {
-    if position.is_some_and(|(x, y)| !x.is_finite() || !y.is_finite()) { return; }
+fn pointer_event(
+    reports: &Reports,
+    slot: &Slot,
+    node: NodeId,
+    phase: PointerPhase,
+    position: Option<(f64, f64)>,
+    button: u32,
+    modifiers: gtk::gdk::ModifierType,
+) {
+    if position.is_some_and(|(x, y)| !x.is_finite() || !y.is_finite()) {
+        return;
+    }
     let (x, y) = position.map_or((None, None), |(x, y)| (Some(x), Some(y)));
-    identified(reports, slot, |id| Event::Pointer { node, id, phase, x, y, button, modifiers: modifiers.bits() });
+    identified(reports, slot, |id| Event::Pointer {
+        node,
+        id,
+        phase,
+        x,
+        y,
+        button,
+        modifiers: modifiers.bits(),
+    });
 }
 
 fn identified(reports: &Reports, slot: &Slot, event: impl FnOnce(EventId) -> Event) {
-    if let Some(id) = slot.id() { reports.push(event(id)); }
+    if let Some(id) = slot.id() {
+        reports.push(event(id));
+    }
 }
 
 /// Text entry of every shape.

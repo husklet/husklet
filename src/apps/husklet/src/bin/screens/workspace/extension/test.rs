@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use hl_gui::{Element, Event, EventId, Reconciliation, Tag};
 
-use super::{channel, Delivery, Interface, Post, Signal, DRAIN};
+use super::{DRAIN, Delivery, Interface, Post, Signal, channel};
 
 /// Everything the sink was handed, in order.
 type Record = Rc<RefCell<Vec<Signal>>>;
@@ -122,13 +122,104 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_rendered_button_reaches_the_sink();
         retained_pane_actions_keep_their_slot();
         retiring_a_pane_discards_its_queued_interaction();
+        retired_panes_ignore_late_frames_until_explicitly_remounted();
+        oversized_tree_growth_is_atomic_isolated_and_remountable();
         semantics_are_redacted_and_actions_reject_stale_revisions();
+        command_palette_exposes_typed_semantic_actions();
+        tag_input_exposes_value_actions_and_authored_tags();
+        validation_summary_is_readable_and_keeps_corrective_actions();
+        diff_lines_project_status_and_bounded_text();
+        markdown_preserves_bounded_source_in_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn diff_lines_project_status_and_bounded_text() {
+    let mut fixture = Fixture::new();
+    let described = Element::diff_viewer()
+        .child(Element::diff_line("-", "image: app:v1"))
+        .child(Element::diff_line("+", "image: app:v2"));
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let diff = &tree.root.children[0];
+    assert_eq!(diff.role, "DiffViewer");
+    assert_eq!(diff.children.len(), 2);
+    assert_eq!(diff.children[0].label.as_deref(), Some("-"));
+    assert_eq!(diff.children[0].value.as_deref(), Some("image: app:v1"));
+    assert_eq!(diff.children[1].label.as_deref(), Some("+"));
+    assert_eq!(diff.children[1].value.as_deref(), Some("image: app:v2"));
+}
+
+fn validation_summary_is_readable_and_keeps_corrective_actions() {
+    let mut fixture = Fixture::new();
+    let described = Element::validation_summary("2 problems found")
+        .detail("Correct the highlighted fields")
+        .child(Element::button("Review name", EventId::new("review-name")));
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let summary = &tree.root.children[0];
+    assert_eq!(summary.role, "ValidationSummary");
+    assert_eq!(summary.label.as_deref(), Some("2 problems found"));
+    assert_eq!(summary.value.as_deref(), Some("Correct the highlighted fields"));
+    assert_eq!(summary.children[0].label.as_deref(), Some("Review name"));
+    assert_eq!(summary.children[0].actions, vec![hl_extension::SemanticActionKind::Invoke]);
+}
+
+fn tag_input_exposes_value_actions_and_authored_tags() {
+    let mut fixture = Fixture::new();
+    let described = Element::tag_input(EventId::new("tag-change"), EventId::new("tag-submit"))
+        .value("new")
+        .child(Element::toggle_button("backend", EventId::new("remove-backend")));
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let input = &tree.root.children[0];
+    assert_eq!(input.role, "TagInput");
+    assert_eq!(input.value.as_deref(), Some("new"));
+    assert_eq!(input.children[0].label.as_deref(), Some("backend"));
+    assert_eq!(
+        input.actions,
+        vec![
+            hl_extension::SemanticActionKind::Change,
+            hl_extension::SemanticActionKind::Submit,
+        ]
+    );
+}
+
+fn markdown_preserves_bounded_source_in_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::markdown_view("# Review\n- safe <html>"));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let document = &tree.root.children[0];
+    assert_eq!(document.role, "MarkdownView");
+    assert_eq!(document.value.as_deref(), Some("# Review\n- safe <html>"));
+    assert!(document.actions.is_empty(), "a document is readable, not actionable");
+}
+
+fn command_palette_exposes_typed_semantic_actions() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::command_palette(
+        EventId::new("filter-command"),
+        EventId::new("run-command"),
+    ));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let palette = &tree.root.children[0];
+    assert_eq!(palette.role, "CommandPalette");
+    assert_eq!(
+        palette.actions,
+        vec![
+            hl_extension::SemanticActionKind::Change,
+            hl_extension::SemanticActionKind::Submit,
+        ]
+    );
 }
 
 fn retiring_a_pane_discards_its_queued_interaction() {
@@ -156,6 +247,124 @@ fn retiring_a_pane_discards_its_queued_interaction() {
     );
 }
 
+fn retired_panes_ignore_late_frames_until_explicitly_remounted() {
+    let mut fixture = Fixture::new();
+    let first = fixture.page.pane("pane-reused");
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-reused".into(),
+            frame: Reconciliation::new().reconcile(&panel("First generation")),
+        })
+        .expect("first generation frame queued");
+    fixture.page.tick();
+    assert!(descendants(&first).iter().any(|widget| {
+        widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().as_str() == "First generation")
+    }));
+
+    fixture.page.retire("pane-reused");
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-reused".into(),
+            frame: Reconciliation::new().reconcile(&panel("Stale generation")),
+        })
+        .expect("late frame queued");
+    fixture.page.tick();
+    assert!(
+        !fixture.page.panes.contains_key("pane-reused"),
+        "a late frame cannot recreate retired slot authority"
+    );
+
+    let replacement = fixture.page.pane("pane-reused");
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-reused".into(),
+            frame: Reconciliation::new().reconcile(&panel("Replacement generation")),
+        })
+        .expect("replacement frame queued");
+    fixture.page.tick();
+    assert!(descendants(&replacement).iter().any(|widget| {
+        widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().as_str() == "Replacement generation")
+    }));
+}
+
+fn oversized_tree_growth_is_atomic_isolated_and_remountable() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::text("last valid interface"));
+    fixture.page.tick();
+    let valid_sequence = fixture.page.tree.sequence();
+    let valid_nodes = fixture.page.tree.len();
+
+    let mut oversized = Element::column();
+    for index in 0..=super::TREE_NODE_LIMIT {
+        oversized = oversized.child(Element::text(format!("node {index}")));
+    }
+    fixture.describe(&oversized);
+    fixture.page.tick();
+    assert_eq!(
+        fixture.page.tree.sequence(),
+        valid_sequence,
+        "rejected growth consumes no sequence"
+    );
+    assert_eq!(
+        fixture.page.tree.len(),
+        valid_nodes,
+        "rejected growth mutates no retained nodes"
+    );
+    assert!(
+        fixture.widgets().iter().any(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text().as_str() == "last valid interface")
+        }),
+        "the last valid GTK interface remains visible"
+    );
+    assert!(fixture.page.banner().is_visible());
+    assert!(fixture.page.banner().text().contains("above the limit"));
+
+    let mut healthy = Fixture::new();
+    healthy.describe(&Element::text("independent extension"));
+    healthy.page.tick();
+    assert_eq!(
+        healthy.page.tree.sequence(),
+        1,
+        "another extension owns an independent tree budget"
+    );
+
+    let slot = "bounded-pane";
+    let _rejected = fixture.page.pane(slot);
+    let mut large = Reconciliation::new();
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: slot.into(),
+            frame: large.reconcile(&oversized),
+        })
+        .expect("oversized pane frame queued");
+    fixture.page.tick();
+    fixture.page.retire(slot);
+    let replacement = fixture.page.pane(slot);
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: slot.into(),
+            frame: Reconciliation::new().reconcile(&Element::text("recovered pane")),
+        })
+        .expect("fresh pane frame queued");
+    fixture.page.tick();
+    assert!(descendants(&replacement).iter().any(|widget| {
+        widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().as_str() == "recovered pane")
+    }));
+}
+
 fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
     let mut found = vec![widget.clone()];
     let mut index = 0;
@@ -168,6 +377,7 @@ fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
 
 fn retained_pane_actions_keep_their_slot() {
     let mut fixture = Fixture::new();
+    let _pane = fixture.page.pane("pane-2");
     let frame = Reconciliation::new().reconcile(&panel("Pane two"));
     fixture
         .post
@@ -405,10 +615,12 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Extension stopped"))
         .expect("the visible fault has a semantic projection");
-    assert!(fault
-        .value
-        .as_deref()
-        .is_some_and(|value| value.contains("socket closed")));
+    assert!(
+        fault
+            .value
+            .as_deref()
+            .is_some_and(|value| value.contains("socket closed"))
+    );
     assert_eq!(fault.actions, vec![hl_extension::SemanticActionKind::Invoke]);
     fixture
         .page

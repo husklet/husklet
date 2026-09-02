@@ -8,9 +8,9 @@ use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerOutput, ContainerSummary, Division, Entry, ExecutionList, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
-    ImageSummary, NetworkSummary, PaneInventory, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
-    WorkspaceConfiguration, WorkspaceState,
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionList, ExecutionSummary, HostError, ImageDetails,
+    ImagePruneResult, ImagePullJob, ImagePullStatus, ImageSummary, NetworkSummary, PaneInventory, PaneText,
+    ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
 };
 
 /// A call from an extension.
@@ -96,7 +96,11 @@ pub enum Request {
         id: String,
     },
     ExecutionList,
-    ExecutionLogs { id: String, stdout: bool, stderr: bool },
+    ExecutionLogs {
+        id: String,
+        stdout: bool,
+        stderr: bool,
+    },
     ExecutionWait {
         id: String,
         timeout_ms: u32,
@@ -105,8 +109,12 @@ pub enum Request {
         id: String,
         signal: String,
     },
-    ExecutionRemove { id: String },
-    ContainerCreate { spec: crate::port::ContainerCreateSpec },
+    ExecutionRemove {
+        id: String,
+    },
+    ContainerCreate {
+        spec: crate::port::ContainerCreateSpec,
+    },
     ContainerStart {
         id: String,
     },
@@ -135,9 +143,22 @@ pub enum Request {
         user: Option<String>,
         working_directory: Option<String>,
     },
+    ContainerAttachTerminal {
+        id: String,
+        command: Vec<String>,
+    },
     ImageList,
     ImagePull {
         reference: String,
+    },
+    ImagePullStart {
+        reference: String,
+    },
+    ImagePullStatus {
+        job: String,
+    },
+    ImagePullCancel {
+        job: String,
     },
     ImageInspect {
         reference: String,
@@ -155,6 +176,7 @@ pub enum Request {
     },
     VolumeRemove {
         name: String,
+        generation: String,
     },
     NetworkList,
     NetworkInspect {
@@ -222,6 +244,9 @@ pub enum Request {
         path: RelativePath,
     },
     FilesystemRead {
+        path: RelativePath,
+    },
+    FilesystemStat {
         path: RelativePath,
     },
     FilesystemWrite {
@@ -311,8 +336,14 @@ impl Request {
             | Self::ExecutionKill { .. }
             | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
+            Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
-            Self::ImagePull { .. } | Self::ImageRemove { .. } | Self::ImagePrune => Capability::ImageWrite,
+            Self::ImagePull { .. }
+            | Self::ImagePullStart { .. }
+            | Self::ImagePullStatus { .. }
+            | Self::ImagePullCancel { .. }
+            | Self::ImageRemove { .. }
+            | Self::ImagePrune => Capability::ImageWrite,
             Self::VolumeList | Self::VolumeInspect { .. } => Capability::VolumeRead,
             Self::VolumeCreate { .. } | Self::VolumeRemove { .. } => Capability::VolumeWrite,
             Self::NetworkList | Self::NetworkInspect { .. } => Capability::NetworkRead,
@@ -336,7 +367,9 @@ impl Request {
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
+            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemStat { .. } => {
+                Capability::FilesystemRead
+            }
             Self::FilesystemWrite { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
@@ -359,6 +392,7 @@ impl Request {
         match self {
             Self::FilesystemList { path }
             | Self::FilesystemRead { path }
+            | Self::FilesystemStat { path }
             | Self::FilesystemWrite { path, .. }
             | Self::FilesystemMkdir { path }
             | Self::FilesystemRemove { path } => Some(path),
@@ -375,6 +409,7 @@ pub enum Topic {
     Containers,
     Executions,
     Images,
+    ImagePulls,
     Volumes,
     Networks,
     Terminal,
@@ -394,6 +429,7 @@ impl Topic {
             Self::Containers => Capability::ContainerRead,
             Self::Executions => Capability::ContainerRead,
             Self::Images => Capability::ImageRead,
+            Self::ImagePulls => Capability::ImageWrite,
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
@@ -409,6 +445,7 @@ impl Topic {
         Self::Containers,
         Self::Executions,
         Self::Images,
+        Self::ImagePulls,
         Self::Volumes,
         Self::Networks,
         Self::Terminal,
@@ -456,6 +493,8 @@ pub enum Reply {
     Executions(ExecutionList),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
+    ImagePullJob(ImagePullJob),
+    ImagePull(ImagePullStatus),
     ImageDetails(ImageDetails),
     ImagePrune(ImagePruneResult),
     Volumes(Vec<VolumeSummary>),
@@ -468,6 +507,7 @@ pub enum Reply {
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
+    Entry(Entry),
     Contents(Vec<u8>),
     Identity(String),
     Done,
@@ -548,10 +588,20 @@ mod tests {
         assert_eq!(
             Request::ContainerCreate {
                 spec: crate::port::ContainerCreateSpec {
-                    image: "alpine:3.20".into(), name: "worker".into(), entrypoint: None,
-                    command: Vec::new(), environment: Vec::new(), working_directory: None,
-                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
-                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                    image: "alpine:3.20".into(),
+                    name: "worker".into(),
+                    entrypoint: None,
+                    command: Vec::new(),
+                    environment: Vec::new(),
+                    working_directory: None,
+                    user: None,
+                    labels: Vec::new(),
+                    mounts: Vec::new(),
+                    network: None,
+                    ports: Vec::new(),
+                    memory_mb: None,
+                    cpus: None,
+                    pids_limit: None,
                 },
             }
             .capability(),
@@ -566,6 +616,14 @@ mod tests {
             }
             .capability(),
             Capability::ContainerControl
+        );
+        assert_eq!(
+            Request::ContainerAttachTerminal {
+                id: "a".repeat(64),
+                command: vec!["sh".into()],
+            }
+            .capability(),
+            Capability::ContainerAttach
         );
         assert_eq!(Request::ImageList.capability(), Capability::ImageRead);
         assert_eq!(

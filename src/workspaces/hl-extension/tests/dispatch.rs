@@ -45,6 +45,7 @@ impl hl_extension::port::VolumeStore for Host {
         Ok(vec![hl_extension::port::VolumeSummary {
             name: "cache".into(),
             driver: "local".into(),
+            generation: "a".repeat(32),
         }])
     }
     fn inspect(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
@@ -52,6 +53,7 @@ impl hl_extension::port::VolumeStore for Host {
         Ok(hl_extension::port::VolumeSummary {
             name: name.into(),
             driver: "local".into(),
+            generation: "a".repeat(32),
         })
     }
     fn create(&self, name: &str) -> Result<hl_extension::port::VolumeSummary, HostError> {
@@ -59,9 +61,10 @@ impl hl_extension::port::VolumeStore for Host {
         Ok(hl_extension::port::VolumeSummary {
             name: name.into(),
             driver: "local".into(),
+            generation: "a".repeat(32),
         })
     }
-    fn remove(&self, _name: &str) -> Result<(), HostError> {
+    fn remove(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         self.ledger.note("volumes.remove");
         Ok(())
     }
@@ -70,7 +73,7 @@ impl hl_extension::port::NetworkStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
         self.ledger.note("networks.list");
         Ok(vec![hl_extension::port::NetworkSummary {
-            id: "n1".into(),
+            id: "a".repeat(32),
             name: "private".into(),
             driver: "bridge".into(),
             scope: "local".into(),
@@ -79,7 +82,7 @@ impl hl_extension::port::NetworkStore for Host {
     fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
         self.ledger.note("networks.inspect");
         Ok(hl_extension::port::NetworkSummary {
-            id: "n1".into(),
+            id: "a".repeat(32),
             name: reference.into(),
             driver: "bridge".into(),
             scope: "local".into(),
@@ -87,7 +90,7 @@ impl hl_extension::port::NetworkStore for Host {
     }
     fn create(&self, _name: &str) -> Result<String, HostError> {
         self.ledger.note("networks.create");
-        Ok("n1".into())
+        Ok("a".repeat(32))
     }
     fn remove(&self, _reference: &str) -> Result<(), HostError> {
         self.ledger.note("networks.remove");
@@ -140,6 +143,10 @@ impl ContainerInventory for Host {
         Ok(ProcessList {
             titles: vec!["PID".into(), "CMD".into()],
             processes: vec![vec!["7".into(), "server".into()]],
+            observed_at_ms: 1_700_000_000_000,
+            scope: hl_extension::port::ProcessScope::Initial,
+            pid_identity: hl_extension::port::ProcessPidIdentity::Snapshot,
+            truncated: false,
         })
     }
 
@@ -149,6 +156,9 @@ impl ContainerInventory for Host {
             stdout: b"ready\n".to_vec(),
             stderr: Vec::new(),
             truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            eof: false,
         })
     }
 
@@ -166,17 +176,34 @@ impl ContainerInventory for Host {
     }
     fn executions(&self) -> Result<hl_extension::port::ExecutionList, HostError> {
         self.ledger.note("executions.list");
-        Ok(hl_extension::port::ExecutionList { executions: vec![self.execution("e1")?], truncated: false })
+        Ok(hl_extension::port::ExecutionList {
+            executions: vec![self.execution("e1")?],
+            truncated: false,
+        })
     }
     fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
         self.ledger.note("executions.logs");
-        Ok(ContainerOutput { stdout: b"exec out\n".to_vec(), stderr: b"exec err\n".to_vec(), truncated: false })
+        Ok(ContainerOutput {
+            stdout: b"exec out\n".to_vec(),
+            stderr: b"exec err\n".to_vec(),
+            truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            eof: true,
+        })
     }
 
     fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
         self.ledger.note("executions.wait");
-        Ok(ExecutionSummary { id: id.into(), container_id: "c1".into(), running: false,
-            exit_code: 17, pid: 0, command: vec!["worker".into()], user: "root".into() })
+        Ok(ExecutionSummary {
+            id: id.into(),
+            container_id: "c1".into(),
+            running: false,
+            exit_code: 17,
+            pid: 0,
+            command: vec!["worker".into()],
+            user: "root".into(),
+        })
     }
 }
 
@@ -294,6 +321,10 @@ impl ImageStore for Host {
 }
 
 impl TerminalSurface for Host {
+    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+        self.ledger.note("terminal.attach_container");
+        Ok("attached-pane".into())
+    }
     fn pane_inventory(&self) -> Result<hl_extension::port::PaneInventory, HostError> {
         self.ledger.note("terminal.pane_inventory");
         Ok(hl_extension::port::PaneInventory {
@@ -347,9 +378,20 @@ impl TerminalSurface for Host {
         Ok(())
     }
     fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError> {
+        if slot == "oversized" {
+            return Ok(PaneText {
+                slot: slot.into(),
+                lines: vec!["old".repeat(hl_extension::port::PANE_TEXT_BYTES / 3), "new".into()],
+                cursor_column: 0,
+                cursor_row: 0,
+                truncated: false,
+            });
+        }
         Ok(PaneText {
             slot: slot.into(),
             lines: vec![format!("at most {lines}")],
+            cursor_column: 12,
+            cursor_row: 3,
             truncated: true,
         })
     }
@@ -415,6 +457,26 @@ impl TerminalSurface for Host {
 }
 
 #[test]
+fn terminal_screen_bytes_are_bounded_before_the_reply_is_encoded() {
+    let host = Host::new();
+    let reply = session(&[Capability::TerminalOutput], &[])
+        .dispatch(
+            &Request::TerminalReadPane {
+                slot: "oversized".into(),
+                lines: None,
+            },
+            &services(&host),
+        )
+        .expect("bounded screen");
+    let Reply::Text(text) = reply else {
+        panic!("wrong reply")
+    };
+    assert!(text.truncated);
+    assert_eq!(text.lines, vec!["new"]);
+    assert_eq!((text.cursor_column, text.cursor_row), (0, 0));
+}
+
+#[test]
 fn pane_semantic_read_and_control_are_separately_granted() {
     let host = Host::new();
     let read = Request::PaneSemanticRead { slot: "s1".into() };
@@ -446,11 +508,15 @@ fn pane_semantic_read_and_control_are_separately_granted() {
 #[test]
 fn pane_discovery_requires_observation_without_content_authority() {
     let host = Host::new();
-    assert!(session(&[], &[]).dispatch(&Request::PaneList, &services(&host)).is_err());
+    assert!(session(&[], &[])
+        .dispatch(&Request::PaneList, &services(&host))
+        .is_err());
     let reply = session(&[Capability::PaneObserve], &[])
         .dispatch(&Request::PaneList, &services(&host))
         .expect("pane observation grants bounded discovery");
-    let Reply::Panes(inventory) = reply else { panic!("wrong reply") };
+    let Reply::Panes(inventory) = reply else {
+        panic!("wrong reply")
+    };
     assert_eq!(inventory.panes[0].slot, "workspace");
     assert_eq!(host.ledger.reached(), vec!["terminal.pane_inventory"]);
 }
@@ -540,6 +606,14 @@ impl WorkspaceFiles for Host {
     fn read(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
         self.ledger.note("files.read");
         Ok(b"contents".to_vec())
+    }
+    fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
+        self.ledger.note("files.stat");
+        Ok(Entry {
+            path: path.clone(),
+            directory: false,
+            size: 7,
+        })
     }
 
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
@@ -777,15 +851,38 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
         (Request::ExecutionList, Capability::ContainerRead),
-        (Request::ExecutionLogs { id: "e1".into(), stdout: true, stderr: true }, Capability::ContainerRead),
-        (Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, Capability::ContainerRead),
+        (
+            Request::ExecutionLogs {
+                id: "e1".into(),
+                stdout: true,
+                stderr: true,
+            },
+            Capability::ContainerRead,
+        ),
+        (
+            Request::ExecutionWait {
+                id: "e1".into(),
+                timeout_ms: 500,
+            },
+            Capability::ContainerRead,
+        ),
         (
             Request::ContainerCreate {
                 spec: hl_extension::port::ContainerCreateSpec {
-                    image: "alpine".into(), name: "x".into(), entrypoint: None,
-                    command: Vec::new(), environment: Vec::new(), working_directory: None,
-                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
-                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                    image: "alpine".into(),
+                    name: "x".into(),
+                    entrypoint: None,
+                    command: Vec::new(),
+                    environment: Vec::new(),
+                    working_directory: None,
+                    user: None,
+                    labels: Vec::new(),
+                    mounts: Vec::new(),
+                    network: None,
+                    ports: Vec::new(),
+                    memory_mb: None,
+                    cpus: None,
+                    pids_limit: None,
                 },
             },
             Capability::ContainerControl,
@@ -794,9 +891,9 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::ContainerStart { id: "c1".into() },
             Capability::ContainerControl,
         ),
-        (Request::ContainerStop { id: "c1".into() }, Capability::ContainerControl),
+        (Request::ContainerStop { id: "c".repeat(64) }, Capability::ContainerControl),
         (
-            Request::ContainerRemove { id: "c1".into() },
+            Request::ContainerRemove { id: "c".repeat(64) },
             Capability::ContainerControl,
         ),
         (
@@ -813,19 +910,22 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ContainerKill {
-                id: "c1".into(),
+                id: "c".repeat(64),
                 signal: "SIGTERM".into(),
             },
             Capability::ContainerControl,
         ),
         (
             Request::ExecutionKill {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 signal: "SIGTERM".into(),
             },
             Capability::ContainerControl,
         ),
-        (Request::ExecutionRemove { id: "e1".into() }, Capability::ContainerControl),
+        (
+            Request::ExecutionRemove { id: "e1".into() },
+            Capability::ContainerControl,
+        ),
         (
             Request::ContainerExec {
                 id: "c1".into(),
@@ -850,7 +950,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ImageRemove {
-                reference: "alpine".into(),
+                reference: format!("sha256:{}", "a".repeat(64)),
             },
             Capability::ImageWrite,
         ),
@@ -897,6 +997,12 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::FilesystemRead {
+                path: path("logs/app.log"),
+            },
+            Capability::FilesystemRead,
+        ),
+        (
+            Request::FilesystemStat {
                 path: path("logs/app.log"),
             },
             Capability::FilesystemRead,
@@ -1034,7 +1140,13 @@ fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
         vec!["x".into(); hl_extension::port::TERMINAL_COMMAND_ARGUMENTS + 1],
     ] {
         assert!(matches!(
-            session.dispatch(&Request::TerminalSpawn { slot: "s1".into(), command }, &services(&host)),
+            session.dispatch(
+                &Request::TerminalSpawn {
+                    slot: "s1".into(),
+                    command
+                },
+                &services(&host)
+            ),
             Err(Failure::Conflict { .. })
         ));
     }
@@ -1056,18 +1168,37 @@ fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
 fn configured_container_creation_is_bounded_before_control_authority() {
     use hl_extension::port::{ContainerCreateSpec, ContainerPort, ContainerVolumeMount};
     let host = Host::new();
-    let mut authorized = session(&[
-        Capability::ContainerControl, Capability::VolumeRead, Capability::NetworkWrite,
-    ], &[]);
+    let mut authorized = session(
+        &[
+            Capability::ContainerControl,
+            Capability::VolumeRead,
+            Capability::NetworkWrite,
+        ],
+        &[],
+    );
     let spec = ContainerCreateSpec {
-        image: "alpine:3.20".into(), name: "worker".into(), entrypoint: Some(vec!["/init".into()]),
-        command: vec!["serve".into()], environment: vec![("MODE".into(), "agent".into())],
-        working_directory: Some("/work".into()), user: Some("1000".into()),
+        image: "alpine:3.20".into(),
+        name: "worker".into(),
+        entrypoint: Some(vec!["/init".into()]),
+        command: vec!["serve".into()],
+        environment: vec![("MODE".into(), "agent".into())],
+        working_directory: Some("/work".into()),
+        user: Some("1000".into()),
         labels: vec![("owner".into(), "agent".into())],
-        mounts: vec![ContainerVolumeMount { volume: "cache".into(), target: "/cache".into(), read_only: true }],
+        mounts: vec![ContainerVolumeMount {
+            volume: "cache".into(),
+            target: "/cache".into(),
+            read_only: true,
+        }],
         network: Some("private".into()),
-        ports: vec![ContainerPort { container: 8080, host: Some(18080), protocol: "tcp".into() }],
-        memory_mb: Some(512), cpus: Some(2), pids_limit: Some(128),
+        ports: vec![ContainerPort {
+            container: 8080,
+            host: Some(18080),
+            protocol: "tcp".into(),
+        }],
+        memory_mb: Some(512),
+        cpus: Some(2),
+        pids_limit: Some(128),
     };
     assert_eq!(
         authorized.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
@@ -1087,7 +1218,11 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         authorized.dispatch(&Request::ContainerCreate { spec: escaped }, &services(&host)),
         Err(Failure::Conflict { .. })
     ));
-    assert_eq!(host.ledger.reached(), ["containers.create_spec"], "invalid mounts never reach control");
+    assert_eq!(
+        host.ledger.reached(),
+        ["containers.create_spec"],
+        "invalid mounts never reach control"
+    );
 }
 
 #[test]
@@ -1107,6 +1242,90 @@ fn execution_signals_are_bounded_before_the_container_port_is_reached() {
         ));
     }
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    for request in [
+        Request::ContainerStop { id: "friendly-name".into() },
+        Request::ContainerRemove { id: "a".repeat(12) },
+        Request::ContainerKill { id: "1".into(), signal: "SIGTERM".into() },
+        Request::ContainerKill { id: "friendly-name".into(), signal: "SIGTERM".into() },
+        Request::ContainerKill { id: "a".repeat(12), signal: "SIGTERM".into() },
+        Request::ExecutionKill { id: "7".into(), signal: "SIGTERM".into() },
+        Request::ExecutionKill { id: "b".repeat(12), signal: "SIGTERM".into() },
+    ] {
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+
+    session.dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host)).unwrap();
+    session.dispatch(&Request::ContainerRemove { id: "a".repeat(64) }, &services(&host)).unwrap();
+    session.dispatch(&Request::ContainerKill { id: "a".repeat(64), signal: "SIGTERM".into() }, &services(&host)).unwrap();
+    session.dispatch(&Request::ExecutionKill { id: "b".repeat(32), signal: "SIGTERM".into() }, &services(&host)).unwrap();
+    assert_eq!(host.ledger.reached(), ["containers.stop", "containers.remove", "containers.kill", "executions.kill"]);
+}
+
+#[test]
+fn image_removal_refuses_mutable_tags_and_partial_digests_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ImageWrite], &[]);
+    for reference in ["alpine:latest".to_owned(), "sha256:abc".to_owned(), "a".repeat(64)] {
+        assert!(matches!(
+            session.dispatch(&Request::ImageRemove { reference }, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+    session
+        .dispatch(
+            &Request::ImageRemove { reference: format!("sha256:{}", "a".repeat(64)) },
+            &services(&host),
+        )
+        .unwrap();
+    assert_eq!(host.ledger.reached(), ["images.remove"]);
+}
+
+#[test]
+fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::NetworkWrite], &[]);
+    for request in [
+        Request::NetworkRemove { reference: "private".into() },
+        Request::NetworkConnect { reference: "a".repeat(12), container: "b".repeat(64) },
+        Request::NetworkDisconnect { reference: "a".repeat(32), container: "friendly".into() },
+    ] {
+        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+    }
+    assert!(host.ledger.reached().is_empty());
+    session.dispatch(&Request::NetworkRemove { reference: "a".repeat(32) }, &services(&host)).unwrap();
+    session.dispatch(&Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
+    session.dispatch(&Request::NetworkDisconnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
+    assert_eq!(host.ledger.reached(), ["networks.remove", "networks.connect", "networks.disconnect"]);
+}
+
+#[test]
+fn volume_removal_requires_the_exact_observed_generation() {
+    let host = Host::new();
+    let mut session = session(&[Capability::VolumeWrite], &[]);
+    assert!(matches!(
+        session.dispatch(
+            &Request::VolumeRemove { name: "cache".into(), generation: "legacy-or-stale".into() },
+            &services(&host),
+        ),
+        Err(Failure::Conflict { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
+    session.dispatch(
+        &Request::VolumeRemove { name: "cache".into(), generation: "a".repeat(32) },
+        &services(&host),
+    ).unwrap();
+    assert_eq!(host.ledger.reached(), ["volumes.remove"]);
 }
 
 #[test]
@@ -1210,7 +1429,11 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
     let processes = session
         .dispatch(&Request::ContainerProcesses { id: "c1".into() }, &services(&host))
         .expect("process table");
-    assert!(matches!(processes, Reply::Processes(table) if table.titles == ["PID", "CMD"]));
+    assert!(matches!(processes, Reply::Processes(table)
+        if table.titles == ["PID", "CMD"] && table.observed_at_ms == 1_700_000_000_000
+            && table.scope == hl_extension::port::ProcessScope::Initial
+            && table.pid_identity == hl_extension::port::ProcessPidIdentity::Snapshot
+            && !table.truncated));
 
     let logs = session
         .dispatch(
@@ -1222,16 +1445,36 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
             &services(&host),
         )
         .expect("logs");
-    assert!(matches!(logs, Reply::Logs(output) if output.stdout == b"ready\n" && !output.truncated));
+    assert!(matches!(logs, Reply::Logs(output)
+        if output.stdout == b"ready\n" && !output.truncated && !output.eof
+            && !output.stdout_truncated && !output.stderr_truncated));
 
     let execution = session
         .dispatch(&Request::ExecutionInspect { id: "e1".into() }, &services(&host))
         .expect("execution");
     assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
 
-    let waited = session.dispatch(
-        &Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, &services(&host),
-    ).expect("execution wait");
+    let output = session
+        .dispatch(
+            &Request::ExecutionLogs {
+                id: "e1".into(),
+                stdout: true,
+                stderr: true,
+            },
+            &services(&host),
+        )
+        .expect("execution output");
+    assert!(matches!(output, Reply::Logs(output) if output.eof && !output.truncated));
+
+    let waited = session
+        .dispatch(
+            &Request::ExecutionWait {
+                id: "e1".into(),
+                timeout_ms: 500,
+            },
+            &services(&host),
+        )
+        .expect("execution wait");
     assert!(matches!(waited, Reply::Execution(execution) if !execution.running && execution.exit_code == 17));
 }
 
@@ -1239,7 +1482,15 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
 fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(session.dispatch(&Request::ExecutionWait { id: "e1".into(), timeout_ms: 30_001 }, &services(&host)).is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExecutionWait {
+                id: "e1".into(),
+                timeout_ms: 30_001
+            },
+            &services(&host)
+        )
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
 
@@ -1247,7 +1498,16 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
 fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(session.dispatch(&Request::ExecutionLogs { id: "e1".into(), stdout: false, stderr: false }, &services(&host)).is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExecutionLogs {
+                id: "e1".into(),
+                stdout: false,
+                stderr: false
+            },
+            &services(&host)
+        )
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
@@ -1278,7 +1538,7 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
         matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values[0].name == "cache")
     );
     assert!(
-        matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "n1")
+        matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "a".repeat(32))
     );
     assert!(matches!(
         read.dispatch(&Request::VolumeCreate { name: "unsafe".into() }, &services(&host)),
@@ -1291,13 +1551,13 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     );
     assert_eq!(
         write.dispatch(&Request::NetworkCreate { name: "private".into() }, &services(&host)),
-        Ok(Reply::Identity("n1".into()))
+        Ok(Reply::Identity("a".repeat(32)))
     );
     assert_eq!(
         write.dispatch(
             &Request::NetworkConnect {
-                reference: "private".into(),
-                container: "c1".into()
+                reference: "a".repeat(32),
+                container: "b".repeat(64)
             },
             &services(&host)
         ),
@@ -1306,8 +1566,8 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     assert_eq!(
         write.dispatch(
             &Request::NetworkDisconnect {
-                reference: "private".into(),
-                container: "c1".into()
+                reference: "a".repeat(32),
+                container: "b".repeat(64)
             },
             &services(&host)
         ),
@@ -1592,6 +1852,37 @@ fn a_granted_call_reaches_exactly_one_service() {
 
     assert!(matches!(reply, Reply::Containers(containers) if containers.len() == 1));
     assert_eq!(host.ledger.reached(), vec!["containers.list"]);
+}
+
+#[test]
+fn container_attachment_requires_its_dedicated_grant_and_preserves_exact_argv() {
+    let request = Request::ContainerAttachTerminal {
+        id: "a".repeat(64),
+        command: vec!["sh".into(), "-lc".into(), "printf '%s' \"$HOME\"".into()],
+    };
+    let host = Host::new();
+    let mut denied = session(&[Capability::ContainerControl, Capability::TerminalControl], &[]);
+    assert!(matches!(
+        denied.dispatch(&request, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
+
+    let mut granted = session(&[Capability::ContainerAttach], &[]);
+    assert!(matches!(
+        granted.dispatch(&request, &services(&host)).expect("dedicated grant"),
+        Reply::Identity(ref slot) if slot == "attached-pane"
+    ));
+    assert_eq!(host.ledger.reached(), vec!["terminal.attach_container"]);
+
+    let invalid = Request::ContainerAttachTerminal {
+        id: "friendly".into(),
+        command: vec!["sh".into()],
+    };
+    assert!(matches!(
+        granted.dispatch(&invalid, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
 }
 
 #[test]

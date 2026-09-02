@@ -39,6 +39,10 @@ pub const CAPACITY: usize = 16;
 /// equality.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
+    AttachContainer {
+        id: String,
+        command: Vec<String>,
+    },
     /// Every tab and the panes in it.
     Tabs,
     /// Nested tab and split topology.
@@ -235,6 +239,13 @@ impl Relay {
 }
 
 impl TerminalSurface for Relay {
+    fn attach_container(&self, id: &str, command: &[String]) -> Result<String, HostError> {
+        self.slot(Request::AttachContainer {
+            id: id.to_owned(),
+            command: command.to_vec(),
+        })
+    }
+
     /// # Errors
     /// Returns a host failure when no window is drawing this workspace.
     fn tabs(&self) -> Result<Vec<TabSummary>, HostError> {

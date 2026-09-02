@@ -51,6 +51,28 @@ async fn named_and_anonymous_volumes_are_validated_idempotent_and_ordered() {
 }
 
 #[tokio::test]
+async fn conditional_remove_rejects_recreated_and_legacy_generations_atomically() {
+    let root = tempfile::tempdir().unwrap();
+    let containers = Containers::builder(Config::new(root.path()).persistence(Persistence::Memory))
+        .build().await.unwrap();
+    let volumes = containers.volumes();
+    let first = volumes.create(VolumeSpec::new("stable-name")).await.unwrap();
+    assert_eq!(first.generation.len(), 32);
+    volumes.remove_if_generation(&first.name, &first.generation).await.unwrap();
+    let second = volumes.create(VolumeSpec::new("stable-name")).await.unwrap();
+    assert_ne!(first.generation, second.generation);
+    assert!(matches!(
+        volumes.remove_if_generation(&second.name, &first.generation).await,
+        Err(Error::VolumeConflict(name)) if name == "stable-name"
+    ));
+    assert_eq!(volumes.inspect("stable-name").await.unwrap(), second);
+    assert!(matches!(
+        volumes.remove_if_generation("stable-name", "").await,
+        Err(Error::VolumeConflict(name)) if name == "stable-name"
+    ));
+}
+
+#[tokio::test]
 async fn bind_backed_volume_canonicalizes_and_never_owns_host_data() {
     let root = tempfile::tempdir().unwrap();
     let device = root.path().join("device");

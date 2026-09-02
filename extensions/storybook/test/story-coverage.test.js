@@ -11,7 +11,9 @@ import { NAVIGATION_STORY, NavigationDialogsStory } from '../src/navigation-dial
 import { StreamingLogStory } from '../src/streaming-log.js';
 import { EventStreamStory, TimelineSource } from '../src/event-stream.js';
 import { KeyValueInspectorStory, KeyValueSource } from '../src/key-value-inspector.js';
+import { MarkdownReviewStory } from '../src/markdown-review.js';
 import { storyCoverage } from '../src/story-coverage.js';
+import { DIFF_STORY, DiffReviewStory } from '../src/diff-review.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -50,6 +52,8 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['streaming log', h(StreamingLogStory)],
     ['event timeline', h(EventStreamStory, { source: new TimelineSource() })],
     ['key/value inspector', h(KeyValueInspectorStory, { source: new KeyValueSource() })],
+    ['diff review', h(DiffReviewStory)],
+    ['markdown review', h(MarkdownReviewStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -61,6 +65,21 @@ test('every composed story has a readable root and a bounded initial wire frame'
   }
 });
 
+test('the diff review is bounded, selectable, and switches presentation', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const story = node(first.patches, 'ListItemButton', DIFF_STORY);
+  assert.ok(story);
+  stage.surface.dispatch({ trigger: 'Invoke', node: story, id: `${story}:Invoke` });
+  const opened = stage.frames.at(-1).patches;
+  assert.equal(opened.filter((patch) => patch.Create?.tag === 'DiffLine').length, 4);
+  const toggle = node(opened, 'Button', 'Show side by side');
+  assert.ok(toggle);
+  const before = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: toggle, id: `${toggle}:Invoke` });
+  assert.ok(stage.since(before).some((patch) => patch.SetProp?.prop === 'Orientation'));
+});
+
 test('navigation and transient UI is selectable and demonstrates expand, invoke, and close', () => {
   const stage = host();
   const first = stage.render(h(Playground));
@@ -69,8 +88,11 @@ test('navigation and transient UI is selectable and demonstrates expand, invoke,
   stage.surface.dispatch({ trigger: 'Invoke', node: story, id: `${story}:Invoke` });
   const opened = stage.frames.at(-1).patches;
   const accordion = opened.find((patch) => patch.Create?.tag === 'Accordion')?.Create.id;
+  const palette = opened.find((patch) => patch.Create?.tag === 'CommandPalette')?.Create.id;
   const button = node(opened, 'Button', 'Open actions');
-  assert.ok(accordion && button);
+  assert.ok(accordion && palette && button);
+  stage.surface.dispatch({ trigger: 'Change', node: palette, id: `${palette}:Change`, value: 'logs' });
+  stage.surface.dispatch({ trigger: 'Submit', node: palette, id: `${palette}:Submit` });
   stage.surface.dispatch({ trigger: 'Expand', node: accordion, id: `${accordion}:Expand`, expanded: false });
   const beforeMenu = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: button, id: `${button}:Invoke` });
@@ -82,4 +104,5 @@ test('navigation and transient UI is selectable and demonstrates expand, invoke,
     .filter((patch) => patch.SetProp?.prop === 'Label').map((patch) => patch.SetProp.value.Text);
   assert.ok(labels.includes('Deployment details collapsed.'));
   assert.ok(labels.includes('Action menu dismissed.'));
+  assert.ok(labels.includes('Command submitted: logs.'));
 });

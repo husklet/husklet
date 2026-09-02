@@ -14,7 +14,27 @@ const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+
+function immutableIdentity(id, widths, noun) {
+  if (typeof id === 'string' && widths.includes(id.length) && /^[0-9a-f]+$/.test(id)) return id;
+  throw new TypeError(`${noun} operation requires the complete immutable ID returned by inspection`);
+}
+
+function exactCommand(command) {
+  if (!Array.isArray(command) || command.length < 1 || command.length > 64
+    || command[0] === '' || command.some((argument) => typeof argument !== 'string'
+      || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
+    || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32768) {
+    throw new TypeError('command must contain 1..64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+  }
+  return command;
+}
+
+function immutableDigest(value, noun) {
+  if (!/^sha256:[0-9a-f]{64}$/.test(value)) throw new TypeError(`${noun} removal requires the complete immutable sha256 digest returned by inventory`);
+  return value;
+}
 
 /**
  * Connects to the workspace this extension runs in.
@@ -132,7 +152,7 @@ export function workspace(session) {
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
         await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
       ),
-      signalExecution: (id, signal) => done('execution_kill', { id, signal }),
+      signalExecution: (id, signal) => done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
       removeExecution: (id) => done('execution_remove', { id }),
       create: async (configuration, legacyName) => {
         const spec = typeof configuration === 'string' ? {
@@ -147,38 +167,44 @@ export function workspace(session) {
         return expect(await session.call('container_create', { spec }), 'identity');
       },
       start: (id) => done('container_start', { id }),
-      stop: (id) => done('container_stop', { id }),
-      remove: (id) => done('container_remove', { id }),
+      stop: (id) => done('container_stop', { id: immutableIdentity(id, [32, 64], 'container') }),
+      remove: (id) => done('container_remove', { id: immutableIdentity(id, [32, 64], 'container') }),
       pause: (id) => done('container_pause', { id }),
       unpause: (id) => done('container_unpause', { id }),
       restart: (id) => done('container_restart', { id }),
-      kill: (id, signal) => done('container_kill', { id, signal }),
+      kill: (id, signal) => done('container_kill', { id: immutableIdentity(id, [32, 64], 'container'), signal }),
       exec: async (id, { command, user, workingDirectory } = {}) => expect(
         await session.call('container_exec', {
           id, command, user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
+      attachTerminal: (id, command) => session.call('container_attach_terminal', {
+        id: immutableIdentity(id, [32, 64], 'container'), command: exactCommand(command),
+      }).then((reply) => expect(reply, 'identity')),
     },
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+      startPull: async (reference) => expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
+      pullStatus: async (job) => expect(await session.call('image_pull_status', { job }), 'image_pull'),
+      cancelPull: (job) => done('image_pull_cancel', { job }),
       inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
-      remove: (reference) => done('image_remove', { reference }),
+      remove: (reference) => done('image_remove', { reference: immutableDigest(reference, 'image') }),
       prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
       list: async () => expect(await session.call('volume_list'), 'volumes'),
       inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
       create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
-      remove: (name) => done('volume_remove', { name }),
+      remove: (name, generation) => done('volume_remove', { name, generation: immutableIdentity(generation, [32], 'volume generation') }),
     },
     networks: {
       list: async () => expect(await session.call('network_list'), 'networks'),
       inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
       create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
-      remove: (reference) => done('network_remove', { reference }),
-      connect: (reference, container) => done('network_connect', { reference, container }),
-      disconnect: (reference, container) => done('network_disconnect', { reference, container }),
+      remove: (reference) => done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
+      connect: (reference, container) => done('network_connect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
+      disconnect: (reference, container) => done('network_disconnect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
     },
     terminal: {
       panes: async () => expect(await session.call('pane_list'), 'panes'),
@@ -222,6 +248,7 @@ export function workspace(session) {
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
+      stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
       mkdir: (path) => done('filesystem_mkdir', { path }),
       rename: (from, to) => done('filesystem_rename', { from, to }),
@@ -250,6 +277,12 @@ export function workspace(session) {
     try { await api.subscribe('executions'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('executions'); };
   };
+  api.watchImagePulls = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('image pull listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'image_pulls') listener(event.of); });
+    try { await api.subscribe('image-pulls'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('image-pulls'); };
+  };
   api.watchExtensions = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('extension listener must be a function');
     const off = session.onEvent((event) => { if (event?.snapshot === 'extensions') listener(event.of); });
@@ -267,6 +300,12 @@ export function workspace(session) {
     const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_lifecycle') listener(event.of); });
     try { await api.subscribe('workspace-lifecycle'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('workspace-lifecycle'); };
+  };
+  api.watchWorkspaceEvents = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('workspace event listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_events') listener(event.of); });
+    try { await api.subscribe('workspace-events'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('workspace-events'); };
   };
   return api;
 }
@@ -430,12 +469,12 @@ export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
-    images: ['list', 'pull'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec', 'attachTerminal'],
+    images: ['list', 'pull', 'startPull', 'pullStatus', 'cancelPull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
-    files: ['list', 'read', 'write', 'mkdir', 'rename', 'remove'],
+    files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
     workspaceEvents: ['key', 'focus', 'pointer'],

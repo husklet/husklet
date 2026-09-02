@@ -31,15 +31,19 @@ try {
     if (typeof runAgentDayOne !== 'function') process.exit(1);
     if (typeof runAgentAdmin !== 'function') process.exit(1);
     const names = new Set(tools({}).map(({ name }) => name));
-    for (const name of ['husklet_workspace_create', 'husklet_workspace_update', 'husklet_container_execution', 'husklet_execution_list', 'husklet_execution_logs', 'husklet_execution_wait', 'husklet_execution_signal', 'husklet_execution_remove', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_remove', 'husklet_image_prune']) {
+    for (const name of ['husklet_workspace_create', 'husklet_workspace_update', 'husklet_container_execution', 'husklet_execution_list', 'husklet_execution_logs', 'husklet_execution_wait', 'husklet_execution_signal', 'husklet_execution_remove', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_pull_start', 'husklet_image_pull_status', 'husklet_image_pull_cancel', 'husklet_image_remove', 'husklet_image_prune']) {
       if (!names.has(name)) process.exit(1);
     }
+    const imageRemove = tools({ images: { remove: async () => {} } }).find(({ name }) => name === 'husklet_image_remove');
+    if (imageRemove.inputSchema.safeParse({ reference: 'moving:tag', confirm: true }).success) process.exit(1);
+    if (!imageRemove.inputSchema.safeParse({ reference: 'sha256:' + 'a'.repeat(64), confirm: true }).success) process.exit(1);
     if (!tools({ watchExecutions: async () => async () => {} }).some(({ name }) => name === 'husklet_execution_change_wait')) process.exit(1);
     if (!tools({ watchContainers: async () => async () => {} }).some(({ name }) => name === 'husklet_container_change_wait')) process.exit(1);
+    if (!tools({ watchImagePulls: async () => async () => {} }).some(({ name }) => name === 'husklet_image_pull_wait')) process.exit(1);
     for (const name of ['husklet_volume_list', 'husklet_volume_inspect', 'husklet_volume_create', 'husklet_volume_remove', 'husklet_network_list', 'husklet_network_inspect', 'husklet_network_create', 'husklet_network_remove', 'husklet_network_connect', 'husklet_network_disconnect']) {
       if (!names.has(name)) process.exit(1);
     }
-    for (const name of ['husklet_file_mkdir', 'husklet_file_rename', 'husklet_file_remove']) if (!names.has(name)) process.exit(1);
+    for (const name of ['husklet_file_stat', 'husklet_file_mkdir', 'husklet_file_rename', 'husklet_file_remove']) if (!names.has(name)) process.exit(1);
     if (!names.has('husklet_terminal_write_bytes')) process.exit(1);
     let written;
     const byteTool = tools({ terminal: { writeInput: async (slot, input) => { written = [slot, [...input]]; } } })
@@ -49,15 +53,19 @@ try {
     const terminationCalls = [];
     const termination = tools({ containers: {
       stop: async (id) => terminationCalls.push(['stop', id]),
+      remove: async (id) => terminationCalls.push(['remove', id]),
       kill: async (id, signal) => terminationCalls.push(['kill', id, signal]),
     } });
     const stop = termination.find(({ name }) => name === 'husklet_container_stop');
+    const remove = termination.find(({ name }) => name === 'husklet_container_remove');
     const kill = termination.find(({ name }) => name === 'husklet_container_kill');
     if (stop.inputSchema.safeParse({ id: 'packed' }).success) process.exit(1);
     if (kill.inputSchema.safeParse({ id: 'packed', signal: 'SIGKILL' }).success) process.exit(1);
-    await stop.run({ id: 'packed', confirm: true });
-    await kill.run({ id: 'packed', signal: 'SIGKILL', confirm: true });
-    if (JSON.stringify(terminationCalls) !== JSON.stringify([['stop', 'packed'], ['kill', 'packed', 'SIGKILL']])) process.exit(1);
+    const immutable = 'a'.repeat(64);
+    await stop.run({ id: immutable, confirm: true });
+    await remove.run({ id: immutable, confirm: true });
+    await kill.run({ id: immutable, signal: 'SIGKILL', confirm: true });
+    if (JSON.stringify(terminationCalls) !== JSON.stringify([['stop', immutable], ['remove', immutable], ['kill', immutable, 'SIGKILL']])) process.exit(1);
     if (!tools({ terminal: { panes: async () => ({ panes: [], truncated: false }) } }).some(({ name }) => name === 'husklet_pane_list')) process.exit(1);
     const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     if (!xml.startsWith('<pane slot="packed"')) process.exit(1);

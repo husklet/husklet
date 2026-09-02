@@ -9,11 +9,95 @@ use super::field;
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::CodeView => source().upcast(),
+        Tag::MarkdownView => markdown_view().upcast(),
         Tag::LogView => log().upcast(),
         Tag::Video => gtk::Video::new().upcast(),
-        // Chart is the last content tag routed here.
+        Tag::Chart => chart().upcast(),
+        Tag::DiffViewer => diff().upcast(),
+        Tag::DiffLine => diff_line().upcast(),
         _ => chart().upcast(),
     }
+}
+
+fn diff() -> gtk::Box {
+    let widget = super::axis::column(2);
+    widget.add_css_class("view");
+    widget.set_hexpand(true);
+    widget
+}
+
+fn diff_line() -> gtk::Box {
+    let widget = super::axis::row(8);
+    let status = super::slot::caption_label();
+    status.add_css_class("dim-label");
+    status.set_width_chars(3);
+    let content = super::axis::label();
+    content.set_selectable(true);
+    content.set_wrap(false);
+    content.set_xalign(0.0);
+    content.set_hexpand(true);
+    content.add_css_class("monospace");
+    super::slot::field(&content);
+    widget.append(&status);
+    widget.append(&content);
+    widget
+}
+
+fn markdown_view() -> gtk::ScrolledWindow {
+    let label = super::axis::label();
+    label.set_selectable(true);
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_xalign(0.0);
+    label.set_yalign(0.0);
+    let window = gtk::ScrolledWindow::new();
+    window.set_child(Some(&label));
+    window.set_min_content_height(120);
+    window.set_hexpand(true);
+    window.set_vexpand(true);
+    window
+}
+
+/// Renders a deliberately small, safe Markdown subset. Text is escaped before
+/// Pango sees it, so authored HTML and markup remain inert and visible.
+pub(crate) fn markdown(widget: &gtk::Widget, source: &str) -> bool {
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let label = loop {
+        let Some(widget) = held else { return false };
+        if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+            break label;
+        }
+        held = widget.first_child();
+    };
+    let mut fenced = false;
+    let mut rendered = Vec::new();
+    for line in source.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        let (text, open, close) = if fenced {
+            (line, "<tt>", "</tt>")
+        } else if let Some(text) = line.strip_prefix("### ") {
+            (text, "<span size=\"large\" weight=\"bold\">", "</span>")
+        } else if let Some(text) = line.strip_prefix("## ") {
+            (text, "<span size=\"x-large\" weight=\"bold\">", "</span>")
+        } else if let Some(text) = line.strip_prefix("# ") {
+            (text, "<span size=\"xx-large\" weight=\"bold\">", "</span>")
+        } else if let Some(text) = line.strip_prefix("> ") {
+            (text, "<i>│ ", "</i>")
+        } else if let Some(text) = line.strip_prefix("- ") {
+            (text, "• ", "")
+        } else {
+            (line, "", "")
+        };
+        rendered.push(format!("{open}{}{close}", gtk::glib::markup_escape_text(text)));
+    }
+    label.set_markup(&rendered.join("\n"));
+    true
 }
 
 /// A read-only monospaced view of source text.

@@ -12,11 +12,12 @@
 //! so the thread serving it returns from its blocking read, then joins it. A
 //! listener that has been closed owns no running thread.
 
+use std::collections::HashMap;
 use std::io;
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,14 @@ use super::SidecarSpec;
 /// The one connection an extension may hold at a time, kept as a second
 /// descriptor so shutdown can wake the thread serving it.
 type Live = Arc<Mutex<Option<UnixStream>>>;
+
+type PathLock = Arc<Mutex<()>>;
+
+#[derive(Clone, Copy)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
 
 /// Why a listener could not be closed cleanly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +65,7 @@ pub struct Listener {
     live: Live,
     ended: Option<mpsc::Receiver<()>>,
     accepting: Option<JoinHandle<()>>,
+    path_lock: PathLock,
 }
 
 impl Listener {
@@ -86,6 +96,8 @@ impl Listener {
     {
         spec.prepare()?;
         let socket = spec.socket().to_path_buf();
+        let path_lock = path_lock(&socket);
+        let _path = path_lock.lock().unwrap_or_else(PoisonError::into_inner);
         clear(&socket)?;
         let listener = UnixListener::bind(&socket)?;
         // Again after binding: `prepare` tightens a socket that is already
@@ -94,7 +106,8 @@ impl Listener {
         spec.prepare()?;
         listener.set_nonblocking(true)?;
         let identity = SocketIdentity::read(&socket)?;
-        Ok(Self::start(socket, identity, listener, Arc::new(attend)))
+        drop(_path);
+        Ok(Self::start(socket, identity, listener, Arc::new(attend), path_lock))
     }
 
     /// The socket extensions connect to.
@@ -119,7 +132,13 @@ impl Listener {
         self.begin_shutdown().map_or(Ok(()), ListenerShutdown::wait)
     }
 
-    fn start<F>(socket: std::path::PathBuf, identity: SocketIdentity, listener: UnixListener, attend: Arc<F>) -> Self
+    fn start<F>(
+        socket: std::path::PathBuf,
+        identity: SocketIdentity,
+        listener: UnixListener,
+        attend: Arc<F>,
+        path_lock: PathLock,
+    ) -> Self
     where
         F: Fn(UnixStream) + Send + Sync + 'static,
     {
@@ -138,6 +157,7 @@ impl Listener {
             live,
             ended: Some(ended),
             accepting: Some(accepting),
+            path_lock,
         }
     }
 
@@ -151,9 +171,10 @@ impl Listener {
         self.wake();
         Some(ListenerShutdown {
             socket: self.socket.clone(),
-            identity: self.identity,
             ended: self.ended.take().expect("a live listener has its completion channel"),
             accepting,
+            path_lock: Arc::clone(&self.path_lock),
+            identity: self.identity,
         })
     }
 
@@ -171,9 +192,10 @@ impl Listener {
 
 struct ListenerShutdown {
     socket: std::path::PathBuf,
-    identity: SocketIdentity,
     ended: mpsc::Receiver<()>,
     accepting: JoinHandle<()>,
+    path_lock: PathLock,
+    identity: SocketIdentity,
 }
 
 impl ListenerShutdown {
@@ -181,6 +203,7 @@ impl ListenerShutdown {
         let started = Instant::now();
         let late = self.ended.recv_timeout(Listener::DEADLINE).is_err() && started.elapsed() >= Listener::DEADLINE;
         let _ = self.accepting.join();
+        let _path = self.path_lock.lock().unwrap_or_else(PoisonError::into_inner);
         self.identity.remove(&self.socket);
         if late {
             return Err(Fault::Deadline(Listener::DEADLINE));
@@ -191,12 +214,6 @@ impl ListenerShutdown {
 
 /// The filesystem object this listener actually bound. A delayed reaper must
 /// never unlink a newer generation that has since claimed the same pathname.
-#[derive(Clone, Copy)]
-struct SocketIdentity {
-    device: u64,
-    inode: u64,
-}
-
 impl SocketIdentity {
     fn read(path: &std::path::Path) -> io::Result<Self> {
         let metadata = std::fs::symlink_metadata(path)?;
@@ -243,6 +260,20 @@ fn clear(socket: &std::path::Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+fn path_lock(socket: &std::path::Path) -> PathLock {
+    static LOCKS: OnceLock<Mutex<HashMap<std::path::PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(lock) = locks.get(socket).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(socket.to_path_buf(), Arc::downgrade(&lock));
+    lock
 }
 
 /// Accepts until told to stop, then joins whatever it was serving.
@@ -382,6 +413,32 @@ mod tests {
         let mode = std::fs::metadata(&socket).expect("metadata").permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "the socket is the extension's credential");
         listener.close().expect("closed");
+    }
+
+    #[test]
+    fn an_old_listener_cannot_unlink_a_replacement_generation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let old = Listener::open(&spec(&socket), |_| {}).expect("old generation bound");
+        let served = Arc::new(AtomicUsize::new(0));
+        let replacement = Listener::open(&spec(&socket), {
+            let served = Arc::clone(&served);
+            move |_| {
+                served.fetch_add(1, Ordering::Release);
+            }
+        })
+        .expect("replacement generation bound");
+
+        old.close().expect("old generation closed after replacement");
+        assert!(socket.exists(), "old cleanup preserves the replacement inode");
+        let peer = UnixStream::connect(&socket).expect("replacement remains reachable");
+        assert!(
+            until(|| served.load(Ordering::Acquire) == 1),
+            "the path still routes to the replacement listener"
+        );
+        drop(peer);
+        replacement.close().expect("replacement closed");
+        assert!(!socket.exists(), "the owning generation removes its own socket");
     }
 
     #[test]

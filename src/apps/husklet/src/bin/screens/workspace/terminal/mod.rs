@@ -71,6 +71,7 @@ impl SurfaceRegistration {
 pub(crate) struct TabEntry {
     name: String,
     button: gtk::Box,
+    persisted: bool,
 }
 
 /// The minimalist search bar: a slim black overlay with a query field + a match-state hint.

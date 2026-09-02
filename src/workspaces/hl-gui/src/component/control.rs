@@ -109,6 +109,22 @@ impl Element {
         Self::new(Tag::Search).on(Trigger::Change, event)
     }
 
+    /// A searchable command surface whose children describe the available actions.
+    #[must_use]
+    pub fn command_palette(change: EventId, submit: EventId) -> Self {
+        Self::new(Tag::CommandPalette)
+            .on(Trigger::Change, change)
+            .on(Trigger::Submit, submit)
+    }
+
+    /// A multi-value field whose children show the values already retained.
+    #[must_use]
+    pub fn tag_input(change: EventId, submit: EventId) -> Self {
+        Self::new(Tag::TagInput)
+            .on(Trigger::Change, change)
+            .on(Trigger::Submit, submit)
+    }
+
     /// A calendar date, written as an ISO 8601 day.
     #[must_use]
     pub fn date_picker(day: impl Into<String>, event: EventId) -> Self {

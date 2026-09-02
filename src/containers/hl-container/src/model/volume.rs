@@ -76,6 +76,8 @@ impl VolumeSpec {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Volume {
     pub name: String,
+    #[serde(default)]
+    pub generation: String,
     pub path: PathBuf,
     pub created_at_ms: u64,
     pub labels: BTreeMap<String, String>,
@@ -107,6 +109,7 @@ impl Volume {
     pub(crate) fn from_spec(spec: VolumeSpec, path: PathBuf, created_at_ms: u64) -> Self {
         Self {
             name: spec.name,
+            generation: uuid::Uuid::new_v4().simple().to_string(),
             path,
             created_at_ms,
             labels: spec.labels,

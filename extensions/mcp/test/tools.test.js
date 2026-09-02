@@ -12,12 +12,12 @@ function fake() {
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), removeExecution: record('containers.removeExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
-    images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
+    images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
-    files: { list: record('files.list'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
-    watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {},
+    files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
+    watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
 }
 
@@ -98,15 +98,22 @@ test('container termination requires confirmation before host authority is calle
   const { api, calls } = fake();
   const listed = tools(api);
   const stop = listed.find(({ name }) => name === 'husklet_container_stop');
+  const remove = listed.find(({ name }) => name === 'husklet_container_remove');
   const kill = listed.find(({ name }) => name === 'husklet_container_kill');
   assert.equal(stop.inputSchema.safeParse({ id: 'abc' }).success, false);
   assert.equal(stop.inputSchema.safeParse({ id: 'abc', confirm: false }).success, false);
+  assert.equal(stop.inputSchema.safeParse({ id: 'abc', confirm: true }).success, false);
+  assert.equal(remove.inputSchema.safeParse({ id: 'friendly-name', confirm: true }).success, false);
   assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'SIGKILL' }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: '1', signal: 'SIGKILL', confirm: true }).success, false);
+  assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'SIGKILL', confirm: true }).success, false);
   assert.equal(kill.inputSchema.safeParse({ id: 'abc', signal: 'x'.repeat(33), confirm: true }).success, false);
   assert.deepEqual(calls, [], 'schema refusal cannot call host authority');
-  await stop.run({ id: 'abc', confirm: true });
-  await kill.run({ id: 'abc', signal: 'SIGKILL', confirm: true });
-  assert.deepEqual(calls, [['containers.stop', 'abc'], ['containers.kill', 'abc', 'SIGKILL']]);
+  const immutable = 'a'.repeat(64);
+  await stop.run({ id: immutable, confirm: true });
+  await remove.run({ id: immutable, confirm: true });
+  await kill.run({ id: immutable, signal: 'SIGKILL', confirm: true });
+  assert.deepEqual(calls, [['containers.stop', immutable], ['containers.remove', immutable], ['containers.kill', immutable, 'SIGKILL']]);
 });
 
 test('pane list exposes bounded discovery metadata without requiring known slots', async () => {
@@ -148,13 +155,14 @@ test('extension acquisition is asynchronous, digest-observable, grant-bounded, a
     assert.equal(byName(name).inputSchema.safeParse(name.endsWith('acquire') ? { reference: 'example:1' } : { job: 'j', revision: 1, granted: [], confirm: false }).success, false);
   }
   assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: 1, granted: ['made-up'], confirm: true }).success, false);
+  assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: 1, granted: ['container-attach'], confirm: true }).success, true);
   assert.equal(byName('husklet_extension_install').inputSchema.safeParse({ job: 'j', revision: Number.MAX_SAFE_INTEGER + 1, granted: [], confirm: true }).success, false);
   await byName('husklet_extension_acquire').run({ reference: 'example:1', confirm: true });
   await byName('husklet_extension_acquisition').run({ job: 'j' });
   await byName('husklet_extension_acquisition_cancel').run({ job: 'j', confirm: true });
-  await byName('husklet_extension_install').run({ job: 'j', revision: 4, granted: ['interface'], confirm: true });
+  await byName('husklet_extension_install').run({ job: 'j', revision: 4, granted: ['interface', 'container-attach'], confirm: true });
   await byName('husklet_extension_update').run({ job: 'j', revision: 4, granted: ['interface'], confirm: true });
-  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j'], ['extensions.install', 'j', 4, ['interface']], ['extensions.update', 'j', 4, ['interface']]]);
+  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j'], ['extensions.install', 'j', 4, ['interface', 'container-attach']], ['extensions.update', 'j', 4, ['interface']]]);
 });
 
 test('extension wait filters acquisition jobs and disposes its credit-controlled watcher', async () => {
@@ -176,6 +184,7 @@ test('container create and exec accept only bounded structured authority', async
   const listed = tools(api);
   const create = listed.find(({ name }) => name === 'husklet_container_create');
   const exec = listed.find(({ name }) => name === 'husklet_container_exec');
+  const attach = listed.find(({ name }) => name === 'husklet_container_attach_terminal');
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
@@ -185,6 +194,9 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
+  assert.equal(attach.inputSchema.safeParse({ id: 'c1', command: ['sh'] }).success, false);
+  assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['sh', '-i'] }).success, true);
+  assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: 'sh -i' }).success, false);
   const spec = create.inputSchema.parse({
     image: 'alpine:3.20', name: 'worker-1', entrypoint: ['/usr/bin/env'], command: ['worker', '--once'],
     environment: [['MODE', 'agent']], working_directory: '/work', user: '1000', labels: [['owner', 'agent']],
@@ -205,10 +217,11 @@ test('filesystem controls are strict and removal requires explicit confirmation'
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt' }).success, false);
   assert.equal(byName('husklet_file_rename').inputSchema.safeParse({ from: 'a', to: 'b', extra: true }).success, false);
+  await byName('husklet_file_stat').run({ path: 'logs/app.log' });
   await byName('husklet_file_mkdir').run({ path: 'logs/new' });
   await byName('husklet_file_rename').run({ from: 'logs/a', to: 'logs/b' });
   await byName('husklet_file_remove').run({ path: 'logs/b', confirm: true });
-  assert.deepEqual(calls, [['files.mkdir', 'logs/new'], ['files.rename', 'logs/a', 'logs/b'], ['files.remove', 'logs/b']]);
+  assert.deepEqual(calls, [['files.stat', 'logs/app.log'], ['files.mkdir', 'logs/new'], ['files.rename', 'logs/a', 'logs/b'], ['files.remove', 'logs/b']]);
 });
 
 test('container execution inspection is a strict bounded read through the typed API', async () => {
@@ -218,6 +231,18 @@ test('container execution inspection is a strict bounded read through the typed 
   assert.equal(execution.inputSchema.safeParse({ id: 'exec-1', extra: true }).success, false);
   await execution.run({ id: 'exec-1' });
   assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
+});
+
+test('process inspection exposes its finite initial-process scope and snapshot PID identity', async () => {
+  const { api, calls } = fake();
+  const snapshot = { titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
+    processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
+    scope: 'initial', pid_identity: 'snapshot', truncated: false };
+  api.containers.processes = async (...args) => { calls.push(['containers.processes', ...args]); return snapshot; };
+  const processTool = tools(api).find(({ name }) => name === 'husklet_container_processes');
+  const result = await processTool.run({ id: 'c1' });
+  assert.deepEqual(JSON.parse(result.content[0].text), snapshot);
+  assert.deepEqual(calls, [['containers.processes', 'c1']]);
 });
 
 test('execution wait is a strict bounded read and preserves the timeout', async () => {
@@ -232,13 +257,17 @@ test('execution wait is a strict bounded read and preserves the timeout', async 
 
 test('execution catalogue and output are finite strict reads', async () => {
   const { api, calls } = fake();
+  const output = { stdout: [111], stderr: [], truncated: true, stdout_truncated: true,
+    stderr_truncated: false, eof: false };
+  api.containers.executionLogs = async (...args) => { calls.push(['containers.executionLogs', ...args]); return output; };
   const listed = tools(api);
   const list = listed.find(({ name }) => name === 'husklet_execution_list');
   const logs = listed.find(({ name }) => name === 'husklet_execution_logs');
   assert.equal(logs.inputSchema.safeParse({ id: 'e1', stdout: false, stderr: false }).success, false);
   assert.equal(logs.inputSchema.safeParse({ id: 'e1', extra: true }).success, false);
   await list.run({});
-  await logs.run({ id: 'e1', stdout: true, stderr: false });
+  const result = await logs.run({ id: 'e1', stdout: true, stderr: false });
+  assert.deepEqual(JSON.parse(result.content[0].text), output);
   assert.deepEqual(calls, [['containers.executions'], ['containers.executionLogs', 'e1', { stdout: true, stderr: false }]]);
 });
 
@@ -246,10 +275,13 @@ test('execution signaling targets an execution with a strict bounded signal', as
   const { api, calls } = fake();
   const signal = tools(api).find(({ name }) => name === 'husklet_execution_signal');
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: '' }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: '1', signal: 'SIGTERM' }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: 'friendly', signal: 'SIGTERM' }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'x'.repeat(33) }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
-  await signal.run({ id: 'e1', signal: 'SIGTERM' });
-  assert.deepEqual(calls, [['containers.signalExecution', 'e1', 'SIGTERM']]);
+  const immutable = 'b'.repeat(32);
+  await signal.run({ id: immutable, signal: 'SIGTERM' });
+  assert.deepEqual(calls, [['containers.signalExecution', immutable, 'SIGTERM']]);
 });
 
 test('execution removal requires literal confirmation', async () => {
@@ -308,19 +340,50 @@ test('image tools use typed reads and require confirmation for destructive contr
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_image_inspect').inputSchema.safeParse({ reference: 'a'.repeat(257) }).success, false);
   assert.equal(byName('husklet_image_remove').inputSchema.safeParse({ reference: 'alpine:3.20' }).success, false);
+  assert.equal(byName('husklet_image_remove').inputSchema.safeParse({ reference: 'sha256:abc', confirm: true }).success, false);
   assert.equal(byName('husklet_image_prune').inputSchema.safeParse({ confirm: false }).success, false);
   await byName('husklet_image_list').run({});
   await byName('husklet_image_inspect').run({ reference: 'sha256:abc' });
   await byName('husklet_image_pull').run({ reference: 'alpine:3.20' });
-  await byName('husklet_image_remove').run({ reference: 'old:tag', confirm: true });
+  const digest = `sha256:${'a'.repeat(64)}`;
+  await byName('husklet_image_remove').run({ reference: digest, confirm: true });
   await byName('husklet_image_prune').run({ confirm: true });
   assert.deepEqual(calls, [
     ['images.list'],
     ['images.inspect', 'sha256:abc'],
     ['images.pull', 'alpine:3.20'],
-    ['images.remove', 'old:tag'],
+    ['images.remove', digest],
     ['images.prune'],
   ]);
+});
+
+test('image pull jobs have strict identities and cancellation is not mislabeled destructive', async () => {
+  const { api, calls } = fake(); const listed = tools(api); const byName = (name) => listed.find((tool) => tool.name === name);
+  assert.equal(byName('husklet_image_pull_start').inputSchema.safeParse({ reference: 'alpine latest' }).success, false);
+  assert.equal(byName('husklet_image_pull_status').inputSchema.safeParse({ job: '0' }).success, false);
+  assert.equal(byName('husklet_image_pull_cancel').inputSchema.safeParse({ job: '7', confirm: true }).success, false);
+  const value = async (name, input) => JSON.parse((await byName(name).run(input)).content[0].text);
+  assert.deepEqual(await value('husklet_image_pull_start', { reference: 'alpine:3.20' }), { job: '7' });
+  assert.deepEqual(await value('husklet_image_pull_status', { job: '7' }), { job: '7', revision: 1, state: 'starting' });
+  assert.deepEqual(await value('husklet_image_pull_cancel', { job: '7' }), { done: true, job: '7' });
+  assert.deepEqual(calls.filter(([name]) => name.startsWith('images.')), [
+    ['images.startPull', 'alpine:3.20'], ['images.pullStatus', '7'], ['images.cancelPull', '7'],
+  ]);
+});
+
+test('image pull wait filters exact job and revision and always disposes', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchImagePulls = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  api.images.pullStatus = async (job) => ({ job, revision: 4, state: 'pulling', current: 5, total: 10 });
+  const wait = tools(api).find(({ name }) => name === 'husklet_image_pull_wait');
+  const pending = wait.run({ job: '7', after_revision: 2, timeout_ms: 1_000 }); await Promise.resolve();
+  listener({ job: '8', revision: 9, state: 'complete', coalesced: 0 });
+  listener({ job: '7', revision: 2, state: 'pulling', coalesced: 0 });
+  listener({ job: '7', revision: 4, state: 'pulling', coalesced: 1 });
+  const answer = JSON.parse((await pending).content[0].text);
+  assert.equal(answer.changed, true); assert.equal(answer.change.job, '7'); assert.equal(answer.status.job, '7'); assert.equal(answer.status.revision, 4); assert.equal(disposed, 1);
+  const timeout = JSON.parse((await wait.run({ job: '7', after_revision: 4, timeout_ms: 1 })).content[0].text);
+  assert.deepEqual(timeout, { changed: false, job: '7', after_revision: 4 }); assert.equal(disposed, 2);
 });
 
 test('volume and network tools preserve typed read/control operations and confirmations', async () => {
@@ -328,28 +391,34 @@ test('volume and network tools preserve typed read/control operations and confir
   const listed = tools(api);
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_volume_remove').inputSchema.safeParse({ name: 'cache' }).success, false);
+  assert.equal(byName('husklet_volume_remove').inputSchema.safeParse({ name: 'cache', generation: 'short', confirm: true }).success, false);
   assert.equal(byName('husklet_network_remove').inputSchema.safeParse({ reference: 'private' }).success, false);
   assert.equal(byName('husklet_network_disconnect').inputSchema.safeParse({ reference: 'private', container: 'c1' }).success, false);
   assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: 'private', container: 'c1', extra: true }).success, false);
+  const networkId = 'a'.repeat(32);
+  const containerId = 'b'.repeat(64);
+  assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: networkId, container: 'friendly' }).success, false);
   await byName('husklet_volume_list').run({});
   await byName('husklet_volume_inspect').run({ name: 'cache' });
   await byName('husklet_volume_create').run({ name: 'build' });
-  await byName('husklet_volume_remove').run({ name: 'old', confirm: true });
+  const volumeGeneration = 'c'.repeat(32);
+  await byName('husklet_volume_remove').run({ name: 'old', generation: volumeGeneration, confirm: true });
   await byName('husklet_network_list').run({});
   await byName('husklet_network_inspect').run({ reference: 'private' });
   await byName('husklet_network_create').run({ name: 'backend' });
-  await byName('husklet_network_remove').run({ reference: 'old-net', confirm: true });
-  await byName('husklet_network_connect').run({ reference: 'backend', container: 'c1' });
-  await byName('husklet_network_disconnect').run({ reference: 'backend', container: 'c1', confirm: true });
+  await byName('husklet_network_remove').run({ reference: networkId, confirm: true });
+  await byName('husklet_network_connect').run({ reference: networkId, container: containerId });
+  await byName('husklet_network_disconnect').run({ reference: networkId, container: containerId, confirm: true });
   assert.deepEqual(calls, [
-    ['volumes.list'], ['volumes.inspect', 'cache'], ['volumes.create', 'build'], ['volumes.remove', 'old'],
-    ['networks.list'], ['networks.inspect', 'private'], ['networks.create', 'backend'], ['networks.remove', 'old-net'],
-    ['networks.connect', 'backend', 'c1'], ['networks.disconnect', 'backend', 'c1'],
+    ['volumes.list'], ['volumes.inspect', 'cache'], ['volumes.create', 'build'], ['volumes.remove', 'old', volumeGeneration],
+    ['networks.list'], ['networks.inspect', 'private'], ['networks.create', 'backend'], ['networks.remove', networkId],
+    ['networks.connect', networkId, containerId], ['networks.disconnect', networkId, containerId],
   ]);
 });
 
 test('unified pane XML packs terminal metadata and escaped bounded screen lines', async () => {
   const terminal = {
+    panes: async () => ({ panes: [{ slot: 'term-1', kind: 'terminal' }], truncated: false }),
     topology: async () => ({ active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Shell & work', root: {
       kind: 'pane', focused: true, grid: { columns: 120, rows: 40 },
       pane: { slot: 'term-1', occupant: 'terminal', working_directory: '/work<&>', command: 'bash', provider: null },
@@ -369,6 +438,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
 
 test('unified pane XML selects surface semantics and gives a clear topology absence error', async () => {
   const terminal = {
+    panes: async () => ({ panes: [{ slot: 'surface-1', kind: 'surface' }], truncated: false }),
     topology: async () => ({ active_tab: null, tabs: [{ id: 't', title: 'UI', root: {
       kind: 'pane', focused: false, grid: null,
       pane: { slot: 'surface-1', occupant: 'surface', working_directory: null, command: null, provider: { extension: 'demo', provider: 'main' } },
@@ -384,7 +454,19 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
   assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
-  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from terminal topology/);
+  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from pane inventory/);
+});
+
+test('unified pane XML projects arbitrary native slots and explicitly rejects unknown kinds', async () => {
+  const terminal = {
+    panes: async () => ({ panes: [{ slot: 'settings-native', kind: 'native' }], truncated: false }),
+    semantics: async (slot) => ({ slot, revision: 4, truncated: false, root: {
+      id: 1, role: 'status', label: 'Settings', value: 'Ready', disabled: false, actions: [], children: [],
+    } }),
+  };
+  assert.match(await paneXml(terminal, 'settings-native'), /occupant="native".*Settings/s);
+  terminal.panes = async () => ({ panes: [{ slot: 'shot', kind: 'screenshot' }], truncated: false });
+  await assert.rejects(() => paneXml(terminal, 'shot'), /unsupported occupant "screenshot"/);
 });
 
 test('results redact secrets and remain bounded', async () => {
@@ -476,6 +558,19 @@ test('pane wait returns only bounded invalidation metadata and releases its subs
   assert.equal(disposed, 1);
   assert(!answer.content[0].text.includes('lines'));
   assert(!answer.content[0].text.includes('value'));
+});
+
+test('workspace event wait filters one bounded batch and always disposes', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchWorkspaceEvents = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_workspace_event_wait');
+  const pending = wait.run({ kind: 'key', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener({ events: [{ event: 'pointer', phase: 'move', x: 1, y: 2, button: null }], dropped: 2 });
+  listener({ events: [{ event: 'key', key: 'Enter', modifiers: [], pressed: true }], dropped: 4 });
+  const answer = JSON.parse((await pending).content[0].text);
+  assert.equal(answer.observed, true); assert.equal(answer.event.event, 'key'); assert.equal(answer.dropped, 4);
+  assert.equal(disposed, 1);
 });
 
 test('execution change wait filters immutable identity and returns subscription credit', async () => {
@@ -608,13 +703,13 @@ test('a real MCP client lists strict tools and calls through the React session c
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
   await client.callTool({ name: 'husklet_execution_wait', arguments: { id: 'exec-live', timeout_ms: 250 } });
-  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
+  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'b'.repeat(32), signal: 'SIGHUP' } });
   const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
   assert.equal(refusedStop.isError, true);
   const refusedKill = await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL' } });
   assert.equal(refusedKill.isError, true);
-  await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1', confirm: true } });
-  await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL', confirm: true } });
+  await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'a'.repeat(64), confirm: true } });
+  await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'a'.repeat(64), signal: 'SIGKILL', confirm: true } });
   const images = await client.callTool({ name: 'husklet_image_list', arguments: {} });
   assert.deepEqual(JSON.parse(images.content[0].text), [{ id: 'sha256:abc', references: ['alpine:3.20'], size: 123 }]);
   const volumes = await client.callTool({ name: 'husklet_volume_list', arguments: {} });
@@ -643,9 +738,9 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
     ['execution_wait', { id: 'exec-live', timeout_ms: 250 }],
-    ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
-    ['container_stop', { id: 'container-1' }],
-    ['container_kill', { id: 'container-1', signal: 'SIGKILL' }],
+    ['execution_kill', { id: 'b'.repeat(32), signal: 'SIGHUP' }],
+    ['container_stop', { id: 'a'.repeat(64) }],
+    ['container_kill', { id: 'a'.repeat(64), signal: 'SIGKILL' }],
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],
@@ -667,6 +762,10 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
     pane: { slot, occupant, working_directory: occupant === 'terminal' ? '/tmp' : null, command: occupant === 'terminal' ? 'sh' : null, provider: null } });
   const session = { call: async (name, argument) => {
     calls.push([name, argument]);
+    if (name === 'pane_list') return { reply: 'panes', with: { panes: [
+      { slot: 'term', kind: 'terminal', provider: null, tab: 'tab', title: 'Packed', focused: true },
+      { slot: 'surface', kind: 'surface', provider: null, tab: 'tab', title: 'Packed', focused: false },
+    ], truncated: false } };
     if (name === 'terminal_topology') return { reply: 'topology', with: { active_tab: 'tab', tabs: [{ id: 'tab', title: 'Packed', root: {
       kind: 'split', division: 'beside', ratio_per_mille: 500, first: pane('term', 'terminal'), second: pane('surface', 'surface'),
     } }] } };
@@ -686,7 +785,7 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
   assert.equal((terminal.content[0].text.match(/<husklet-pane /g) ?? []).length, 1);
   assert.equal((surface.content[0].text.match(/<husklet-pane /g) ?? []).length, 1);
   assert.deepEqual(calls.map(([name]) => name), [
-    'terminal_topology', 'terminal_read_pane', 'terminal_topology', 'pane_semantic_read',
+    'pane_list', 'terminal_topology', 'terminal_read_pane', 'pane_list', 'pane_semantic_read',
   ]);
   await client.close();
   await server.close();
@@ -701,6 +800,10 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
   });
   const session = { call: async (name, argument) => {
     calls.push([name, argument]);
+    if (name === 'pane_list') {
+      const slots = changed ? ['right'] : ['left', 'upper', 'right', 'other-tab'];
+      return { reply: 'panes', with: { panes: slots.map((slot) => ({ slot, kind: 'terminal', provider: null, tab: null, title: null, focused: false })), truncated: false } };
+    }
     if (name === 'terminal_topology') return { reply: 'topology', with: {
       active_tab: changed ? 'tab-b' : 'tab-a',
       tabs: changed ? [{ id: 'tab-b', title: 'After', root: leaf('right', true, 132, 41) }] : [
@@ -711,7 +814,8 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
       ],
     } };
     if (name === 'terminal_read_pane') return { reply: 'text', with: {
-      slot: argument.slot, lines: [`visible <${argument.slot}>`], truncated: argument.slot === 'upper',
+      slot: argument.slot, lines: [`visible <${argument.slot}>`], cursor_column: 6, cursor_row: 7,
+      truncated: argument.slot === 'upper',
     } };
     // A stale host cache must never make a removed split leaf look native.
     if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
@@ -735,7 +839,7 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
     const answer = await client.callTool({ name: 'husklet_pane_read', arguments: { slot, lines: 10 } });
     const xml = answer.content[0].text;
     assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal">`));
-    assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}"[^>]*truncated="${truncated}">`));
+    assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}" cursor-column="6" cursor-row="7"[^>]*truncated="${truncated}">`));
     assert.match(xml, new RegExp(`visible &lt;${slot}&gt;`));
   }
 
@@ -744,7 +848,7 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
   assert.match(surviving.content[0].text, /tab="tab-b" title="After" active="true" focused="true" columns="132" rows="41"/);
   const removed = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'upper', lines: 10 } });
   assert.equal(removed.isError, true);
-  assert.match(removed.content[0].text, /absent from terminal topology/);
+  assert.match(removed.content[0].text, /absent from pane inventory/);
   assert.equal(calls.filter(([name]) => name === 'pane_semantic_read').length, 0, 'removed slots never probe stale semantics');
 
   await client.close();

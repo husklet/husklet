@@ -122,6 +122,7 @@ impl<'a> Overview<'a> {
         // meet: one enum for what a person did, one for what the extension said.
         let ordered = std::rc::Rc::clone(&host);
         let selected = std::rc::Rc::new(move |selection| ordered.accept(Order::PaneProvider(selection)));
+        let stopping = Rc::downgrade(&host);
         let sink = std::rc::Rc::new(move |signal: Signal| match signal {
             Signal::Interaction(event) => host.accept(Order::Interaction(event)),
             Signal::InteractionAt { slot, event } => {
@@ -145,6 +146,14 @@ impl<'a> Overview<'a> {
         holder.append(&widget);
         let generation = gallery.enrol(name.as_str(), &widget, &holder, providers, selected);
         ready_generation.set(Some(generation));
+        gallery.enrol_shutdown(
+            name.as_str(),
+            Rc::new(move || {
+                if let Some(host) = stopping.upgrade() {
+                    host.request_stop();
+                }
+            }),
+        );
         let page = page.install();
         let weak = Rc::downgrade(&page);
         gallery.enrol_panes(

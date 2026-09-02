@@ -121,6 +121,9 @@ pub enum Cell {
 }
 
 impl Cell {
+    /// Maximum UTF-8 payload retained or handed to a toolkit for one cell.
+    pub const MAX_TEXT_BYTES: usize = 16 * 1024;
+
     #[must_use]
     pub fn text(value: impl Into<String>) -> Self {
         Self::Text(value.into())
@@ -131,6 +134,14 @@ impl Cell {
         Self::Badge {
             label: label.into(),
             tone,
+        }
+    }
+
+    #[must_use]
+    fn text_bytes(&self) -> usize {
+        match self {
+            Self::Text(value) | Self::Badge { label: value, .. } => value.len(),
+            Self::Number(_) | Self::Bytes(_) | Self::Stamp(_) | Self::Empty => 0,
         }
     }
 }
@@ -144,11 +155,22 @@ pub struct Row {
 }
 
 impl Row {
+    /// Maximum combined UTF-8 payload retained for one row.
+    pub const MAX_TEXT_BYTES: usize = 64 * 1024;
+
     pub fn new(key: u64, cells: impl IntoIterator<Item = Cell>) -> Self {
         Self {
             key,
             cells: cells.into_iter().collect(),
         }
+    }
+
+    #[must_use]
+    fn text_bytes(&self) -> Option<usize> {
+        self.cells.iter().try_fold(0usize, |total, cell| {
+            let bytes = cell.text_bytes();
+            (bytes <= Cell::MAX_TEXT_BYTES).then(|| total.saturating_add(bytes))
+        })
     }
 }
 
@@ -220,6 +242,23 @@ pub struct RowWindow {
     pub request: RequestId,
     pub range: RowRange,
     pub rows: Vec<Row>,
+}
+
+impl RowWindow {
+    /// Maximum combined UTF-8 payload accepted in one requested window.
+    pub const MAX_TEXT_BYTES: usize = 256 * 1024;
+
+    /// Whether textual cells fit the retained-model and toolkit rendering bounds.
+    #[must_use]
+    pub fn text_is_bounded(&self) -> bool {
+        self.rows
+            .iter()
+            .try_fold(0usize, |total, row| {
+                let bytes = row.text_bytes()?;
+                (bytes <= Row::MAX_TEXT_BYTES).then(|| total.saturating_add(bytes))
+            })
+            .is_some_and(|bytes| bytes <= Self::MAX_TEXT_BYTES)
+    }
 }
 
 /// A producer-side mutation of a source, independent of the node tree.

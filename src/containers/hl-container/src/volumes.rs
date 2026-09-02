@@ -183,6 +183,17 @@ impl Volumes {
         self.remove_locked(name).await
     }
 
+    /// Remove only the exact persisted incarnation observed by the caller.
+    pub async fn remove_if_generation(&self, name: &str, generation: &str) -> Result<Volume> {
+        VolumeSpec::new(name).validate()?;
+        let _guard = self.operation.lock().await;
+        let current = self.storage.get(name).await?.ok_or_else(|| Error::VolumeNotFound(name.into()))?;
+        if generation.is_empty() || current.generation != generation {
+            return Err(Error::VolumeConflict(name.into()));
+        }
+        self.remove_locked(name).await
+    }
+
     /// Remove a volume even when persisted containers still reference it.
     ///
     /// # Errors

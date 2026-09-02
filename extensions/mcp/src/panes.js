@@ -72,31 +72,22 @@ const metadata = (value) => value == null ? '' : escape(SECRET.test(String(value
 
 /** One bounded XML document for either terminal text or a semantic surface. */
 export async function paneXml(terminal, slot, lines = 200) {
-  const topology = await terminal.topology();
-  const leaf = leaves(topology).find(({ pane }) => pane.slot === slot);
-  if (!leaf) {
-    if (slot !== 'workspace') {
-      throw new Error(`pane ${JSON.stringify(slot)} is absent from terminal topology`);
-    }
-    try {
-      const semantic = semanticXml(await terminal.semantics(slot));
-      const open = `<husklet-pane slot="${escape(slot)}" occupant="native">`;
-      const close = '</husklet-pane>';
-      if (bytes(open) + bytes(semantic) + bytes(close) <= XML_LIMIT) return `${open}${semantic}${close}`;
-      return `${open}<truncated/></husklet-pane>`;
-    } catch (cause) {
-      throw new Error(`pane ${JSON.stringify(slot)} is absent from topology and exposes no native semantics: ${cause?.message ?? cause}`, { cause });
-    }
-  }
-  const occupant = leaf.pane.occupant;
+  const inventory = await terminal.panes();
+  const descriptor = Array.isArray(inventory?.panes)
+    ? inventory.panes.find((pane) => pane?.slot === slot) : undefined;
+  if (!descriptor) throw new Error(`pane ${JSON.stringify(slot)} is absent from pane inventory`);
+  const occupant = descriptor.kind;
   const open = `<husklet-pane slot="${escape(slot)}" occupant="${escape(occupant)}">`;
   const close = '</husklet-pane>';
-  if (occupant === 'surface') {
+  if (occupant === 'surface' || occupant === 'native') {
     const semantic = semanticXml(await terminal.semantics(slot));
     if (bytes(open) + bytes(semantic) + bytes(close) <= XML_LIMIT) return `${open}${semantic}${close}`;
     return `${open}<truncated/></husklet-pane>`;
   }
   if (occupant !== 'terminal') throw new TypeError(`pane ${JSON.stringify(slot)} has unsupported occupant ${JSON.stringify(occupant)}`);
+  const topology = await terminal.topology();
+  const leaf = leaves(topology).find(({ pane }) => pane.slot === slot);
+  if (!leaf) throw new Error(`terminal pane ${JSON.stringify(slot)} is inventoried but absent from terminal topology`);
   const screen = await terminal.read(slot, lines);
   let output = open;
   let used = bytes(open);
@@ -107,7 +98,7 @@ export async function paneXml(terminal, slot, lines = 200) {
     output += fragment; used += size; return true;
   };
   const active = topology?.active_tab === leaf.tab?.id;
-  append(`<terminal tab="${escape(leaf.tab?.id ?? '')}" title="${escape(String(leaf.tab?.title ?? '').slice(0, TEXT_LIMIT))}" active="${active}" focused="${leaf.focused === true}" columns="${escape(leaf.grid?.columns ?? '')}" rows="${escape(leaf.grid?.rows ?? '')}" cwd="${metadata(leaf.pane.working_directory)}" command="${metadata(leaf.pane.command)}" truncated="${screen?.truncated === true}">`, bytes('</terminal>') + bytes(close));
+  append(`<terminal tab="${escape(leaf.tab?.id ?? '')}" title="${escape(String(leaf.tab?.title ?? '').slice(0, TEXT_LIMIT))}" active="${active}" focused="${leaf.focused === true}" columns="${escape(leaf.grid?.columns ?? '')}" rows="${escape(leaf.grid?.rows ?? '')}" cursor-column="${escape(screen?.cursor_column ?? '')}" cursor-row="${escape(screen?.cursor_row ?? '')}" cwd="${metadata(leaf.pane.working_directory)}" command="${metadata(leaf.pane.command)}" truncated="${screen?.truncated === true}">`, bytes('</terminal>') + bytes(close));
   let index = 0;
   for (const line of Array.isArray(screen?.lines) ? screen.lines.slice(0, 500) : []) {
     if (!append(`<line index="${index}">${escape(String(line).slice(0, 4096))}</line>`, bytes('</terminal>') + bytes(close) + 14)) break;

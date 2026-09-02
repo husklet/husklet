@@ -1,19 +1,45 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  EmptyState, Heading, KeyValueTable, List, ListItemButton, Row, Scroll, Separator, Spinner, Text,
+  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, Progress, Row, Scroll, Separator, Spinner, Text,
+  LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
-const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
-const SECTIONS = ['overview', 'containers', 'processes', 'images', 'volumes', 'networks'];
+const { createElement: h, useCallback, useEffect, useMemo, useRef, useState } = React;
+const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
 
-export function WorkspaceManager({ api, selections, containerDetails, imageDetails, initial = {} }) {
+export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
+  const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
   const volumes = useResource(api.volumes.list, initial.volumes);
   const networks = useResource(api.networks.list, initial.networks);
+  const [executionsTruncated, setExecutionsTruncated] = useState(false);
+  const listExecutions = useCallback(async () => {
+    const listing = await api.containers.executions();
+    setExecutionsTruncated(listing.truncated);
+    return listing.executions;
+  }, [api]);
+  const executions = useResource(listExecutions, initial.executions);
+  useEffect(() => {
+    if (section !== 'executions' || typeof api.watchExecutions !== 'function') return undefined;
+    let disposed = false;
+    let stop = null;
+    void api.watchExecutions((listing) => {
+      if (disposed) return;
+      setExecutionsTruncated(listing.truncated);
+      executions.replace(listing.executions);
+    }).then((dispose) => {
+      if (disposed) void dispose();
+      else stop = dispose;
+    }).catch(() => { /* Explicit Refresh remains available when observation is unsupported. */ });
+    return () => {
+      disposed = true;
+      if (stop) void stop();
+    };
+  }, [api, section, executions.replace]);
   useEffect(() => selections?.subscribe((event) => {
     if (SECTIONS.includes(event?.pane_provider)) setSection(event.pane_provider);
     if (event?.snapshot === 'containers') void containers.reload();
@@ -39,14 +65,20 @@ export function WorkspaceManager({ api, selections, containerDetails, imageDetai
   const body = section === 'overview'
     ? h(Overview, { containers, images, volumes, networks, onOpen: setSection })
     : section === 'containers'
-      ? h(Containers, { api, resource: containers, containerDetails })
+      ? h(Containers, { api, resource: containers, containerDetails, onOpenExecution: async (id) => {
+        setRequestedExecution(id);
+        await executions.reload();
+        setSection('executions');
+      } })
       : section === 'processes'
         ? h(Processes, { api, resource: containers })
+        : section === 'executions'
+          ? h(Executions, { api, resource: executions, executionDetails, truncated: executionsTruncated, requestedExecution })
         : section === 'images'
           ? h(Images, { api, resource: images, imageDetails })
           : section === 'volumes'
-            ? h(Volumes, { api, resource: volumes })
-            : h(Networks, { api, resource: networks });
+            ? h(Volumes, { api, resource: volumes, volumeDetails })
+            : h(Networks, { api, resource: networks, networkDetails });
   return h(Row, { grow: true, gap: 0 }, h(Navigation, { section, onSelect: setSection }), h(Separator, { orientation: 'vertical' }), body);
 }
 
@@ -78,12 +110,16 @@ function Summary({ title: label, value, detail, onOpen }) {
     h(CardActions, {}, h(Button, { label: 'Open', variant: 'ghost', onInvoke: onOpen })));
 }
 
-export function Containers({ api, resource, containerDetails }) {
+export function Containers({ api, resource, containerDetails, onOpenExecution }) {
   const localDetails = useMemo(() => new ContainerDetailsSource(), []);
   const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [draft, setDraft] = useState({ image: '', name: '' });
+  const [created, setCreated] = useState(null);
+  const [creationError, setCreationError] = useState(null);
+  const [creationNotice, setCreationNotice] = useState('');
   const act = async (verb, id, ...args) => {
     setBusy(`${verb}:${id}`);
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
@@ -106,16 +142,43 @@ export function Containers({ api, resource, containerDetails }) {
     }
     void inspect(item);
   };
+  const createAndStart = async () => {
+    setBusy('create'); setCreationError(null); setCreationNotice('');
+    let target = created;
+    try {
+      if (!target) {
+        const id = await api.containers.create({ image: draft.image.trim(), name: draft.name.trim() });
+        target = { id, name: draft.name.trim() };
+        setCreated(target);
+      }
+      await api.containers.start(target.id);
+      setCreationNotice(`Created and started ${target.name}.`);
+      setCreated(null); setDraft({ image: '', name: '' });
+      await resource.reload();
+    } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
+  };
   const view = bounded(resource.data);
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
+    h(Card, { variant: 'outline' },
+      h(CardHeader, { label: 'Create a container', detail: 'Uses a local image and starts it after durable creation.' }),
+      h(CardContent, {}, h(Row, { gap: 1, wrap: true },
+        h(Entry, { value: draft.image, placeholder: 'Image reference', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, image: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }))),
+      h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
+        label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
+        enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0)),
+        onInvoke: createAndStart,
+      })),
+      h(ErrorText, { error: creationError }), creationNotice ? h(Text, { label: creationNotice, color: 'positive', wrap: true }) : null),
     h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No containers', detail: 'Create a container through an agent or extension, then refresh this page.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.name || shortId(item.id), detail: item.image }),
       h(CardContent, {}, h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' }))),
       h(CardActions, { gap: 1 },
         h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
         ...containerActions(item, busy, act)),
-      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection }) : null)),
+      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onOpenExecution }) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
@@ -127,20 +190,53 @@ function containerActions(item, busy, act) {
     h(Button, { key: 'pause', label: item.state === 'paused' ? 'Resume' : 'Pause', enabled: !blocked && (running || item.state === 'paused'), onInvoke: () => act(item.state === 'paused' ? 'unpause' : 'pause', item.id) }),
     h(ConfirmAction, {
       key: 'stop', label: 'Stop', confirmLabel: 'Confirm stop',
-      question: `Stop ${item.name || shortId(item.id)}?`, enabled: !blocked && running,
+      question: `Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && running,
       onConfirm: () => act('stop', item.id),
     }),
   ];
 }
 
-function ContainerDetail({ api, container, act, inspection }) {
-  const [command, setCommand] = useState('');
+function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
+  const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
+  const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
+  const [attachment, setAttachment] = useState({ state: 'idle', slot: '', error: null });
   const [logs, setLogs] = useState(null);
   const run = async () => {
-    const argv = command.trim().split(/\s+/).filter(Boolean);
-    if (argv.length) await api.containers.exec(container.id, { command: argv });
+    setExecution({ state: 'loading', id: '', error: null });
+    try {
+      let argv;
+      try { argv = JSON.parse(command.argv); }
+      catch { throw new Error('Command must be valid JSON, such as ["sh","-lc","printf hello"].'); }
+      if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64
+        || argv.some((argument) => typeof argument !== 'string' || argument.length > 4_096)) {
+        throw new Error('Command must be a JSON array of 1–64 strings, each at most 4096 characters.');
+      }
+      if (command.user.length > 4_096 || command.workingDirectory.length > 4_096) {
+        throw new Error('User and working directory must each be at most 4096 characters.');
+      }
+      const id = await api.containers.exec(container.id, {
+        command: argv,
+        ...(command.user.trim() ? { user: command.user.trim() } : {}),
+        ...(command.workingDirectory.trim() ? { workingDirectory: command.workingDirectory.trim() } : {}),
+      });
+      setExecution({ state: 'ready', id, error: null });
+    } catch (error) { setExecution({ state: 'error', id: '', error }); }
   };
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
+  const attach = async () => {
+    setAttachment({ state: 'loading', slot: '', error: null });
+    try {
+      let argv;
+      try { argv = JSON.parse(command.argv); }
+      catch { throw new Error('Command must be valid JSON, such as ["sh"].'); }
+      if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64
+        || argv.some((argument) => typeof argument !== 'string' || !argument.length || argument.length > 4_096)) {
+        throw new Error('Command must be a JSON array of 1–64 non-empty strings, each at most 4096 characters.');
+      }
+      const slot = await api.containers.attachTerminal(container.id, argv);
+      setAttachment({ state: 'ready', slot, error: null });
+    } catch (error) { setAttachment({ state: 'error', slot: '', error }); }
+  };
   return h(CardContent, { gap: 2 },
     inspection.state === 'loading'
       ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading container details…' }))
@@ -152,27 +248,48 @@ function ContainerDetail({ api, container, act, inspection }) {
             ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
             : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
-    h(Row, { gap: 1 }, h(Entry, { value: command, placeholder: 'Command and arguments', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: 'Execute', enabled: command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
-      label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)}?`,
+    h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
+      label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`,
       onConfirm: () => act('kill', container.id, 'SIGKILL'),
     })),
-    logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }));
+    logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }),
+    h(Separator), h(Heading, { label: 'Captured execution', scale: 'caption' }),
+    h(Text, { label: 'Runs without an interactive terminal. Inspect the resulting record for status and captured stdout/stderr.', color: 'text-dim', wrap: true }),
+    h(Text, { label: 'Enter an argument array so spaces and quoting remain exact, for example ["sh","-lc","printf hello"].', color: 'text-dim', wrap: true }),
+    h(Row, { gap: 1, wrap: true },
+      h(Entry, { value: command.argv, placeholder: 'Command argv JSON', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, argv: String(event.value ?? '') })) }),
+      h(Entry, { value: command.user, placeholder: 'Run as user (optional)', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, user: String(event.value ?? '') })) }),
+      h(Entry, { value: command.workingDirectory, placeholder: 'Working directory (optional)', enabled: execution.state !== 'loading', onChange: (event) => setCommand((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) })),
+    h(Row, { gap: 1, wrap: true },
+      h(Button, { label: execution.state === 'loading' ? 'Executing…' : 'Execute', enabled: execution.state !== 'loading' && command.argv.trim().length > 0, onInvoke: run }),
+      h(Button, { label: attachment.state === 'loading' ? 'Attaching…' : 'Attach terminal', enabled: attachment.state !== 'loading' && command.argv.trim().length > 0 && container.state === 'running', onInvoke: attach })),
+    attachment.state === 'error' ? h(Text, { label: attachment.error?.message ?? String(attachment.error), color: 'danger', wrap: true }) : null,
+    attachment.state === 'ready' ? h(Text, { label: `Interactive terminal opened in ${attachment.slot}.`, color: 'positive', wrap: true }) : null,
+    execution.state === 'error' ? h(Text, { label: execution.error?.message ?? String(execution.error), color: 'danger', wrap: true }) : null,
+    execution.state === 'ready' ? h(Row, { gap: 1, wrap: true, align: 'center' },
+      h(Text, { label: `Execution ${execution.id} created.`, color: 'positive', wrap: true }),
+      onOpenExecution ? h(Button, { label: 'Inspect execution', onInvoke: () => onOpenExecution(execution.id) }) : null) : null);
 }
 
-function Processes({ api, resource }) {
-  const [processes, setProcesses] = useState([]);
+export function Processes({ api, resource }) {
+  const [snapshots, setSnapshots] = useState([]);
   const [error, setError] = useState(null);
   const load = useCallback(async () => {
     try {
       const groups = await Promise.all((resource.data ?? []).map(async (container) => ({ container, rows: await api.containers.processes(container.id) })));
-      setProcesses(groups.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id))));
+      setSnapshots(groups);
       setError(null);
     } catch (cause) { setError(cause); }
   }, [api, resource.data]);
   useEffect(() => { void load(); }, [load]);
+  const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
+  const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
   const view = bounded(processes);
   return h(Page, { title: 'Processes', subtitle: 'A bounded snapshot across all visible containers.' },
     h(Toolbar, { loading: resource.loading, onRefresh: load }), h(ErrorText, { error }),
+    h(InventoryEmpty, { resource: { loading: resource.loading, error }, records: view.records, label: 'No running processes', detail: 'Start a container to see its process snapshot here.' }),
+    h(Text, { label: 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
+    observed > 0 ? h(Text, { label: `Observed ${new Date(observed).toISOString()}`, color: 'text-dim' }) : null,
     ...view.records.map((process, index) => {
       const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
       const command = process.cells.CMD ?? process.cells.Command ?? process.cells.COMMAND ?? process.values.at(-1) ?? 'Process';
@@ -181,7 +298,82 @@ function Processes({ api, resource }) {
         h(CardHeader, { label: command, detail: process.container }),
         h(CardContent, {}, h(Row, { gap: 2 }, h(Badge, { label: `PID ${pid}` }), h(Text, { label: detail, color: 'text-dim' }))));
     }),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted }),
+    snapshots.some(({ rows }) => rows.truncated)
+      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
+}
+
+export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {
+  const localDetails = useMemo(() => new ExecutionDetailsSource(), []);
+  const detailsSource = executionDetails ?? localDetails;
+  const [selected, setSelected] = useState('');
+  const [inspection, setInspection] = useState({ state: 'idle', count: 0, error: null });
+  const [output, setOutput] = useState(null);
+  const [busy, setBusy] = useState('');
+  const inspect = async (id) => {
+    setSelected(id); setInspection({ state: 'loading', count: 0, error: null }); setOutput(null);
+    try {
+      const detail = await api.containers.execution(id);
+      const count = await detailsSource.replace(detail);
+      setInspection({ state: 'ready', count, error: null });
+    } catch (error) { setInspection({ state: 'error', count: 0, error }); }
+  };
+  useEffect(() => {
+    if (requestedExecution && selected !== requestedExecution) void inspect(requestedExecution);
+  }, [requestedExecution]);
+  const logs = async (id) => {
+    setBusy(`logs:${id}`);
+    try {
+      const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
+      const text = (bytes) => logText(bytes).slice(-LOG_VIEW_CHARACTER_LIMIT);
+      setOutput((current) => ({ revision: (current?.revision ?? 0) + 1,
+        stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }),
+        truncated: value.truncated, stdoutTruncated: value.stdout_truncated, stderrTruncated: value.stderr_truncated,
+        eof: value.eof }));
+    } finally { setBusy(''); }
+  };
+  const wait = async (id) => {
+    setBusy(`wait:${id}`);
+    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); await detailsSource.replace(detail); await resource.reload(); }
+    finally { setBusy(''); }
+  };
+  const terminate = async (id) => {
+    await api.containers.signalExecution(id, 'SIGTERM');
+    await resource.reload();
+    await inspect(id);
+  };
+  const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
+  const view = bounded(resource.data);
+  return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
+    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No executions', detail: 'Commands executed in containers will appear here.' }),
+    ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+      h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
+      h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
+        selected !== item.id ? null : inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading execution details…' }))
+          : inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.count === 0
+              ? h(EmptyState, { label: 'No execution details', detail: 'The host returned no inspectable fields.' })
+              : h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } }),
+        selected === item.id && output ? h(Column, { gap: 1 },
+          h(Heading, { label: 'Standard output', scale: 'caption' }), h(LogView, { key: `stdout-${output.revision}`, value: output.stdout || (output.eof ? 'No stdout captured (EOF).' : 'No stdout captured yet; execution is still running.'), monospace: true }),
+          output.stdoutTruncated ? h(Text, { label: 'Standard output was truncated to its configured bound.', color: 'warning' }) : null,
+          h(Heading, { label: 'Standard error', scale: 'caption' }), h(LogView, { key: `stderr-${output.revision}`, value: output.stderr || (output.eof ? 'No stderr captured (EOF).' : 'No stderr captured yet; execution is still running.'), monospace: true }),
+          output.stderrTruncated ? h(Text, { label: 'Standard error was truncated to its configured bound.', color: 'warning' }) : null,
+          output.eof ? h(Text, { label: 'Captured output is complete (EOF).', color: 'text-dim' })
+            : h(Text, { label: 'Execution is still running; later output may appear.', color: 'text-dim' }),
+          output.truncated && !output.stdoutTruncated && !output.stderrTruncated
+            ? h(Text, { label: 'Host output was truncated to its configured bound.', color: 'warning' }) : null) : null),
+      h(CardActions, { gap: 1 },
+        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
+        h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),
+        h(Button, { label: busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s', enabled: !busy && item.running, onInvoke: () => void wait(item.id) }),
+        h(ConfirmAction, { label: 'Terminate', confirmLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
+        h(ConfirmAction, { label: 'Remove record', confirmLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
+    h(Omitted, { count: view.omitted }),
+    truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
 }
 
 const IMAGE_DETAIL_SCHEMA = Object.freeze([
@@ -198,12 +390,34 @@ export function Images({ api, resource, imageDetails }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
+  const currentImages = useRef(new Set());
+  currentImages.current = new Set((resource.data ?? []).map((item) => item.id));
+  const [pull, setPull] = useState(null);
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const run = async (name, operation) => {
     setBusy(name); setError(null); setNotice('');
     try { await operation(); } catch (cause) { setError(cause); } finally { setBusy(''); }
   };
-  const pull = () => run('pull', async () => { await api.images.pull(reference.trim()); setReference(''); await resource.reload(); });
+  const startPull = () => run('pull', async () => {
+    if (typeof api.images.startPull !== 'function') { await api.images.pull(reference.trim()); await resource.reload(); return; }
+    const started = await api.images.startPull(reference.trim());
+    setPull({ job: started.job, reference: reference.trim(), revision: 0, state: 'starting', status: 'Starting pull…', layer: null, current: null, total: null, error: null });
+  });
+  useEffect(() => {
+    if (!pull?.job || typeof api.watchImagePulls !== 'function' || ['complete', 'failed', 'cancelled'].includes(pull.state)) return undefined;
+    let disposed = false; let stop = null;
+    void api.watchImagePulls(async (change) => {
+      if (disposed || change.job !== pull.job || change.revision <= pull.revision) return;
+      const status = await api.images.pullStatus(pull.job);
+      if (disposed) return;
+      setPull(status);
+      if (status.state === 'complete') { setNotice(`Pulled ${status.reference}.`); await resource.reload(); }
+    }).then((dispose) => { if (disposed) void dispose(); else stop = dispose; }).catch((error) => {
+      if (!disposed) setPull((current) => ({ ...current, state: 'failed', error: error.message ?? String(error) }));
+    });
+    return () => { disposed = true; if (stop) void stop(); };
+  }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
+  const cancelPull = () => run('pull-cancel', async () => { await api.images.cancelPull(pull.job); setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' })); });
   const inspect = (item) => run(`inspect:${item.id}`, async () => {
     setDetail(null);
     setInspection({ id: item.id, state: 'loading', count: 0, error: null });
@@ -218,7 +432,8 @@ export function Images({ api, resource, imageDetails }) {
     }
   });
   const remove = (item) => run(`remove:${item.id}`, async () => {
-    await api.images.remove(item.reference || item.id); setConfirm('');
+    if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
+    await api.images.remove(item.id); setConfirm('');
     if (detail?.id === item.id) setDetail(null);
     await resource.reload();
   });
@@ -229,11 +444,18 @@ export function Images({ api, resource, imageDetails }) {
   });
   const view = bounded(resource.data);
   return h(Page, { title: 'Images', subtitle: 'Images available to this workspace.' },
-    h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: busy === 'pull' ? 'Pulling…' : 'Pull', enabled: !busy && reference.trim().length > 0, onInvoke: pull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
+    h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull', enabled: !busy && reference.trim().length > 0 && (!pull || ['complete', 'failed', 'cancelled'].includes(pull.state)), onInvoke: startPull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
+    pull ? h(Card, { variant: pull.state === 'failed' ? 'outline' : 'filled' },
+      h(CardHeader, { label: pull.reference, detail: pull.status ?? pull.state }),
+      h(CardContent, { gap: 1 }, pull.total > 0 ? h(Meter, { fraction: Math.min(1, pull.current / pull.total), value: `${pull.current} / ${pull.total} bytes` }) : pull.state === 'pulling' || pull.state === 'starting' ? h(Progress, { busy: true }) : null,
+        pull.layer ? h(Text, { label: `Layer ${pull.layer}`, color: 'text-dim' }) : null,
+        pull.error ? h(Text, { label: pull.error, color: 'danger', wrap: true }) : null),
+      h(CardActions, {}, !['complete', 'failed', 'cancelled'].includes(pull.state) ? h(Button, { label: 'Cancel pull', onInvoke: cancelPull }) : null)) : null,
     h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
       ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', enabled: !busy, tone: 'danger', destructive: true, onInvoke: prune }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
     h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
+    h(InventoryEmpty, { resource: { loading: resource.loading, error: error ?? resource.error }, records: view.records, label: 'No images', detail: 'Enter an image reference above to pull one into this workspace.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
       h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }),
         inspection.id === item.id && inspection.state === 'loading'
@@ -246,61 +468,110 @@ export function Images({ api, resource, imageDetails }) {
                 ? h(KeyValueTable, { source: IMAGE_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 12 }, maximum: { step: 40 } } })
                 : null),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === item.id && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
-        ? h(React.Fragment, {}, h(Text, { label: 'Remove this local image?', color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
+        ? h(React.Fragment, {}, h(Text, { label: `Remove immutable image ${item.id}?`, color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
     h(Omitted, { count: view.omitted }));
 }
 
-export function Volumes({ api, resource }) {
+export function Volumes({ api, resource, volumeDetails }) {
+  const localDetails = useMemo(() => new VolumeDetailsSource(), []);
+  const detailsSource = volumeDetails ?? localDetails;
   const [name, setName] = useState('');
-  const [detail, setDetail] = useState(null);
+  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, error: null });
   const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (volume) => { await api.volumes.remove(volume.name); if (detail?.name === volume.name) setDetail(null); await resource.reload(); };
-  const inspect = async (volume) => setDetail(await api.volumes.inspect(volume.name));
+  const currentVolumes = useRef(new Map());
+  currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
+  const remove = async (volume) => {
+    if (currentVolumes.current.get(volume.name) !== volume.generation) return;
+    await api.volumes.remove(volume.name, volume.generation);
+    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, error: null });
+    await resource.reload();
+  };
+  const inspect = async (volume) => {
+    setInspection({ name: volume.name, state: 'loading', count: 0, error: null });
+    try {
+      const count = await detailsSource.replace(await api.volumes.inspect(volume.name));
+      setInspection({ name: volume.name, state: 'ready', count, error: null });
+    } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, error }); }
+  };
   const view = bounded(resource.data);
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(ErrorText, { error: resource.error }),
-    ...view.records.map((volume) => h(Card, { key: volume.name, variant: detail?.name === volume.name ? 'filled' : 'outline' },
+    h(InventoryEmpty, { resource, records: view.records, label: 'No volumes', detail: 'Create a named volume above when a workload needs durable storage.' }),
+    ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name}?`,
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
+        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name} generation ${volume.generation}?`,
         onConfirm: () => remove(volume),
       })),
-      detail?.name === volume.name ? h(CardContent, {}, h(Text, { label: `Driver ${detail.driver}`, color: 'text-dim' })) : null)),
+      inspection.name === volume.name ? h(CardContent, {},
+        inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading volume details…' }))
+          : inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.count === 0
+              ? h(EmptyState, { label: 'No volume details', detail: 'The host returned no inspectable fields.' })
+              : h(KeyValueTable, { source: VOLUME_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 6 }, maximum: { step: 10 } } })) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
-export function Networks({ api, resource }) {
+export function Networks({ api, resource, networkDetails }) {
+  const localDetails = useMemo(() => new NetworkDetailsSource(), []);
+  const detailsSource = networkDetails ?? localDetails;
   const [name, setName] = useState('');
   const [container, setContainer] = useState('');
-  const [detail, setDetail] = useState(null);
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [error, setError] = useState(null);
+  const currentNetworks = useRef(new Set());
+  currentNetworks.current = new Set((resource.data ?? []).map(resourceReference));
+  const current = (id) => { if (currentNetworks.current.has(id)) return true; setError(new Error(`Network ${id} changed or disappeared; inspect and confirm again.`)); return false; };
   const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (network) => { await api.networks.remove(resourceReference(network)); if (detail?.id === network.id) setDetail(null); await resource.reload(); };
-  const inspect = async (network) => setDetail(await api.networks.inspect(resourceReference(network)));
-  const attach = async (network, verb) => { await api.networks[verb](resourceReference(network), container.trim()); await resource.reload(); };
+  const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const inspect = async (network) => {
+    const id = resourceReference(network);
+    setInspection({ id, state: 'loading', count: 0, error: null });
+    try {
+      const count = await detailsSource.replace(await api.networks.inspect(id));
+      setInspection({ id, state: 'ready', count, error: null });
+    } catch (error) { setInspection({ id, state: 'error', count: 0, error }); }
+  };
+  const attach = async (network, verb) => { const id = resourceReference(network); if (!current(id)) return; await api.networks[verb](id, container.trim()); await resource.reload(); };
   const view = bounded(resource.data);
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
-    h(ErrorText, { error: resource.error }),
-    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: detail?.id === network.id ? 'filled' : 'outline' },
+    h(ErrorText, { error: error ?? resource.error }),
+    h(InventoryEmpty, { resource, records: view.records, label: 'No networks', detail: 'Create a network above to connect workspace containers.' }),
+    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
         label: 'Disconnect', confirmLabel: 'Confirm disconnect',
-        question: `Disconnect ${container.trim() || 'container'} from ${network.name}?`,
+        question: `Disconnect immutable container ${container.trim() || 'container'} from network ${resourceReference(network)}?`,
         enabled: container.trim().length > 0, onConfirm: () => attach(network, 'disconnect'),
       }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove network ${network.name}?`,
+        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
         onConfirm: () => remove(network),
       })),
-      detail?.id === network.id ? h(CardContent, {}, h(Text, { label: `${detail.id} · ${detail.driver} · ${detail.scope}`, color: 'text-dim', wrap: true })) : null)),
+      inspection.id === resourceReference(network) ? h(CardContent, {},
+        inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading network details…' }))
+          : inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.count === 0
+              ? h(EmptyState, { label: 'No network details', detail: 'The host returned no inspectable fields.' })
+              : h(KeyValueTable, { source: NETWORK_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 8 }, maximum: { step: 16 } } })) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
 function Page({ title: label, subtitle, children }) { return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 2 }, h(Heading, { label, scale: 'title' }), h(Text, { label: subtitle, color: 'text-dim', wrap: true }), children)); }
 function Toolbar({ loading, onRefresh }) { return h(Row, { gap: 1, align: 'center' }, loading ? h(Spinner) : null, h(Button, { label: 'Refresh', enabled: !loading, onInvoke: onRefresh })); }
 function ErrorText({ error }) { return error ? h(Text, { label: error.message ?? String(error), color: 'danger', wrap: true }) : null; }
+function InventoryEmpty({ resource, records, label, detail }) {
+  return !resource.loading && !resource.error && records.length === 0
+    ? h(EmptyState, { label, detail })
+    : null;
+}
 function Omitted({ count }) { return count > 0 ? h(Text, { label: `${count} more records omitted to keep this view bounded.`, color: 'text-dim' }) : null; }
 
 // A destructive operation is always two distinct interactions. The first
@@ -335,6 +606,7 @@ function useResource(loader, initial) {
     setLoading(true);
     try { setData(await loader()); setError(null); } catch (cause) { setError(cause); } finally { setLoading(false); }
   }, [loader]);
+  const replace = useCallback((value) => { setData(value); setError(null); setLoading(false); }, []);
   useEffect(() => { if (initial === undefined) void reload(); }, [initial, reload]);
-  return { data, loading, error, reload };
+  return { data, loading, error, reload, replace };
 }
