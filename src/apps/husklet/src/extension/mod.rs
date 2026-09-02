@@ -45,7 +45,7 @@ pub use inventory::ContainerCatalog;
 pub use listener::Listener;
 pub use registration::{Acquisition, Candidate};
 pub use resource::Resources;
-pub use roster::{described, Entry, Refusal, Roster};
+pub use roster::{described, Entry, Refusal, Roster, UpdateRefusal};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
 pub use terminal::{Answer, Errand, Errands, Relay, Request};

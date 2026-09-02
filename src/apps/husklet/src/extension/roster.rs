@@ -7,7 +7,7 @@
 //! of "disable this extension" is exercised on a temporary directory with no
 //! display and no container daemon.
 
-use hl_extension::{ExtensionName, Grant, Installation, Manifest, Objection, Record, Stage};
+use hl_extension::{ExtensionName, Grant, Installation, Manifest, Objection, Record, Stage, Update, UpdateFailure};
 use hl_ws::storage::{Directory, Storage};
 
 use super::state::{Fault, Records};
@@ -20,6 +20,21 @@ pub enum Refusal {
     Record(Fault),
     /// The lifecycle policy refused the action.
     Policy(Objection),
+}
+
+#[derive(Debug)]
+pub enum UpdateRefusal {
+    Policy(Objection),
+    Record(Fault),
+}
+
+impl std::fmt::Display for UpdateRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Policy(objection) => write!(formatter, "{objection}"),
+            Self::Record(fault) => write!(formatter, "{fault}"),
+        }
+    }
 }
 
 impl std::fmt::Display for Refusal {
@@ -62,6 +77,8 @@ pub struct Entry {
     pub name: ExtensionName,
     /// The image the grant was given for.
     pub image_digest: String,
+    /// Manifest version consented to for this digest.
+    pub version: String,
     /// Exactly what the person agreed to.
     pub granted: Grant,
     /// Where the extension stands under the lifecycle policy.
@@ -118,6 +135,7 @@ impl<S: Storage> Roster<S> {
             .map(|record| Entry {
                 name: record.name.clone(),
                 image_digest: record.image_digest.clone(),
+                version: record.version.clone(),
                 granted: record.granted.clone(),
                 stage: self.installation.stage(&record.name),
                 pane_providers: record.pane_providers.clone(),
@@ -144,6 +162,27 @@ impl<S: Storage> Roster<S> {
         let record = self.installation.install(manifest, digest, consented, at)?.clone();
         self.records.save(&record)?;
         Ok(())
+    }
+
+    /// Prepares an update prompt without changing the installed record.
+    pub fn prepare_update(&self, manifest: &Manifest, digest: &str) -> Result<Update, Refusal> {
+        self.installation
+            .prepare_update(manifest, digest)
+            .map_err(Refusal::Policy)
+    }
+
+    /// Durably replaces a consented record. Saving is the replacement callback,
+    /// so either both in-memory policy and durable authority advance or neither
+    /// does; the old host remains mounted until the caller refreshes afterward.
+    pub fn commit_update(&mut self, update: Update, consented: &Grant, at: i64) -> Result<(), UpdateRefusal> {
+        let records = &self.records;
+        self.installation
+            .commit_update(update, consented, at, |_, next| records.save(next))
+            .map(|_| ())
+            .map_err(|failure| match failure {
+                UpdateFailure::Refused(objection) => UpdateRefusal::Policy(objection),
+                UpdateFailure::Replacement(fault) => UpdateRefusal::Record(fault),
+            })
     }
 
     /// Marks an extension as one whose sidecar should run.
@@ -223,7 +262,7 @@ pub fn described(record: &Record) -> Manifest {
     Manifest {
         name: record.name.clone(),
         display_name: record.name.to_string(),
-        version: String::new(),
+        version: record.version.clone(),
         protocol: hl_extension::PROTOCOL,
         capabilities: record.granted.clone(),
         entrypoint: None,

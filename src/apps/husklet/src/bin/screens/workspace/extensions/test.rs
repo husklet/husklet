@@ -43,6 +43,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         management_extension_reconciles_native_fallback_pages();
         an_image_is_read_before_anybody_is_asked();
+        an_existing_name_is_an_explicit_update_with_a_capability_delta();
+        a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
         remote_image_progress_precedes_the_consent_prompt();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
@@ -498,6 +500,17 @@ fn candidate() -> Candidate {
     }
 }
 
+fn update_candidate(digest: &str, version: &str) -> Candidate {
+    let mut manifest = manifest("sample");
+    manifest.version = version.to_owned();
+    manifest.capabilities = Grant::new([Capability::Interface, Capability::ContainerControl]);
+    Candidate {
+        reference: format!("sample:{version}"),
+        digest: digest.to_owned(),
+        manifest,
+    }
+}
+
 fn an_image_is_read_before_anybody_is_asked() {
     let fixture = Fixture::new(&[]);
     let page = catalogue(&fixture, Ok(candidate()));
@@ -533,6 +546,108 @@ fn an_image_is_read_before_anybody_is_asked() {
             .iter()
             .any(|widget| widget.has_css_class(settings::STANDING)),
         "the central catalogue gained the lifecycle card"
+    );
+}
+
+fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
+    let fixture = Fixture::new(&[("sample", true)]);
+    let old_surface = fixture.view.page("sample").expect("installed surface");
+    let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    typed(&page, "sample:2");
+    page.inspect();
+    assert!(page.poll());
+
+    let proposal = descendants(page.widget().upcast_ref());
+    let labels: Vec<_> = proposal
+        .iter()
+        .filter_map(|widget| {
+            widget
+                .downcast_ref::<gtk::Label>()
+                .map(|label| label.text().to_string())
+        })
+        .collect();
+    assert!(labels
+        .iter()
+        .any(|line| line.contains("installed") && line.contains("sha256:aaaa")));
+    assert!(labels
+        .iter()
+        .any(|line| line.contains("candidate  2.0.0") && line.contains("sha256:cccc")));
+    assert!(
+        labels.iter().any(|line| line == "+ container-control"),
+        "new authority is called out explicitly: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|line| line == "− container-read"),
+        "authority the candidate dropped is called out explicitly: {labels:?}"
+    );
+    assert_eq!(
+        fixture.view.page("sample").as_ref(),
+        Some(&old_surface),
+        "inspection and prompt leave the old extension live"
+    );
+
+    page.consent();
+    let entry = fixture
+        .roster
+        .borrow()
+        .entries()
+        .into_iter()
+        .find(|entry| entry.name.as_str() == "sample")
+        .expect("updated record");
+    assert_eq!(entry.image_digest, "sha256:cccc");
+    assert_eq!(entry.version, "2.0.0");
+    assert!(entry.granted.holds(Capability::ContainerControl));
+    assert!(!entry.granted.holds(Capability::ContainerRead));
+    assert!(fixture.view.holds("sample"));
+}
+
+fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
+    let fixture = Fixture::new(&[("sample", true)]);
+    let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    typed(&page, "sample:2");
+    page.inspect();
+    assert!(page.poll());
+    let old_surface = fixture.view.page("sample").expect("old surface");
+
+    let winner = update_candidate("sha256:dddd", "1.5.0");
+    let prepared = fixture
+        .roster
+        .borrow()
+        .prepare_update(&winner.manifest, &winner.digest)
+        .expect("competing update");
+    fixture
+        .roster
+        .borrow_mut()
+        .commit_update(prepared, &Grant::new([Capability::ContainerControl]), 2)
+        .expect("competing update commits");
+
+    page.consent();
+    assert!(
+        page.notice().contains("unchanged"),
+        "failure is visible: {}",
+        page.notice()
+    );
+    assert_eq!(
+        fixture.view.page("sample").as_ref(),
+        Some(&old_surface),
+        "a refused replacement does not rebuild the running surface"
+    );
+    assert!(
+        descendants(page.widget().upcast_ref())
+            .iter()
+            .any(|widget| widget.has_css_class(directory::CONSENT)),
+        "the accepted proposal remains available for an explicit retry"
+    );
+    assert_eq!(
+        fixture
+            .roster
+            .borrow()
+            .entries()
+            .into_iter()
+            .find(|entry| entry.name.as_str() == "sample")
+            .expect("winner remains")
+            .image_digest,
+        "sha256:dddd"
     );
 }
 
@@ -660,6 +775,7 @@ impl hl::extension::Supply for Bench {
         let record = Record {
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
+            version: manifest.version.clone(),
             granted: manifest.capabilities.clone(),
             enabled: true,
             installed_at: 1,
