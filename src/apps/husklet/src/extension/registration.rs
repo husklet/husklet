@@ -142,6 +142,15 @@ impl Candidate {
             .ensure(workspace)
             .map_err(|error| error.to_string())?;
         let bridge = Bridge::new(socket).map_err(|error| error.to_string())?;
+        Self::acquire_with_bridge(reference, progress, cancellation, &bridge)
+    }
+
+    fn acquire_with_bridge(
+        reference: &str,
+        progress: &Sender<Acquisition>,
+        cancellation: &Cancellation,
+        bridge: &Bridge,
+    ) -> Result<Self, String> {
         let client = bridge.client();
         let _ = progress.send(Acquisition::Inspecting);
         cancellation.check()?;
@@ -165,6 +174,15 @@ impl Candidate {
             digest: inspection.id,
             manifest,
         })
+    }
+
+    #[cfg(test)]
+    fn acquire_from_socket(socket: &std::path::Path, reference: &str, progress: &Sender<Acquisition>) {
+        let result = Bridge::new(socket.to_path_buf())
+            .map_err(|error| error.to_string())
+            .and_then(|bridge| Self::acquire_with_bridge(reference, progress, &Cancellation::default(), &bridge));
+        let event = result.map_or_else(Acquisition::Failed, Acquisition::Ready);
+        let _ = progress.send(event);
     }
 }
 
@@ -308,9 +326,53 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{document, manifest_path, split};
+    use super::{document, manifest_path, split, Acquisition, Candidate};
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
+
+    fn append(builder: &mut tar::Builder<&mut Vec<u8>>, path: &str, bytes: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, path, bytes).unwrap();
+    }
+
+    fn extension_archive() -> Vec<u8> {
+        use hl_images::Digest;
+        let document = b"name = \"daemon-candidate\"\ndisplay_name = \"Daemon candidate\"\nversion = \"1.2.3\"\nprotocol = 1\ncapabilities = [\"container-read\"]\n";
+        let mut layer = Vec::new();
+        {
+            let mut tar = tar::Builder::new(&mut layer);
+            append(&mut tar, "etc/husklet/extension.toml", document);
+            tar.finish().unwrap();
+        }
+        let config = serde_json::to_vec(&serde_json::json!({
+            "architecture": "arm64", "os": "linux",
+            "config": {
+                "Cmd": ["/never-run"],
+                "Labels": {
+                    "husklet.extension.manifest": "/etc/husklet/extension.toml",
+                    "husklet.extension.protocol": "1"
+                }
+            },
+            "rootfs": {"type": "layers", "diff_ids": [Digest::sha256(&layer).to_string()]}
+        }))
+        .unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!([{
+            "Config": "config.json", "RepoTags": ["scenario/extension:v1"], "Layers": ["layer.tar"]
+        }]))
+        .unwrap();
+        let mut archive = Vec::new();
+        {
+            let mut tar = tar::Builder::new(&mut archive);
+            append(&mut tar, "config.json", &config);
+            append(&mut tar, "layer.tar", &layer);
+            append(&mut tar, "manifest.json", &manifest);
+            tar.finish().unwrap();
+        }
+        archive
+    }
 
     fn archive(entries: &[(&str, &str)]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
@@ -367,5 +429,90 @@ mod tests {
     #[test]
     fn digests_are_forwarded_as_the_pull_selector() {
         assert_eq!(split("team/tool@sha256:abcd"), ("team/tool", Some("sha256:abcd")));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_real_daemon_candidate_is_inspected_copied_and_removed_without_starting() {
+        use hl_client::model::EventQuery;
+        use hl_container::{Config, Containers, Persistence};
+        use hl_daemon::Daemon;
+        use hl_images::format::docker::{Archive, Limits};
+        use tokio::sync::oneshot;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let containers = Containers::builder(Config::new(root.path()).persistence(Persistence::Memory))
+            .build()
+            .await
+            .unwrap();
+        Archive::load(
+            &extension_archive()[..],
+            &containers.images().unwrap(),
+            Limits::default(),
+        )
+        .unwrap();
+        let socket = root.path().join("candidate.sock");
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+            let _ = stopped.await;
+        }));
+        for _ in 0..100 {
+            if socket.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(socket.exists(), "embedded daemon socket did not appear");
+
+        let client = hl_client::Client::unix(&socket).unwrap();
+        let (progress, received) = std::sync::mpsc::channel();
+        let acquisition_socket = socket.clone();
+        let worker = std::thread::spawn(move || {
+            Candidate::acquire_from_socket(&acquisition_socket, "scenario/extension:v1", &progress)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let ready = loop {
+            let event = received
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .expect("candidate acquisition timed out");
+            if matches!(
+                event,
+                Acquisition::Ready(_) | Acquisition::Failed(_) | Acquisition::Cancelled
+            ) {
+                break event;
+            }
+        };
+        worker.join().unwrap();
+        let Acquisition::Ready(candidate) = ready else {
+            panic!("candidate did not become ready: {ready:?}")
+        };
+        assert_eq!(candidate.manifest.name.to_string(), "daemon-candidate");
+        assert_eq!(candidate.manifest.version, "1.2.3");
+        assert!(!candidate.digest.is_empty());
+        assert!(
+            client.containers().list(true).await.unwrap().is_empty(),
+            "inspection container leaked"
+        );
+
+        let mut events = client
+            .events()
+            .subscribe(&EventQuery::default().since(0))
+            .await
+            .unwrap();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!([first.action.as_str(), second.action.as_str()], ["create", "destroy"]);
+        assert_ne!(first.action, "start", "unconsented image execution was attempted");
+
+        drop(events);
+        stop.send(()).unwrap();
+        server.await.unwrap().unwrap();
     }
 }
