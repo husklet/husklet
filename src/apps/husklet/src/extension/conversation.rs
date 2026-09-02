@@ -1258,6 +1258,34 @@ mod tests {
     }
 
     #[test]
+    fn a_from_now_lifecycle_subscription_does_not_replay_the_hosts_prior_revision() {
+        let host = Host { ledger: Arc::new(Ledger::default()) };
+        let lifecycle = LifecycleHost(vec![hl_extension::WorkspaceLifecycleChange {
+            workspace: "before-subscribe".into(),
+            action: hl_extension::WorkspaceLifecycleAction::Create,
+            revision: 71,
+            coalesced: 0,
+        }]);
+        let (ours, peer) = UnixStream::pair().expect("socket pair");
+        peer.set_nonblocking(true).expect("nonblocking peer");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceRead]), Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        let mut ports = services(&host);
+        ports.workspace_control = &lifecycle;
+        let subscribe = codec::request(&Request::EventSubscribe {
+            topic: hl_extension::Topic::WorkspaceLifecycle,
+        }).expect("subscribe request");
+        conversation.exchange(&subscribe, &ports).expect("subscribe");
+        let mut wire = Wire::new(peer);
+        assert_eq!(codec::read_reply(&wire.receive().expect("reply")).expect("done"), Reply::Done);
+        conversation.observe(&ports).expect("observe from now");
+        assert_eq!(wire.receive(), Err(Transit::Pending), "history is not replayed to a new subscriber");
+    }
+
+    #[test]
     fn pane_observation_is_credit_gated_and_reports_transport_coalescing() {
         let ledger = Arc::new(Ledger::default());
         let host = Host {
