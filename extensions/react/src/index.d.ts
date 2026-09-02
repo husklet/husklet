@@ -4684,6 +4684,7 @@ export interface WorkspaceApi {
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
+  watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
   watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;

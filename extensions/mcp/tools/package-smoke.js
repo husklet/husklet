@@ -35,6 +35,7 @@ try {
       if (!names.has(name)) process.exit(1);
     }
     if (!tools({ watchExecutions: async () => async () => {} }).some(({ name }) => name === 'husklet_execution_change_wait')) process.exit(1);
+    if (!tools({ watchContainers: async () => async () => {} }).some(({ name }) => name === 'husklet_container_change_wait')) process.exit(1);
     for (const name of ['husklet_volume_list', 'husklet_volume_inspect', 'husklet_volume_create', 'husklet_volume_remove', 'husklet_network_list', 'husklet_network_inspect', 'husklet_network_create', 'husklet_network_remove', 'husklet_network_connect', 'husklet_network_disconnect']) {
       if (!names.has(name)) process.exit(1);
     }

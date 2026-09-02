@@ -242,6 +242,19 @@ test('execution watcher uses exact topic and returns credit after delivery', asy
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('container watcher uses existing snapshot topic and returns credit after delivery', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = []; const opening = api.watchContainers((value) => seen.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'containers' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); const stop = await opening;
+  const containers = [{ id: 'c1', state: 'running' }];
+  stage.host.write(encode({ channel: 10, kind: KIND.event, payload: { snapshot: 'containers', of: containers } }));
+  assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [containers]);
+  const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'containers' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('extension acquisition preserves job revision and explicit grant identity', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);

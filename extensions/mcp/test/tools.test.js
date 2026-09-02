@@ -494,6 +494,19 @@ test('execution change wait filters immutable identity and returns subscription 
   assert.equal(disposed, 1);
 });
 
+test('container change wait filters identity/state and disposes after match', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchContainers = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_container_change_wait');
+  assert.equal(wait.inputSchema.safeParse({ id: 'c1', state: 'running', absent: true }).success, false);
+  const pending = wait.run({ id: 'c2', state: 'exited', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener([{ id: 'c1', state: 'exited' }, { id: 'c2', state: 'running' }]);
+  listener([{ id: 'c2', state: 'exited', name: 'worker' }]);
+  assert.deepEqual(JSON.parse((await pending).content[0].text), { changed: true, container: { id: 'c2', state: 'exited', name: 'worker' } });
+  assert.equal(disposed, 1);
+});
+
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
   const hostile = `&<>"'`;
   assert.equal(semanticXml({ slot: hostile, revision: 3, truncated: false, root: {

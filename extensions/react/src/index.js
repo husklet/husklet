@@ -230,6 +230,12 @@ export function workspace(session) {
     subscribe,
     unsubscribe,
   };
+  api.watchContainers = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('container listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'containers') listener(event.of); });
+    try { await api.subscribe('containers'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('containers'); };
+  };
   api.watchPaneChanges = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('pane change listener must be a function');
     const off = session.onEvent((event) => {
