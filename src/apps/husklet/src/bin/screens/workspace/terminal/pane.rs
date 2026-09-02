@@ -51,6 +51,7 @@ impl PaneChooser {
         let button = gtk::MenuButton::new();
         button.set_icon_name("view-grid-symbolic");
         button.set_tooltip_text(Some("Choose what this pane displays"));
+        button.set_focusable(true);
         button.add_css_class("flat");
         button.set_halign(gtk::Align::End);
         button.set_valign(gtk::Align::Start);
@@ -68,6 +69,13 @@ impl PaneChooser {
 
     pub(crate) fn populate(window: &Rc<TermWin>, button: &gtk::MenuButton) {
         let providers = Window::gallery(window).map_or_else(Vec::new, |gallery| gallery.providers());
+        // The menu button is an overlay child of one stable pane chrome. Bind
+        // its actions to that chrome's slot instead of whichever terminal last
+        // happened to own keyboard focus.
+        let target = button
+            .parent()
+            .and_then(|parent| Panes::all(window).into_iter().find(|pane| pane.widget == parent))
+            .map(|pane| pane.slot);
         let choices = gtk::Box::new(gtk::Orientation::Vertical, 6);
         choices.set_margin_top(10);
         choices.set_margin_bottom(10);
@@ -85,7 +93,8 @@ impl PaneChooser {
         terminal.set_halign(gtk::Align::Fill);
         {
             let window = window.clone();
-            terminal.connect_clicked(move |_| Self::terminal(&window));
+            let target = target.clone();
+            terminal.connect_clicked(move |_| Self::terminal_in(&window, target.as_deref()));
         }
         choices.append(&terminal);
 
@@ -125,9 +134,10 @@ impl PaneChooser {
                 choice.set_halign(gtk::Align::Fill);
                 let identity = format!("{}\n{} {}", provider.extension, provider.title, provider.id).to_lowercase();
                 let window = window.clone();
+                let target = target.clone();
                 let extension = provider.extension;
                 let id = provider.id;
-                choice.connect_clicked(move |_| Self::provider(&window, &extension, &id));
+                choice.connect_clicked(move |_| Self::provider_in(&window, target.as_deref(), &extension, &id));
                 choices.append(&choice);
                 groups
                     .last_mut()
@@ -167,11 +177,20 @@ impl PaneChooser {
     }
 
     pub(crate) fn provider(window: &Rc<TermWin>, extension: &str, provider: &str) {
+        Self::provider_in(window, None, extension, provider);
+    }
+
+    fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) {
         let Some(gallery) = Window::gallery(window) else { return };
         if !gallery.offers(extension, provider) {
             return;
         }
-        let Some(current) = Self::selected(window) else { return };
+        let Some(current) = slot
+            .and_then(|slot| Panes::at(window, slot))
+            .or_else(|| Self::selected(window))
+        else {
+            return;
+        };
         if !PaneSwap::can_replace(&current.content) {
             return;
         }
@@ -208,7 +227,16 @@ impl PaneChooser {
     }
 
     pub(crate) fn terminal(window: &Rc<TermWin>) {
-        let Some(current) = Self::selected(window) else { return };
+        Self::terminal_in(window, None);
+    }
+
+    fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) {
+        let Some(current) = slot
+            .and_then(|slot| Panes::at(window, slot))
+            .or_else(|| Self::selected(window))
+        else {
+            return;
+        };
         Self::terminal_at(window, &current, true);
     }
 

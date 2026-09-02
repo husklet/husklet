@@ -59,6 +59,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
+        panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
         panes::pane_chooser_groups_and_filters_many_extension_views();
         panes::disabling_an_extension_tombstones_and_recovers_its_surface_pane();
@@ -1831,6 +1832,82 @@ mod panes {
             labels(),
             ["Terminal", "Postgres"],
             "an old tab reads the live catalogue"
+        );
+    }
+
+    pub(super) fn each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus() {
+        let bench = Bench::new();
+        let (first, first_slot) = bench.shell();
+        let (second, second_slot) = bench.beside(&first);
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
+        Window::exhibit(&bench.window, gallery);
+        assert!(Panes::focus(&bench.window, &first_slot));
+        assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
+
+        let second_pane = Panes::at(&bench.window, &second_slot).expect("second pane");
+        let chooser = super::descendants(&second_pane.widget)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("every split leaf owns a chooser");
+        assert!(chooser.is_focusable(), "the chooser is keyboard reachable");
+        PaneChooser::populate(&bench.window, &chooser);
+        let postgres = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Postgres"))
+            .expect("provider choice");
+        postgres.emit_clicked();
+
+        assert_eq!(
+            Panes::at(&bench.window, &first_slot)
+                .expect("focused first pane")
+                .content,
+            first.clone().upcast::<gtk::Widget>(),
+            "the globally focused pane is not replaced"
+        );
+        assert_eq!(
+            Panes::at(&bench.window, &second_slot)
+                .expect("chosen second pane")
+                .occupant,
+            Occupant::Surface,
+            "the chooser replaces its own leaf"
+        );
+        assert!(
+            first.has_focus(),
+            "switching an adjacent pane preserves terminal keyboard focus"
+        );
+
+        PaneChooser::populate(&bench.window, &chooser);
+        let terminal = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Terminal"))
+            .expect("terminal is always available");
+        terminal.emit_clicked();
+        assert_eq!(
+            Panes::at(&bench.window, &second_slot)
+                .expect("restored second pane")
+                .content,
+            second.upcast::<gtk::Widget>(),
+            "the displaced terminal identity is restored"
         );
     }
 
