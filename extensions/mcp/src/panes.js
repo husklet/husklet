@@ -151,6 +151,14 @@ export function paneTools(terminal) {
       async ({ slot, confirm, ...action }) => {
         const tree = await terminal.semantics(slot);
         const node = findNode(tree.root, action.node);
+        if (!node) throw new Error(`semantic node ${action.node} is absent from revision ${tree.revision}`);
+        if (tree.revision !== action.revision) {
+          throw new Error(`stale semantic revision ${action.revision}; current is ${tree.revision}`);
+        }
+        if (node.disabled === true) throw new Error(`semantic node ${action.node} is disabled`);
+        if (!Array.isArray(node.actions) || !node.actions.includes(action.action)) {
+          throw new Error(`semantic node ${action.node} does not advertise ${action.action}`);
+        }
         if (node?.destructive === true && confirm !== true) throw new Error('destructive pane action requires confirm: true');
         await terminal.act(slot, action);
         return { done: true };

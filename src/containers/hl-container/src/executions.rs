@@ -44,6 +44,11 @@ impl Executions {
         self.service.list_execs().await
     }
 
+    /// Returns the finite captured output emitted so far by one execution.
+    pub async fn logs(&self, id: &ExecId) -> Result<crate::Logs> {
+        self.service.exec_logs(id).await
+    }
+
     /// Starts a created execution exactly once and returns its interactive session.
     ///
     /// Detached callers may drop the returned session after a successful start.

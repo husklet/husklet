@@ -330,11 +330,24 @@ impl WorkspaceStore {
 
     /// Add or replace a workspace by name, then persist.
     pub fn upsert(&mut self, ws: WorkspaceConfig) -> io::Result<()> {
+        #[cfg(feature = "runtime")]
+        let existed = self.items.iter().any(|workspace| workspace.name == ws.name);
+        #[cfg(feature = "runtime")]
+        let name = ws.name.clone();
         let mut items = self.items.clone();
         items.retain(|workspace| workspace.name != ws.name);
         items.push(ws);
         self.save(&items)?;
         self.items = items;
+        #[cfg(feature = "runtime")]
+        crate::workspace_lifecycle::changed(
+            &name,
+            if existed {
+                hl_extension::WorkspaceLifecycleAction::Update
+            } else {
+                hl_extension::WorkspaceLifecycleAction::Create
+            },
+        );
         Ok(())
     }
 
@@ -346,6 +359,10 @@ impl WorkspaceStore {
         let removed = items.len() != before;
         self.save(&items)?;
         self.items = items;
+        #[cfg(feature = "runtime")]
+        if removed {
+            crate::workspace_lifecycle::changed(name, hl_extension::WorkspaceLifecycleAction::Remove);
+        }
         Ok(removed)
     }
 

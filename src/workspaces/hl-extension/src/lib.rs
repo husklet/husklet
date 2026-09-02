@@ -48,7 +48,7 @@ pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};
 pub use subscription::{
     ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
-    WorkspaceEventBatch,
+    WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
 };
 
 /// The host's opening frame, carrying this domain's grant.

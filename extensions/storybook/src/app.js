@@ -32,6 +32,9 @@ import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
 import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
+import { STREAMING_LOG_STORY, StreamingLogStory } from './streaming-log.js';
+import { EVENT_STREAM_STORY, EventStreamStory } from './event-stream.js';
+import { KEY_VALUE_STORY, KeyValueInspectorStory } from './key-value-inspector.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
@@ -39,12 +42,14 @@ const { createElement: h, useMemo, useRef, useState } = React;
 const INTERACTION_HISTORY = 5;
 
 /** The whole playground. */
-export function Playground({ largeSource } = {}) {
+export function Playground({ largeSource, timelineSource, keyValueSource, initialStory = OPENING } = {}) {
   const families = useMemo(grouped, []);
-  const [selected, setSelected] = useState(OPENING);
+  const [selected, setSelected] = useState(initialStory);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY || selected === NAVIGATION_STORY;
+  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
+    || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
+    || selected === KEY_VALUE_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -56,10 +61,10 @@ export function Playground({ largeSource } = {}) {
 
   return h(
     Row,
-    { gap: 0, grow: true },
+    { gap: 0, grow: true, wrap: true },
     h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
-    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, triggers: contract?.triggers ?? [] }),
+    h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, timelineSource, keyValueSource, triggers: contract?.triggers ?? [] }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
     h(Inspector, {
       key: 'inspector',
@@ -94,6 +99,24 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(KEYBOARD_STORY),
       }),
       h(ListItemButton, {
+        key: STREAMING_LOG_STORY,
+        label: STREAMING_LOG_STORY,
+        selected: selected === STREAMING_LOG_STORY,
+        onInvoke: () => onSelect(STREAMING_LOG_STORY),
+      }),
+      h(ListItemButton, {
+        key: EVENT_STREAM_STORY,
+        label: EVENT_STREAM_STORY,
+        selected: selected === EVENT_STREAM_STORY,
+        onInvoke: () => onSelect(EVENT_STREAM_STORY),
+      }),
+      h(ListItemButton, {
+        key: KEY_VALUE_STORY,
+        label: KEY_VALUE_STORY,
+        selected: selected === KEY_VALUE_STORY,
+        onInvoke: () => onSelect(KEY_VALUE_STORY),
+      }),
+      h(ListItemButton, {
         key: FORM_STORY,
         label: FORM_STORY,
         selected: selected === FORM_STORY,
@@ -121,7 +144,7 @@ export function Sidebar({ families, selected, onSelect }) {
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened, largeSource, triggers = [] }) {
+export function Preview({ name, opened, largeSource, timelineSource, keyValueSource, triggers = [] }) {
   const [interactions, setInteractions] = useState([]);
   const sequence = useRef(0);
   const handlers = interactionProps(triggers, (trigger, event) => {
@@ -141,6 +164,12 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
         ? h(ValidatedSettingsFormStory)
         : name === KEYBOARD_STORY
         ? h(KeyboardAccessibilityStory)
+        : name === STREAMING_LOG_STORY
+        ? h(StreamingLogStory)
+        : name === EVENT_STREAM_STORY && timelineSource
+        ? h(EventStreamStory, { source: timelineSource })
+        : name === KEY_VALUE_STORY && keyValueSource
+        ? h(KeyValueInspectorStory, { source: keyValueSource })
         : name === NAVIGATION_STORY
         ? h(NavigationDialogsStory)
         : name === 'DataTable' && largeSource
@@ -248,7 +277,7 @@ export function Inspector({ name, properties, triggers, props, onChange }) {
     h(
       Column,
       { pad: 3, gap: 2 },
-      h(Heading, { key: 'title', label: `${name} properties`, scale: 'caption' }),
+      h(Heading, { key: 'title', label: `${name} properties`, scale: 'caption', wrap: true }),
       h(Text, { key: 'note', label: notes.values, color: 'text-dim', wrap: true }),
       ...groups.flatMap((group) => [
         h(ListSubheader, { key: `group-${group.key}`, label: group.group }),

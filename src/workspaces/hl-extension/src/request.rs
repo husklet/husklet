@@ -8,7 +8,7 @@ use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
+    ContainerOutput, ContainerSummary, Division, Entry, ExecutionList, ExecutionSummary, HostError, ImageDetails, ImagePruneResult,
     ImageSummary, NetworkSummary, PaneInventory, PaneText, ProcessList, TabSummary, TerminalTopology, VolumeSummary,
     WorkspaceConfiguration, WorkspaceState,
 };
@@ -95,14 +95,18 @@ pub enum Request {
     ExecutionInspect {
         id: String,
     },
+    ExecutionList,
+    ExecutionLogs { id: String, stdout: bool, stderr: bool },
+    ExecutionWait {
+        id: String,
+        timeout_ms: u32,
+    },
     ExecutionKill {
         id: String,
         signal: String,
     },
-    ContainerCreate {
-        image: String,
-        name: String,
-    },
+    ExecutionRemove { id: String },
+    ContainerCreate { spec: crate::port::ContainerCreateSpec },
     ContainerStart {
         id: String,
     },
@@ -292,7 +296,10 @@ impl Request {
             | Self::ContainerInspect { .. }
             | Self::ContainerProcesses { .. }
             | Self::ContainerLogs { .. }
-            | Self::ExecutionInspect { .. } => Capability::ContainerRead,
+            | Self::ExecutionInspect { .. }
+            | Self::ExecutionList
+            | Self::ExecutionLogs { .. }
+            | Self::ExecutionWait { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
             | Self::ContainerStop { .. }
@@ -302,6 +309,7 @@ impl Request {
             | Self::ContainerRestart { .. }
             | Self::ContainerKill { .. }
             | Self::ExecutionKill { .. }
+            | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePull { .. } | Self::ImageRemove { .. } | Self::ImagePrune => Capability::ImageWrite,
@@ -365,6 +373,7 @@ impl Request {
 #[serde(rename_all = "kebab-case")]
 pub enum Topic {
     Containers,
+    Executions,
     Images,
     Volumes,
     Networks,
@@ -372,6 +381,7 @@ pub enum Topic {
     PaneChanges,
     Extensions,
     ExtensionAcquisitions,
+    WorkspaceLifecycle,
     WorkspaceEvents,
 }
 
@@ -382,6 +392,7 @@ impl Topic {
     pub const fn capability(self) -> Capability {
         match self {
             Self::Containers => Capability::ContainerRead,
+            Self::Executions => Capability::ContainerRead,
             Self::Images => Capability::ImageRead,
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
@@ -389,12 +400,14 @@ impl Topic {
             Self::PaneChanges => Capability::PaneObserve,
             Self::Extensions => Capability::ExtensionRead,
             Self::ExtensionAcquisitions => Capability::ExtensionInstall,
+            Self::WorkspaceLifecycle => Capability::WorkspaceRead,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
         }
     }
 
     pub const ALL: &'static [Self] = &[
         Self::Containers,
+        Self::Executions,
         Self::Images,
         Self::Volumes,
         Self::Networks,
@@ -402,6 +415,7 @@ impl Topic {
         Self::PaneChanges,
         Self::Extensions,
         Self::ExtensionAcquisitions,
+        Self::WorkspaceLifecycle,
         Self::WorkspaceEvents,
     ];
 }
@@ -439,6 +453,7 @@ pub enum Reply {
     Processes(ProcessList),
     Logs(ContainerOutput),
     Execution(ExecutionSummary),
+    Executions(ExecutionList),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
     ImageDetails(ImageDetails),
@@ -532,8 +547,12 @@ mod tests {
         );
         assert_eq!(
             Request::ContainerCreate {
-                image: "alpine:3.20".into(),
-                name: "worker".into(),
+                spec: crate::port::ContainerCreateSpec {
+                    image: "alpine:3.20".into(), name: "worker".into(), entrypoint: None,
+                    command: Vec::new(), environment: Vec::new(), working_directory: None,
+                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
+                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                },
             }
             .capability(),
             Capability::ContainerControl
@@ -627,6 +646,7 @@ mod tests {
         assert_eq!(Topic::Terminal.capability(), Capability::TerminalRead);
         assert_eq!(Topic::Extensions.capability(), Capability::ExtensionRead);
         assert_eq!(Topic::ExtensionAcquisitions.capability(), Capability::ExtensionInstall);
+        assert_eq!(Topic::WorkspaceLifecycle.capability(), Capability::WorkspaceRead);
     }
 
     #[test]

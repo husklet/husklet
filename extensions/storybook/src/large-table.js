@@ -75,9 +75,9 @@ export function LargeDataTableStory({ source }) {
     void source.configure(changed);
   };
   return h(Column, { gap: 2, grow: true },
-    h(Heading, { label: '100,000 logical records', scale: 'title' }),
+    h(Heading, { label: '100,000 logical records', scale: 'title', wrap: true }),
     h(Text, { label: 'Only host-requested 128-row windows exist in memory. Resize or scroll to request another window.', wrap: true }),
-    h(Row, { gap: 2 },
+    h(Row, { gap: 2, wrap: true },
       h(Entry, {
         value: filter,
         placeholder: 'Filter records',

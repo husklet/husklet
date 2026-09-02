@@ -1,6 +1,6 @@
 use http::Method;
 
-use crate::model::{ExecAttach, ExecConfig, ExecCreated, ExecInspect, ExecStart, Wait};
+use crate::model::{ExecAttach, ExecCatalogue, ExecConfig, ExecCreated, ExecInspect, ExecOutput, ExecStart, Wait};
 use crate::transport::Transport;
 use crate::uri::Component;
 use crate::{Error, Result};
@@ -40,6 +40,14 @@ impl<'a> Executions<'a> {
         self.transport
             .get_json(&format!("/exec/{}/json", Component::segment(id)))
             .await
+    }
+
+    pub async fn list(&self, limit: u16) -> Result<ExecCatalogue> {
+        self.transport.get_json(&format!("/exec/json?limit={limit}")).await
+    }
+
+    pub async fn logs(&self, id: &str) -> Result<ExecOutput> {
+        self.transport.get_json(&format!("/exec/{}/logs", Component::segment(id))).await
     }
 
     /// Waits without polling for an execution to exit.

@@ -172,7 +172,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
@@ -205,6 +205,53 @@ test('extension inventory and acquisition watchers use separate exact topics', a
   assert.equal(inventory[0][0].name, 'manager'); assert.deepEqual(acquisitions[0], { job: 'j', revision: 2, state: 'ready', coalesced: 4 });
   const stoppingInventory = stopInventory(); assert.deepEqual((await next()).payload.with, { topic: 'extensions' }); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stoppingInventory;
   const stoppingAcquisitions = stopAcquisitions(); assert.deepEqual((await next()).payload.with, { topic: 'extension-acquisitions' }); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stoppingAcquisitions;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('workspace lifecycle watcher uses its WorkspaceRead-gated exact topic', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const changes = [];
+  const opening = api.watchWorkspaceLifecycle((value) => changes.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'workspace-lifecycle' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  stage.host.write(encode({ channel: 8, kind: KIND.event, payload: { snapshot: 'workspace_lifecycle', of: {
+    workspace: 'target', action: 'update', revision: 9, coalesced: 2,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.deepEqual(changes, [{ workspace: 'target', action: 'update', revision: 9, coalesced: 2 }]);
+  const stopping = stop();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-lifecycle' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('execution watcher uses exact topic and returns credit after delivery', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = [];
+  const opening = api.watchExecutions((value) => seen.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'executions' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  const catalogue = { executions: [{ id: 'e1', running: false }], truncated: false };
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'executions', of: catalogue } }));
+  assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [catalogue]);
+  const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'executions' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('container watcher uses existing snapshot topic and returns credit after delivery', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = []; const opening = api.watchContainers((value) => seen.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'containers' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); const stop = await opening;
+  const containers = [{ id: 'c1', state: 'running' }];
+  stage.host.write(encode({ channel: 10, kind: KIND.event, payload: { snapshot: 'containers', of: containers } }));
+  assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [containers]);
+  const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'containers' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -317,8 +364,8 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const api = workspace(stage.session);
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
-    api.containers.execution('e1'), api.containers.pause('c1'), api.containers.unpause('c1'),
-    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'),
+    api.containers.execution('e1'), api.containers.executions(), api.containers.executionLogs('e1', { stdout: true, stderr: false }), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.pause('c1'), api.containers.unpause('c1'),
+    api.containers.restart('c1'), api.containers.kill('c1', 'SIGTERM'), api.containers.signalExecution('e1', 'SIGHUP'), api.containers.removeExecution('e1'),
     api.containers.exec('c1', { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
   ];
@@ -328,11 +375,15 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_processes', with: { id: 'c1' } },
     { call: 'container_logs', with: { id: 'c1', stdout: true, stderr: false } },
     { call: 'execution_inspect', with: { id: 'e1' } },
+    { call: 'execution_list' },
+    { call: 'execution_logs', with: { id: 'e1', stdout: true, stderr: false } },
+    { call: 'execution_wait', with: { id: 'e1', timeout_ms: 250 } },
     { call: 'container_pause', with: { id: 'c1' } },
     { call: 'container_unpause', with: { id: 'c1' } },
     { call: 'container_restart', with: { id: 'c1' } },
     { call: 'container_kill', with: { id: 'c1', signal: 'SIGTERM' } },
     { call: 'execution_kill', with: { id: 'e1', signal: 'SIGHUP' } },
+    { call: 'execution_remove', with: { id: 'e1' } },
     { call: 'container_exec', with: { id: 'c1', command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
@@ -340,7 +391,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'processes', with: { titles: [], processes: [] } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
     { reply: 'execution', with: { id: 'e1' } },
-    ...Array(5).fill({ reply: 'done' }),
+    { reply: 'executions', with: { executions: [], truncated: false } },
+    { reply: 'logs', with: { stdout: [], stderr: [], truncated: false } },
+    { reply: 'execution', with: { id: 'e1', running: false, exit_code: 0 } },
+    ...Array(6).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
     { reply: 'done' },
   ];
@@ -348,7 +402,23 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
-  assert.equal(results[8], 'e2');
+  assert.equal(results[12], 'e2');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('configured container creation preserves its bounded typed specification', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const spec = {
+    image: 'alpine:3.20', name: 'worker', entrypoint: ['/init'], command: ['serve'],
+    environment: [['MODE', 'agent']], working_directory: '/work', user: '1000',
+    labels: [['owner', 'agent']], mounts: [{ volume: 'cache', target: '/cache', read_only: true }],
+    network: 'private', ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
+    memory_mb: 512, cpus: 2, pids_limit: 128,
+  };
+  const pending = workspace(stage.session).containers.create(spec);
+  assert.deepEqual((await next()).payload, { call: 'container_create', with: { spec } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'c-rich' } }));
+  assert.equal(await pending, 'c-rich');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -381,9 +451,13 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   await next();
   const terminal = workspace(stage.session).terminal;
   const topology = terminal.topology();
+  const spawning = terminal.spawn('s1', ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_spawn', with: { slot: 's1', command: ['printf', '%s\n', 'ready'] },
+  });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_write_pane', with: { slot: 's1', contents: [...new TextEncoder().encode('echo hello\n')] },
   });
@@ -394,8 +468,12 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
-  await Promise.all([writing, resizing]);
+  await Promise.all([spawning, writing, resizing]);
+  assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
+  assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
+  assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
   assert.throws(() => terminal.writeInput('s1', new Uint8Array(65_537)), /65536 byte limit/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
   stage.session.close(); stage.host.destroy(); stage.server.close();

@@ -28,6 +28,11 @@ impl Service {
         self.logs.read(&JournalId::container(container.id)).await
     }
 
+    pub(crate) async fn exec_logs(&self, id: &crate::ExecId) -> Result<crate::Logs> {
+        self.inspect_exec(id).await?;
+        self.logs.read(&JournalId::exec(id.clone())).await
+    }
+
     pub(crate) async fn attach(self: &Arc<Self>, reference: &str) -> Result<crate::Session> {
         let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;

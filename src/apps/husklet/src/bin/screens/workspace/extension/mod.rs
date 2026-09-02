@@ -49,6 +49,7 @@ pub struct Interface {
     deliveries: Deliveries,
     sink: Rc<dyn Sink>,
     faulted: Rc<dyn Fn(u32)>,
+    ready: Rc<dyn Fn()>,
     /// Monotonic tick count, which is the clock the row models age against.
     clock: u64,
 }
@@ -72,7 +73,7 @@ impl Interface {
     /// drives it.
     #[must_use]
     pub fn new(deliveries: Deliveries, sink: Rc<dyn Sink>) -> (gtk::Box, Self) {
-        Self::with_faults(deliveries, sink, Rc::new(|_| {}))
+        Self::with_lifecycle(deliveries, sink, Rc::new(|_| {}), Rc::new(|| {}))
     }
 
     /// Builds a page that also publishes structured crash-loop state on the
@@ -80,6 +81,18 @@ impl Interface {
     /// the background host never touches either one.
     #[must_use]
     pub fn with_faults(deliveries: Deliveries, sink: Rc<dyn Sink>, faulted: Rc<dyn Fn(u32)>) -> (gtk::Box, Self) {
+        Self::with_lifecycle(deliveries, sink, faulted, Rc::new(|| {}))
+    }
+
+    /// Builds a page whose provider authority is published only after a valid
+    /// frame proves this host generation can render.
+    #[must_use]
+    pub fn with_lifecycle(
+        deliveries: Deliveries,
+        sink: Rc<dyn Sink>,
+        faulted: Rc<dyn Fn(u32)>,
+        ready: Rc<dyn Fn()>,
+    ) -> (gtk::Box, Self) {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.set_hexpand(true);
         widget.set_vexpand(true);
@@ -97,6 +110,7 @@ impl Interface {
             deliveries,
             sink,
             faulted,
+            ready,
             clock: 0,
         };
         (widget, interface)
@@ -182,8 +196,10 @@ impl Interface {
                 .collect::<String>()
         };
         let actions = node
-            .handlers
-            .keys()
+            .is_enabled()
+            .then_some(node.handlers.keys())
+            .into_iter()
+            .flatten()
             .filter_map(|trigger| match trigger {
                 hl_gui::Trigger::Invoke => Some(SemanticActionKind::Invoke),
                 hl_gui::Trigger::Change => Some(SemanticActionKind::Change),
@@ -196,6 +212,9 @@ impl Interface {
             .collect();
         let mut children = Vec::new();
         for child in &node.children {
+            if tree.node(*child).is_some_and(|node| !node.is_visible()) {
+                continue;
+            }
             if depth + 1 >= hl_extension::port::SEMANTIC_DEPTH_LIMIT
                 || *count >= hl_extension::port::SEMANTIC_NODE_LIMIT
             {
@@ -211,7 +230,7 @@ impl Interface {
             value: node
                 .text(hl_gui::Prop::Value)
                 .map(|value| if secret { "[redacted]".to_owned() } else { clip(value) }),
-            disabled: !node.flag(hl_gui::Prop::Enabled, true),
+            disabled: !node.is_enabled(),
             destructive: node.flag(hl_gui::Prop::Destructive, false),
             actions,
             children,
@@ -249,9 +268,10 @@ impl Interface {
             SemanticActionKind::Expand => hl_gui::Trigger::Expand,
         };
         let id = tree
-            .handler(node_id, trigger)
+            .node(node_id)
+            .and_then(|node| node.action(trigger))
             .cloned()
-            .ok_or_else(|| HostError::Conflict("node does not declare that action".into()))?;
+            .ok_or_else(|| HostError::Conflict("node is hidden, disabled, or does not declare that action".into()))?;
         let event = match action.action {
             SemanticActionKind::Invoke => Event::Invoke { node: node_id, id },
             SemanticActionKind::Submit => Event::Submit { node: node_id, id },
@@ -361,6 +381,7 @@ impl Interface {
     fn draw(&mut self, frame: &Frame) {
         match self.tree.apply(frame, &mut self.surface) {
             Ok(()) => {
+                (self.ready)();
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }
@@ -372,6 +393,7 @@ impl Interface {
         let pane = self.panes.entry(slot.to_owned()).or_insert_with(PaneInterface::new);
         match pane.tree.apply(frame, &mut pane.surface) {
             Ok(()) => {
+                (self.ready)();
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }

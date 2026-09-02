@@ -13,6 +13,7 @@
 //! listener that has been closed owns no running thread.
 
 use std::io;
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
@@ -50,6 +51,7 @@ impl std::error::Error for Fault {}
 /// One extension's socket and the thread accepting on it.
 pub struct Listener {
     socket: std::path::PathBuf,
+    identity: SocketIdentity,
     stop: Arc<AtomicBool>,
     live: Live,
     ended: Option<mpsc::Receiver<()>>,
@@ -91,7 +93,8 @@ impl Listener {
         // umask.
         spec.prepare()?;
         listener.set_nonblocking(true)?;
-        Ok(Self::start(socket, listener, Arc::new(attend)))
+        let identity = SocketIdentity::read(&socket)?;
+        Ok(Self::start(socket, identity, listener, Arc::new(attend)))
     }
 
     /// The socket extensions connect to.
@@ -116,7 +119,7 @@ impl Listener {
         self.begin_shutdown().map_or(Ok(()), ListenerShutdown::wait)
     }
 
-    fn start<F>(socket: std::path::PathBuf, listener: UnixListener, attend: Arc<F>) -> Self
+    fn start<F>(socket: std::path::PathBuf, identity: SocketIdentity, listener: UnixListener, attend: Arc<F>) -> Self
     where
         F: Fn(UnixStream) + Send + Sync + 'static,
     {
@@ -130,6 +133,7 @@ impl Listener {
         });
         Self {
             socket,
+            identity,
             stop,
             live,
             ended: Some(ended),
@@ -147,6 +151,7 @@ impl Listener {
         self.wake();
         Some(ListenerShutdown {
             socket: self.socket.clone(),
+            identity: self.identity,
             ended: self.ended.take().expect("a live listener has its completion channel"),
             accepting,
         })
@@ -166,6 +171,7 @@ impl Listener {
 
 struct ListenerShutdown {
     socket: std::path::PathBuf,
+    identity: SocketIdentity,
     ended: mpsc::Receiver<()>,
     accepting: JoinHandle<()>,
 }
@@ -175,11 +181,36 @@ impl ListenerShutdown {
         let started = Instant::now();
         let late = self.ended.recv_timeout(Listener::DEADLINE).is_err() && started.elapsed() >= Listener::DEADLINE;
         let _ = self.accepting.join();
-        let _ = std::fs::remove_file(&self.socket);
+        self.identity.remove(&self.socket);
         if late {
             return Err(Fault::Deadline(Listener::DEADLINE));
         }
         Ok(())
+    }
+}
+
+/// The filesystem object this listener actually bound. A delayed reaper must
+/// never unlink a newer generation that has since claimed the same pathname.
+#[derive(Clone, Copy)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl SocketIdentity {
+    fn read(path: &std::path::Path) -> io::Result<Self> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    fn remove(self, path: &std::path::Path) {
+        let Ok(current) = Self::read(path) else { return };
+        if current.device == self.device && current.inode == self.inode {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -487,5 +518,44 @@ mod tests {
         release.send(()).expect("release conversation");
         assert!(until(|| !socket.exists()), "the reaper still completes cleanup");
         drop(peer);
+    }
+
+    #[test]
+    fn a_delayed_reaper_cannot_unlink_a_replacement_listener() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let (release, blocked) = mpsc::channel();
+        let blocked = Arc::new(Mutex::new(blocked));
+        let generation = Arc::new(());
+        let (entered, serving) = mpsc::channel();
+        let listener = Listener::open(&spec(&socket), {
+            let blocked = Arc::clone(&blocked);
+            let generation = Arc::clone(&generation);
+            move |_stream| {
+                let _held = &generation;
+                let _ = entered.send(());
+                let _ = blocked.lock().expect("release").recv();
+            }
+        })
+        .expect("first generation bound");
+        let old_peer = UnixStream::connect(&socket).expect("old generation connected");
+        serving
+            .recv_timeout(Duration::from_secs(1))
+            .expect("conversation entered");
+
+        drop(listener);
+        std::fs::remove_file(&socket).expect("retire old socket pathname");
+        let replacement = std::os::unix::net::UnixListener::bind(&socket).expect("replacement generation bound");
+
+        release.send(()).expect("release old conversation");
+        assert!(
+            until(|| Arc::strong_count(&generation) == 1),
+            "the old listener and its reaper have finished"
+        );
+        assert!(socket.exists(), "the replacement pathname survives old cleanup");
+        let replacement_peer = UnixStream::connect(&socket).expect("replacement remains reachable");
+        let _replacement_connection = replacement.accept().expect("replacement accepts its own peer");
+
+        drop((replacement_peer, old_peer, replacement));
     }
 }

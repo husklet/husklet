@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as exported from '../src/components.js';
 import { tags } from '../src/components.js';
-import { vocabulary } from '../src/index.js';
+import { LOG_VIEW_CHARACTER_LIMIT, vocabulary } from '../src/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tagSource = path.resolve(here, '../../../src/workspaces/hl-gui/src/node/tag.rs');
@@ -16,6 +16,12 @@ test('every tag in the catalogue is exported by name', () => {
     assert.equal(exported[tag], tag, `<${tag}> is missing from components.js`);
   }
   assert.ok(tags.length >= 120, 'the catalogue is the whole component library');
+});
+
+test('LogView publishes its bounded append-only retention contract', () => {
+  const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
+  assert.equal(LOG_VIEW_CHARACTER_LIMIT, 4096);
+  assert.match(catalogue.notes.logViewRetention, /append.*newest 4096 Unicode characters/i);
 });
 
 test('the catalogue still matches the Rust vocabulary', (t) => {

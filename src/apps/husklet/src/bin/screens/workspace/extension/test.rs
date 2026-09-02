@@ -2,7 +2,7 @@
 //! per-tick cap, nothing is dropped, a stopped extension keeps its last
 //! interface on screen, and interaction reaches the caller's sink.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -79,6 +79,30 @@ fn panel(title: &str) -> Element {
         .child(Element::button("Restart", EventId::new("restart")).key("restart"))
 }
 
+fn provider_authority_waits_for_a_valid_frame() {
+    let (post, deliveries) = channel();
+    let ready = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&ready);
+    let (_widget, mut page) = Interface::with_lifecycle(
+        deliveries,
+        Rc::new(|_| {}),
+        Rc::new(|_| {}),
+        Rc::new(move || observed.set(observed.get() + 1)),
+    );
+
+    let mut out_of_sequence = Reconciliation::new();
+    let _ = out_of_sequence.reconcile(&Element::heading("discarded initial frame"));
+    let rejected = out_of_sequence.reconcile(&Element::heading("update without root"));
+    post.send(Delivery::Frame(rejected)).expect("page listening");
+    page.tick();
+    assert_eq!(ready.get(), 0, "a rejected frame cannot publish provider authority");
+
+    let accepted = Reconciliation::new().reconcile(&Element::heading("ready"));
+    post.send(Delivery::Frame(accepted)).expect("page listening");
+    page.tick();
+    assert_eq!(ready.get(), 1, "the first valid frame publishes provider authority");
+}
+
 /// Every scenario runs inside one test, on the binary's toolkit thread.
 ///
 /// GTK belongs to whichever thread entered it and libtest gives every `#[test]`
@@ -89,6 +113,7 @@ fn panel(title: &str) -> Element {
 #[test]
 fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
+        provider_authority_waits_for_a_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
@@ -99,6 +124,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         retiring_a_pane_discards_its_queued_interaction();
         semantics_are_redacted_and_actions_reject_stale_revisions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
+        disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
@@ -224,6 +250,46 @@ fn semantic_actions_are_safe_by_default_and_preserve_authored_danger() {
     let actions = &tree.root.children[0].children;
     assert!(!actions[0].destructive, "ordinary actions remain safe by default");
     assert!(actions[1].destructive, "authored danger reaches semantic clients");
+}
+
+fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
+    let mut fixture = Fixture::new();
+    let described = Element::column()
+        .child(
+            Element::button("Unavailable", EventId::new("disabled"))
+                .prop(hl_gui::Prop::Enabled, hl_gui::PropValue::Flag(false)),
+        )
+        .child(
+            Element::button("Hidden", EventId::new("hidden"))
+                .prop(hl_gui::Prop::Visible, hl_gui::PropValue::Flag(false)),
+        );
+    fixture.describe(&described);
+    fixture.page.tick();
+
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let controls = &tree.root.children[0].children;
+    assert_eq!(controls.len(), 1, "hidden controls stay out of the visible semantic tree");
+    let disabled = &controls[0];
+    assert_eq!(disabled.label.as_deref(), Some("Unavailable"));
+    assert!(disabled.disabled, "disabled state remains understandable");
+    assert!(disabled.actions.is_empty(), "disabled controls advertise no executable actions");
+
+    let rejected = fixture.page.semantic_action(&hl_extension::PaneSemanticAction {
+        revision: tree.revision,
+        node: disabled.id,
+        action: hl_extension::SemanticActionKind::Invoke,
+        value: None,
+    });
+    assert!(matches!(rejected, Err(hl_extension::HostError::Conflict(_))));
+    assert!(fixture.recorded.borrow().is_empty(), "a rejected action never reaches the extension");
+
+    let button = fixture
+        .widgets()
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some("Unavailable"))
+        .expect("disabled control is still visibly explained");
+    assert!(!button.is_sensitive(), "GTK and semantic actionability agree");
 }
 
 fn a_structured_fault_reaches_lifecycle_on_the_toolkit_tick() {

@@ -170,6 +170,13 @@ fn notes() -> Vec<String> {
             "\"lengthEncoding\": {}",
             text("A Length is an externally tagged enum: {\"Step\": 2}, {\"Chars\": 20}, \"Fill\", \"Content\".")
         ),
+        format!(
+            "\"logViewRetention\": {}",
+            text(&format!(
+                "LogView Value patches append; renderers retain only the newest {} Unicode characters.",
+                hl_gui::LOG_VIEW_CHARACTER_LIMIT
+            ))
+        ),
     ]
 }
 
@@ -352,7 +359,9 @@ fn family(tag: Tag) -> &'static str {
         | Tag::TableCell
         | Tag::TableSortLabel
         | Tag::DataTable
+        | Tag::KeyValueTable
         | Tag::TreeTable
+        | Tag::EventStream
         | Tag::TablePagination => "tables",
         Tag::Tree | Tag::TreeItem => "trees",
         Tag::Tabs

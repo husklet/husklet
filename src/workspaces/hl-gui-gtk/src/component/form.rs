@@ -31,7 +31,11 @@ fn helper() -> gtk::Label {
 fn caption() -> gtk::Box {
     let widget = axis::row(8);
     widget.set_valign(gtk::Align::Center);
-    widget.append(&slot::caption_label());
+    let caption = slot::caption_label();
+    caption.set_wrap(true);
+    caption.set_xalign(0.0);
+    caption.set_hexpand(true);
+    widget.append(&caption);
     widget
 }
 

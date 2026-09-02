@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hl_client::model::{CreateContainer, DockerMount, HostConfig, InspectImage};
 use hl_extension::port::HostError;
@@ -36,6 +36,10 @@ pub const NAME_PREFIX: &str = "extension-";
 
 /// Label carrying the specification signature.
 pub const SIGNATURE_LABEL: &str = "husklet.extension.signature";
+pub const GENERATION_LABEL: &str = "husklet.extension.generation";
+
+/// Creation is a read/decide/write transaction over a reusable daemon name.
+static ENSURE: Mutex<()> = Mutex::new(());
 
 /// Label carrying the extension name, so a stray container can be traced back
 /// to the extension that owns it.
@@ -95,6 +99,7 @@ pub struct SidecarSpec {
     granted: Vec<String>,
     resources: Resources,
     socket: PathBuf,
+    generation: i64,
 }
 
 impl SidecarSpec {
@@ -117,7 +122,14 @@ impl SidecarSpec {
                 .collect(),
             resources: manifest.resources.clamp(),
             socket: socket.into(),
+            generation: 0,
         }
+    }
+
+    #[must_use]
+    pub const fn generation(mut self, generation: i64) -> Self {
+        self.generation = generation;
+        self
     }
 
     /// The container name this specification claims.
@@ -173,6 +185,7 @@ impl SidecarSpec {
             Self::field(&mut value, &limit.to_string());
         }
         Self::field(&mut value, &self.socket.to_string_lossy());
+        Self::field(&mut value, &self.generation.to_string());
         value
     }
 
@@ -203,6 +216,7 @@ impl SidecarSpec {
     fn labels(&self) -> BTreeMap<String, String> {
         BTreeMap::from([
             (SIGNATURE_LABEL.to_owned(), self.signature()),
+            (GENERATION_LABEL.to_owned(), self.generation.to_string()),
             (
                 NAME_LABEL.to_owned(),
                 self.name.trim_start_matches(NAME_PREFIX).to_owned(),
@@ -305,15 +319,17 @@ impl Sidecar {
     /// Returns a host failure from the container daemon, including the failure
     /// to remove the container that no longer matches.
     pub fn ensure(&self, spec: &SidecarSpec) -> Result<Outcome, HostError> {
-        if let Some(outcome) = self.reuse(spec)? {
-            return Ok(outcome);
-        }
-        let client = self.bridge.client();
-        self.bridge
-            .wait(client.containers().create(&spec.request(), Some(spec.container())))
-            .map_err(|error| failure(&error))?;
-        self.start(spec.container())?;
-        Ok(Outcome::Creation)
+        ensure_transaction(|| {
+            if let Some(outcome) = self.reuse(spec)? {
+                return Ok(outcome);
+            }
+            let client = self.bridge.client();
+            self.bridge
+                .wait(client.containers().create(&spec.request(), Some(spec.container())))
+                .map_err(|error| failure(&error))?;
+            self.start(spec.container())?;
+            Ok(Outcome::Creation)
+        })
     }
 
     /// Reuses the existing container when its signature still matches, and
@@ -328,7 +344,8 @@ impl Sidecar {
             Err(error) => return absence(&error),
         };
         if container.config.labels.get(SIGNATURE_LABEL) != Some(&spec.signature()) {
-            self.remove(spec.container())?;
+            let target = replacement_target(spec, &container.config.labels, &container.details.metadata.id)?;
+            self.remove(target)?;
             return Ok(None);
         }
         if container.state.activity.running {
@@ -350,6 +367,9 @@ impl Sidecar {
         };
         let actual = container.config.labels.get(SIGNATURE_LABEL).map(String::as_str);
         let target = removal_target(&spec.signature(), actual, &container.details.metadata.id)?;
+        if container.state.activity.running {
+            self.stop(target)?;
+        }
         self.remove(target)
     }
 
@@ -382,6 +402,24 @@ impl Sidecar {
         }
     }
 
+    /// Stops only the container generation created from `spec`.
+    ///
+    /// Shutdown can finish after an updated extension has recreated the stable
+    /// name. The signature selects ownership and the immutable inspected id is
+    /// the stop target, so delayed cleanup cannot stop that replacement.
+    pub fn stop_owned(&self, spec: &SidecarSpec) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        let container = match self.bridge.wait(client.containers().inspect(spec.container())) {
+            Ok(container) => container,
+            Err(error) => return absence(&error).map(|_| ()),
+        };
+        let actual = container.config.labels.get(SIGNATURE_LABEL).map(String::as_str);
+        let Some(target) = stop_target(&spec.signature(), actual, &container.details.metadata.id) else {
+            return Ok(());
+        };
+        self.stop(target)
+    }
+
     /// Removes an extension container, forcing it down if it is still running.
     ///
     /// Forcing is right here and wrong in the extension-facing control port:
@@ -400,13 +438,40 @@ impl Sidecar {
     }
 }
 
+fn ensure_transaction<T>(work: impl FnOnce() -> T) -> T {
+    let _transaction = ENSURE.lock().unwrap_or_else(PoisonError::into_inner);
+    work()
+}
+
+fn replacement_target<'a>(
+    spec: &SidecarSpec,
+    labels: &BTreeMap<String, String>,
+    id: &'a str,
+) -> Result<&'a str, HostError> {
+    let owner = spec.name.trim_start_matches(NAME_PREFIX);
+    let existing = labels
+        .get(GENERATION_LABEL)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    if !id.is_empty() && labels.get(NAME_LABEL).map(String::as_str) == Some(owner) && existing < spec.generation {
+        return Ok(id);
+    }
+    Err(HostError::Conflict(
+        "a newer or foreign extension generation occupies the sidecar name".to_owned(),
+    ))
+}
+
 fn removal_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Result<&'a str, HostError> {
-    if actual == Some(expected) {
+    if !id.is_empty() && actual == Some(expected) {
         return Ok(id);
     }
     Err(HostError::Conflict(
         "the extension container name is occupied by a container Husklet does not own".to_owned(),
     ))
+}
+
+fn stop_target<'a>(expected: &str, actual: Option<&str>, id: &'a str) -> Option<&'a str> {
+    (!id.is_empty() && actual == Some(expected)).then_some(id)
 }
 
 /// Turns a "no such container" into an absence and anything else into a failure.
@@ -419,7 +484,16 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{removal_target, Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::Duration;
+
+    use super::{
+        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec,
+        GENERATION_LABEL, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+    };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
@@ -467,6 +541,345 @@ mod tests {
         assert_eq!(removal_target("ours", Some("ours"), "immutable-id"), Ok("immutable-id"));
         assert!(removal_target("ours", Some("foreign"), "foreign-id").is_err());
         assert!(removal_target("ours", None, "unlabelled-id").is_err());
+        assert!(removal_target("ours", Some("ours"), "").is_err());
+    }
+
+    #[test]
+    fn delayed_stop_targets_only_the_inspected_owned_generation() {
+        assert_eq!(stop_target("ours", Some("ours"), "old-id"), Some("old-id"));
+        assert_eq!(stop_target("ours", Some("replacement"), "replacement-id"), None);
+        assert_eq!(stop_target("ours", None, "unrelated-id"), None);
+        assert_eq!(stop_target("ours", Some("ours"), ""), None);
+    }
+
+    #[test]
+    fn concurrent_ensure_transactions_never_overlap() {
+        let entered = Arc::new(Barrier::new(3));
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let entered = Arc::clone(&entered);
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            workers.push(std::thread::spawn(move || {
+                entered.wait();
+                ensure_transaction(|| {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(20));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                });
+            }));
+        }
+        entered.wait();
+        for worker in workers {
+            worker.join().expect("ensure worker");
+        }
+        assert_eq!(maximum.load(Ordering::SeqCst), 1, "two ensure transactions overlapped");
+    }
+
+    #[test]
+    fn stale_ensure_cannot_replace_a_newer_or_foreign_generation() {
+        let old = spec().generation(10);
+        let newer = spec().generation(20);
+        let mut newer_labels = newer.labels();
+        assert!(replacement_target(&old, &newer_labels, "new-id").is_err());
+        assert_eq!(replacement_target(&newer, &old.labels(), "old-id"), Ok("old-id"));
+        newer_labels.remove(NAME_LABEL);
+        assert!(replacement_target(&newer, &newer_labels, "foreign-id").is_err());
+        assert!(replacement_target(&newer, &old.labels(), "").is_err());
+        assert_eq!(newer.labels().get(GENERATION_LABEL).map(String::as_str), Some("20"));
+        assert_ne!(
+            old.signature(),
+            newer.signature(),
+            "generation belongs to the signed identity"
+        );
+    }
+
+    #[test]
+    fn simultaneous_ensures_coalesce_over_the_real_unix_transport() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        listener.set_nonblocking(true).expect("bounded mock listener");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for step in 0..4 {
+                let mut stream = accept_bounded(&listener);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .expect("read timeout");
+                requests.push(read_request(&mut stream).expect("Docker request"));
+                match step {
+                    0 => respond_close(&mut stream, "404 Not Found", br#"{"message":"absent"}"#),
+                    1 => respond_close(&mut stream, "201 Created", br#"{"Id":"winning-id","Warnings":[]}"#),
+                    2 => respond_close(&mut stream, "204 No Content", &[]),
+                    3 => {
+                        let labels = format!(
+                            r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#
+                        );
+                        respond_close(&mut stream, "200 OK", inspection("winning-id", &labels).as_bytes());
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            requests
+        });
+        let gate = Arc::new(Barrier::new(3));
+        let mut callers = Vec::new();
+        for _ in 0..2 {
+            let gate = Arc::clone(&gate);
+            let socket = socket.clone();
+            let wanted = wanted.clone();
+            callers.push(std::thread::spawn(move || {
+                let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+                gate.wait();
+                Sidecar::new(bridge).ensure(&wanted)
+            }));
+        }
+        gate.wait();
+        let mut outcomes = callers
+            .into_iter()
+            .map(|caller| caller.join().expect("caller").expect("ensure"))
+            .collect::<Vec<_>>();
+        outcomes.sort_by_key(|outcome| format!("{outcome:?}"));
+
+        assert_eq!(outcomes, vec![super::Outcome::Creation, super::Outcome::Reuse]);
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+            ],
+            "one create/start wins and the other caller only reuses it"
+        );
+    }
+
+    #[test]
+    fn owned_stop_uses_real_transport_and_never_addresses_a_replacement_name() {
+        for (actual, id, expected_requests) in [
+            (Some(spec().signature()), "immutable-old-id", 2),
+            (Some("replacement-signature".to_owned()), "replacement-id", 1),
+            (None, "unrelated-id", 1),
+            (Some(spec().signature()), "", 1),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let socket = temporary.path().join("docker.sock");
+            let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+            let signature = actual.clone();
+            let id = id.to_owned();
+            let served = std::thread::spawn(move || serve_stop(listener, signature.as_deref(), &id, expected_requests));
+            let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+            Sidecar::new(bridge).stop_owned(&spec()).expect("bounded stop");
+
+            let requests = served.join().expect("mock joined");
+            assert_eq!(requests[0], "GET /v1.43/containers/extension%2Dsample/json?size=false");
+            if expected_requests == 2 {
+                assert_eq!(requests[1], "POST /v1.43/containers/immutable%2Dold%2Did/stop?t=5");
+            } else {
+                assert_eq!(requests.len(), 1, "foreign/replacement generation received a stop");
+            }
+        }
+    }
+
+    #[test]
+    fn owned_stop_bounds_an_inspection_failure_without_sending_stop() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let served = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client connected");
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .expect("read timeout");
+            let request = read_request(&mut stream).expect("inspect request");
+            respond(
+                &mut stream,
+                "500 Internal Server Error",
+                br#"{"message":"inspection failed"}"#,
+            );
+            assert!(
+                read_request(&mut stream).is_none(),
+                "failure must not fall through to stop"
+            );
+            request
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        let failure = Sidecar::new(bridge)
+            .stop_owned(&spec())
+            .expect_err("inspection failure is reported");
+
+        assert!(failure.to_string().contains("inspection failed"));
+        assert_eq!(
+            served.join().expect("mock joined"),
+            "GET /v1.43/containers/extension%2Dsample/json?size=false"
+        );
+    }
+
+    #[test]
+    fn owned_removal_stops_then_removes_only_the_immutable_generation() {
+        for (actual, id, expected_requests) in [
+            (Some(spec().signature()), "immutable-old-id", 3),
+            (Some("replacement-signature".to_owned()), "replacement-id", 1),
+            (None, "unrelated-id", 1),
+            (Some(spec().signature()), "", 1),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let socket = temporary.path().join("docker.sock");
+            let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+            let signature = actual.clone();
+            let id = id.to_owned();
+            let served = std::thread::spawn(move || serve_stop(listener, signature.as_deref(), &id, expected_requests));
+            let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+            let result = Sidecar::new(bridge).remove_owned(&spec());
+
+            let requests = served.join().expect("mock joined");
+            assert_eq!(requests[0], "GET /v1.43/containers/extension%2Dsample/json?size=false");
+            if expected_requests == 3 {
+                result.expect("owned removal");
+                assert_eq!(requests[1], "POST /v1.43/containers/immutable%2Dold%2Did/stop?t=5");
+                assert_eq!(
+                    requests[2],
+                    "DELETE /v1.43/containers/immutable%2Dold%2Did?force=true&v=false"
+                );
+            } else {
+                assert!(result.is_err(), "foreign identity must be visible as a refusal");
+                assert_eq!(requests.len(), 1, "foreign/replacement generation was mutated");
+            }
+        }
+    }
+
+    #[test]
+    fn owned_removal_reports_stop_failure_and_never_falls_through_to_remove() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let signature = spec().signature();
+        let served = std::thread::spawn(move || serve_stop(listener, Some(&signature), "immutable-old-id", 4));
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        let failure = Sidecar::new(bridge)
+            .remove_owned(&spec())
+            .expect_err("stop failure is visible");
+
+        assert!(failure.to_string().contains("stop failed"));
+        let requests = served.join().expect("mock joined");
+        assert_eq!(requests.len(), 2, "a failed stop cannot fall through to remove");
+    }
+
+    fn serve_stop(listener: UnixListener, signature: Option<&str>, id: &str, expected: usize) -> Vec<String> {
+        let (mut stream, _) = listener.accept().expect("client connected");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("read timeout");
+        let mut requests = vec![read_request(&mut stream).expect("inspect request")];
+        let labels = signature.map_or_else(
+            || "{}".to_owned(),
+            |value| format!(r#"{{"{SIGNATURE_LABEL}":"{value}"}}"#),
+        );
+        let body = inspection(id, &labels);
+        respond(&mut stream, "200 OK", body.as_bytes());
+        if expected >= 2 {
+            requests.push(read_request(&mut stream).expect("stop request"));
+            if expected == 4 {
+                respond(
+                    &mut stream,
+                    "500 Internal Server Error",
+                    br#"{"message":"stop failed"}"#,
+                );
+                assert!(
+                    read_request(&mut stream).is_none(),
+                    "failed stop fell through to removal"
+                );
+                return requests;
+            }
+            respond(&mut stream, "204 No Content", &[]);
+            if expected == 3 {
+                requests.push(read_request(&mut stream).expect("remove request"));
+                respond(&mut stream, "204 No Content", &[]);
+            }
+        } else {
+            assert!(
+                read_request(&mut stream).is_none(),
+                "an unowned generation was addressed"
+            );
+        }
+        requests
+    }
+
+    fn read_request(stream: &mut std::os::unix::net::UnixStream) -> Option<String> {
+        let mut bytes = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !bytes.ends_with(b"\r\n\r\n") {
+            if stream.read(&mut byte).ok()? == 0 {
+                return None;
+            }
+            bytes.push(byte[0]);
+        }
+        let headers = String::from_utf8(bytes).ok()?;
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("content-length: ")
+                    .or_else(|| line.strip_prefix("Content-Length: "))
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = vec![0_u8; length];
+        stream.read_exact(&mut body).ok()?;
+        let line = headers.lines().next()?.to_owned();
+        line.strip_suffix(" HTTP/1.1").map(str::to_owned)
+    }
+
+    fn accept_bounded(listener: &UnixListener) -> std::os::unix::net::UnixStream {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("client did not connect inside the bound: {error}"),
+            }
+        }
+    }
+
+    fn inspection(id: &str, labels: &str) -> String {
+        format!(
+            r#"{{"Id":"{id}","Image":"sha256:image","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+        )
+    }
+
+    fn respond_close(stream: &mut std::os::unix::net::UnixStream, status: &str, body: &[u8]) {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .expect("response headers");
+        stream.write_all(body).expect("response body");
+        stream.flush().expect("response flush");
+    }
+
+    fn respond(stream: &mut std::os::unix::net::UnixStream, status: &str, body: &[u8]) {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .expect("response headers");
+        stream.write_all(body).expect("response body");
+        stream.flush().expect("response flush");
     }
 
     #[test]

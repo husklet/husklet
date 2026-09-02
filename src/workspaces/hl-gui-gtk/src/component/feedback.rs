@@ -81,7 +81,11 @@ fn title() -> gtk::Label {
 fn strip() -> gtk::Box {
     let widget = axis::row(8);
     widget.append(&slot::emblem_image());
-    widget.append(&slot::caption_label());
+    let caption = slot::caption_label();
+    caption.set_wrap(true);
+    caption.set_xalign(0.0);
+    caption.set_hexpand(true);
+    widget.append(&caption);
     widget
 }
 

@@ -8,6 +8,9 @@ import { ValidatedSettingsFormStory } from '../src/form.js';
 import { KeyboardAccessibilityStory } from '../src/keyboard-accessibility.js';
 import { LargeDataTableStory, LargeRecordSource } from '../src/large-table.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from '../src/navigation-dialogs.js';
+import { StreamingLogStory } from '../src/streaming-log.js';
+import { EventStreamStory, TimelineSource } from '../src/event-stream.js';
+import { KeyValueInspectorStory, KeyValueSource } from '../src/key-value-inspector.js';
 import { storyCoverage } from '../src/story-coverage.js';
 import { host } from './host.js';
 
@@ -44,6 +47,9 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['keyboard accessibility', h(KeyboardAccessibilityStory)],
     ['large records', h(LargeDataTableStory, { source: new LargeRecordSource() })],
     ['navigation', h(NavigationDialogsStory)],
+    ['streaming log', h(StreamingLogStory)],
+    ['event timeline', h(EventStreamStory, { source: new TimelineSource() })],
+    ['key/value inspector', h(KeyValueInspectorStory, { source: new KeyValueSource() })],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);

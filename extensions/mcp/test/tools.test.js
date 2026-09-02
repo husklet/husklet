@@ -11,11 +11,11 @@ function fake() {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
-    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), removeExecution: record('containers.removeExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {},
   }};
@@ -73,14 +73,25 @@ test('live MCP transport carries workspace configuration and host authority fail
   await server.close();
 });
 
-test('schemas are strict, controls map exactly, and no terminal shell shortcut exists', async () => {
+test('schemas are strict, controls map exactly, and terminal spawn accepts argv rather than shell text', async () => {
   const { api, calls } = fake();
   const listed = tools(api);
-  assert(!listed.some(({ name }) => /spawn|shell/.test(name)));
+  assert(!listed.some(({ name }) => /shell/.test(name)));
+  const spawn = listed.find(({ name }) => name === 'husklet_terminal_spawn');
+  assert(spawn);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: 'echo unsafe' }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: [] }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: [''] }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['x'.repeat(4097)] }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['x'.repeat(513), ...Array(63).fill('x'.repeat(512))] }).success, false);
+  await spawn.run({ slot: 'pane-1', command: ['printf', '%s\n', 'ready'] });
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   await start.run({ id: 'abc' });
-  assert.deepEqual(calls, [['containers.start', 'abc']]);
+  assert.deepEqual(calls, [
+    ['terminal.spawn', 'pane-1', ['printf', '%s\n', 'ready']],
+    ['containers.start', 'abc'],
+  ]);
 });
 
 test('container termination requires confirmation before host authority is called', async () => {
@@ -168,14 +179,22 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1' }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: '../host', read_only: false }] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', ports: [{ container: 80, host: 0, protocol: 'tcp' }] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
-  await create.run({ image: 'alpine:3.20', name: 'worker-1' });
+  const spec = create.inputSchema.parse({
+    image: 'alpine:3.20', name: 'worker-1', entrypoint: ['/usr/bin/env'], command: ['worker', '--once'],
+    environment: [['MODE', 'agent']], working_directory: '/work', user: '1000', labels: [['owner', 'agent']],
+    mounts: [{ volume: 'cache', target: '/cache', read_only: false }], network: 'private',
+    ports: [{ container: 8080, host: 18080, protocol: 'tcp' }], memory_mb: 512, cpus: 2, pids_limit: 128,
+  });
+  await create.run(spec);
   await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' });
   assert.deepEqual(calls, [
-    ['containers.create', 'alpine:3.20', 'worker-1'],
+    ['containers.create', spec],
     ['containers.exec', 'c1', { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
   ]);
 });
@@ -201,6 +220,28 @@ test('container execution inspection is a strict bounded read through the typed 
   assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
 });
 
+test('execution wait is a strict bounded read and preserves the timeout', async () => {
+  const { api, calls } = fake();
+  const wait = tools(api).find(({ name }) => name === 'husklet_execution_wait');
+  assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 0 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 30_001 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 10, extra: true }).success, false);
+  await wait.run({ id: 'e1', timeout_ms: 1250 });
+  assert.deepEqual(calls, [['containers.waitExecution', 'e1', { timeoutMs: 1250 }]]);
+});
+
+test('execution catalogue and output are finite strict reads', async () => {
+  const { api, calls } = fake();
+  const listed = tools(api);
+  const list = listed.find(({ name }) => name === 'husklet_execution_list');
+  const logs = listed.find(({ name }) => name === 'husklet_execution_logs');
+  assert.equal(logs.inputSchema.safeParse({ id: 'e1', stdout: false, stderr: false }).success, false);
+  assert.equal(logs.inputSchema.safeParse({ id: 'e1', extra: true }).success, false);
+  await list.run({});
+  await logs.run({ id: 'e1', stdout: true, stderr: false });
+  assert.deepEqual(calls, [['containers.executions'], ['containers.executionLogs', 'e1', { stdout: true, stderr: false }]]);
+});
+
 test('execution signaling targets an execution with a strict bounded signal', async () => {
   const { api, calls } = fake();
   const signal = tools(api).find(({ name }) => name === 'husklet_execution_signal');
@@ -209,6 +250,15 @@ test('execution signaling targets an execution with a strict bounded signal', as
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
   await signal.run({ id: 'e1', signal: 'SIGTERM' });
   assert.deepEqual(calls, [['containers.signalExecution', 'e1', 'SIGTERM']]);
+});
+
+test('execution removal requires literal confirmation', async () => {
+  const { api, calls } = fake();
+  const remove = tools(api).find(({ name }) => name === 'husklet_execution_remove');
+  assert.equal(remove.inputSchema.safeParse({ id: 'e1' }).success, false);
+  assert.equal(remove.inputSchema.safeParse({ id: 'e1', confirm: false }).success, false);
+  await remove.run({ id: 'e1', confirm: true });
+  assert.deepEqual(calls, [['containers.removeExecution', 'e1']]);
 });
 
 test('terminal layout tools use the host wire vocabulary and bounded destructive controls', async () => {
@@ -354,14 +404,16 @@ test('pane tools are capability-shaped and only appear for the real typed method
   assert(!tools(api).some(({ name }) => name.startsWith('husklet_pane_')));
   api.terminal.semantics = async (slot) => { calls.push(['terminal.semantics', slot]); return {
     slot, revision: 7, truncated: false,
-    root: { id: 0, role: 'column', label: 'A & <B>', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [] },
+    root: { id: 0, role: 'column', label: 'A & <B>', value: null, disabled: false, destructive: false, actions: [], children: [
+      { id: 3, role: 'button', label: 'Run', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [] },
+    ] },
   }; };
   api.terminal.act = async (slot, action) => { calls.push(['terminal.act', slot, action]); };
   const listed = tools(api);
   const snapshot = listed.find(({ name }) => name === 'husklet_pane_snapshot');
   const action = listed.find(({ name }) => name === 'husklet_pane_action');
   const shown = await snapshot.run({ slot: 'pane-1' });
-  assert.equal(shown.content[0].text, '<pane slot="pane-1" revision="7" truncated="false"><node id="0" role="column" disabled="false" destructive="false" actions="invoke"><label>A &amp; &lt;B&gt;</label></node></pane>');
+  assert.equal(shown.content[0].text, '<pane slot="pane-1" revision="7" truncated="false"><node id="0" role="column" disabled="false" destructive="false" actions=""><label>A &amp; &lt;B&gt;</label><node id="3" role="button" disabled="false" destructive="false" actions="invoke"><label>Run</label></node></node></pane>');
   await action.run({ slot: 'pane-1', revision: 7, node: 3, action: 'invoke' });
   assert.deepEqual(calls, [
     ['terminal.semantics', 'pane-1'],
@@ -369,6 +421,23 @@ test('pane tools are capability-shaped and only appear for the real typed method
     ['terminal.act', 'pane-1', { revision: 7, node: 3, action: 'invoke' }],
   ]);
   assert.equal(action.inputSchema.safeParse({ slot: 'pane-1', revision: 7, node: 3, action: 'run' }).success, false);
+});
+
+test('pane actions reject stale, absent, disabled and unadvertised controls before dispatch', async () => {
+  const { api, calls } = fake();
+  api.terminal.semantics = async () => ({ slot: 'pane-1', revision: 12, truncated: false, root: {
+    id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [
+      { id: 4, role: 'button', label: 'Pending', value: null, disabled: true, destructive: false, actions: [], children: [] },
+      { id: 5, role: 'entry', label: 'Name', value: '', disabled: false, destructive: false, actions: ['change'], children: [] },
+    ],
+  }});
+  api.terminal.act = async (...args) => calls.push(['terminal.act', ...args]);
+  const action = tools(api).find(({ name }) => name === 'husklet_pane_action');
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 11, node: 5, action: 'change' }), /stale semantic revision/);
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 99, action: 'invoke' }), /is absent/);
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 4, action: 'invoke' }), /is disabled/);
+  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 5, action: 'invoke' }), /does not advertise invoke/);
+  assert(!calls.some(([name]) => name === 'terminal.act'));
 });
 
 test('destructive semantic actions require an explicit MCP confirmation', async () => {
@@ -407,6 +476,35 @@ test('pane wait returns only bounded invalidation metadata and releases its subs
   assert.equal(disposed, 1);
   assert(!answer.content[0].text.includes('lines'));
   assert(!answer.content[0].text.includes('value'));
+});
+
+test('execution change wait filters immutable identity and returns subscription credit', async () => {
+  const { api } = fake();
+  let listener; let disposed = 0;
+  api.watchExecutions = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_execution_change_wait');
+  const pending = wait.run({ id: 'e2', running: false, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener({ executions: [{ id: 'e1', running: false }], truncated: false });
+  listener({ executions: [{ id: 'e2', running: true }], truncated: false });
+  listener({ executions: [{ id: 'e2', running: false, exit_code: 9 }], truncated: true });
+  assert.deepEqual(JSON.parse((await pending).content[0].text), {
+    changed: true, execution: { id: 'e2', running: false, exit_code: 9 }, truncated: true,
+  });
+  assert.equal(disposed, 1);
+});
+
+test('container change wait filters identity/state and disposes after match', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchContainers = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_container_change_wait');
+  assert.equal(wait.inputSchema.safeParse({ id: 'c1', state: 'running', absent: true }).success, false);
+  const pending = wait.run({ id: 'c2', state: 'exited', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener([{ id: 'c1', state: 'exited' }, { id: 'c2', state: 'running' }]);
+  listener([{ id: 'c2', state: 'exited', name: 'worker' }]);
+  assert.deepEqual(JSON.parse((await pending).content[0].text), { changed: true, container: { id: 'c2', state: 'exited', name: 'worker' } });
+  assert.equal(disposed, 1);
 });
 
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
@@ -461,9 +559,10 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: argument.slot, revision: 11, truncated: false,
-        root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: [], children: [] },
+        root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: ['invoke'], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
+      if (name === 'terminal_spawn') return { reply: 'done' };
       if (name === 'terminal_write_pane') return { reply: 'done' };
       if (name === 'event_subscribe') {
         queueMicrotask(() => { for (const listener of events) listener({ snapshot: 'pane_changes', of: {
@@ -483,6 +582,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_extension_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_execution_wait'));
   assert(listed.tools.some(({ name }) => name === 'husklet_execution_signal'));
   assert(listed.tools.some(({ name }) => name === 'husklet_image_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_volume_list'));
@@ -492,6 +592,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_action'));
   assert(listed.tools.some(({ name }) => name === 'husklet_pane_wait'));
   assert(listed.tools.some(({ name }) => name === 'husklet_terminal_write_bytes'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_terminal_spawn'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(answer.content[0].text, '{"name":"demo"}');
   const extensions = await client.callTool({ name: 'husklet_extension_list', arguments: {} });
@@ -506,6 +607,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(JSON.parse(execution.content[0].text), {
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
+  await client.callTool({ name: 'husklet_execution_wait', arguments: { id: 'exec-live', timeout_ms: 250 } });
   await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
   const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
   assert.equal(refusedStop.isError, true);
@@ -519,6 +621,9 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(JSON.parse(volumes.content[0].text), [{ name: 'cache', driver: 'local' }]);
   const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
   assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
+  await client.callTool({ name: 'husklet_terminal_spawn', arguments: {
+    slot: 'pane-live', command: ['printf', '%s\n', 'ready'],
+  } });
   await client.callTool({ name: 'husklet_terminal_write_bytes', arguments: {
     slot: 'pane-live', input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
   } });
@@ -537,12 +642,14 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_acquisition_status', { job: 'job-live' }],
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
+    ['execution_wait', { id: 'exec-live', timeout_ms: 250 }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
     ['container_stop', { id: 'container-1' }],
     ['container_kill', { id: 'container-1', signal: 'SIGKILL' }],
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],
+    ['terminal_spawn', { slot: 'pane-live', command: ['printf', '%s\n', 'ready'] }],
     ['terminal_write_pane', { slot: 'pane-live', contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],

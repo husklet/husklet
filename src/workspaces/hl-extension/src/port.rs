@@ -63,6 +63,39 @@ pub struct ContainerOutput {
     pub truncated: bool,
 }
 
+/// Bounded container creation authority with no host bind-mount path.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerCreateSpec {
+    pub image: String,
+    pub name: String,
+    pub entrypoint: Option<Vec<String>>,
+    pub command: Vec<String>,
+    pub environment: Vec<(String, String)>,
+    pub working_directory: Option<String>,
+    pub user: Option<String>,
+    pub labels: Vec<(String, String)>,
+    pub mounts: Vec<ContainerVolumeMount>,
+    pub network: Option<String>,
+    pub ports: Vec<ContainerPort>,
+    pub memory_mb: Option<u32>,
+    pub cpus: Option<u16>,
+    pub pids_limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerVolumeMount {
+    pub volume: String,
+    pub target: String,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerPort {
+    pub container: u16,
+    pub host: Option<u16>,
+    pub protocol: String,
+}
+
 /// State of one additional process created through the container exec API.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExecutionSummary {
@@ -73,6 +106,12 @@ pub struct ExecutionSummary {
     pub pid: i64,
     pub command: Vec<String>,
     pub user: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExecutionList {
+    pub executions: Vec<ExecutionSummary>,
+    pub truncated: bool,
 }
 
 /// An image as an extension sees it.
@@ -220,6 +259,12 @@ pub struct PaneSemanticAction {
 
 /// The maximum bytes one terminal-input call may inject.
 pub const PANE_INPUT_BYTES: usize = 64 * 1024;
+/// Maximum argv entries accepted when replacing one terminal pane process.
+pub const TERMINAL_COMMAND_ARGUMENTS: usize = 64;
+/// Maximum UTF-8 bytes in one terminal command argument.
+pub const TERMINAL_COMMAND_ARGUMENT_BYTES: usize = 4096;
+/// Maximum aggregate UTF-8 bytes in a terminal command argv.
+pub const TERMINAL_COMMAND_BYTES: usize = 32 * 1024;
 
 /// The maximum rows or columns one explicit PTY grid may request.
 pub const PANE_GRID_EDGE: u16 = 1000;
@@ -494,6 +539,19 @@ pub trait ContainerInventory {
             "execution inspection is unsupported by this host".into(),
         ))
     }
+
+    fn executions(&self) -> Result<ExecutionList, HostError> {
+        Err(HostError::Unsupported("execution listing is unsupported by this host".into()))
+    }
+
+    fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
+        Err(HostError::Unsupported("execution logs are unsupported by this host".into()))
+    }
+
+    /// Waits at most `timeout_ms` for an execution to stop, then returns its final state.
+    fn execution_wait(&self, _id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
+        Err(HostError::Unsupported("execution waiting is unsupported by this host".into()))
+    }
 }
 
 /// Changing container state. Granting this is granting code execution inside
@@ -502,6 +560,18 @@ pub trait ContainerControl {
     /// # Errors
     /// Returns a host failure.
     fn create(&self, image: &str, name: &str) -> Result<String, HostError>;
+
+    fn create_spec(&self, spec: &ContainerCreateSpec) -> Result<String, HostError> {
+        if spec.entrypoint.is_none() && spec.command.is_empty() && spec.environment.is_empty()
+            && spec.working_directory.is_none() && spec.user.is_none() && spec.labels.is_empty()
+            && spec.mounts.is_empty() && spec.network.is_none() && spec.ports.is_empty()
+            && spec.memory_mb.is_none() && spec.cpus.is_none() && spec.pids_limit.is_none()
+        {
+            self.create(&spec.image, &spec.name)
+        } else {
+            Err(HostError::Unsupported("configured container creation is unavailable".into()))
+        }
+    }
 
     /// # Errors
     /// Returns a host failure.
@@ -549,6 +619,11 @@ pub trait ContainerControl {
         Err(HostError::Unsupported(
             "execution signaling is unsupported by this host".into(),
         ))
+    }
+
+    /// Removes one stopped execution record and its captured output.
+    fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("execution removal is unsupported by this host".into()))
     }
 
     /// Starts an additional process detached from the extension connection and
@@ -724,6 +799,14 @@ pub trait WorkspaceInventory {
 
 /// Creating, configuring, and controlling workspace execution domains.
 pub trait WorkspaceControl {
+    /// Current lifecycle sequence for this host process.
+    fn lifecycle_revision(&self) -> u64 {
+        0
+    }
+    /// Successful mutations after `revision`, oldest first and bounded by the host.
+    fn lifecycle_since(&self, _revision: u64) -> Result<Vec<crate::WorkspaceLifecycleChange>, HostError> {
+        Ok(Vec::new())
+    }
     fn inspect(&self, _name: &str) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }

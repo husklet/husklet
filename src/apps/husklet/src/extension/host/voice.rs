@@ -46,12 +46,23 @@ pub(super) fn speak_provider(voice: &Voice, selection: &hl_extension::PaneSelect
 /// Encodes one interaction. `None` when it cannot be encoded, which is not
 /// worth ending a conversation over.
 fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
+    if matches!(
+        event,
+        hl_gui::Event::Invoke { .. }
+            | hl_gui::Event::Submit { .. }
+            | hl_gui::Event::Change { .. }
+            | hl_gui::Event::Select { .. }
+            | hl_gui::Event::Focus { .. }
+    ) {
+        return hl_extension::codec::interaction(event, slot);
+    }
     let mut value = match event {
         hl_gui::Event::Rows(request) => serde_json::to_value(request).ok()?,
-        hl_gui::Event::Invoke { node, id } => envelope("invoke", *node, id),
-        hl_gui::Event::Submit { node, id } => envelope("submit", *node, id),
-        hl_gui::Event::Change { node, id, value } => change(*node, id, value),
-        hl_gui::Event::Select { node, id, rows } => selection(*node, id, rows),
+        hl_gui::Event::Invoke { .. }
+        | hl_gui::Event::Submit { .. }
+        | hl_gui::Event::Change { .. }
+        | hl_gui::Event::Select { .. }
+        | hl_gui::Event::Focus { .. } => unreachable!("shared interaction encoder handled this event"),
         hl_gui::Event::Scroll { node, id, dx, dy } => {
             details("scroll", *node, id, serde_json::json!({ "dx": dx, "dy": dy }))
         }
@@ -72,9 +83,6 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
             id,
             serde_json::json!({ "key": key, "keycode": keycode, "modifiers": modifiers, "pressed": pressed }),
         ),
-        hl_gui::Event::Focus { node, id, focused } => {
-            details("focus", *node, id, serde_json::json!({ "focused": focused }))
-        }
         hl_gui::Event::Pointer {
             node,
             id,
@@ -124,27 +132,6 @@ fn details(
     carried
 }
 
-/// A changed value, added to the envelope it belongs in.
-fn change(node: hl_gui::NodeId, id: &hl_gui::EventId, value: &hl_gui::PropValue) -> serde_json::Value {
-    let mut carried = envelope("change", node, id);
-    insert(&mut carried, "value", serde_json::to_value(value).ok());
-    carried
-}
-
-/// A row selection, added to the envelope it belongs in.
-fn selection(node: hl_gui::NodeId, id: &hl_gui::EventId, rows: &[u64]) -> serde_json::Value {
-    let mut carried = envelope("select", node, id);
-    insert(&mut carried, "rows", serde_json::to_value(rows).ok());
-    carried
-}
-
-/// Adds one field to an envelope, leaving it alone when there is nothing to add.
-fn insert(carried: &mut serde_json::Value, field: &str, value: Option<serde_json::Value>) {
-    let (Some(object), Some(value)) = (carried.as_object_mut(), value) else {
-        return;
-    };
-    object.insert(field.to_owned(), value);
-}
 
 /// The host's writing end of the live conversation.
 ///

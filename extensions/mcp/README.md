@@ -36,8 +36,11 @@ Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,
 and actions; other tools use JSON. Container execution state is available as a
 read-only inspection tool under the host's `ContainerRead` grant. Container exec
-accepts only a bounded argv vector under `ContainerControl`; terminal process
-spawning remains absent, so this package provides no unrestricted shell shortcut.
+accepts only a bounded argv vector under `ContainerControl`. The
+`husklet_terminal_spawn` tool replaces one discovered terminal pane's process
+under `TerminalControl` with an exact 1..=64 element argv vector (4096 bytes per
+argument, 32768 bytes total). It never parses shell command text and does not
+grant access to a pane the socket authority cannot already control.
 Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
@@ -45,6 +48,11 @@ methods.
 Execution inspection and execution signaling use distinct typed calls: signaling
 targets one existing execution ID under `ContainerControl` and accepts only a
 1..=32 byte signal name. It does not signal the owning container or parse a shell.
+
+Container creation accepts bounded entrypoint/argv, environment, working directory,
+user, labels, named-volume mounts, one workspace-local network, TCP/UDP exposure,
+and memory/CPU/PID limits. Host bind paths are deliberately absent. Published ports
+bind `127.0.0.1` only, and creation never pulls an image or starts the container.
 
 Workspace creation and update carry the complete typed configuration: identity,
 architecture, storage, resources, environment, mounts, Docker access, terminal,
@@ -170,6 +178,9 @@ not redirected by a workspace name passed to lifecycle tools. The helper first
 calls `husklet_workspace_info`, requires the caller's `hostingWorkspace` to
 match, and requires the separately managed workspace to have another name. This
 prevents an administrator from assuming that creating `target` makes subsequent
-file paths resolve inside `target`. The protocol currently has no workspace
-lifecycle event topic, so the example observes the existing credit-controlled
-pane-change topic and does not claim create/start/stop notifications exist.
+file paths resolve inside `target`. The helper arms `husklet_workspace_wait`
+before create, start, stop, and removal and filters by the managed identity and
+action. Lifecycle notices carry a monotonic host-process revision and visible
+coalescing count under `WorkspaceRead`; an unrelated workspace notice cannot
+satisfy the filtered wait. The independent pane wait still demonstrates that
+filesystem authority remains attached to the socket workspace.

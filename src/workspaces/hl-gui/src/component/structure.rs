@@ -149,6 +149,18 @@ impl Element {
     pub fn data_table() -> Self {
         Self::new(Tag::DataTable)
     }
+
+    /// Property names and values over a windowed data source.
+    #[must_use]
+    pub fn key_value_table() -> Self {
+        Self::new(Tag::KeyValueTable)
+    }
+
+    /// A chronological event history over a windowed data source.
+    #[must_use]
+    pub fn event_stream() -> Self {
+        Self::new(Tag::EventStream)
+    }
 }
 
 /// Navigation, including the parts of a stepper and an accordion.

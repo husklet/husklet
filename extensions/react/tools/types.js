@@ -152,6 +152,8 @@ export const vocabulary: { props: string[]; handlers: string[] };
 
 export const SOCKET: string;
 export const PROTOCOL: number;
+/** Maximum Unicode characters retained by a LogView; Value patches append. */
+export const LOG_VIEW_CHARACTER_LIMIT: 4096;
 
 export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-events';
 export type Division = 'beside' | 'below';

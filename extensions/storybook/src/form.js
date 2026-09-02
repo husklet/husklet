@@ -45,7 +45,7 @@ export function ValidatedSettingsFormStory() {
   return h(
     Column,
     { gap: 3, width: { maximum: { chars: 58 } } },
-    h(Heading, { key: 'title', label: 'Workspace defaults', scale: 'title' }),
+    h(Heading, { key: 'title', label: 'Workspace defaults', scale: 'title', wrap: true }),
     h(Text, {
       key: 'intro',
       label: 'A controlled form that validates on submit and keeps feedback beside the affected field.',

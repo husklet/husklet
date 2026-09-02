@@ -45,3 +45,10 @@ pub use node::{
 pub use render::{Event, Events, PointerPhase, Renderer};
 pub use size::ByteSize;
 pub use style::{Align, Bounds, Density, Edges, Length, Rgb, Scale, Theme, Token, Tone, Variant};
+
+/// Maximum Unicode characters a [`Tag::LogView`] retains.
+///
+/// A log's `Value` patches are append-only deltas. Renderers discard the oldest
+/// characters beyond this bound so a long-running operational surface cannot
+/// grow host memory without limit.
+pub const LOG_VIEW_CHARACTER_LIMIT: i32 = 4_096;

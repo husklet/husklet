@@ -17,8 +17,40 @@ const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.
 const imageReference = z.string().min(1).max(512).refine((value) => value.trim() === value && !/\s/.test(value), 'image reference must not contain whitespace');
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
+  if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
   const bytes = argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
+});
+const optionalCommand = z.array(z.string().max(4096)).max(64);
+const containerCreate = z.object({
+  image: imageReference,
+  name: containerName,
+  entrypoint: command.nullable().default(null),
+  command: optionalCommand.default([]),
+  environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(8192)])).max(256).default([]),
+  working_directory: z.string().min(1).max(4096).startsWith('/').nullable().default(null),
+  user: z.string().min(1).max(256).nullable().default(null),
+  labels: z.array(z.tuple([z.string().min(1).max(256), z.string().max(4096)])).max(128).default([]),
+  mounts: z.array(z.object({ volume: containerName, target: z.string().min(1).max(4096).startsWith('/'), read_only: z.boolean().default(false) }).strict()).max(64).default([]),
+  network: containerName.nullable().default(null),
+  ports: z.array(z.object({ container: z.number().int().min(1).max(65535), host: z.number().int().min(1).max(65535).nullable().default(null), protocol: z.enum(['tcp', 'udp']) }).strict()).max(64).default([]),
+  memory_mb: z.number().int().min(1).max(1_048_576).nullable().default(null),
+  cpus: z.number().int().min(1).max(256).nullable().default(null),
+  pids_limit: z.number().int().min(1).max(1_000_000).nullable().default(null),
+}).strict().superRefine((spec, context) => {
+  const issue = (message) => context.addIssue({ code: z.ZodIssueCode.custom, message });
+  const argv = [...(spec.entrypoint ?? []), ...spec.command];
+  if (spec.command.length > 0 && spec.command[0].length === 0) issue('command executable must not be empty');
+  if (argv.some((argument) => argument.includes('\0'))
+    || argv.reduce((total, argument) => total + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) issue('entrypoint and command must be NUL-free and at most 32768 bytes');
+  const normalized = (value) => !value.split('/').some((part) => part === '.' || part === '..');
+  if (spec.working_directory != null && !normalized(spec.working_directory)) issue('working_directory must be normalized');
+  if (spec.mounts.some(({ target }) => !normalized(target))) issue('mount targets must be normalized');
+  if (spec.user?.includes('\0') || spec.environment.some(([, value]) => value.includes('\0'))
+    || spec.labels.some(([name, value]) => name.includes('\0') || value.includes('\0'))) issue('text fields cannot contain NUL');
+  const unique = (pairs) => new Set(pairs.map(([name]) => name)).size === pairs.length;
+  if (!unique(spec.environment) || !unique(spec.labels)) issue('environment and label names must be unique');
+  if (new Set(spec.ports.map(({ container, protocol }) => `${container}/${protocol}`)).size !== spec.ports.length) issue('container ports must be unique');
 });
 const nullable = (schema) => schema.nullable();
 const absolutePath = z.string().min(1).max(4096).startsWith('/');
@@ -92,9 +124,13 @@ export function tools(api) {
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
     define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
+    define('husklet_execution_list', 'List the bounded durable execution catalogue for this workspace.', empty, () => api.containers.executions()),
+    define('husklet_execution_logs', 'Replay bounded captured output for one execution.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr })),
+    define('husklet_execution_wait', 'Wait up to 30 seconds for one execution to stop and return its final state.', z.object({ id, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ id: value, timeout_ms }) => api.containers.waitExecution(value, { timeoutMs: timeout_ms })),
     define('husklet_execution_signal', 'Signal one execution without signaling its owning container.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
+    define('husklet_execution_remove', 'Remove one stopped execution record and its captured output after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.removeExecution(value); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
-    define('husklet_container_create', 'Create a container from an image already present in this workspace; this never pulls an image.', z.object({ image: imageReference, name: containerName }).strict(), ({ image, name }) => api.containers.create(image, name)),
+    define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, (spec) => api.containers.create(spec)),
     define('husklet_container_exec', 'Execute a bounded argv vector in a running container without shell parsing.', z.object({ id, command, user: z.string().min(1).max(256).optional(), working_directory: z.string().min(1).max(4096).startsWith('/').optional() }).strict(), ({ id: value, command: argv, user, working_directory: workingDirectory }) => api.containers.exec(value, { command: argv, user, workingDirectory })),
     ...['start', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
     define('husklet_container_stop', 'Stop one container after explicit confirmation.', z.object({ id, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),
@@ -122,6 +158,7 @@ export function tools(api) {
     define('husklet_terminal_write_bytes', 'Write up to 65536 arbitrary bytes from canonical padded base64, including control and non-UTF8 bytes.', terminalBytes, async ({ slot: value, input_base64: encoded }) => { await api.terminal.writeInput(value, decodeTerminalBytes(encoded)); return { done: true }; }),
     define('husklet_terminal_open', 'Open a terminal tab.', z.object({ title: z.string().max(256).optional() }).strict(), ({ title }) => api.terminal.openTab(title ?? null)),
     define('husklet_terminal_split', 'Split a pane beside or below the selected pane.', z.object({ slot: id, division: z.enum(['beside', 'below']) }).strict(), ({ slot: value, division }) => api.terminal.split(value, division)),
+    define('husklet_terminal_spawn', 'Replace one terminal pane process with a bounded exact argv vector; no shell parsing.', z.object({ slot: id, command }).strict(), async ({ slot: value, command: argv }) => { await api.terminal.spawn(value, argv); return { done: true }; }),
     define('husklet_terminal_focus', 'Focus one pane.', slot, async ({ slot: value }) => { await api.terminal.focus(value); return { done: true }; }),
     define('husklet_terminal_resize', 'Request a bounded terminal grid size.', z.object({ slot: id, columns: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }).strict(), async ({ slot: value, columns, rows }) => { await api.terminal.resizeGrid(value, columns, rows); return { done: true }; }),
     define('husklet_terminal_ratio', 'Set the pane share of its split.', z.object({ slot: id, ratio: z.number().min(0.05).max(0.95) }).strict(), async ({ slot: value, ratio }) => { await api.terminal.ratio(value, ratio); return { done: true }; }),
@@ -158,6 +195,45 @@ export function tools(api) {
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
+  if (typeof api.watchExecutions === 'function') definitions.push(define(
+    'husklet_execution_change_wait',
+    'Wait for a bounded execution catalogue change matching one immutable exec identity.',
+    z.object({ id, running: z.boolean().optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ id: wanted, running, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      api.watchExecutions((catalogue) => {
+        const execution = catalogue.executions.find(({ id: candidate }) => candidate === wanted);
+        if (execution && (running == null || execution.running === running)) {
+          finish({ changed: true, execution, truncated: catalogue.truncated });
+        }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
+  if (typeof api.watchContainers === 'function') definitions.push(define(
+    'husklet_container_change_wait',
+    'Wait for a bounded container snapshot matching one immutable container identity.',
+    z.object({ id, state: z.string().min(1).max(64).optional(), absent: z.boolean().default(false), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+      .refine(({ state, absent }) => !absent || state == null, 'absent and state are mutually exclusive'),
+    ({ id: wanted, state, absent, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      api.watchContainers((containers) => {
+        const container = containers.find(({ id: candidate }) => candidate === wanted);
+        if ((absent && !container) || (!absent && container && (state == null || container.state === state))) {
+          finish({ changed: true, container: container ?? null });
+        }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
   if (typeof api.watchExtensions === 'function' && typeof api.watchExtensionAcquisitions === 'function') definitions.push(define(
     'husklet_extension_wait',
     'Wait for a bounded installed-extension snapshot or acquisition revision invalidation without polling.',
@@ -173,6 +249,28 @@ export function tools(api) {
       const watch = kind === 'inventory' ? api.watchExtensions : api.watchExtensionAcquisitions;
       watch((change) => { if (kind === 'inventory' || job == null || change.job === job) finish({ changed: true, change }); })
         .then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
+    }),
+  ));
+  if (typeof api.watchWorkspaceLifecycle === 'function') definitions.push(define(
+    'husklet_workspace_wait',
+    'Wait for one bounded workspace lifecycle invalidation under WorkspaceRead authority.',
+    z.object({
+      workspace: id.optional(),
+      action: z.enum(['create', 'update', 'remove', 'start', 'stop', 'restart']).optional(),
+      timeout_ms: z.number().int().min(1).max(30_000).default(30_000),
+    }).strict(),
+    ({ workspace: wanted, action, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+      let stop; let settled = false;
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const timer = setTimeout(() => finish({ changed: false }), timeout);
+      api.watchWorkspaceLifecycle((change) => {
+        if ((wanted == null || change.workspace === wanted) && (action == null || change.action === action)) {
+          finish({ changed: true, change });
+        }
+      }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
   return definitions.concat(paneTools(api.terminal));

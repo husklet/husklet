@@ -188,7 +188,8 @@ impl Supply for Workspace {
         let manifest = described(&record);
         let bridge = self.bridge()?;
         let image = Self::image(&bridge, &record)?;
-        let spec = SidecarSpec::new(&manifest, &record.granted, &image, self.socket(&record.name));
+        let spec = SidecarSpec::new(&manifest, &record.granted, &image, self.socket(&record.name))
+            .generation(record.installed_at);
         Ok(Some(Plan {
             record,
             manifest,
@@ -238,7 +239,7 @@ impl Supply for Workspace {
         let Ok(bridge) = self.bridge() else {
             return;
         };
-        if let Err(error) = Sidecar::new(bridge).stop(plan.spec.container()) {
+        if let Err(error) = Sidecar::new(bridge).stop_owned(&plan.spec) {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "extension {}: {error}", plan.record.name);
         }
     }
@@ -384,6 +385,14 @@ impl Store {
 }
 
 impl WorkspaceControl for Store {
+    fn lifecycle_revision(&self) -> u64 {
+        crate::workspace_lifecycle::revision()
+    }
+
+    fn lifecycle_since(&self, revision: u64) -> Result<Vec<hl_extension::WorkspaceLifecycleChange>, HostError> {
+        Ok(crate::workspace_lifecycle::since(revision))
+    }
+
     fn inspect(&self, name: &str) -> Result<WorkspaceConfiguration, HostError> {
         self.find(name).map(|workspace| Self::configuration(&workspace))
     }
@@ -448,17 +457,23 @@ impl WorkspaceControl for Store {
         let workspace = self.mutable(name)?;
         crate::runtime::domain::Domain::new(&workspace)
             .close(crate::runtime::domain::Close::Kill)
-            .map_err(|error| HostError::Failed(error.to_string()))
+            .map_err(|error| HostError::Failed(error.to_string()))?;
+        Ok(())
     }
 
     fn restart(&self, name: &str) -> Result<(), HostError> {
-        self.stop(name)?;
-        self.start(name)
+        let workspace = self.mutable(name)?;
+        crate::runtime::domain::Domain::new(&workspace)
+            .restart(&workspace)
+            .map(|_| ())
+            .map_err(|error| HostError::Failed(error.to_string()))
     }
 }
 
 #[cfg(test)]
 mod workspace_control_tests {
+    use hl_extension::port::WorkspaceControl as _;
+
     use super::Store;
 
     #[test]
@@ -496,6 +511,32 @@ mod workspace_control_tests {
         carried.architecture = "arm64".into();
         carried.vpn = Some("not a proxy".into());
         assert!(Store::configured(&carried).is_err());
+    }
+
+    #[test]
+    fn lifecycle_ledger_is_bounded_and_revisions_are_stable_across_store_instances() {
+        let first = Store { current: "one".into() };
+        let before = first.lifecycle_revision();
+        crate::workspace_lifecycle::changed("created", hl_extension::WorkspaceLifecycleAction::Create);
+        crate::workspace_lifecycle::changed("started", hl_extension::WorkspaceLifecycleAction::Start);
+        let second = Store { current: "two".into() };
+        let changes = second.lifecycle_since(before).expect("lifecycle");
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].workspace, "created");
+        assert_eq!(changes[1].workspace, "started");
+        assert!(changes[0].revision < changes[1].revision);
+        assert_eq!(second.lifecycle_revision(), changes[1].revision);
+
+        let overflow_start = second.lifecycle_revision();
+        for index in 0..258 {
+            crate::workspace_lifecycle::changed(
+                &format!("overflow-{index}"),
+                hl_extension::WorkspaceLifecycleAction::Update,
+            );
+        }
+        let bounded = second.lifecycle_since(overflow_start).expect("bounded lifecycle");
+        assert_eq!(bounded.len(), 256);
+        assert_eq!(bounded[0].coalesced, 2);
     }
 }
 

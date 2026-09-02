@@ -164,12 +164,31 @@ impl ContainerInventory for Host {
             user: "root".into(),
         })
     }
+    fn executions(&self) -> Result<hl_extension::port::ExecutionList, HostError> {
+        self.ledger.note("executions.list");
+        Ok(hl_extension::port::ExecutionList { executions: vec![self.execution("e1")?], truncated: false })
+    }
+    fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
+        self.ledger.note("executions.logs");
+        Ok(ContainerOutput { stdout: b"exec out\n".to_vec(), stderr: b"exec err\n".to_vec(), truncated: false })
+    }
+
+    fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
+        self.ledger.note("executions.wait");
+        Ok(ExecutionSummary { id: id.into(), container_id: "c1".into(), running: false,
+            exit_code: 17, pid: 0, command: vec!["worker".into()], user: "root".into() })
+    }
 }
 
 impl ContainerControl for Host {
     fn create(&self, _image: &str, name: &str) -> Result<String, HostError> {
         self.ledger.note("containers.create");
         Ok(format!("id-{name}"))
+    }
+
+    fn create_spec(&self, spec: &hl_extension::port::ContainerCreateSpec) -> Result<String, HostError> {
+        self.ledger.note("containers.create_spec");
+        Ok(format!("id-{}", spec.name))
     }
 
     fn start(&self, _id: &str) -> Result<(), HostError> {
@@ -209,6 +228,10 @@ impl ContainerControl for Host {
 
     fn execution_kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
         self.ledger.note("executions.kill");
+        Ok(())
+    }
+    fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
+        self.ledger.note("executions.remove");
         Ok(())
     }
 
@@ -753,10 +776,17 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerRead,
         ),
         (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
+        (Request::ExecutionList, Capability::ContainerRead),
+        (Request::ExecutionLogs { id: "e1".into(), stdout: true, stderr: true }, Capability::ContainerRead),
+        (Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, Capability::ContainerRead),
         (
             Request::ContainerCreate {
-                image: "alpine".into(),
-                name: "x".into(),
+                spec: hl_extension::port::ContainerCreateSpec {
+                    image: "alpine".into(), name: "x".into(), entrypoint: None,
+                    command: Vec::new(), environment: Vec::new(), working_directory: None,
+                    user: None, labels: Vec::new(), mounts: Vec::new(), network: None,
+                    ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+                },
             },
             Capability::ContainerControl,
         ),
@@ -795,6 +825,7 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ContainerControl,
         ),
+        (Request::ExecutionRemove { id: "e1".into() }, Capability::ContainerControl),
         (
             Request::ContainerExec {
                 id: "c1".into(),
@@ -991,6 +1022,75 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
 }
 
 #[test]
+fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalControl], &[]);
+    for command in [
+        Vec::new(),
+        vec![String::new()],
+        vec!["x".repeat(hl_extension::port::TERMINAL_COMMAND_ARGUMENT_BYTES + 1)],
+        vec!["ok".into(), "contains\0nul".into()],
+        vec!["x".repeat(513); hl_extension::port::TERMINAL_COMMAND_ARGUMENTS],
+        vec!["x".into(); hl_extension::port::TERMINAL_COMMAND_ARGUMENTS + 1],
+    ] {
+        assert!(matches!(
+            session.dispatch(&Request::TerminalSpawn { slot: "s1".into(), command }, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+    assert_eq!(
+        session.dispatch(
+            &Request::TerminalSpawn {
+                slot: "s1".into(),
+                command: vec!["printf".into(), "%s\\n".into(), "ready".into()],
+            },
+            &services(&host),
+        ),
+        Ok(Reply::Done)
+    );
+    assert_eq!(host.ledger.reached(), ["terminal.spawn"]);
+}
+
+#[test]
+fn configured_container_creation_is_bounded_before_control_authority() {
+    use hl_extension::port::{ContainerCreateSpec, ContainerPort, ContainerVolumeMount};
+    let host = Host::new();
+    let mut authorized = session(&[
+        Capability::ContainerControl, Capability::VolumeRead, Capability::NetworkWrite,
+    ], &[]);
+    let spec = ContainerCreateSpec {
+        image: "alpine:3.20".into(), name: "worker".into(), entrypoint: Some(vec!["/init".into()]),
+        command: vec!["serve".into()], environment: vec![("MODE".into(), "agent".into())],
+        working_directory: Some("/work".into()), user: Some("1000".into()),
+        labels: vec![("owner".into(), "agent".into())],
+        mounts: vec![ContainerVolumeMount { volume: "cache".into(), target: "/cache".into(), read_only: true }],
+        network: Some("private".into()),
+        ports: vec![ContainerPort { container: 8080, host: Some(18080), protocol: "tcp".into() }],
+        memory_mb: Some(512), cpus: Some(2), pids_limit: Some(128),
+    };
+    assert_eq!(
+        authorized.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
+        Ok(Reply::Identity("id-worker".into()))
+    );
+    assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
+
+    let mut insufficient = session(&[Capability::ContainerControl], &[]);
+    assert!(matches!(
+        insufficient.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+
+    let mut escaped = spec;
+    escaped.mounts[0].target = "/work/../host".into();
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: escaped }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    assert_eq!(host.ledger.reached(), ["containers.create_spec"], "invalid mounts never reach control");
+}
+
+#[test]
 fn execution_signals_are_bounded_before_the_container_port_is_reached() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
@@ -1128,6 +1228,27 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
         .dispatch(&Request::ExecutionInspect { id: "e1".into() }, &services(&host))
         .expect("execution");
     assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
+
+    let waited = session.dispatch(
+        &Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, &services(&host),
+    ).expect("execution wait");
+    assert!(matches!(waited, Reply::Execution(execution) if !execution.running && execution.exit_code == 17));
+}
+
+#[test]
+fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    assert!(session.dispatch(&Request::ExecutionWait { id: "e1".into(), timeout_ms: 30_001 }, &services(&host)).is_err());
+    assert!(!host.ledger.reached().contains(&"executions.wait"));
+}
+
+#[test]
+fn execution_logs_require_a_stream_before_calling_host() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    assert!(session.dispatch(&Request::ExecutionLogs { id: "e1".into(), stdout: false, stderr: false }, &services(&host)).is_err());
+    assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
 #[test]

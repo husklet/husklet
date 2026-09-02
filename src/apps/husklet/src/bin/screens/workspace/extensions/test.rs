@@ -17,7 +17,7 @@ use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wi
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{directory, settings, Catalogue, Cleanup, Inspection, PendingInspection, Shared, Shelf, Surfaces};
+use super::{directory, settings, Catalogue, Cleanup, Gallery, Inspection, PendingInspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -38,6 +38,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         selecting_an_extension_shows_the_surface_it_draws();
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
+        fault_removal_actions_wrap_at_narrow_and_wide_sizes();
         the_settings_actions_drive_the_installation();
         lifecycle_actions_share_keyboard_and_semantic_focus();
         native_extension_cards_are_semantic_and_actionable();
@@ -53,6 +54,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         a_failed_registry_read_can_be_retried_without_duplicate_work();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
+        stale_provider_generations_cannot_authorize_replacements();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
@@ -87,6 +89,22 @@ fn native_extension_cards_are_semantic_and_actionable() {
     use super::super::semantic::{Action, ActionKind};
     let fixture = Fixture::new(&[("semantic", false)]);
     let snapshot = fixture.view.semantic_snapshot();
+    let card = snapshot
+        .root
+        .children
+        .iter()
+        .find(|node| node.role == "group" && node.label.as_deref() == Some("semantic"))
+        .expect("the visible lifecycle card is represented");
+    assert_eq!(card.value.as_deref(), Some("version 1.0.0; disabled"));
+    let grants = snapshot
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Granted capabilities"))
+        .expect("the consented authority is visible to agents");
+    assert!(grants.value.as_deref().is_some_and(|value| {
+        value.contains("interface") && value.contains("container-read")
+    }));
     let enable = snapshot
         .root
         .children
@@ -115,6 +133,11 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .children
         .iter()
         .any(|node| node.label.as_deref() == Some("Read manifest")));
+
+    let empty = Fixture::new(&[]).view.semantic_snapshot();
+    assert!(empty.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Installed extensions") && node.value.as_deref() == Some("None installed")
+    }));
 }
 
 /// One shell, one roster, and the shelf between them.
@@ -161,7 +184,7 @@ impl Fixture {
         view.page(Page::Extensions.title())
             .and_downcast::<gtk::Box>()
             .expect("extensions page")
-            .append(catalogue.widget());
+            .append(catalogue.viewport());
         Self {
             _storage: storage,
             view,
@@ -267,7 +290,9 @@ fn focus_chain(window: &gtk::Window) -> Vec<gtk::Widget> {
         if !window.child_focus(gtk::DirectionType::TabForward) {
             break;
         }
-        let Some(focus) = gtk::prelude::RootExt::focus(window) else { break };
+        let Some(focus) = gtk::prelude::RootExt::focus(window) else {
+            break;
+        };
         if found.iter().any(|seen| seen == &focus) {
             break;
         }
@@ -288,7 +313,7 @@ fn has_focusable_ancestor(widget: &gtk::Widget) -> bool {
 }
 
 /// Waits for something another thread reaches on its own schedule.
-fn until(condition: impl Fn() -> bool) -> bool {
+fn until(mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if condition() {
@@ -393,6 +418,47 @@ fn a_live_host_fault_reaches_central_settings_and_can_retry() {
     );
 }
 
+fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
+    let fixture = Fixture::new(&[("alpha", true)]);
+    fixture.shelf.fault(&named("alpha"), 5);
+    fixture.act("alpha", settings::REMOVE);
+    let root = fixture._catalogue.widget().clone().upcast::<gtk::Widget>();
+    let actions = descendants(&root)
+        .into_iter()
+        .find(|widget| widget.has_css_class(settings::ACTIONS))
+        .and_downcast::<gtk::FlowBox>()
+        .expect("faulted lifecycle card has a wrapping action region");
+
+    for width in [300, 1_200] {
+        root.measure(gtk::Orientation::Horizontal, -1);
+        root.measure(gtk::Orientation::Vertical, width);
+        root.allocate(width, 1_000, -1, None);
+        let children = descendants(actions.upcast_ref())
+            .into_iter()
+            .filter(|widget| widget.parent().as_ref() == Some(actions.upcast_ref()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            children.len(),
+            3,
+            "Retry, Enable and removal confirmation stay represented"
+        );
+        assert!(
+            children.iter().all(|child| {
+                let allocation = child.allocation();
+                allocation.x() >= 0 && allocation.x() + allocation.width() <= actions.width()
+            }),
+            "lifecycle actions overflowed at {width}px"
+        );
+        if width == 300 {
+            let first_y = children[0].allocation().y();
+            assert!(
+                children.iter().any(|child| child.allocation().y() > first_y),
+                "the worst-case fault confirmation did not wrap at 300px"
+            );
+        }
+    }
+}
+
 fn the_settings_actions_drive_the_installation() {
     let fixture = Fixture::new(&[("alpha", false)]);
     assert_eq!(fixture.stage("alpha"), Stage::Standby);
@@ -413,12 +479,21 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
     let fixture = Fixture::new(&[("alpha", false)]);
     fixture.view.select_name(Page::Extensions.title());
     let window = gtk::Window::builder()
-        .default_width(900)
-        .default_height(700)
+        .default_width(300)
+        .default_height(420)
         .child(&fixture.view.widget)
         .build();
     window.present();
     while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!((window.width(), window.height()), (300, 420));
+    assert!(
+        fixture._catalogue.viewport().vexpands(),
+        "the catalogue consumes the bounded page height"
+    );
+    assert!(
+        fixture._catalogue.viewport().vadjustment().upper() > fixture._catalogue.viewport().vadjustment().page_size(),
+        "the narrow catalogue scrolls instead of imposing its full natural height"
+    );
     let focusable: Vec<_> = descendants(fixture.view.widget.upcast_ref())
         .into_iter()
         .filter(|widget| {
@@ -436,6 +511,17 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             .all(|widget| traversed.iter().any(|focused| focused == widget)),
         "Tab reaches every visible enabled catalogue/lifecycle control"
     );
+
+    window.set_child(gtk::Widget::NONE);
+    window.close();
+    let window = gtk::Window::builder()
+        .default_width(1_200)
+        .default_height(700)
+        .child(&fixture.view.widget)
+        .build();
+    window.present();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(window.width(), 1_200, "the same live page reallocates at wide size");
 
     let initial = fixture.view.semantic_snapshot();
     let enable = initial
@@ -475,6 +561,7 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .find(|node| node.label.as_deref() == Some("Confirm removal"))
         .unwrap();
     assert!(confirm.disabled, "hidden confirmation is not focusable");
+    assert!(confirm.actions.is_empty(), "disabled native controls advertise no actions");
     assert!(matches!(
         fixture.view.semantic_action(&Action {
             revision: removal.revision,
@@ -1291,6 +1378,31 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool) {
         return;
     }
     greeted.store(true, Ordering::Release);
+    if wire
+        .send(
+            &hl_extension::codec::request(&hl_extension::Request::InterfaceOpenTab {
+                title: "Sample".to_owned(),
+            })
+            .expect("open request encodes"),
+        )
+        .is_err()
+        || wire.receive().is_err()
+    {
+        return;
+    }
+    let described = hl_gui::Element::column()
+        .child(hl_gui::Element::button("Restart", hl_gui::EventId::new("restart")).key("restart"));
+    let frame = hl_gui::Reconciliation::new().reconcile(&described);
+    if wire
+        .send(
+            &hl_extension::codec::request(&hl_extension::Request::InterfaceRender { frame })
+                .expect("interface request encodes"),
+        )
+        .is_err()
+        || wire.receive().is_err()
+    {
+        return;
+    }
     while let Ok(frame) = wire.receive() {
         let Ok(said) = serde_json::from_slice::<serde_json::Value>(&frame.payload) else {
             continue;
@@ -1328,12 +1440,13 @@ fn shake(wire: &mut Wire<UnixStream>) -> Result<(), hl_extension::Transit> {
 
 fn a_click_on_a_rendered_button_reaches_the_extension() {
     use super::super::extension::{channel, Delivery, Interface, Signal};
-    use hl_gui::{Element, EventId, Reconciliation};
 
     let temporary = tempfile::tempdir().expect("temporary directory");
     let socket = temporary.path().join("run/extension.sock");
     let heard: Heard = Arc::default();
     let greeted = Arc::new(AtomicBool::new(false));
+    let (post, deliveries) = channel();
+    let delivered = post.clone();
     let host = Rc::new(hl::extension::Host::open(
         Bench {
             socket,
@@ -1341,7 +1454,11 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
             greeted: Arc::clone(&greeted),
             peers: Mutex::new(Vec::new()),
         },
-        Box::new(|_| ()),
+        Box::new(move |report| {
+            if let hl::extension::Report::Frame(frame) = report {
+                drop(delivered.send(Delivery::Frame(frame.frame)));
+            }
+        }),
     ));
     assert!(
         until(|| host.standing() == hl::extension::Standing::Duty),
@@ -1359,9 +1476,12 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         "the extension read the host's welcome"
     );
 
-    let (post, deliveries) = channel();
     let orders = Rc::clone(&host);
-    let (widget, mut page) = Interface::new(
+    let gallery = Gallery::new();
+    let ready_gallery = gallery.clone();
+    let ready_generation = Rc::new(Cell::new(None));
+    let published_generation = Rc::clone(&ready_generation);
+    let (widget, mut page) = Interface::with_lifecycle(
         deliveries,
         Rc::new(move |signal: Signal| match signal {
             Signal::Interaction(event) => orders.accept(hl::extension::Order::Interaction(event)),
@@ -1373,11 +1493,77 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
             }
             Signal::Retry => orders.accept(hl::extension::Order::Retry),
         }),
+        Rc::new(|_| {}),
+        Rc::new(move || {
+            if let Some(generation) = published_generation.get() {
+                ready_gallery.ready("sample", generation);
+            }
+        }),
     );
-    let described = Element::column().child(Element::button("Restart", EventId::new("restart")).key("restart"));
-    let frame = Reconciliation::new().reconcile(&described);
-    post.send(Delivery::Frame(frame)).expect("the page is listening");
-    page.tick();
+    let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    home.append(&widget);
+    let provider = hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    };
+    let generation = gallery.enrol(
+        "sample",
+        &widget,
+        &home,
+        std::slice::from_ref(&provider),
+        Rc::new(|_| {}),
+    );
+    ready_generation.set(Some(generation));
+    gallery.enrol_semantics(
+        "sample",
+        Rc::new(|slot: &str| {
+            Ok(hl_extension::PaneSemanticTree {
+                slot: slot.to_owned(),
+                revision: 0,
+                root: hl_extension::SemanticNode {
+                    id: 0,
+                    role: "status".to_owned(),
+                    label: Some("Starting".to_owned()),
+                    value: None,
+                    disabled: true,
+                    destructive: false,
+                    actions: Vec::new(),
+                    children: Vec::new(),
+                },
+                truncated: false,
+            })
+        }),
+        Rc::new(|_, _| Ok(())),
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "persisted provider is withheld before the socket's first frame"
+    );
+    let replacement_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let replacement = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    replacement_home.append(&replacement);
+    let replacement_generation = gallery.enrol("sample", &replacement, &replacement_home, &[provider], Rc::new(|_| {}));
+    panes::readable(&gallery, "sample");
+    assert!(
+        until(|| {
+            page.tick();
+            descendants(&widget.clone().upcast())
+                .iter()
+                .any(|found| found.has_css_class("hl-button"))
+        }),
+        "the old real Unix conversation's frame reaches only its old page"
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "the accepted old-generation socket frame cannot authorize the replacement"
+    );
+    gallery.ready("sample", replacement_generation);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "the replacement's frame can publish its provider"
+    );
 
     let button = descendants(&widget.clone().upcast())
         .into_iter()
@@ -1394,6 +1580,52 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         heard.lock().expect("heard")
     );
     drop(host);
+}
+
+fn stale_provider_generations_cannot_authorize_replacements() {
+    let gallery = Gallery::new();
+    let provider = hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    };
+    let old_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let old = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    old_home.append(&old);
+    let old_generation = gallery.enrol(
+        "sample",
+        &old,
+        &old_home,
+        std::slice::from_ref(&provider),
+        Rc::new(|_| {}),
+    );
+    let new_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let new = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    new_home.append(&new);
+    let new_generation = gallery.enrol("sample", &new, &new_home, &[provider], Rc::new(|_| {}));
+    panes::readable(&gallery, "sample");
+
+    gallery.ready("sample", old_generation);
+    assert!(
+        gallery.providers().is_empty(),
+        "a late old-generation frame cannot authorize its replacement"
+    );
+    gallery.ready("sample", new_generation);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "only the replacement generation can become ready"
+    );
+    gallery.withdraw("sample");
+    assert!(
+        gallery.providers().is_empty(),
+        "fault or unmount withdraws chooser authority synchronously"
+    );
+    gallery.ready("sample", new_generation);
+    assert!(
+        gallery.providers().is_empty(),
+        "late frames cannot resurrect a withdrawn generation"
+    );
 }
 
 /// In-memory ports, so a conversation can be served with no container runtime
@@ -1665,7 +1897,7 @@ mod panes {
         }
     }
 
-    fn readable(gallery: &Gallery, extension: &str) {
+    pub(super) fn readable(gallery: &Gallery, extension: &str) {
         let owner = extension.to_owned();
         gallery.enrol_semantics(
             extension,
@@ -1695,7 +1927,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "sample",
             &interface,
             &home,
@@ -1720,6 +1952,12 @@ mod panes {
         assert!(unavailable.root.actions.is_empty());
 
         readable(&gallery, "sample");
+        assert!(
+            gallery.providers().is_empty(),
+            "a projection without a successful frame is still starting"
+        );
+        assert!(!gallery.offers("sample", "dashboard"));
+        gallery.ready("sample", generation);
         assert!(gallery.offers("sample", "dashboard"));
         assert_eq!(gallery.providers()[0].title, "Dashboard");
         assert_eq!(
@@ -1803,20 +2041,8 @@ mod panes {
             }
         }
 
-        let semantics = super::super::super::semantic::Registry::new("workspace");
-        let view = Rc::new(super::super::super::View::with_semantics(
-            [
-                (
-                    super::super::super::Page::Extensions,
-                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
-                ),
-                (
-                    super::super::super::Page::Settings,
-                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
-                ),
-            ],
-            semantics,
-        ));
+        let fixture = super::Fixture::new(&[("agent-extension", false)]);
+        let view = Rc::clone(&fixture.view);
         view.select_name("Extensions");
         let bench = Bench::new();
         let (_terminal, terminal_slot, slave) = bench.shell_with_pty();
@@ -1952,9 +2178,9 @@ mod panes {
             "MCP bridge failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Settings</label>"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Extensions</label>"));
         assert!(String::from_utf8_lossy(&output.stdout).contains("agent-received:agent-status"));
-        assert_eq!(view.shown().as_deref(), Some("Settings"));
+        assert_eq!(view.shown().as_deref(), Some("Extensions"));
         guest.join().expect("guest PTY responder");
         served.join().expect("conversation thread");
     }
@@ -2196,7 +2422,10 @@ mod panes {
             "and hands the interface back to its page rather than taking it away"
         );
         let replacement = Window::slot(&bench.window);
-        assert_ne!(replacement, slot, "a replacement at the same UI position gets a fresh authority identity");
+        assert_ne!(
+            replacement, slot,
+            "a replacement at the same UI position gets a fresh authority identity"
+        );
 
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
@@ -2275,7 +2504,7 @@ mod panes {
         home.append(&interface);
         let selected = Rc::new(RefCell::new(None));
         let selection = Rc::clone(&selected);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2287,6 +2516,7 @@ mod panes {
             Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
         );
         readable(&gallery, "postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery.clone());
         let chrome = Panes::at(&bench.window, &slot).expect("pane chrome").widget;
 
@@ -2395,7 +2625,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2407,6 +2637,7 @@ mod panes {
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery);
         PaneChooser::populate(&bench.window, &chooser);
         assert_eq!(
@@ -2424,7 +2655,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2436,6 +2667,7 @@ mod panes {
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery);
         assert!(Panes::focus(&bench.window, &first_slot));
         assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
@@ -2522,8 +2754,9 @@ mod panes {
                     icon: None,
                 })
                 .collect();
-            gallery.enrol(extension, &interface, &home, &providers, Rc::new(|_| {}));
+            let generation = gallery.enrol(extension, &interface, &home, &providers, Rc::new(|_| {}));
             readable(&gallery, extension);
+            gallery.ready(extension, generation);
             homes.push(home);
         }
         Window::exhibit(&bench.window, gallery);
@@ -2576,7 +2809,7 @@ mod panes {
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
         home.append(&interface);
-        gallery.enrol(
+        let generation = gallery.enrol(
             "postgres",
             &interface,
             &home,
@@ -2588,6 +2821,7 @@ mod panes {
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
+        gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery.clone());
         assert!(Panes::focus(&bench.window, &first_slot));
         PaneChooser::provider(&bench.window, "postgres", "database");
@@ -2643,7 +2877,7 @@ mod panes {
         );
 
         if !remove {
-            gallery.enrol(
+            let generation = gallery.enrol(
                 "postgres",
                 &interface,
                 &home,
@@ -2655,6 +2889,7 @@ mod panes {
                 Rc::new(|_| {}),
             );
             readable(&gallery, "postgres");
+            gallery.ready("postgres", generation);
             PaneChooser::recover(&bench.window, "postgres");
             assert_eq!(
                 interface.parent().as_ref(),

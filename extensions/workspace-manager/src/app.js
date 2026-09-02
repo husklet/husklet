@@ -1,14 +1,14 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  Heading, List, ListItemButton, Row, Scroll, Separator, Spinner, Text,
+  EmptyState, Heading, KeyValueTable, List, ListItemButton, Row, Scroll, Separator, Spinner, Text,
 } from '@husklet/react';
-import { LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
-const { createElement: h, useCallback, useEffect, useState } = React;
+const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'images', 'volumes', 'networks'];
 
-export function WorkspaceManager({ api, selections, initial = {} }) {
+export function WorkspaceManager({ api, selections, containerDetails, imageDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -39,11 +39,11 @@ export function WorkspaceManager({ api, selections, initial = {} }) {
   const body = section === 'overview'
     ? h(Overview, { containers, images, volumes, networks, onOpen: setSection })
     : section === 'containers'
-      ? h(Containers, { api, resource: containers })
+      ? h(Containers, { api, resource: containers, containerDetails })
       : section === 'processes'
         ? h(Processes, { api, resource: containers })
         : section === 'images'
-          ? h(Images, { api, resource: images })
+          ? h(Images, { api, resource: images, imageDetails })
           : section === 'volumes'
             ? h(Volumes, { api, resource: volumes })
             : h(Networks, { api, resource: networks });
@@ -78,12 +78,33 @@ function Summary({ title: label, value, detail, onOpen }) {
     h(CardActions, {}, h(Button, { label: 'Open', variant: 'ghost', onInvoke: onOpen })));
 }
 
-export function Containers({ api, resource }) {
+export function Containers({ api, resource, containerDetails }) {
+  const localDetails = useMemo(() => new ContainerDetailsSource(), []);
+  const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const act = async (verb, id, ...args) => {
     setBusy(`${verb}:${id}`);
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
+  };
+  const inspect = async (item) => {
+    setSelected(item.id);
+    setInspection({ id: item.id, state: 'loading', count: 0, error: null });
+    try {
+      const detail = await api.containers.inspect(item.id);
+      const count = await detailsSource.replace(detail);
+      setInspection({ id: item.id, state: 'ready', count, error: null });
+    } catch (cause) {
+      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+    }
+  };
+  const toggleDetails = (item) => {
+    if (selected === item.id && inspection.state !== 'error') {
+      setSelected(null);
+      return;
+    }
+    void inspect(item);
   };
   const view = bounded(resource.data);
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
@@ -92,9 +113,9 @@ export function Containers({ api, resource }) {
       h(CardHeader, { label: item.name || shortId(item.id), detail: item.image }),
       h(CardContent, {}, h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' }))),
       h(CardActions, { gap: 1 },
-        h(Button, { label: selected === item.id ? 'Hide details' : 'Details', onInvoke: () => setSelected(selected === item.id ? null : item.id) }),
+        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
         ...containerActions(item, busy, act)),
-      selected === item.id ? h(ContainerDetail, { api, container: item, act }) : null)),
+      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection }) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
@@ -112,7 +133,7 @@ function containerActions(item, busy, act) {
   ];
 }
 
-function ContainerDetail({ api, container, act }) {
+function ContainerDetail({ api, container, act, inspection }) {
   const [command, setCommand] = useState('');
   const [logs, setLogs] = useState(null);
   const run = async () => {
@@ -121,6 +142,15 @@ function ContainerDetail({ api, container, act }) {
   };
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
   return h(CardContent, { gap: 2 },
+    inspection.state === 'loading'
+      ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading container details…' }))
+      : inspection.state === 'error'
+        ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+        : inspection.state === 'ready' && inspection.count === 0
+          ? h(EmptyState, { label: 'No container details', detail: 'The host returned no inspectable fields.' })
+          : inspection.state === 'ready'
+            ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
+            : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1 }, h(Entry, { value: command, placeholder: 'Command and arguments', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: 'Execute', enabled: command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
       label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)}?`,
@@ -154,19 +184,39 @@ function Processes({ api, resource }) {
     h(Omitted, { count: view.omitted }));
 }
 
-export function Images({ api, resource }) {
+const IMAGE_DETAIL_SCHEMA = Object.freeze([
+  { key: 'property', title: 'Property', width: { chars: 20 } },
+  { key: 'value', title: 'Value', width: 'fill' },
+]);
+
+export function Images({ api, resource, imageDetails }) {
+  const localDetails = useMemo(() => new ImageDetailsSource(), []);
+  const detailsSource = imageDetails ?? localDetails;
   const [reference, setReference] = useState('');
   const [detail, setDetail] = useState(null);
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const run = async (name, operation) => {
     setBusy(name); setError(null); setNotice('');
     try { await operation(); } catch (cause) { setError(cause); } finally { setBusy(''); }
   };
   const pull = () => run('pull', async () => { await api.images.pull(reference.trim()); setReference(''); await resource.reload(); });
-  const inspect = (item) => run(`inspect:${item.id}`, async () => setDetail(await api.images.inspect(item.reference || item.id)));
+  const inspect = (item) => run(`inspect:${item.id}`, async () => {
+    setDetail(null);
+    setInspection({ id: item.id, state: 'loading', count: 0, error: null });
+    try {
+      const value = await api.images.inspect(item.reference || item.id);
+      const count = await detailsSource.replace(value);
+      setDetail(value);
+      setInspection({ id: item.id, state: 'ready', count, error: null });
+    } catch (cause) {
+      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+      throw cause;
+    }
+  });
   const remove = (item) => run(`remove:${item.id}`, async () => {
     await api.images.remove(item.reference || item.id); setConfirm('');
     if (detail?.id === item.id) setDetail(null);
@@ -185,8 +235,17 @@ export function Images({ api, resource }) {
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
     h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
-      h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }), detail?.id === item.id ? h(Text, { label: `${detail.os}/${detail.architecture} · ${detail.user || 'default user'} · ${detail.working_directory || '/'}`, color: 'text-dim', wrap: true }) : null),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
+      h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }),
+        inspection.id === item.id && inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading image details…' }))
+          : inspection.id === item.id && inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.id === item.id && inspection.state === 'ready' && inspection.count === 0
+              ? h(EmptyState, { label: 'No image details', detail: 'The host returned no inspectable fields.' })
+              : detail?.id === item.id
+                ? h(KeyValueTable, { source: IMAGE_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 12 }, maximum: { step: 40 } } })
+                : null),
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === item.id && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
         ? h(React.Fragment, {}, h(Text, { label: 'Remove this local image?', color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
     h(Omitted, { count: view.omitted }));

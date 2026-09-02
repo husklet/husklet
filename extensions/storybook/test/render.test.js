@@ -68,7 +68,7 @@ test('the playground renders one frame holding the three panes', () => {
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    tags.length + 4,
+    tags.length + 7,
     'every component and all end-user flows are listed',
   );
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
@@ -80,7 +80,7 @@ test('keyboard accessibility story validates, confirms separately, and bounds fo
   const first = stage.render(h(KeyboardAccessibilityStory));
   const entry = created(first.patches).find((created) => created.tag === 'Entry')?.id;
   const review = node(first.patches, 'Button', 'Review removal');
-  const disabled = node(first.patches, 'Button', 'Unavailable while running');
+  const disabled = node(first.patches, 'Button', 'Unavailable');
   assert.ok(entry && review && disabled);
   assert.ok(first.patches.some((patch) => 'SetProp' in patch && patch.SetProp.id === disabled
     && patch.SetProp.prop === 'Enabled' && patch.SetProp.value.Flag === false));

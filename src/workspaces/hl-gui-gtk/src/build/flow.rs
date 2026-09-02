@@ -68,7 +68,7 @@ impl LayoutManagerImpl for Weave {
             let widest = lines
                 .iter()
                 .flat_map(|line| &line.children)
-                .map(|(_, main, _)| *main)
+                .map(|(child, _, _)| minimum(child, self.direction.get() == gtk::Orientation::Vertical))
                 .max();
             let natural = lines.iter().map(|line| line.main).max().unwrap_or(0);
             return (widest.unwrap_or(0), natural.max(widest.unwrap_or(0)), -1, -1);
@@ -97,7 +97,7 @@ impl Weave {
         let vertical = self.direction.get() == gtk::Orientation::Vertical;
         let mut lines = vec![Line::default()];
         for child in children(widget) {
-            let (main, cross) = size(&child, vertical);
+            let (main, cross) = size(&child, vertical, room);
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };
             if room >= 0 && !line.children.is_empty() && line.main + advance > room {
@@ -129,15 +129,29 @@ impl Weave {
     }
 }
 
-fn size(child: &gtk::Widget, vertical: bool) -> (i32, i32) {
+fn size(child: &gtk::Widget, vertical: bool, room: i32) -> (i32, i32) {
     let (main, cross) = if vertical {
         (gtk::Orientation::Vertical, gtk::Orientation::Horizontal)
     } else {
         (gtk::Orientation::Horizontal, gtk::Orientation::Vertical)
     };
-    let (_, along, _, _) = child.measure(main, -1);
+    let (minimum, natural, _, _) = child.measure(main, -1);
+    let along = if room < 0 {
+        natural
+    } else {
+        natural.min(room).max(minimum)
+    };
     let (_, across, _, _) = child.measure(cross, along);
     (along, across)
+}
+
+fn minimum(child: &gtk::Widget, vertical: bool) -> i32 {
+    let axis = if vertical {
+        gtk::Orientation::Vertical
+    } else {
+        gtk::Orientation::Horizontal
+    };
+    child.measure(axis, -1).0
 }
 
 fn children(widget: &gtk::Widget) -> Vec<gtk::Widget> {

@@ -513,6 +513,9 @@ async fn executions_are_single_use_and_keep_independent_output() {
             ..
         }
     ));
+    let replay = containers.executions().logs(&exec.id).await.unwrap();
+    assert_eq!(replay.stdout, b"fake-out\n");
+    assert_eq!(replay.stderr, b"fake-err\n");
     assert_eq!(containers.logs("exec-parent").await.unwrap().stdout, b"fake-out\n");
 }
 

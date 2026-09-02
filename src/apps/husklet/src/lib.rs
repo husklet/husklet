@@ -12,3 +12,6 @@ pub mod extension;
 
 #[cfg(feature = "runtime")]
 pub mod runtime;
+
+#[cfg(feature = "runtime")]
+pub(crate) mod workspace_lifecycle;

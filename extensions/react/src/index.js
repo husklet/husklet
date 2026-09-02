@@ -14,7 +14,7 @@ const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
 
 /**
  * Connects to the workspace this extension runs in.
@@ -125,8 +125,27 @@ export function workspace(session) {
         await session.call('container_logs', { id, stdout, stderr }), 'logs',
       ),
       execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
+      executions: async () => expect(await session.call('execution_list'), 'executions'),
+      executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(
+        await session.call('execution_logs', { id, stdout, stderr }), 'logs',
+      ),
+      waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
+        await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
+      ),
       signalExecution: (id, signal) => done('execution_kill', { id, signal }),
-      create: async (image, name) => expect(await session.call('container_create', { image, name }), 'identity'),
+      removeExecution: (id) => done('execution_remove', { id }),
+      create: async (configuration, legacyName) => {
+        const spec = typeof configuration === 'string' ? {
+          image: configuration, name: legacyName, entrypoint: null, command: [], environment: [],
+          working_directory: null, user: null, labels: [], mounts: [], network: null, ports: [],
+          memory_mb: null, cpus: null, pids_limit: null,
+        } : {
+          entrypoint: null, command: [], environment: [], working_directory: null, user: null,
+          labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null,
+          pids_limit: null, ...configuration,
+        };
+        return expect(await session.call('container_create', { spec }), 'identity');
+      },
       start: (id) => done('container_start', { id }),
       stop: (id) => done('container_stop', { id }),
       remove: (id) => done('container_remove', { id }),
@@ -167,7 +186,16 @@ export function workspace(session) {
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
       split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
-      spawn: (slot, command) => done('terminal_spawn', { slot, command }),
+      spawn: (slot, command) => {
+        if (!Array.isArray(command) || command.length === 0 || command.length > 64
+          || command.some((argument) => typeof argument !== 'string'
+            || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
+          || command[0].length === 0
+          || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) {
+          throw new RangeError('terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+        }
+        return done('terminal_spawn', { slot, command: [...command] });
+      },
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
       semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
       act: (slot, action) => {
@@ -202,6 +230,12 @@ export function workspace(session) {
     subscribe,
     unsubscribe,
   };
+  api.watchContainers = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('container listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'containers') listener(event.of); });
+    try { await api.subscribe('containers'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('containers'); };
+  };
   api.watchPaneChanges = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('pane change listener must be a function');
     const off = session.onEvent((event) => {
@@ -209,6 +243,12 @@ export function workspace(session) {
     });
     try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('pane-changes'); };
+  };
+  api.watchExecutions = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('execution listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'executions') listener(event.of); });
+    try { await api.subscribe('executions'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('executions'); };
   };
   api.watchExtensions = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('extension listener must be a function');
@@ -221,6 +261,12 @@ export function workspace(session) {
     const off = session.onEvent((event) => { if (event?.snapshot === 'extension_acquisitions') listener(event.of); });
     try { await api.subscribe('extension-acquisitions'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('extension-acquisitions'); };
+  };
+  api.watchWorkspaceLifecycle = async (listener) => {
+    if (typeof listener !== 'function') throw new TypeError('workspace lifecycle listener must be a function');
+    const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_lifecycle') listener(event.of); });
+    try { await api.subscribe('workspace-lifecycle'); } catch (error) { off(); throw error; }
+    return async () => { off(); await api.unsubscribe('workspace-lifecycle'); };
   };
   return api;
 }
@@ -377,11 +423,14 @@ export const vocabulary = {
   handlers: [...TRIGGERS.keys()],
 };
 
+/** Maximum Unicode characters retained by a LogView; Value patches append. */
+export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
+
 /** Honest inventory of the current host contract; gaps are not callable APIs. */
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'signalExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],

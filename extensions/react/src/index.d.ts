@@ -3044,7 +3044,77 @@ export interface DataTableProps extends NodeProps {
   onContext?: (report: Report) => void;
 }
 
+export interface KeyValueTableProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** table columns: key, title, width as a Length, align, sortable */
+  schema?: ColumnSpec[];
+  /** identity of the windowed row source backing a collection */
+  source?: number;
+  onSelect?: (report: Report) => void;
+  onScroll?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
+}
+
 export interface TreeTableProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** table columns: key, title, width as a Length, align, sortable */
+  schema?: ColumnSpec[];
+  /** identity of the windowed row source backing a collection */
+  source?: number;
+  onSelect?: (report: Report) => void;
+  onScroll?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onPointer?: (report: Report) => void;
+  onContext?: (report: Report) => void;
+}
+
+export interface EventStreamProps extends NodeProps {
   /** marks an action as irreversible so automation requires confirmation */
   destructive?: boolean;
   /** defaults to visible when absent */
@@ -4300,7 +4370,9 @@ export const TableRow: ComponentType<TableRowProps>;
 export const TableCell: ComponentType<TableCellProps>;
 export const TableSortLabel: ComponentType<TableSortLabelProps>;
 export const DataTable: ComponentType<DataTableProps>;
+export const KeyValueTable: ComponentType<KeyValueTableProps>;
 export const TreeTable: ComponentType<TreeTableProps>;
+export const EventStream: ComponentType<EventStreamProps>;
 export const TablePagination: ComponentType<TablePaginationProps>;
 export const Tree: ComponentType<TreeProps>;
 export const TreeItem: ComponentType<TreeItemProps>;
@@ -4354,8 +4426,10 @@ export const vocabulary: { props: string[]; handlers: string[] };
 
 export const SOCKET: string;
 export const PROTOCOL: number;
+/** Maximum Unicode characters retained by a LogView; Value patches append. */
+export const LOG_VIEW_CHARACTER_LIMIT: 4096;
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-events';
+export type Topic = 'containers' | 'executions' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
@@ -4398,10 +4472,27 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
 export interface ProcessList { titles: string[]; processes: string[][] }
 export interface ContainerOutput { stdout: number[]; stderr: number[]; truncated: boolean }
+export interface ContainerCreateSpec {
+  image: string;
+  name: string;
+  entrypoint?: string[] | null;
+  command?: string[];
+  environment?: [string, string][];
+  working_directory?: string | null;
+  user?: string | null;
+  labels?: [string, string][];
+  mounts?: { volume: string; target: string; read_only: boolean }[];
+  network?: string | null;
+  ports?: { container: number; host?: number | null; protocol: 'tcp' | 'udp' }[];
+  memory_mb?: number | null;
+  cpus?: number | null;
+  pids_limit?: number | null;
+}
 export interface ExecutionSummary {
   id: string; container_id: string; running: boolean; exit_code: number; pid: number;
   command: string[]; user: string;
 }
+export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
@@ -4435,6 +4526,7 @@ export type WorkspaceEvent =
   | { event: 'focus'; active: boolean }
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
+export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }
 export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {
   interaction: I; trigger: T; node: number; id: string; slot?: string;
@@ -4459,6 +4551,7 @@ export type LegacyInterfaceEvent =
   | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
+  | { snapshot: 'executions'; of: ExecutionList }
   | { snapshot: 'images'; of: ImageSummary[] }
   | { snapshot: 'volumes'; of: VolumeSummary[] }
   | { snapshot: 'networks'; of: NetworkSummary[] }
@@ -4466,6 +4559,7 @@ export type SnapshotEvent =
   | { snapshot: 'pane_changes'; of: PaneChange }
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
+  | { snapshot: 'workspace_lifecycle'; of: WorkspaceLifecycleChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
 
@@ -4532,7 +4626,12 @@ export interface WorkspaceApi {
     processes(id: string): Promise<ProcessList>;
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
+    executions(): Promise<ExecutionList>;
+    executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
+    waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
+    removeExecution(id: string): Promise<void>;
+    create(spec: ContainerCreateSpec): Promise<string>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;
@@ -4585,8 +4684,11 @@ export interface WorkspaceApi {
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
+  watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
+  watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
+  watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
 }
 
 export function workspace(session: Session): WorkspaceApi;

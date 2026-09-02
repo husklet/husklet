@@ -33,10 +33,19 @@ export async function runAgentAdmin(client, {
   let directoryCreated = false;
   let fileCreated = false;
   const cleanupErrors = [];
+  const lifecycle = [];
+  const mutate = async (action, operation) => {
+    const waiting = json(client, 'husklet_workspace_wait', {
+      workspace: workspaceConfiguration.name, action, timeout_ms: waitMs,
+    });
+    const value = await operation();
+    lifecycle.push(await waiting);
+    return value;
+  };
   try {
-    const created = await json(client, 'husklet_workspace_create', { configuration: workspaceConfiguration });
+    const created = await mutate('create', () => json(client, 'husklet_workspace_create', { configuration: workspaceConfiguration }));
     workspaceCreated = true;
-    await call(client, 'husklet_workspace_start', { name: workspaceConfiguration.name });
+    await mutate('start', () => call(client, 'husklet_workspace_start', { name: workspaceConfiguration.name }));
     workspaceStarted = true;
     await call(client, 'husklet_file_mkdir', { path: directory });
     directoryCreated = true;
@@ -47,7 +56,7 @@ export async function runAgentAdmin(client, {
     const waiting = json(client, 'husklet_pane_wait', { slot: eventSlot, timeout_ms: waitMs });
     await call(client, 'husklet_terminal_write', { slot: eventSlot, input: eventInput });
     const event = await waiting;
-    return { hosting, created, read, event };
+    return { hosting, created, read, event, lifecycle };
   } finally {
     if (fileCreated) {
       try { await call(client, 'husklet_file_remove', { path: file, confirm: true }); } catch (error) { cleanupErrors.push(error); }
@@ -56,10 +65,11 @@ export async function runAgentAdmin(client, {
       try { await call(client, 'husklet_file_remove', { path: directory, confirm: true }); } catch (error) { cleanupErrors.push(error); }
     }
     if (workspaceStarted) {
-      try { await call(client, 'husklet_workspace_stop', { name: workspaceConfiguration.name }); } catch (error) { cleanupErrors.push(error); }
+      try { await mutate('stop', () => call(client, 'husklet_workspace_stop', { name: workspaceConfiguration.name })); }
+      catch (error) { cleanupErrors.push(error); }
     }
     if (workspaceCreated) {
-      try { await call(client, 'husklet_workspace_delete', { name: workspaceConfiguration.name, confirm: true }); }
+      try { await mutate('remove', () => call(client, 'husklet_workspace_delete', { name: workspaceConfiguration.name, confirm: true })); }
       catch (error) { cleanupErrors.push(error); }
     }
     if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'administrative cleanup failed');

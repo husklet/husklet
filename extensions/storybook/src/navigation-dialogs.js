@@ -11,7 +11,7 @@ export function NavigationDialogsStory() {
   const [open, setOpen] = useState(false);
   const [event, setEvent] = useState('No navigation event yet.');
   return h(Column, { gap: 3 },
-    h(Heading, { label: 'Navigation and transient UI', scale: 'title' }),
+    h(Heading, { label: 'Navigation and transient UI', scale: 'title', wrap: true }),
     h(Text, { label: 'Expand details, open the action menu, choose an item, or dismiss it.', wrap: true }),
     h(Accordion, {
       label: 'Deployment details',
@@ -35,6 +35,6 @@ export function NavigationDialogsStory() {
       h(MenuItem, { label: 'View logs', icon: 'document-open', onInvoke: () => { setOpen(false); setEvent('View logs selected.'); } }),
       h(MenuItem, { label: 'Restart unavailable', enabled: false }),
     ))] : []),
-    h(Row, { gap: 1 }, h(InlineMessage, { label: event, tone: 'neutral' })),
+    h(Row, { gap: 1, wrap: true }, h(InlineMessage, { label: event, tone: 'neutral' })),
   );
 }
