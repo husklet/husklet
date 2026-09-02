@@ -11,8 +11,13 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const directory = await mkdtemp(join(tmpdir(), 'husklet-workspace-manager-'));
   const socketPath = join(directory, 'host.sock');
   const calls = [];
+  let tearingDown = false;
   const server = net.createServer((socket) => {
     const reader = new Reader();
+    socket.on('error', (error) => {
+      if (!tearingDown) throw error;
+      assert.equal(error.code, 'ECONNRESET');
+    });
     socket.write(encode({ channel: 0, kind: KIND.request, payload: {
       protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'interface'],
     } }));
@@ -44,6 +49,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render') && calls.includes('container_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
     assert.equal(stderr, '');
   } finally {
+    tearingDown = true;
     child.kill('SIGTERM');
     await new Promise((resolve) => child.once('close', resolve));
     await new Promise((resolve) => server.close(resolve));
