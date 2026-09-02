@@ -151,6 +151,11 @@ jobs:
           npm pack --dry-run --ignore-scripts --workspace @husklet/react
           npm pack --dry-run --ignore-scripts --workspace @husklet/mcp
 
+      - name: Install and import the exact release tarball pair
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run prepublish:check
+
       - name: Publish React with npm trusted publishing
         run: npm publish --workspace @husklet/react --access public --provenance
 
