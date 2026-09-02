@@ -628,7 +628,7 @@ fn validate_checkpoint_generation(generation: &[u8], ordinal: usize) -> Result<(
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
     output::validate_translated_execution(generation)
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
-    output::validate_profile(std::str::from_utf8(generation)?)
+    output::validate_profile_or_product(generation)
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
     let receipt = output::backend_execution_digest(generation);
     if receipt.is_empty() {

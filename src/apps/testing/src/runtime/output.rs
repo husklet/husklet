@@ -349,6 +349,15 @@ pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
     Ok(())
 }
 
+pub(super) fn validate_profile_or_product(stderr: &[u8]) -> Result<(), Error> {
+    if product_backend_shape(stderr) {
+        backend_shape_product(stderr, true)?;
+        Ok(())
+    } else {
+        validate_profile(std::str::from_utf8(stderr)?)
+    }
+}
+
 pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), Error> {
     let product = product_backend_shape(stderr);
     let records = stderr
@@ -1306,6 +1315,7 @@ mod tests {
 
         validate_backend_tree(product.as_bytes(), true).unwrap();
         validate_translated_execution(product.as_bytes()).unwrap();
+        validate_profile_or_product(product.as_bytes()).unwrap();
         let digest = backend_execution_digest(product.as_bytes());
         assert!(digest.starts_with("backend-shape "), "{digest}");
         assert!(digest.contains("translated_entries=3"), "{digest}");
