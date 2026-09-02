@@ -2663,14 +2663,8 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             .options
             .set("HL_CKPT_TEST_FAIL_AFTER_FORK", "1", true)
             .unwrap();
-        let failed_restore = Engine::with_checkpoint(
-            isa,
-            failed_plan,
-            StandardStreams::default(),
-            failed_sink,
-            first.clone(),
-        )
-        .unwrap();
+        let failed_restore =
+            Engine::with_checkpoint(isa, failed_plan, StandardStreams::default(), failed_sink, first.clone()).unwrap();
         failed_restore.start().unwrap();
         assert!(
             failed_restore.wait().is_err(),
@@ -3321,6 +3315,7 @@ fn checkpoint_round_trip(
     executable: &Path,
     recapture_barrier: Option<&std::sync::Barrier>,
     terminal: bool,
+    extra_options: &[&str],
 ) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
@@ -3330,7 +3325,12 @@ fn checkpoint_round_trip(
 
     let capture = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
+        plan(
+            executable,
+            &release,
+            &final_release,
+            &[&["HL_CHECKPOINT"], extra_options].concat(),
+        ),
         streams(terminal),
         store.clone(),
         store.clone(),
@@ -3360,10 +3360,14 @@ fn checkpoint_round_trip(
             &release,
             &final_release,
             &[
-                "HL_RESTORE",
-                "HL_CKPT_TEST_FAIL_AFTER_FORK",
-                "HL_CKPT_TEST_PRIVATE_FD_INHERIT",
-            ],
+                &[
+                    "HL_RESTORE",
+                    "HL_CKPT_TEST_FAIL_AFTER_FORK",
+                    "HL_CKPT_TEST_PRIVATE_FD_INHERIT",
+                ],
+                extra_options,
+            ]
+            .concat(),
         ),
         streams(terminal),
         store.clone(),
@@ -3390,7 +3394,11 @@ fn checkpoint_round_trip(
             executable,
             &release,
             &final_release,
-            &["HL_RESTORE", "HL_CHECKPOINT", "HL_CKPT_TEST_PRIVATE_FD_INHERIT"],
+            &[
+                &["HL_RESTORE", "HL_CHECKPOINT", "HL_CKPT_TEST_PRIVATE_FD_INHERIT"],
+                extra_options,
+            ]
+            .concat(),
         ),
         streams(terminal),
         second_store.clone(),
@@ -3424,7 +3432,7 @@ fn checkpoint_round_trip(
             executable,
             &release,
             &final_release,
-            &["HL_RESTORE", "HL_CKPT_TEST_PRIVATE_FD_INHERIT"],
+            &[&["HL_RESTORE", "HL_CKPT_TEST_PRIVATE_FD_INHERIT"], extra_options].concat(),
         ),
         streams(terminal),
         second_store.clone(),
@@ -3645,7 +3653,7 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             "missing checkpoint fixture: {}",
             executable.display()
         );
-        checkpoint_round_trip(isa, &executable, None, false);
+        checkpoint_round_trip(isa, &executable, None, false, &[]);
     }
 }
 
@@ -3657,8 +3665,18 @@ fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
-        checkpoint_round_trip(isa, &executable, None, true);
+        checkpoint_round_trip(isa, &executable, None, true, &[]);
     }
+}
+
+#[test]
+fn x86_translator_round_trips_complete_tree_terminal_and_failure_contract() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executable = fixture(GuestIsa::X86_64, fixtures.path());
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    checkpoint_round_trip(GuestIsa::X86_64, &executable, None, true, &["HL_TRANSLIT"]);
 }
 
 #[test]

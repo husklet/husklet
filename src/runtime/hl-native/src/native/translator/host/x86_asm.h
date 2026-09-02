@@ -74,9 +74,10 @@ static inline void hl_x64_store_gs(hl_x64_asm *a, int reg, int32_t disp) {
     hl_x64_gs_op(a, 1, 0x89, reg, disp);
 }
 
-// movq $imm32, %gs:disp32  (sign-extended to 64 bits)
+// movl $imm32, %gs:disp32. Every caller names a 32-bit CPU field; a REX.W movq would overwrite the
+// adjacent field too (jcc_ibtc_miss is immediately followed by the low half of tpending).
 static inline void hl_x64_store_gs_imm32(hl_x64_asm *a, int32_t value, int32_t disp) {
-    hl_x64_gs_op(a, 1, 0xC7, 0, disp);
+    hl_x64_gs_op(a, 0, 0xC7, 0, disp);
     hl_x64_u32(a, (uint32_t)value);
 }
 

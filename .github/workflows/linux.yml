@@ -708,9 +708,11 @@ jobs:
 
       # The hook suite above validates checkpoint record machinery, but it never launches a guest
       # through hl-engine's capture/restore lifecycle. Run the Linux end-to-end suite on this real
-      # AArch64 host as the other half of the backend matrix: its AArch64 fixture takes the native-
-      # supervised path, while its x86_64 fixture necessarily takes translation. The AMD64 job runs
-      # the inverse pair and also forces same-ISA x86 translation explicitly.
+      # AArch64 host as the other half of the translated matrix: checkpoint-capable launches refuse the
+      # native-supervised path, so its AArch64 fixture takes same-ISA translation and its x86_64 fixture
+      # takes cross-ISA translation. The AMD64 job covers AArch64 cross-ISA translation and also forces
+      # same-ISA x86 translation explicitly. This is runtime evidence for translation only; native
+      # checkpoint execution remains unsupported rather than being inferred from the host ISA.
       #
       # Require one broad journey from each backend by exact name. Cargo exits successfully when a
       # target is cfg'd to zero tests or a filter drifts, which would turn this expensive step into no
@@ -718,7 +720,7 @@ jobs:
       - name: Test checkpoint and restore end to end on ARM64
         run: |
           set -o pipefail
-          .github/scripts/cargo-test-named.sh "ARM64 checkpoint backend matrix" \
+          .github/scripts/cargo-test-named.sh "ARM64 translated checkpoint matrix" \
             nix --extra-experimental-features 'nix-command flakes' develop . --command \
             cargo test -p hl-engine --test checkpoint_linux --locked --offline \
             --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/checkpoint-backend-matrix.log"
@@ -727,7 +729,7 @@ jobs:
             amd64_daily_development_workload_survives_two_checkpoint_cycles \
             amd64_transliterated_jcc_links_are_rebuilt_across_two_checkpoint_cycles; do
             grep -qE "^test $verdict \.\.\. ok$" "$RUNNER_TEMP/checkpoint-backend-matrix.log" || {
-              echo "::error title=Checkpoint backend verdict missing::$verdict did not report ok on this native AArch64 host."
+              echo "::error title=Translated checkpoint verdict missing::$verdict did not report ok on this AArch64 host."
               exit 1
             }
           done
