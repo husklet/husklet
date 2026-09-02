@@ -861,7 +861,7 @@ static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
     /* The census contribution is a single lock-free atomic transition. The lifecycle parent owns every
        blocking teardown, reap and report operation after this signal context reaches _exit. */
     HL_BACKEND_TREE_FINALIZE_CPU(c);
-    (void)hl_backend_tree_finalize(1);
+    (void)hl_backend_tree_finalize_from(1, HL_BACKEND_FINALIZE_FATAL_SIGNAL);
     _exit(128 + sig);
 }
 

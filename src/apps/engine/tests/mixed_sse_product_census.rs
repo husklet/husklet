@@ -34,6 +34,10 @@ const LIFECYCLE_FIELDS: [&str; 6] = [
     "live",
     "claimed",
 ];
+const FINALIZER_FIELDS: [&str; 6] = [
+    "first_finalize_caller", "first_finalize_actor", "first_finalize_slot_pid",
+    "duplicate_finalize_caller", "duplicate_finalize_actor", "duplicate_finalize_slot_pid",
+];
 
 fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
     let records = stderr
@@ -52,7 +56,10 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
             return Err(format!("production mixed-SSE census has malformed token {token:?}"));
         };
         let version = fields.get("version").copied().unwrap_or(10);
-        if !FIELDS.contains(&name) && !(version >= 10 && LIFECYCLE_FIELDS.contains(&name)) {
+        if !FIELDS.contains(&name)
+            && !(version >= 10 && LIFECYCLE_FIELDS.contains(&name))
+            && !(version >= 11 && FINALIZER_FIELDS.contains(&name))
+        {
             return Err(format!("production mixed-SSE census has extra field {name:?}"));
         }
         let value = value
@@ -74,7 +81,14 @@ fn census(stderr: &str) -> Result<BTreeMap<&str, u64>, String> {
             }
         }
     }
-    if !matches!(fields["version"], 4 | 10) || fields["available"] != 1 {
+    if fields["version"] >= 11 {
+        for name in FINALIZER_FIELDS {
+            if !fields.contains_key(name) {
+                return Err(format!("production mixed-SSE census omits field {name:?}"));
+            }
+        }
+    }
+    if !matches!(fields["version"], 4 | 10 | 11) || fields["available"] != 1 {
         return Err("production mixed-SSE census is unavailable or has the wrong version".into());
     }
     if fields["version"] >= 10

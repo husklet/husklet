@@ -17,6 +17,16 @@
 #define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
 #define HL_BACKEND_EXECUTED_FORM_TOP 16u
 
+enum hl_backend_finalize_caller {
+    HL_BACKEND_FINALIZE_UNKNOWN,
+    HL_BACKEND_FINALIZE_PROCESS_EXIT,
+    HL_BACKEND_FINALIZE_FATAL_SIGNAL,
+    HL_BACKEND_FINALIZE_RUN_EPILOGUE,
+    HL_BACKEND_FINALIZE_ABNORMAL_EXIT,
+    HL_BACKEND_FINALIZE_REAPER,
+    HL_BACKEND_FINALIZE_PARENT_BARRIER,
+};
+
 struct hl_backend_executed_form {
     _Atomic uint32_t state;
     uint64_t key;
@@ -515,6 +525,8 @@ struct hl_backend_tree_shared {
     _Atomic int root_pid;
     _Atomic uint64_t missing_claims;
     _Atomic uint64_t duplicate_finalize;
+    _Atomic uint32_t first_finalize_caller;
+    _Atomic uint32_t duplicate_finalize_caller;
     _Atomic uint32_t reported;
     struct hl_backend_shape_form fallback_forms[HL_BACKEND_SHAPE_FORM_SLOTS];
     struct hl_backend_shape_form stop_forms[HL_BACKEND_SHAPE_FORM_SLOTS];
@@ -931,23 +943,37 @@ static inline void hl_backend_tree_irq_pending(void) {
 }
 
 static int hl_backend_tree_finalize_slot_in(struct hl_backend_tree_shared *shared, struct hl_backend_tree_slot *slot,
-                                            int abnormal) {
+                                            int abnormal, unsigned caller) {
     if (slot == NULL) return 0;
     uint32_t expected = HL_BACKEND_TREE_CLAIMED;
     uint32_t completed = abnormal ? HL_BACKEND_TREE_ABNORMAL : HL_BACKEND_TREE_COMPLETED;
     if (atomic_compare_exchange_strong_explicit(&slot->lifecycle, &expected, completed, memory_order_acq_rel,
-                                                memory_order_acquire))
+                                                memory_order_acquire)) {
+        uint32_t unset = HL_BACKEND_FINALIZE_UNKNOWN;
+        if (shared != NULL)
+            (void)atomic_compare_exchange_strong_explicit(&shared->first_finalize_caller, &unset, caller,
+                                                          memory_order_acq_rel, memory_order_relaxed);
         return 1;
-    if (shared != NULL) atomic_fetch_add_explicit(&shared->duplicate_finalize, 1, memory_order_relaxed);
+    }
+    if (shared != NULL) {
+        atomic_fetch_add_explicit(&shared->duplicate_finalize, 1, memory_order_relaxed);
+        uint32_t unset = HL_BACKEND_FINALIZE_UNKNOWN;
+        (void)atomic_compare_exchange_strong_explicit(&shared->duplicate_finalize_caller, &unset, caller,
+                                                      memory_order_acq_rel, memory_order_relaxed);
+    }
     return 0;
 }
 
 static int hl_backend_tree_finalize_slot(struct hl_backend_tree_slot *slot, int abnormal) {
-    return hl_backend_tree_finalize_slot_in(g_backend_tree, slot, abnormal);
+    return hl_backend_tree_finalize_slot_in(g_backend_tree, slot, abnormal, HL_BACKEND_FINALIZE_UNKNOWN);
 }
 
 static int hl_backend_tree_finalize(int abnormal) {
     return hl_backend_tree_finalize_slot(g_backend_tree_self, abnormal);
+}
+
+static int hl_backend_tree_finalize_from(int abnormal, unsigned caller) {
+    return hl_backend_tree_finalize_slot_in(g_backend_tree, g_backend_tree_self, abnormal, caller);
 }
 
 /* A reaper closes a child that could not execute its own finalizer (SIGKILL, host fault). */
@@ -958,7 +984,7 @@ static void hl_backend_tree_reaped(int pid) {
         if (atomic_load_explicit(&slot->pid, memory_order_acquire) != pid) continue;
         uint32_t lifecycle = atomic_load_explicit(&slot->lifecycle, memory_order_acquire);
         if (lifecycle != HL_BACKEND_TREE_CLAIMED) continue;
-        (void)hl_backend_tree_finalize_slot(slot, 1);
+        (void)hl_backend_tree_finalize_slot_in(g_backend_tree, slot, 1, HL_BACKEND_FINALIZE_REAPER);
         return;
     }
 }
@@ -993,7 +1019,7 @@ static int hl_backend_tree_parent_barrier(struct hl_backend_tree_shared *shared,
             if (pid <= 0) continue;
             if (pid == root_pid || !hl_backend_tree_process_can_mutate(slot, pid)) {
                 if (atomic_load_explicit(&slot->lifecycle, memory_order_acquire) == HL_BACKEND_TREE_CLAIMED)
-                    (void)hl_backend_tree_finalize_slot_in(shared, slot, 1);
+                    (void)hl_backend_tree_finalize_slot_in(shared, slot, 1, HL_BACKEND_FINALIZE_PARENT_BARRIER);
                 continue;
             }
             (void)kill((pid_t)pid, SIGKILL);
@@ -1488,7 +1514,7 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
 }
 
 static _Noreturn void hl_backend_tree_abnormal_exit(int status) {
-    (void)hl_backend_tree_finalize(1);
+    (void)hl_backend_tree_finalize_from(1, HL_BACKEND_FINALIZE_ABNORMAL_EXIT);
     _exit(status);
 }
 
@@ -1505,6 +1531,18 @@ static int hl_backend_tree_wait(pid_t child, int reap_as_abnormal) {
 static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_services *host) {
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
+    if (scenario == 15) {
+        if (!hl_backend_tree_finalize_from(0, HL_BACKEND_FINALIZE_PROCESS_EXIT) ||
+            hl_backend_tree_finalize_from(1, HL_BACKEND_FINALIZE_FATAL_SIGNAL))
+            return 100;
+        return atomic_load_explicit(&g_backend_tree->first_finalize_caller, memory_order_acquire) ==
+                           HL_BACKEND_FINALIZE_PROCESS_EXIT &&
+                       atomic_load_explicit(&g_backend_tree->duplicate_finalize_caller, memory_order_acquire) ==
+                           HL_BACKEND_FINALIZE_FATAL_SIGNAL &&
+                       atomic_load_explicit(&g_backend_tree->duplicate_finalize, memory_order_relaxed) == 1
+                   ? 0
+                   : 101;
+    }
     if (scenario == 14) {
         struct hl_backend_tree_slot *paused = hl_backend_tree_prepare_fork();
         if (paused == NULL || atomic_load_explicit(&paused->pid, memory_order_acquire) != -1 ||
@@ -2034,6 +2072,12 @@ struct hl_backend_mixed_sse_shared {
     _Atomic int root_pid;
     _Atomic uint64_t missing_claims;
     _Atomic uint64_t duplicate_finalize;
+    _Atomic uint32_t first_finalize_caller;
+    _Atomic int first_finalize_actor;
+    _Atomic int first_finalize_slot_pid;
+    _Atomic uint32_t duplicate_finalize_caller;
+    _Atomic int duplicate_finalize_actor;
+    _Atomic int duplicate_finalize_slot_pid;
     _Atomic uint32_t reported;
     _Atomic uint64_t executed;
     _Atomic uint64_t executed_transitions;
@@ -2205,21 +2249,40 @@ void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
     g_backend_mixed_sse_self = hl_backend_mixed_sse_claim(self);
 }
 
-static int hl_backend_mixed_sse_finalize_slot(struct hl_backend_tree_slot *slot, int abnormal) {
+static int hl_backend_mixed_sse_finalize_slot(struct hl_backend_tree_slot *slot, int abnormal, unsigned caller) {
     if (slot == NULL) return 0;
     uint32_t expected = HL_BACKEND_MIXED_SSE_CLAIMED;
     uint32_t completed = abnormal ? HL_BACKEND_MIXED_SSE_ABNORMAL : HL_BACKEND_MIXED_SSE_COMPLETED;
     if (atomic_compare_exchange_strong_explicit(&slot->lifecycle, &expected, completed, memory_order_acq_rel,
-                                                memory_order_acquire))
+                                                memory_order_acquire)) {
+        uint32_t unset = HL_BACKEND_FINALIZE_UNKNOWN;
+        if (g_backend_mixed_sse != NULL &&
+            atomic_compare_exchange_strong_explicit(&g_backend_mixed_sse->first_finalize_caller, &unset, caller,
+                                                    memory_order_acq_rel, memory_order_relaxed)) {
+            atomic_store_explicit(&g_backend_mixed_sse->first_finalize_actor, (int)getpid(), memory_order_relaxed);
+            atomic_store_explicit(&g_backend_mixed_sse->first_finalize_slot_pid,
+                                  atomic_load_explicit(&slot->pid, memory_order_acquire), memory_order_release);
+        }
         return 1;
-    if (g_backend_mixed_sse != NULL)
+    }
+    if (g_backend_mixed_sse != NULL) {
         atomic_fetch_add_explicit(&g_backend_mixed_sse->duplicate_finalize, 1, memory_order_relaxed);
+        uint32_t unset = HL_BACKEND_FINALIZE_UNKNOWN;
+        if (atomic_compare_exchange_strong_explicit(&g_backend_mixed_sse->duplicate_finalize_caller, &unset,
+                                                    caller, memory_order_acq_rel, memory_order_relaxed)) {
+            atomic_store_explicit(&g_backend_mixed_sse->duplicate_finalize_actor, (int)getpid(),
+                                  memory_order_relaxed);
+            atomic_store_explicit(&g_backend_mixed_sse->duplicate_finalize_slot_pid,
+                                  atomic_load_explicit(&slot->pid, memory_order_acquire), memory_order_release);
+        }
+    }
     return 0;
 }
 
-static int hl_backend_tree_finalize(int abnormal) {
-    return hl_backend_mixed_sse_finalize_slot(g_backend_mixed_sse_self, abnormal);
+static int hl_backend_tree_finalize_from(int abnormal, unsigned caller) {
+    return hl_backend_mixed_sse_finalize_slot(g_backend_mixed_sse_self, abnormal, caller);
 }
+#define hl_backend_tree_finalize(abnormal) hl_backend_tree_finalize_from((abnormal), HL_BACKEND_FINALIZE_UNKNOWN)
 
 static int hl_backend_tree_is_finalized(void) {
     return g_backend_mixed_sse_self != NULL &&
@@ -2258,7 +2321,7 @@ static void hl_backend_tree_reaped(int pid) {
         struct hl_backend_tree_slot *slot = &g_backend_mixed_sse->slots[index];
         if (atomic_load_explicit(&slot->pid, memory_order_acquire) != pid) continue;
         if (atomic_load_explicit(&slot->lifecycle, memory_order_acquire) == HL_BACKEND_MIXED_SSE_CLAIMED)
-            (void)hl_backend_mixed_sse_finalize_slot(slot, 1);
+            (void)hl_backend_mixed_sse_finalize_slot(slot, 1, HL_BACKEND_FINALIZE_REAPER);
         return;
     }
 }
@@ -2284,7 +2347,7 @@ static int hl_backend_mixed_sse_parent_barrier(struct hl_backend_mixed_sse_share
             if (pid <= 0) continue;
             if (pid == root_pid || !hl_backend_mixed_sse_process_can_mutate(slot, pid)) {
                 if (atomic_load_explicit(&slot->lifecycle, memory_order_acquire) == HL_BACKEND_MIXED_SSE_CLAIMED)
-                    (void)hl_backend_mixed_sse_finalize_slot(slot, 1);
+                    (void)hl_backend_mixed_sse_finalize_slot(slot, 1, HL_BACKEND_FINALIZE_PARENT_BARRIER);
                 continue;
             }
             (void)kill((pid_t)pid, SIGKILL);
@@ -2340,8 +2403,11 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
         jcc_late_candidate += atomic_load_explicit(&census->jcc_late[reason], memory_order_relaxed);
     int formatted = snprintf(record, sizeof record,
-                             "[diag] backend-shape version=10 available=%d lifecycle_settled=%d "
+                             "[diag] backend-shape version=11 available=%d lifecycle_settled=%d "
                              "missing_claims=%llu duplicate_finalize=%llu reserved=%llu live=%llu claimed=%llu "
+                             "first_finalize_caller=%u first_finalize_actor=%d first_finalize_slot_pid=%d "
+                             "duplicate_finalize_caller=%u duplicate_finalize_actor=%d "
+                             "duplicate_finalize_slot_pid=%d "
                              "crossings=%llu "
                              "translated_entries=%llu interpreted_entries=%llu translated_steps=%llu "
                              "interpreted_steps=%llu mixed_sse_executed=%llu "
@@ -2377,6 +2443,12 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                                       memory_order_relaxed),
                              (unsigned long long)lifecycle.reserved, (unsigned long long)lifecycle.live,
                              (unsigned long long)lifecycle.claimed,
+                             atomic_load_explicit(&census->first_finalize_caller, memory_order_acquire),
+                             atomic_load_explicit(&census->first_finalize_actor, memory_order_acquire),
+                             atomic_load_explicit(&census->first_finalize_slot_pid, memory_order_acquire),
+                             atomic_load_explicit(&census->duplicate_finalize_caller, memory_order_acquire),
+                             atomic_load_explicit(&census->duplicate_finalize_actor, memory_order_acquire),
+                             atomic_load_explicit(&census->duplicate_finalize_slot_pid, memory_order_acquire),
                              (unsigned long long)(atomic_load_explicit(&census->translated_entries,
                                                                       memory_order_relaxed) +
                                                   atomic_load_explicit(&census->interpreted_entries,
@@ -3041,7 +3113,7 @@ static inline void hl_backend_tree_jcc_late(unsigned reason) {
 #define hl_backend_tree_stw_retry() ((void)0)
 #define hl_backend_tree_irq_pending() ((void)0)
 static _Noreturn void hl_backend_tree_abnormal_exit(int status) {
-    (void)hl_backend_tree_finalize(1);
+    (void)hl_backend_tree_finalize_from(1, HL_BACKEND_FINALIZE_ABNORMAL_EXIT);
     _exit(status);
 }
 

@@ -71,6 +71,15 @@ fn duplicate_finalize_is_counted_without_changing_the_first_outcome() {
 }
 
 #[test]
+fn finalizer_provenance_preserves_the_first_and_rejected_second_caller() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 15)
+            .unwrap_or_else(|status| panic!("ISA {isa} finalizer provenance scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {
