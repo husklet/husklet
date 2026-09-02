@@ -5,12 +5,17 @@
 
 ARG NODE_IMAGE=node:22-alpine
 FROM ${NODE_IMAGE} AS package
+ARG HUSKLET_REACT_VERSION
 WORKDIR /source
 COPY package.json README.md LICENSE ./
 COPY src ./src
-RUN npm pack --ignore-scripts --pack-destination /out
+RUN test -n "${HUSKLET_REACT_VERSION}" \
+    && npm pkg set "version=${HUSKLET_REACT_VERSION}" \
+    && test "$(node -p "require('./package.json').version")" = "${HUSKLET_REACT_VERSION}" \
+    && npm pack --ignore-scripts --pack-destination /out
 
 FROM ${NODE_IMAGE}
+ARG HUSKLET_REACT_VERSION
 
 # The package lives inside the working directory's own module tree, because ESM
 # resolution walks directories and ignores NODE_PATH entirely.
@@ -24,6 +29,7 @@ WORKDIR /app
 COPY --from=package /out /opt/husklet-sdk
 RUN npm init -y \
     && npm install --no-audit --no-fund --save-exact react@18.3.1 react-reconciler@0.29.2 /opt/husklet-sdk/*.tgz \
+    && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && npm cache clean --force
 
 WORKDIR /app
@@ -38,6 +44,7 @@ CMD ["node", "--input-type=module", "-e", "console.error('this image is a base; 
 # The manifest the host reads off the image. An extension replaces this label
 # with its own; the fields are those of hl_extension::manifest::Manifest.
 LABEL husklet.extension.protocol="1"
+LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"
 # A base image declares no manifest: it is not an extension, it is what
 # extensions are built from. Each of those copies its own extension.toml
 # and points this label at it.

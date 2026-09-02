@@ -8,7 +8,8 @@ socket.
 ## Using it
 
 ```dockerfile
-FROM husklet/react:latest
+ARG HUSKLET_REACT_IMAGE
+FROM ${HUSKLET_REACT_IMAGE}
 COPY . /app
 CMD ["node", "/app/main.js"]
 LABEL husklet.extension.protocol="1"

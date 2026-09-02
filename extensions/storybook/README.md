@@ -33,7 +33,11 @@ component can report.
 npm install
 npm test          # node --test, no framework
 
-docker build -t husklet/storybook .    # FROM husklet/react:latest
+docker build \
+  --build-arg HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:0.1.0 \
+  --build-arg HUSKLET_REACT_VERSION=0.1.0 \
+  --build-arg HUSKLET_EXTENSION_VERSION=0.1.0 \
+  -t husklet/storybook .
 ```
 
 The host starts the image, mounts a socket at `HUSKLET_EXTENSION_SOCKET`, and

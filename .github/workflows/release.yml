@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -181,6 +181,9 @@ jobs:
           }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Install multi-architecture emulation
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
       - name: Configure multi-architecture builder
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -198,7 +201,76 @@ jobs:
           file: extensions/react/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/extension-react-base:latest
+          build-args: HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
+          provenance: mode=max
+          sbom: true
+
+  first-party-extensions:
+    name: Publish ${{ matrix.extension }} / multi-architecture
+    needs: [smoke, native-linux-reproducibility, react-extension-base]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        extension: [storybook, workspace-manager]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve and validate image version
+        id: version
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          else
+            version="$MANUAL_VERSION"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "version must have exact X.Y.Z form, got: $version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify first-party image contracts
+        run: .github/scripts/check-first-party-images.sh
+
+      - name: Install multi-architecture emulation
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Configure multi-architecture builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish one multi-architecture manifest
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: extensions/${{ matrix.extension }}
+          file: extensions/${{ matrix.extension }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:latest
+          build-args: |
+            HUSKLET_REACT_IMAGE=ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+            HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
+            HUSKLET_EXTENSION_VERSION=${{ steps.version.outputs.version }}
           provenance: mode=max
           sbom: true
 
@@ -207,6 +279,8 @@ jobs:
     needs: [smoke, native-linux-reproducibility]
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
