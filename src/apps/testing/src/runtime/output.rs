@@ -76,6 +76,28 @@ const BACKEND_SHAPE_PRODUCT_V5_EXTRA: &[&str] = &[
 ];
 const BACKEND_SHAPE_PRODUCT_V6_EXTRA: &[&str] =
     &["executed_form_total", "executed_form_unique", "executed_form_overflow"];
+const BACKEND_SHAPE_PRODUCT_V9_EXTRA: &[&str] = &[
+    "jcc_taken_ibtc_misses",
+    "indirect_ibtc_misses",
+    "jcc_late_candidate",
+    "jcc_late_eligible",
+    "jcc_late_invalid",
+    "jcc_late_target_absent",
+    "jcc_late_page_generation",
+    "jcc_late_displacement",
+    "jcc_late_other",
+    "jcc_invalid_null",
+    "jcc_invalid_magic",
+    "jcc_invalid_gpc",
+    "jcc_invalid_block_generation",
+    "jcc_invalid_entry_zero",
+    "jcc_invalid_length_zero",
+    "jcc_invalid_resolve",
+    "jcc_invalid_resolved_generation",
+    "jcc_invalid_entry_overflow",
+    "jcc_invalid_site_unique",
+    "jcc_invalid_site_overflow",
+];
 
 fn backend_shape_product_field(name: &str, version: u64) -> bool {
     if BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
@@ -91,6 +113,9 @@ fn backend_shape_product_field(name: &str, version: u64) -> bool {
         return false;
     }
     if BACKEND_SHAPE_PRODUCT_V6_EXTRA.contains(&name) {
+        return true;
+    }
+    if version >= 9 && BACKEND_SHAPE_PRODUCT_V9_EXTRA.contains(&name) {
         return true;
     }
     let Some(suffix) = name.strip_prefix("executed_form") else {
@@ -707,7 +732,19 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             }
         }
     }
-    if fields["version"] != 4 && fields["version"] != 5 && fields["version"] != 6 && fields["version"] != 7 {
+    if version >= 9 {
+        for name in BACKEND_SHAPE_PRODUCT_V9_EXTRA {
+            if !fields.contains_key(name) {
+                return Err(format!("backend-shape product diagnostic omitted field {name:?}").into());
+            }
+        }
+    }
+    if fields["version"] != 4
+        && fields["version"] != 5
+        && fields["version"] != 6
+        && fields["version"] != 7
+        && fields["version"] != 9
+    {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
     if fields["available"] != 1 {
@@ -729,9 +766,15 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     }
     let dispositions = fields["jcc_ibtc_fills"]
         .checked_add(fields["jcc_ibtc_suppressed"])
-        .and_then(|value| value.checked_add(fields["jcc_ibtc_invalid_refusals"]))
-        .and_then(|value| value.checked_add(fields["jcc_ibtc_irq"]));
-    if dispositions != Some(fields["jcc_ibtc_misses"]) {
+        .and_then(|value| value.checked_add(fields["jcc_ibtc_invalid_refusals"]));
+    let jcc_reconciles = if version >= 9 {
+        fields["jcc_ibtc_misses"] == fields["jcc_taken_ibtc_misses"]
+            && dispositions.is_some_and(|value| value <= fields["jcc_taken_ibtc_misses"])
+            && fields["jcc_ibtc_irq"] <= fields["jcc_taken_ibtc_misses"]
+    } else {
+        dispositions.and_then(|value| value.checked_add(fields["jcc_ibtc_irq"])) == Some(fields["jcc_ibtc_misses"])
+    };
+    if !jcc_reconciles {
         return Err("backend-shape product JCC IBTC miss dispositions do not reconcile".into());
     }
     if fields["jcc_ibtc_enabled"] == 0 && (fields["jcc_ibtc_hits"] != 0 || fields["jcc_ibtc_fills"] != 0) {
@@ -748,9 +791,15 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     }
     let direct_dispositions = fields["direct_jmp_ibtc_fills"]
         .checked_add(fields["direct_jmp_ibtc_suppressed"])
-        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_invalid_refusals"]))
-        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_irq"]));
-    if direct_dispositions != Some(fields["direct_jmp_ibtc_misses"]) {
+        .and_then(|value| value.checked_add(fields["direct_jmp_ibtc_invalid_refusals"]));
+    let direct_reconciles = if version >= 9 {
+        direct_dispositions.is_some_and(|value| value <= fields["direct_jmp_ibtc_misses"])
+            && fields["direct_jmp_ibtc_irq"] <= fields["direct_jmp_ibtc_misses"]
+    } else {
+        direct_dispositions.and_then(|value| value.checked_add(fields["direct_jmp_ibtc_irq"]))
+            == Some(fields["direct_jmp_ibtc_misses"])
+    };
+    if !direct_reconciles {
         return Err("backend-shape product direct-JMP IBTC miss dispositions do not reconcile".into());
     }
     if fields["direct_jmp_ibtc_enabled"] == 0
@@ -1134,6 +1183,44 @@ mod tests {
         assert!(backend_shape_product(missing_jcc_miss.as_bytes(), true).is_err());
         let missing_jump_miss = interrupted.replacen(" direct_jmp_ibtc_misses=2", " direct_jmp_ibtc_misses=1", 1);
         assert!(backend_shape_product(missing_jump_miss.as_bytes(), true).is_err());
+    }
+
+    #[test]
+    fn product_v9_reconciles_repeated_misses_and_overlapping_irq() {
+        let mut product = PRODUCT_SHAPE_ON.trim_end().replace("version=4", "version=9");
+        for name in BACKEND_SHAPE_PRODUCT_V5_EXTRA
+            .iter()
+            .chain(BACKEND_SHAPE_PRODUCT_V6_EXTRA)
+            .chain(BACKEND_SHAPE_PRODUCT_V9_EXTRA)
+        {
+            let value = match *name {
+                "jcc_taken_ibtc_misses" => 5,
+                "indirect_ibtc_misses" => 7,
+                _ => 0,
+            };
+            product.push_str(&format!(" {name}={value}"));
+        }
+        for rank in 0..16 {
+            product.push_str(&format!(" executed_form{rank}_key=0 executed_form{rank}_count=0"));
+        }
+        product.push_str(
+            "\n[diag] x86-exit-family version=1 translated_entries=0 total=0 \
+             t_fallthrough=0 t_jcc_taken=0 t_jcc_fall=0 t_direct_jmp=0 t_direct_call=0 t_ret=0 \
+             t_jmp_reg=0 t_jmp_mem=0 t_call_reg=0 t_call_mem=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0\n",
+        );
+        product = product
+            .replace(" jcc_ibtc_misses=1", " jcc_ibtc_misses=5")
+            .replace(" jcc_ibtc_irq=0", " jcc_ibtc_irq=4")
+            .replace(" direct_jmp_ibtc_misses=1", " direct_jmp_ibtc_misses=5")
+            .replace(" direct_jmp_ibtc_irq=0", " direct_jmp_ibtc_irq=4");
+        backend_shape_product(product.as_bytes(), true).unwrap();
+
+        let collapsed_split = product.replacen(" jcc_taken_ibtc_misses=5", " jcc_taken_ibtc_misses=4", 1);
+        assert!(backend_shape_product(collapsed_split.as_bytes(), true).is_err());
+        let excess_irq = product.replacen(" jcc_ibtc_irq=4", " jcc_ibtc_irq=6", 1);
+        assert!(backend_shape_product(excess_irq.as_bytes(), true).is_err());
+        let excess_attempts = product.replacen(" jcc_ibtc_fills=1", " jcc_ibtc_fills=6", 1);
+        assert!(backend_shape_product(excess_attempts.as_bytes(), true).is_err());
     }
 
     #[test]
