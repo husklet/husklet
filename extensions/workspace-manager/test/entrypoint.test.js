@@ -156,6 +156,12 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert.ok(requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'The host execution catalogue was truncated at its safety limit.')));
     assert.ok(requests.filter((request) => request.call === 'interface_render_at').length > beforeExecutions);
+    peer.write(encode({ channel: 34, kind: KIND.event, payload: invocation(requests, 'Terminate') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Send SIGTERM to execution e2?')));
+    peer.write(encode({ channel: 35, kind: KIND.event, payload: invocation(requests, 'Confirm SIGTERM') }));
+    await until(() => calls.includes('execution_kill'));
+    assert.deepEqual(requests.find((request) => request.call === 'execution_kill').with, { id: 'e2', signal: 'SIGTERM' });
     peer.write(encode({ channel: 14, kind: KIND.event, payload: invocation(requests, 'Details') }));
     await until(() => calls.includes('execution_inspect') && requests.some((request) =>
       request.call === 'source_resize_at' && request.with.mutation.Length?.source === 203));

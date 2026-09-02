@@ -318,6 +318,11 @@ export function Executions({ api, resource, executionDetails, truncated = false,
     try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); await detailsSource.replace(detail); await resource.reload(); }
     finally { setBusy(''); }
   };
+  const terminate = async (id) => {
+    await api.containers.signalExecution(id, 'SIGTERM');
+    await resource.reload();
+    await inspect(id);
+  };
   const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
   const view = bounded(resource.data);
   return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
@@ -346,6 +351,7 @@ export function Executions({ api, resource, executionDetails, truncated = false,
         h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
         h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),
         h(Button, { label: busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s', enabled: !busy && item.running, onInvoke: () => void wait(item.id) }),
+        h(ConfirmAction, { label: 'Terminate', confirmLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
         h(ConfirmAction, { label: 'Remove record', confirmLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
     h(Omitted, { count: view.omitted }),
     truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null);

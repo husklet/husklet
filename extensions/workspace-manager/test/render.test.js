@@ -441,6 +441,31 @@ test('finished execution cleanup requires explicit destructive confirmation', as
   assert.deepEqual(calls, [['e2']]);
 });
 
+test('running execution termination is exact-id, confirmed and refreshes its detail', async () => {
+  const calls = [];
+  const item = { id: 'execution-full-identity', container_id: 'c1', running: true, exit_code: 0, pid: 42, command: ['sleep', '30'], user: '' };
+  const controlled = { containers: {
+    execution: async (id) => { calls.push(['inspect', id]); return item; },
+    executionLogs: async () => ({ stdout: [], stderr: [], truncated: false }),
+    waitExecution: async () => item,
+    signalExecution: async (...args) => calls.push(['signal', ...args]),
+    removeExecution: async () => {},
+  } };
+  const resource = { data: [item], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Executions, { api: controlled, resource }));
+  invoke(stage, 'Terminate');
+  assert.deepEqual(calls, [], 'opening the prompt cannot signal the process');
+  assert.ok(labelled(stage, 'Send SIGTERM to execution execution-full-identity?'));
+  assert.equal(isDestructive(stage, 'Confirm SIGTERM'), true);
+  invoke(stage, 'Confirm SIGTERM'); await settled(); await settled();
+  assert.deepEqual(calls, [
+    ['signal', 'execution-full-identity', 'SIGTERM'],
+    ['reload'],
+    ['inspect', 'execution-full-identity'],
+  ]);
+});
+
 test('empty and host-truncated execution catalogues remain explicit', async () => {
   const item = { id: 'empty', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: [], user: '' };
   const controlled = { containers: {
