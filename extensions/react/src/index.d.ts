@@ -4643,7 +4643,7 @@ export interface WorkspaceInfo { name: string; architecture: string; image: stri
 export interface ExtensionSummary { name: string; image_digest: string; status: string }
 export type ExtensionCapability =
   | 'workspace-read' | 'workspace-control' | 'workspace-events'
-  | 'container-read' | 'container-control' | 'image-read' | 'image-write'
+  | 'container-read' | 'container-control' | 'container-attach' | 'image-read' | 'image-write'
   | 'volume-read' | 'volume-write' | 'network-read' | 'network-write'
   | 'terminal-read' | 'terminal-control' | 'terminal-output' | 'pane-observe'
   | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'

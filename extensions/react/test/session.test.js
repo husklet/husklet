@@ -295,7 +295,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1'), api.extensions.install('job-1', 7, ['interface']),
+    api.extensions.cancelAcquisition('job-1'), api.extensions.install('job-1', 7, ['interface', 'container-attach']),
     api.extensions.update('job-2', 8, ['container-read'])];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
@@ -303,7 +303,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1' } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface'] } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface', 'container-attach'] } },
     { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['container-read'] } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };

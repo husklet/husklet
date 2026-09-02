@@ -31,7 +31,7 @@ async function fakeHost(context, { greet = true } = {}) {
     if (!greet) return;
     const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
-      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'container-attach'],
+      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'container-attach', 'extension-install'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
@@ -41,6 +41,8 @@ async function fakeHost(context, { greet = true } = {}) {
           ? { reply: 'workspace', with: { name: 'dev' } }
           : frame.payload.call === 'container_attach_terminal'
             ? { reply: 'identity', with: 'p-attached' }
+            : frame.payload.call === 'extension_install'
+              ? { reply: 'extension', with: { name: 'terminal-agent', image_digest: 'sha256:abc', status: 'standby' } }
             : null;
         if (!payload) throw new Error(`unexpected host call ${frame.payload.call}`);
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
@@ -95,14 +97,20 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   const listed = await client.listTools();
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_attach_terminal'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_extension_install'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(JSON.parse(answer.content[0].text).name, 'dev');
   const id = 'a'.repeat(64);
   const attached = await client.callTool({ name: 'husklet_container_attach_terminal', arguments: { id, command: ['sh', '-i'] } });
   assert.equal(JSON.parse(attached.content[0].text), 'p-attached');
+  const installed = await client.callTool({ name: 'husklet_extension_install', arguments: {
+    job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'], confirm: true,
+  } });
+  assert.equal(JSON.parse(installed.content[0].text).name, 'terminal-agent');
   assert.deepEqual(calls, [
     { call: 'workspace_info' }, { call: 'workspace_info' },
     { call: 'container_attach_terminal', with: { id, command: ['sh', '-i'] } },
+    { call: 'extension_install', with: { job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'] } },
   ]);
   assert.equal(diagnostics, '');
   await client.close();

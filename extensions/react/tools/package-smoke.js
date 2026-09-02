@@ -73,10 +73,12 @@ try {
   assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { render, useHostEvents, usePaneSelection, workspace, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
+    import { render, useHostEvents, usePaneSelection, workspace, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
+    const attachmentGrant: ExtensionCapability = 'container-attach';
+    void attachmentGrant;
     void table;
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
     void api.subscribe('terminal');
