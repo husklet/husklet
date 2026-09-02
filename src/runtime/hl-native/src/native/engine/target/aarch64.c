@@ -63,7 +63,7 @@ static void translit_sampling_receipt(const char *stage) { (void)stage; }
 #include "../../host/range.h"
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+HL_API __attribute__((weak)) int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     (void)scenario;
     return -1; /* the x86 same-ISA transliterator is absent on this host */
 }
