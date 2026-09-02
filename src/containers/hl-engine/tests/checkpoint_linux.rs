@@ -2780,7 +2780,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             assert!(
                 shapes
                     .iter()
-                    .all(|(_, _, capacity, descriptors, transitions, boundaries, sse_riprel)| *capacity > 0
+                    .all(|(_, _, capacity, descriptors, transitions, boundaries, _sse_riprel)| *capacity > 0
                         && *descriptors > 0
                         && *transitions >= *descriptors
                         && *boundaries == 0),
