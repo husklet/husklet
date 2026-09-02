@@ -18,6 +18,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Sparkline => sparkline().upcast(),
         Tag::FlameGraph => flame_graph().upcast(),
         Tag::MemoryMap => memory_map().upcast(),
+        Tag::DisassemblyView => memory_map().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -321,6 +322,49 @@ pub(crate) fn regions(widget: &gtk::Widget, value: &str) -> bool {
             label.set_width_chars(match index {
                 0 => 35,
                 1 => 4,
+                2 => 10,
+                _ => 24,
+            });
+            label.set_hexpand(index == 3);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+/// Replaces a decoded instruction listing with four selectable columns.
+pub(crate) fn instructions(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for line in value.lines().take(hl_gui::DISASSEMBLY_INSTRUCTION_LIMIT) {
+        let columns = line.splitn(4, '\t').collect::<Vec<_>>();
+        if columns.len() != 4 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(text);
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            label.add_css_class("monospace");
+            label.set_width_chars(match index {
+                0 => 16,
+                1 => 47,
                 2 => 10,
                 _ => 24,
             });

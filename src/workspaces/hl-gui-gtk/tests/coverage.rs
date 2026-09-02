@@ -97,11 +97,34 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     hex_view_is_selectable_and_monospaced();
     flame_graph_is_bounded_selectable_and_proportional();
     memory_map_is_bounded_selectable_and_columnar();
+    disassembly_is_bounded_selectable_and_columnar();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn disassembly_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let listing = session.producer.create(Tag::DisassemblyView);
+    session.producer.append(NodeId::ROOT, listing);
+    let value = (0..300)
+        .map(|index| format!("{index:016x}\t48 89 e5\tmov\trbp, rsp"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(listing, Prop::Value, PropValue::text(value));
+    session.flush().expect("disassembly renders");
+    let widget = session.tagged(Tag::DisassemblyView).expect("disassembly widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels.len(), 256 * 4, "256 instructions each retain four columns");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert_eq!(labels[2].text(), "mov");
+    assert_eq!(labels[3].text(), "rbp, rsp");
 }
 
 fn memory_map_is_bounded_selectable_and_columnar() {
@@ -906,6 +929,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::Sparkline => Aspect::Value,
         Tag::FlameGraph => Aspect::Value,
         Tag::MemoryMap => Aspect::Value,
+        Tag::DisassemblyView => Aspect::Value,
         _ => structural(tag),
     }
 }

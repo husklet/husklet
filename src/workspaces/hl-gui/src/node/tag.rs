@@ -337,6 +337,7 @@ catalogue! {
     Sparkline: leaf, props[Value, Tone], triggers[],
     FlameGraph: leaf, props[Value, Tone], triggers[],
     MemoryMap: leaf, props[Value, Tone], triggers[],
+    DisassemblyView: leaf, props[Value, Tone], triggers[],
     DiffViewer: children, props[Gap, Orientation], triggers[],
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
     StackTrace: children, props[Gap], triggers[],

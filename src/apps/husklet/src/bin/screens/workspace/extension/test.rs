@@ -137,12 +137,30 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         file_browser_keeps_its_semantic_role();
         flame_graph_projects_profile_frames_into_semantics();
         memory_map_projects_exact_regions_into_semantics();
+        disassembly_projects_exact_instructions_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn disassembly_projects_exact_instructions_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::disassembly_view([
+        hl_gui::Instruction::new(0x401000, [0x55], "push", "rbp").expect("instruction"),
+        hl_gui::Instruction::new(0x401001, [0x48, 0x89, 0xe5], "mov", "rbp, rsp").expect("instruction"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let listing = &tree.root.children[0];
+    assert_eq!(listing.role, "DisassemblyView");
+    assert_eq!(
+        listing.value.as_deref(),
+        Some("0000000000401000\t55\tpush\trbp\n0000000000401001\t48 89 e5\tmov\trbp, rsp")
+    );
+    assert!(listing.actions.is_empty());
 }
 
 fn memory_map_projects_exact_regions_into_semantics() {

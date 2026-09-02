@@ -63,6 +63,36 @@ impl MemoryRegion {
     }
 }
 
+/// One decoded machine instruction with its original bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Instruction {
+    address: u64,
+    bytes: Vec<u8>,
+    mnemonic: String,
+    operands: String,
+}
+
+impl Instruction {
+    /// Makes an instruction. Empty or implausibly long encodings are omitted.
+    #[must_use]
+    pub fn new(
+        address: u64,
+        bytes: impl Into<Vec<u8>>,
+        mnemonic: impl Into<String>,
+        operands: impl Into<String>,
+    ) -> Option<Self> {
+        let bytes = bytes.into();
+        let mnemonic = mnemonic.into().replace(['\t', '\n', '\r'], " ");
+        let operands = operands.into().replace(['\t', '\n', '\r'], " ");
+        (!bytes.is_empty() && bytes.len() <= 16 && !mnemonic.trim().is_empty()).then_some(Self {
+            address,
+            bytes,
+            mnemonic,
+            operands,
+        })
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -341,6 +371,29 @@ impl Element {
         Self::new(Tag::MemoryMap).value(value)
     }
 
+    /// A bounded decoded instruction listing with exact source bytes.
+    #[must_use]
+    pub fn disassembly_view(instructions: impl IntoIterator<Item = Instruction>) -> Self {
+        let value = instructions
+            .into_iter()
+            .take(crate::DISASSEMBLY_INSTRUCTION_LIMIT)
+            .map(|instruction| {
+                let bytes = instruction
+                    .bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "{:016x}\t{}\t{}\t{}",
+                    instruction.address, bytes, instruction.mnemonic, instruction.operands
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::DisassemblyView).value(value)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -350,7 +403,7 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlameFrame, HexSource, HexView, MemoryRegion};
+    use super::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion};
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -463,5 +516,33 @@ mod tests {
             "the public region ceiling is a fixed contract"
         );
         assert!(value.starts_with("0000000000000000-0000000000001000\tr-xp\t4096\tsegment 0"));
+    }
+
+    #[test]
+    fn disassembly_rejects_invalid_encodings_and_has_an_independent_ceiling() {
+        assert!(Instruction::new(0, [], "ret", "").is_none());
+        assert!(Instruction::new(0, [0xc3], " ", "").is_none());
+        let instructions = (0..300).filter_map(|index| Instruction::new(index, [0x48, 0x89, 0xe5], "mov", "rbp\t rsp"));
+        let element = Element::disassembly_view(instructions);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("disassembly value");
+        assert_eq!(
+            value.lines().count(),
+            256,
+            "the instruction ceiling is a fixed contract"
+        );
+        assert!(value.starts_with("0000000000000000\t48 89 e5\tmov\trbp  rsp"));
     }
 }
