@@ -1,10 +1,7 @@
 // One component per tag, so an interface is written in components rather than
 // in strings.
 //
-// TODO: read the catalogue the Rust build emits once it lands, instead of the
-// copy in src/catalogue.json generated from src/workspaces/hl-gui/src/node/tag.rs.
-
-import catalogue from './catalogue.json' with { type: 'json' };
+import catalogue from '../catalogue.json' with { type: 'json' };
 
 /**
  * Every tag, as a host component React can create.
@@ -12,14 +9,14 @@ import catalogue from './catalogue.json' with { type: 'json' };
  * The element type is the tag's wire spelling, so there is no lookup table
  * between what someone writes and what the host receives.
  */
-export const components = Object.fromEntries(catalogue.tags.map((entry) => [entry.tag, entry.tag]));
+export const components = Object.fromEntries(catalogue.tags.map((entry) => [entry.name, entry.name]));
 
 /** Every tag name, in catalogue order. */
-export const tags = catalogue.tags.map((entry) => entry.tag);
+export const tags = catalogue.tags.map((entry) => entry.name);
 
 /** Whether a tag accepts child nodes. Leaf tags reject `Insert` on the host. */
 export function acceptsChildren(tag) {
-  return catalogue.tags.some((entry) => entry.tag === tag && entry.children);
+  return catalogue.tags.some((entry) => entry.name === tag && entry.acceptsChildren);
 }
 
 export const {

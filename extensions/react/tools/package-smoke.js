@@ -13,7 +13,7 @@ try {
     cwd: root, encoding: 'utf8',
   }));
   const names = new Set(dryRun[0].files.map(({ path: name }) => name));
-  for (const required of ['package.json', 'README.md', 'LICENSE', 'src/index.js', 'src/index.d.ts', 'src/catalogue.json']) {
+  for (const required of ['package.json', 'README.md', 'LICENSE', 'catalogue.json', 'src/index.js', 'src/index.d.ts']) {
     assert(names.has(required), `npm package omits ${required}`);
   }
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')), 'developer-only files leaked into package');
@@ -29,8 +29,11 @@ try {
     cwd: consumer, stdio: 'pipe',
   });
   const runtime = execFileSync(process.execPath, ['--input-type=module', '--eval', `
-    import { connect, workspace } from '@husklet/react';
+    import { Button, acceptsChildren, connect, tags, workspace } from '@husklet/react';
+    import catalogue from '@husklet/react/catalogue' with { type: 'json' };
     if (typeof connect !== 'function' || typeof workspace !== 'function') process.exit(1);
+    if (Button !== 'Button' || !acceptsChildren('Column')) process.exit(2);
+    if (catalogue.tags.length !== tags.length || catalogue.tags[0].name !== tags[0]) process.exit(3);
   `], { cwd: consumer, encoding: 'utf8' });
   assert.equal(runtime, '');
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
