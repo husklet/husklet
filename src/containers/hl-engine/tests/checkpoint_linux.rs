@@ -2762,6 +2762,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
                         .unwrap_or_else(|| panic!("missing {name} in {line}"))
                 };
                 (
+                    field("translated_entries="),
                     field("mixed_sse_executed="),
                     field("mixed_sse_executed_transitions="),
                     field("mixed_sse_disabled_boundaries="),
@@ -2772,10 +2773,11 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             mixed.len() == 3
                 && mixed
                     .iter()
-                    .all(|(descriptors, transitions, boundaries)| *descriptors > 0
+                    .all(|(translated, descriptors, transitions, boundaries)| *translated > 0
+                        && *descriptors > 0
                         && *transitions >= *descriptors
                         && *boundaries == 0),
-            "each capture/restore generation must execute a mixed body in its own fork-shared census: {mixed:?}\n{diagnostic_text}"
+            "each capture/restore generation must execute translated mixed bodies in its own fork-shared census: {mixed:?}\n{diagnostic_text}"
         );
     }
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");
@@ -3783,6 +3785,18 @@ fn daily_development_workload_survives_two_checkpoint_cycles(isa: GuestIsa) {
 #[test]
 fn aarch64_daily_development_workload_survives_two_checkpoint_cycles() {
     daily_development_workload_survives_two_checkpoint_cycles(GuestIsa::Aarch64);
+}
+
+#[test]
+fn aarch64_translated_daily_development_workload_survives_two_checkpoint_cycles() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let executable = daily_dev_fixture(GuestIsa::Aarch64, fixtures.path());
+    let fixture_compile = started.elapsed();
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    daily_dev_round_trip(GuestIsa::Aarch64, &executable, fixture_compile, true);
 }
 
 #[test]

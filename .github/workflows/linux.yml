@@ -745,6 +745,7 @@ jobs:
             --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/checkpoint-backend-matrix.log"
           for verdict in \
             aarch64_daily_development_workload_survives_two_checkpoint_cycles \
+            aarch64_translated_daily_development_workload_survives_two_checkpoint_cycles \
             amd64_daily_development_workload_survives_two_checkpoint_cycles \
             amd64_transliterated_jcc_links_are_rebuilt_across_two_checkpoint_cycles \
             x86_translator_round_trips_complete_tree_terminal_and_failure_contract; do
