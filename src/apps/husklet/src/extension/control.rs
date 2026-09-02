@@ -155,6 +155,11 @@ impl ContainerControl for ContainerLifecycle {
             .map_err(|error| failure(&error))
     }
 
+    fn execution_remove(&self, id: &str) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        self.bridge.wait(client.executions().remove(id)).map_err(|error| failure(&error))
+    }
+
     fn execute(
         &self,
         id: &str,

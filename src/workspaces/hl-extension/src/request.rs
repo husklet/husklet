@@ -105,6 +105,7 @@ pub enum Request {
         id: String,
         signal: String,
     },
+    ExecutionRemove { id: String },
     ContainerCreate { spec: crate::port::ContainerCreateSpec },
     ContainerStart {
         id: String,
@@ -308,6 +309,7 @@ impl Request {
             | Self::ContainerRestart { .. }
             | Self::ContainerKill { .. }
             | Self::ExecutionKill { .. }
+            | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePull { .. } | Self::ImageRemove { .. } | Self::ImagePrune => Capability::ImageWrite,

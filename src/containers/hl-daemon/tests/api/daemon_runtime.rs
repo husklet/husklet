@@ -413,6 +413,8 @@ async fn exec(client: &Client, rootfs: &Path) -> Result<(), Box<dyn std::error::
     require(catalogue.executions.iter().any(|entry| entry.id == exec.id), "daemon exec catalogue omitted durable identity")?;
     let replay = client.executions().logs(&exec.id).await?;
     require(replay.stdout == b"exec:alpine:value\n" && replay.stderr == b"exec-error\n", "daemon exec replay changed captured streams")?;
+    client.executions().remove(&exec.id).await?;
+    require(client.executions().list(1024).await?.executions.iter().all(|entry| entry.id != exec.id), "removed execution remained in catalogue")?;
     require(
         std::fs::read(rootfs.join("tmp/exec-shared"))? == b"shared",
         "daemon exec did not mutate the parent rootfs",

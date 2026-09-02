@@ -162,6 +162,7 @@ impl Session {
             | Request::ContainerRestart { .. }
             | Request::ContainerKill { .. }
             | Request::ExecutionKill { .. }
+            | Request::ExecutionRemove { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList
             | Request::ImagePull { .. }
@@ -311,6 +312,7 @@ impl Session {
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
+            Request::ExecutionRemove { id } => port.execution_remove(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerExec {
                 id,
                 command,

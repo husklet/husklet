@@ -621,6 +621,11 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Removes one stopped execution record and its captured output.
+    fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("execution removal is unsupported by this host".into()))
+    }
+
     /// Starts an additional process detached from the extension connection and
     /// returns its durable exec identity.
     fn execute(

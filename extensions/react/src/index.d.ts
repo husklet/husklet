@@ -4629,6 +4629,7 @@ export interface WorkspaceApi {
     executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
+    removeExecution(id: string): Promise<void>;
     create(spec: ContainerCreateSpec): Promise<string>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;

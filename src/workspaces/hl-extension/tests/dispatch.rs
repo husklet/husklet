@@ -230,6 +230,10 @@ impl ContainerControl for Host {
         self.ledger.note("executions.kill");
         Ok(())
     }
+    fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
+        self.ledger.note("executions.remove");
+        Ok(())
+    }
 
     fn execute(
         &self,
@@ -821,6 +825,7 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ContainerControl,
         ),
+        (Request::ExecutionRemove { id: "e1".into() }, Capability::ContainerControl),
         (
             Request::ContainerExec {
                 id: "c1".into(),

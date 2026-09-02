@@ -11,7 +11,7 @@ function fake() {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
-    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), removeExecution: record('containers.removeExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
@@ -250,6 +250,15 @@ test('execution signaling targets an execution with a strict bounded signal', as
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
   await signal.run({ id: 'e1', signal: 'SIGTERM' });
   assert.deepEqual(calls, [['containers.signalExecution', 'e1', 'SIGTERM']]);
+});
+
+test('execution removal requires literal confirmation', async () => {
+  const { api, calls } = fake();
+  const remove = tools(api).find(({ name }) => name === 'husklet_execution_remove');
+  assert.equal(remove.inputSchema.safeParse({ id: 'e1' }).success, false);
+  assert.equal(remove.inputSchema.safeParse({ id: 'e1', confirm: false }).success, false);
+  await remove.run({ id: 'e1', confirm: true });
+  assert.deepEqual(calls, [['containers.removeExecution', 'e1']]);
 });
 
 test('terminal layout tools use the host wire vocabulary and bounded destructive controls', async () => {
