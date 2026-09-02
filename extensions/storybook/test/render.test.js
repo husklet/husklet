@@ -11,6 +11,7 @@ import { defaults } from '../src/defaults.js';
 import { components } from '@husklet/react';
 import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from '../src/form.js';
+import { EVENT_LIMIT, KEYBOARD_STORY, KeyboardAccessibilityStory } from '../src/keyboard-accessibility.js';
 
 import { host } from './host.js';
 
@@ -67,11 +68,55 @@ test('the playground renders one frame holding the three panes', () => {
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    tags.length + 2,
-    'every component and both end-user flows are listed',
+    tags.length + 3,
+    'every component and all end-user flows are listed',
   );
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
+});
+
+test('keyboard accessibility story validates, confirms separately, and bounds focus history', () => {
+  const stage = host();
+  const first = stage.render(h(KeyboardAccessibilityStory));
+  const entry = created(first.patches).find((created) => created.tag === 'Entry')?.id;
+  const review = node(first.patches, 'Button', 'Review removal');
+  const disabled = node(first.patches, 'Button', 'Unavailable while running');
+  assert.ok(entry && review && disabled);
+  assert.ok(first.patches.some((patch) => 'SetProp' in patch && patch.SetProp.id === disabled
+    && patch.SetProp.prop === 'Enabled' && patch.SetProp.value.Flag === false));
+
+  let before = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke`, value: null });
+  assert.ok(node(stage.since(before), 'InlineMessage', 'Resolve the validation error before confirmation.'));
+
+  stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'storybook' });
+  before = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke`, value: null });
+  const confirmation = stage.since(before);
+  assert.ok(node(confirmation, 'Button', 'Cancel'));
+  const confirm = node(confirmation, 'Button', 'Confirm removal');
+  assert.ok(confirm);
+  assert.ok(confirmation.some((patch) => 'SetProp' in patch && patch.SetProp.id === confirm
+    && patch.SetProp.prop === 'Destructive' && patch.SetProp.value.Flag === true));
+
+  for (let index = 0; index < EVENT_LIMIT + 3; index += 1) {
+    stage.surface.dispatch({ trigger: 'Focus', node: review, id: `${review}:Focus`, focused: true });
+  }
+  const labels = stage.frames.flatMap((frame) => frame.patches)
+    .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
+    .map((patch) => patch.SetProp.value.Text);
+  assert.ok(labels.includes(`Event history (${EVENT_LIMIT}/${EVENT_LIMIT})`));
+  assert.ok(!labels.some((label) => label?.includes('ERROR disabled control focused')));
+});
+
+test('keyboard accessibility story is selectable from the shipped sidebar', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const item = node(first.patches, 'ListItemButton', KEYBOARD_STORY);
+  assert.ok(item);
+  const before = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null });
+  assert.ok(node(stage.since(before), 'Heading', 'Keyboard-safe extension removal'));
 });
 
 test('the form story validates submit, recovers on change, and confirms success', () => {

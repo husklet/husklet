@@ -31,6 +31,7 @@ import { amountOf, lengthValue, modeOf, rows } from './editors.js';
 import { LargeDataTableStory } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
+import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -42,7 +43,7 @@ export function Playground({ largeSource } = {}) {
   const [selected, setSelected] = useState(OPENING);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY;
+  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -86,6 +87,12 @@ export function Sidebar({ families, selected, onSelect }) {
         onInvoke: () => onSelect(ACQUISITION_STORY),
       }),
       h(ListItemButton, {
+        key: KEYBOARD_STORY,
+        label: KEYBOARD_STORY,
+        selected: selected === KEYBOARD_STORY,
+        onInvoke: () => onSelect(KEYBOARD_STORY),
+      }),
+      h(ListItemButton, {
         key: FORM_STORY,
         label: FORM_STORY,
         selected: selected === FORM_STORY,
@@ -125,6 +132,8 @@ export function Preview({ name, opened, largeSource, triggers = [] }) {
         ? h(AcquisitionProgressStory)
         : name === FORM_STORY
         ? h(ValidatedSettingsFormStory)
+        : name === KEYBOARD_STORY
+        ? h(KeyboardAccessibilityStory)
         : name === 'DataTable' && largeSource
         ? h(LargeDataTableStory, { source: largeSource })
         : h(components[name], { ...present(opened.props), ...handlers }, ...opened.children.map(child)),
