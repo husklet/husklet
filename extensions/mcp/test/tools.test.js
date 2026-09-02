@@ -317,7 +317,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
   assert.match(xml, /<\/terminal><\/husklet-pane>$/);
 });
 
-test('unified pane XML selects surface semantics and gives a clear absent error', async () => {
+test('unified pane XML selects surface semantics and gives a clear topology absence error', async () => {
   const terminal = {
     topology: async () => ({ active_tab: null, tabs: [{ id: 't', title: 'UI', root: {
       kind: 'pane', focused: false, grid: null,
@@ -334,7 +334,7 @@ test('unified pane XML selects surface semantics and gives a clear absent error'
   assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
-  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from topology and exposes no native semantics/);
+  await assert.rejects(() => paneXml(terminal, 'missing'), /absent from terminal topology/);
 });
 
 test('results redact secrets and remain bounded', async () => {
@@ -581,6 +581,65 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
   assert.deepEqual(calls.map(([name]) => name), [
     'terminal_topology', 'terminal_read_pane', 'terminal_topology', 'pane_semantic_read',
   ]);
+  await client.close();
+  await server.close();
+});
+
+test('pane XML follows every split leaf and refuses a removed stale slot', async () => {
+  let changed = false;
+  const calls = [];
+  const leaf = (slot, focused, columns, rows) => ({
+    kind: 'pane', focused, grid: { columns, rows },
+    pane: { slot, occupant: 'terminal', working_directory: `/work/${slot}`, command: `shell-${slot}`, provider: null },
+  });
+  const session = { call: async (name, argument) => {
+    calls.push([name, argument]);
+    if (name === 'terminal_topology') return { reply: 'topology', with: {
+      active_tab: changed ? 'tab-b' : 'tab-a',
+      tabs: changed ? [{ id: 'tab-b', title: 'After', root: leaf('right', true, 132, 41) }] : [
+        { id: 'tab-a', title: 'Before', root: { kind: 'split', division: 'beside', ratio_per_mille: 600,
+          first: leaf('left', true, 72, 30), second: { kind: 'split', division: 'below', ratio_per_mille: 400,
+            first: leaf('upper', false, 48, 12), second: leaf('right', false, 48, 18) } } },
+        { id: 'tab-b', title: 'Background', root: leaf('other-tab', true, 90, 25) },
+      ],
+    } };
+    if (name === 'terminal_read_pane') return { reply: 'text', with: {
+      slot: argument.slot, lines: [`visible <${argument.slot}>`], truncated: argument.slot === 'upper',
+    } };
+    // A stale host cache must never make a removed split leaf look native.
+    if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
+      slot: argument.slot, revision: 99, truncated: false,
+      root: { id: 1, role: 'status', label: 'stale', value: 'removed', disabled: false, destructive: false, actions: [], children: [] },
+    } };
+    throw new Error(`unexpected call ${name}`);
+  } };
+  const server = createServer(session);
+  const client = new Client({ name: 'split-reader', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const expected = [
+    ['left', 'tab-a', 'true', 'true', '72', '30', 'false'],
+    ['upper', 'tab-a', 'true', 'false', '48', '12', 'true'],
+    ['right', 'tab-a', 'true', 'false', '48', '18', 'false'],
+    ['other-tab', 'tab-b', 'false', 'true', '90', '25', 'false'],
+  ];
+  for (const [slot, tab, active, focused, columns, rows, truncated] of expected) {
+    const answer = await client.callTool({ name: 'husklet_pane_read', arguments: { slot, lines: 10 } });
+    const xml = answer.content[0].text;
+    assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal">`));
+    assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}"[^>]*truncated="${truncated}">`));
+    assert.match(xml, new RegExp(`visible &lt;${slot}&gt;`));
+  }
+
+  changed = true;
+  const surviving = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'right', lines: 10 } });
+  assert.match(surviving.content[0].text, /tab="tab-b" title="After" active="true" focused="true" columns="132" rows="41"/);
+  const removed = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: 'upper', lines: 10 } });
+  assert.equal(removed.isError, true);
+  assert.match(removed.content[0].text, /absent from terminal topology/);
+  assert.equal(calls.filter(([name]) => name === 'pane_semantic_read').length, 0, 'removed slots never probe stale semantics');
+
   await client.close();
   await server.close();
 });
