@@ -128,3 +128,32 @@ the host's credit-controlled subscription either reports a coalesced change or
 times out. Only a reported change causes one fresh snapshot. There is no polling
 loop. A stale-revision error is authoritative: read a fresh tree and reconsider
 the action instead of replaying an old node ID.
+
+## Day-one control workflow
+
+[`examples/agent-day-one.mjs`](examples/agent-day-one.mjs) composes a complete,
+bounded workflow over an initialized MCP `Client`:
+
+```js
+import { runAgentDayOne } from '@husklet/mcp/examples/agent-day-one.mjs';
+
+const observation = await runAgentDayOne(client, {
+  workspaceName: 'dev-target',
+  updatedConfiguration,
+  container: {
+    image: 'example/worker@sha256:...',
+    name: 'agent-check',
+    command: ['/usr/bin/worker', '--once'],
+  },
+  terminalInput: 'status\n',
+  actionLabel: 'Refresh',
+});
+```
+
+It inspects and temporarily updates a target workspace, creates and starts one
+container, executes a bounded argv vector, inspects processes, discovers panes,
+reads and writes a terminal, reads semantic XML, and invokes a node at the exact
+observed revision. One-shot pane waits are armed before terminal input and UI
+action. A `finally` block uses confirmed container stop/removal and restores the
+original workspace configuration. It never accepts shell command text and does
+not retry a stale semantic action.

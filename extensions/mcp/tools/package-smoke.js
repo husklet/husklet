@@ -24,8 +24,10 @@ try {
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { tools, createServer, semanticXml } from '@husklet/mcp';
     import { runPaneAgentTurn } from '@husklet/mcp/examples/agent-pane-flow.mjs';
+    import { runAgentDayOne } from '@husklet/mcp/examples/agent-day-one.mjs';
     if (typeof tools !== 'function' || typeof createServer !== 'function') process.exit(1);
     if (typeof runPaneAgentTurn !== 'function') process.exit(1);
+    if (typeof runAgentDayOne !== 'function') process.exit(1);
     const names = new Set(tools({}).map(({ name }) => name));
     for (const name of ['husklet_workspace_create', 'husklet_workspace_update', 'husklet_container_execution', 'husklet_execution_signal', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_remove', 'husklet_image_prune']) {
       if (!names.has(name)) process.exit(1);
@@ -75,6 +77,7 @@ try {
   const names = new Set(packed[0].files.map(({ path: name }) => name));
   assert(names.has('src/cli.js'));
   assert(names.has('examples/agent-pane-flow.mjs'));
+  assert(names.has('examples/agent-day-one.mjs'));
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')));
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
