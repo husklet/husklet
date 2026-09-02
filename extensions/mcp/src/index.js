@@ -124,6 +124,7 @@ export function tools(api) {
     define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
     define('husklet_container_processes', 'Read the bounded process table for one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
     define('husklet_container_execution', 'Inspect one bounded container execution.', z.object({ id }).strict(), ({ id: value }) => api.containers.execution(value)),
+    define('husklet_execution_wait', 'Wait up to 30 seconds for one execution to stop and return its final state.', z.object({ id, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ id: value, timeout_ms }) => api.containers.waitExecution(value, { timeoutMs: timeout_ms })),
     define('husklet_execution_signal', 'Signal one execution without signaling its owning container.', z.object({ id, signal: z.string().min(1).max(32) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
     define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
     define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, (spec) => api.containers.create(spec)),

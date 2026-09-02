@@ -11,7 +11,7 @@ function fake() {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
     extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
-    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
+    containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
@@ -218,6 +218,16 @@ test('container execution inspection is a strict bounded read through the typed 
   assert.equal(execution.inputSchema.safeParse({ id: 'exec-1', extra: true }).success, false);
   await execution.run({ id: 'exec-1' });
   assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
+});
+
+test('execution wait is a strict bounded read and preserves the timeout', async () => {
+  const { api, calls } = fake();
+  const wait = tools(api).find(({ name }) => name === 'husklet_execution_wait');
+  assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 0 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 30_001 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 10, extra: true }).success, false);
+  await wait.run({ id: 'e1', timeout_ms: 1250 });
+  assert.deepEqual(calls, [['containers.waitExecution', 'e1', { timeoutMs: 1250 }]]);
 });
 
 test('execution signaling targets an execution with a strict bounded signal', async () => {
@@ -522,6 +532,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_extension_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_execution'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_execution_wait'));
   assert(listed.tools.some(({ name }) => name === 'husklet_execution_signal'));
   assert(listed.tools.some(({ name }) => name === 'husklet_image_list'));
   assert(listed.tools.some(({ name }) => name === 'husklet_volume_list'));
@@ -546,6 +557,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   assert.deepEqual(JSON.parse(execution.content[0].text), {
     id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
   });
+  await client.callTool({ name: 'husklet_execution_wait', arguments: { id: 'exec-live', timeout_ms: 250 } });
   await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'exec-live', signal: 'SIGHUP' } });
   const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
   assert.equal(refusedStop.isError, true);
@@ -580,6 +592,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_acquisition_status', { job: 'job-live' }],
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: 'exec-live' }],
+    ['execution_wait', { id: 'exec-live', timeout_ms: 250 }],
     ['execution_kill', { id: 'exec-live', signal: 'SIGHUP' }],
     ['container_stop', { id: 'container-1' }],
     ['container_kill', { id: 'container-1', signal: 'SIGKILL' }],

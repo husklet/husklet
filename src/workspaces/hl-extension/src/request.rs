@@ -95,6 +95,10 @@ pub enum Request {
     ExecutionInspect {
         id: String,
     },
+    ExecutionWait {
+        id: String,
+        timeout_ms: u32,
+    },
     ExecutionKill {
         id: String,
         signal: String,
@@ -289,7 +293,8 @@ impl Request {
             | Self::ContainerInspect { .. }
             | Self::ContainerProcesses { .. }
             | Self::ContainerLogs { .. }
-            | Self::ExecutionInspect { .. } => Capability::ContainerRead,
+            | Self::ExecutionInspect { .. }
+            | Self::ExecutionWait { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
             | Self::ContainerStop { .. }

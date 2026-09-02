@@ -149,7 +149,8 @@ impl Session {
             | Request::ContainerInspect { .. }
             | Request::ContainerProcesses { .. }
             | Request::ContainerLogs { .. }
-            | Request::ExecutionInspect { .. } => self.containers(request, services),
+            | Request::ExecutionInspect { .. }
+            | Request::ExecutionWait { .. } => self.containers(request, services),
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
             | Request::ContainerStop { .. }
@@ -251,6 +252,14 @@ impl Session {
             Request::ContainerProcesses { id } => Ok(Reply::Processes(port.processes(id)?)),
             Request::ContainerLogs { id, stdout, stderr } => Ok(Reply::Logs(port.logs(id, *stdout, *stderr)?)),
             Request::ExecutionInspect { id } => Ok(Reply::Execution(port.execution(id)?)),
+            Request::ExecutionWait { id, timeout_ms } => {
+                if !(1..=30_000).contains(timeout_ms) {
+                    return Err(Failure::Conflict {
+                        detail: "execution wait timeout_ms must be between 1 and 30000".into(),
+                    });
+                }
+                Ok(Reply::Execution(port.execution_wait(id, *timeout_ms)?))
+            }
             Request::ContainerList => Ok(Reply::Containers(port.list()?)),
             _ => Err(Failure::Unsupported {
                 call: "container read".into(),

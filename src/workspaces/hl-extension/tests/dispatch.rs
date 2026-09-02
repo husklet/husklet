@@ -164,6 +164,12 @@ impl ContainerInventory for Host {
             user: "root".into(),
         })
     }
+
+    fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
+        self.ledger.note("executions.wait");
+        Ok(ExecutionSummary { id: id.into(), container_id: "c1".into(), running: false,
+            exit_code: 17, pid: 0, command: vec!["worker".into()], user: "root".into() })
+    }
 }
 
 impl ContainerControl for Host {
@@ -758,6 +764,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerRead,
         ),
         (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
+        (Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, Capability::ContainerRead),
         (
             Request::ContainerCreate {
                 spec: hl_extension::port::ContainerCreateSpec {
@@ -1206,6 +1213,19 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
         .dispatch(&Request::ExecutionInspect { id: "e1".into() }, &services(&host))
         .expect("execution");
     assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
+
+    let waited = session.dispatch(
+        &Request::ExecutionWait { id: "e1".into(), timeout_ms: 500 }, &services(&host),
+    ).expect("execution wait");
+    assert!(matches!(waited, Reply::Execution(execution) if !execution.running && execution.exit_code == 17));
+}
+
+#[test]
+fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    assert!(session.dispatch(&Request::ExecutionWait { id: "e1".into(), timeout_ms: 30_001 }, &services(&host)).is_err());
+    assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
 
 #[test]

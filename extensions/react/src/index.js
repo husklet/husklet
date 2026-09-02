@@ -125,6 +125,9 @@ export function workspace(session) {
         await session.call('container_logs', { id, stdout, stderr }), 'logs',
       ),
       execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
+      waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
+        await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
+      ),
       signalExecution: (id, signal) => done('execution_kill', { id, signal }),
       create: async (configuration, legacyName) => {
         const spec = typeof configuration === 'string' ? {
@@ -410,7 +413,7 @@ export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'signalExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'waitExecution', 'signalExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec'],
     images: ['list', 'pull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],

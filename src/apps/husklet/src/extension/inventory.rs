@@ -1,6 +1,6 @@
 //! Reading container state on behalf of an extension.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use hl_client::model::{Container, InspectContainer, List};
 use hl_extension::port::{
@@ -79,11 +79,26 @@ impl ContainerInventory for ContainerCatalog {
             .bridge
             .wait(client.executions().inspect(id))
             .map_err(|error| failure(&error))?;
+        Ok(execution_summary(execution))
+    }
+
+    fn execution_wait(&self, id: &str, timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
+        let client = self.bridge.client();
+        self.bridge.wait(async {
+            tokio::time::timeout(Duration::from_millis(u64::from(timeout_ms)), client.executions().wait(id)).await
+        }).map_err(|_| HostError::Conflict(format!("execution {id} did not stop within {timeout_ms}ms")))?
+            .map_err(|error| failure(&error))?;
+        let execution = self.bridge.wait(client.executions().inspect(id)).map_err(|error| failure(&error))?;
+        Ok(execution_summary(execution))
+    }
+}
+
+fn execution_summary(execution: hl_client::model::ExecInspect) -> ExecutionSummary {
         let command = std::iter::once(execution.process.entrypoint.clone())
             .chain(execution.process.arguments.clone())
             .filter(|part| !part.is_empty())
             .collect();
-        Ok(ExecutionSummary {
+        ExecutionSummary {
             id: execution.id,
             container_id: execution.container_id,
             running: execution.running,
@@ -91,8 +106,7 @@ impl ContainerInventory for ContainerCatalog {
             pid: execution.pid,
             command,
             user: execution.process.user,
-        })
-    }
+        }
 }
 
 /// Per-stream wire bound. The client already bounds the HTTP response; this

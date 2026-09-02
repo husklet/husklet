@@ -533,6 +533,11 @@ pub trait ContainerInventory {
             "execution inspection is unsupported by this host".into(),
         ))
     }
+
+    /// Waits at most `timeout_ms` for an execution to stop, then returns its final state.
+    fn execution_wait(&self, _id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
+        Err(HostError::Unsupported("execution waiting is unsupported by this host".into()))
+    }
 }
 
 /// Changing container state. Granting this is granting code execution inside
