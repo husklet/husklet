@@ -235,7 +235,14 @@ impl Interface {
                 value: hl_gui::PropValue::Flag(action.value.as_deref() != Some("false")),
             },
         };
-        self.sink.accept(Signal::Interaction(event));
+        if self.panes.contains_key(slot) {
+            self.sink.accept(Signal::InteractionAt {
+                slot: slot.to_owned(),
+                event,
+            });
+        } else {
+            self.sink.accept(Signal::Interaction(event));
+        }
         Ok(())
     }
 
@@ -340,9 +347,12 @@ impl Interface {
         for event in self.surface.reports().drain() {
             self.sink.accept(Signal::Interaction(event));
         }
-        for pane in self.panes.values() {
+        for (slot, pane) in &self.panes {
             for event in pane.surface.reports().drain() {
-                self.sink.accept(Signal::Interaction(event));
+                self.sink.accept(Signal::InteractionAt {
+                    slot: slot.clone(),
+                    event,
+                });
             }
         }
     }
@@ -354,9 +364,12 @@ impl Interface {
         for request in self.surface.requests(self.clock) {
             self.sink.accept(Signal::Interaction(Event::Rows(request)));
         }
-        for pane in self.panes.values_mut() {
+        for (slot, pane) in &mut self.panes {
             for request in pane.surface.requests(self.clock) {
-                self.sink.accept(Signal::Interaction(Event::Rows(request)));
+                self.sink.accept(Signal::InteractionAt {
+                    slot: slot.clone(),
+                    event: Event::Rows(request),
+                });
             }
         }
     }

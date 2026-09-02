@@ -8,6 +8,8 @@ pub enum Signal {
     /// Interaction reported by the rendered surface, or a table asking for a
     /// window of rows — both arrive as [`Event`], so both travel one path.
     Interaction(Event),
+    /// Interaction from one independently retained pane surface.
+    InteractionAt { slot: String, event: Event },
     /// The user asked for the stopped extension to be started again.
     Retry,
 }

@@ -124,6 +124,9 @@ impl<'a> Overview<'a> {
         let selected = std::rc::Rc::new(move |selection| ordered.accept(Order::PaneProvider(selection)));
         let sink = std::rc::Rc::new(move |signal: Signal| match signal {
             Signal::Interaction(event) => host.accept(Order::Interaction(event)),
+            Signal::InteractionAt { slot, event } => {
+                host.accept(Order::InteractionAt(hl_extension::SurfaceEvent { slot, event }))
+            }
             Signal::Retry => host.accept(Order::Retry),
         });
         let (widget, page) = screens::workspace::extension::Interface::with_faults(deliveries, sink, faulted);

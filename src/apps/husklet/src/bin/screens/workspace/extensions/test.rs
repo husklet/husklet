@@ -1128,6 +1128,12 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         deliveries,
         Rc::new(move |signal: Signal| match signal {
             Signal::Interaction(event) => orders.accept(hl::extension::Order::Interaction(event)),
+            Signal::InteractionAt { slot, event } => {
+                orders.accept(hl::extension::Order::InteractionAt(hl_extension::SurfaceEvent {
+                    slot,
+                    event,
+                }));
+            }
             Signal::Retry => orders.accept(hl::extension::Order::Retry),
         }),
     );
