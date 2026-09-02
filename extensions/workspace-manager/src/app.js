@@ -11,6 +11,7 @@ const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images',
 
 export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
+  const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
   const volumes = useResource(api.volumes.list, initial.volumes);
@@ -64,11 +65,15 @@ export function WorkspaceManager({ api, selections, containerDetails, executionD
   const body = section === 'overview'
     ? h(Overview, { containers, images, volumes, networks, onOpen: setSection })
     : section === 'containers'
-      ? h(Containers, { api, resource: containers, containerDetails })
+      ? h(Containers, { api, resource: containers, containerDetails, onOpenExecution: async (id) => {
+        setRequestedExecution(id);
+        await executions.reload();
+        setSection('executions');
+      } })
       : section === 'processes'
         ? h(Processes, { api, resource: containers })
         : section === 'executions'
-          ? h(Executions, { api, resource: executions, executionDetails, truncated: executionsTruncated })
+          ? h(Executions, { api, resource: executions, executionDetails, truncated: executionsTruncated, requestedExecution })
         : section === 'images'
           ? h(Images, { api, resource: images, imageDetails })
           : section === 'volumes'
@@ -105,7 +110,7 @@ function Summary({ title: label, value, detail, onOpen }) {
     h(CardActions, {}, h(Button, { label: 'Open', variant: 'ghost', onInvoke: onOpen })));
 }
 
-export function Containers({ api, resource, containerDetails }) {
+export function Containers({ api, resource, containerDetails, onOpenExecution }) {
   const localDetails = useMemo(() => new ContainerDetailsSource(), []);
   const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState(null);
@@ -173,7 +178,7 @@ export function Containers({ api, resource, containerDetails }) {
       h(CardActions, { gap: 1 },
         h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
         ...containerActions(item, busy, act)),
-      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection }) : null)),
+      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onOpenExecution }) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
@@ -191,12 +196,23 @@ function containerActions(item, busy, act) {
   ];
 }
 
-function ContainerDetail({ api, container, act, inspection }) {
+function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
   const [command, setCommand] = useState('');
+  const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
   const [logs, setLogs] = useState(null);
   const run = async () => {
-    const argv = command.trim().split(/\s+/).filter(Boolean);
-    if (argv.length) await api.containers.exec(container.id, { command: argv });
+    setExecution({ state: 'loading', id: '', error: null });
+    try {
+      let argv;
+      try { argv = JSON.parse(command); }
+      catch { throw new Error('Command must be valid JSON, such as ["sh","-lc","printf hello"].'); }
+      if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64
+        || argv.some((argument) => typeof argument !== 'string' || argument.length > 4_096)) {
+        throw new Error('Command must be a JSON array of 1–64 strings, each at most 4096 characters.');
+      }
+      const id = await api.containers.exec(container.id, { command: argv });
+      setExecution({ state: 'ready', id, error: null });
+    } catch (error) { setExecution({ state: 'error', id: '', error }); }
   };
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
   return h(CardContent, { gap: 2 },
@@ -210,10 +226,15 @@ function ContainerDetail({ api, container, act, inspection }) {
             ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
             : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
-    h(Row, { gap: 1 }, h(Entry, { value: command, placeholder: 'Command and arguments', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: 'Execute', enabled: command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
+    h(Text, { label: 'Enter an argument array so spaces and quoting remain exact, for example ["sh","-lc","printf hello"].', color: 'text-dim', wrap: true }),
+    h(Row, { gap: 1, wrap: true }, h(Entry, { value: command, placeholder: 'Command argv JSON', enabled: execution.state !== 'loading', onChange: (event) => setCommand(String(event.value ?? '')) }), h(Button, { label: execution.state === 'loading' ? 'Executing…' : 'Execute', enabled: execution.state !== 'loading' && command.trim().length > 0, onInvoke: run }), h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
       label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)}?`,
       onConfirm: () => act('kill', container.id, 'SIGKILL'),
     })),
+    execution.state === 'error' ? h(Text, { label: execution.error?.message ?? String(execution.error), color: 'danger', wrap: true }) : null,
+    execution.state === 'ready' ? h(Row, { gap: 1, wrap: true, align: 'center' },
+      h(Text, { label: `Execution ${execution.id} created.`, color: 'positive', wrap: true }),
+      onOpenExecution ? h(Button, { label: 'Inspect execution', onInvoke: () => onOpenExecution(execution.id) }) : null) : null,
     logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }));
 }
 
@@ -243,7 +264,7 @@ function Processes({ api, resource }) {
     h(Omitted, { count: view.omitted }));
 }
 
-export function Executions({ api, resource, executionDetails, truncated = false }) {
+export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {
   const localDetails = useMemo(() => new ExecutionDetailsSource(), []);
   const detailsSource = executionDetails ?? localDetails;
   const [selected, setSelected] = useState('');
@@ -258,6 +279,9 @@ export function Executions({ api, resource, executionDetails, truncated = false 
       setInspection({ state: 'ready', count, error: null });
     } catch (error) { setInspection({ state: 'error', count: 0, error }); }
   };
+  useEffect(() => {
+    if (requestedExecution && selected !== requestedExecution) void inspect(requestedExecution);
+  }, [requestedExecution]);
   const logs = async (id) => {
     setBusy(`logs:${id}`);
     try {

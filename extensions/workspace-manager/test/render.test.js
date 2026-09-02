@@ -305,6 +305,32 @@ test('container creation retains exact identity and retries only start after a p
   ], 'retry never creates a duplicate container');
 });
 
+test('container execution preserves argv and exposes the exact inspectable identity', async () => {
+  const calls = [];
+  const controlled = { containers: {
+    inspect: async () => ({ id: 'container-one', name: 'api', image: 'alpine', state: 'running', created: 0 }),
+    exec: async (id, options) => { calls.push(['exec', id, options]); return 'execution-exact-42'; },
+    logs: async () => new Uint8Array(),
+  } };
+  const resource = { data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running' }], loading: false, error: null, reload: async () => {} };
+  const opened = [];
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource, onOpenExecution: async (id) => opened.push(id) }));
+  invoke(stage, 'Details'); await settled(); await settled();
+
+  change(stage, 'Command argv JSON', 'sh -lc echo');
+  invoke(stage, 'Execute'); await settled();
+  assert.ok(labelled(stage, 'Command must be valid JSON, such as ["sh","-lc","printf hello"].'), 'invalid ambiguous input is rejected');
+  assert.deepEqual(calls, []);
+
+  change(stage, 'Command argv JSON', '["sh","-lc","printf hello world"]');
+  invoke(stage, 'Execute'); await settled(); await settled();
+  assert.deepEqual(calls, [['exec', 'container-one', { command: ['sh', '-lc', 'printf hello world'] }]]);
+  assert.ok(labelled(stage, 'Execution execution-exact-42 created.'));
+  invoke(stage, 'Inspect execution'); await settled();
+  assert.deepEqual(opened, ['execution-exact-42']);
+});
+
 test('container details load through the bounded source and a failed read is retryable', async () => {
   let attempts = 0;
   const mutations = [];

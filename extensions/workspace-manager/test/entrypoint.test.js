@@ -15,6 +15,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const received = [];
   let peer;
   let tearingDown = false;
+  let executed = false;
   const server = net.createServer((socket) => {
     peer = socket;
     const reader = new Reader();
@@ -40,10 +41,17 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             ? { reply: 'container', with: { id: 'c1', name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
           : name === 'container_create'
             ? { reply: 'identity', with: 'created-over-socket' }
+          : name === 'container_exec'
+            ? (executed = true, { reply: 'identity', with: 'execution-over-socket' })
           : name === 'execution_list'
-            ? { reply: 'executions', with: { executions: [{ id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' }], truncated: false } }
+            ? { reply: 'executions', with: { executions: [
+              { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
+              ...(executed ? [{ id: 'execution-over-socket', container_id: 'c1', running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }] : []),
+            ], truncated: false } }
           : name === 'execution_inspect'
-            ? { reply: 'execution', with: { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' } }
+            ? { reply: 'execution', with: frame.payload.with.id === 'execution-over-socket'
+              ? { id: 'execution-over-socket', container_id: 'c1', running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }
+              : { id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 0, command: ['true'], user: '' } }
           : name === 'execution_logs'
             ? { reply: 'logs', with: { stdout: [111, 107], stderr: [33], truncated: false } }
           : name === 'image_list'
@@ -112,6 +120,18 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const containerResize = requests.findLast((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 202);
     assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
+    peer.write(encode({ channel: 29, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON', '["sh","-lc","printf hello world"]') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === '["sh","-lc","printf hello world"]')));
+    peer.write(encode({ channel: 30, kind: KIND.event, payload: invocation(requests, 'Execute') }));
+    await until(() => calls.includes('container_exec') && requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Execution execution-over-socket created.')));
+    assert.deepEqual(requests.find((request) => request.call === 'container_exec').with, {
+      id: 'c1', command: ['sh', '-lc', 'printf hello world'], user: null, working_directory: null,
+    });
+    peer.write(encode({ channel: 31, kind: KIND.event, payload: invocation(requests, 'Inspect execution') }));
+    await until(() => requests.some((request) => request.call === 'execution_inspect'
+      && request.with.id === 'execution-over-socket'));
     const beforeExecutions = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 13, kind: KIND.event, payload: invocation(requests, 'Executions') }));
     await until(() => requests.some((request) => request.call === 'event_subscribe' && request.with.topic === 'executions'));
