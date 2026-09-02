@@ -76,6 +76,13 @@ jobs:
           DYLD_LIBRARY_PATH="$native_directory" "$RUNNER_TEMP/hl-public-abi-c"
           DYLD_LIBRARY_PATH="$native_directory" "$RUNNER_TEMP/hl-public-abi-cxx"
 
+      - name: Test macOS ARM64 checkpoint backend policy
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --locked -p hl-engine --lib
+          runtime::execution::native_eligibility_tests::arm_and_non_linux_hosts_refuse_native_checkpoint_composition
+          -- --exact
+
   native-windows-amd64:
     name: Native surface / Windows AMD64
     runs-on: windows-2025

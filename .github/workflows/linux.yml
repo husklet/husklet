@@ -698,3 +698,10 @@ jobs:
               exit 1
             }
           done
+
+      - name: Test ARM64 checkpoint backend policy
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --locked --offline -p hl-engine --lib
+          runtime::execution::native_eligibility_tests::arm_and_non_linux_hosts_refuse_native_checkpoint_composition
+          -- --exact

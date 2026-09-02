@@ -992,6 +992,50 @@ mod native_eligibility_tests {
             );
         }
     }
+
+    #[test]
+    fn arm_and_non_linux_hosts_refuse_native_checkpoint_composition() {
+        for intent in [
+            NativeCheckpointIntent::FreshCoordinator,
+            NativeCheckpointIntent::DomainMember,
+            NativeCheckpointIntent::Restore,
+            NativeCheckpointIntent::Partial,
+        ] {
+            let arm = native_eligibility(
+                crate::activation::GuestIsa::Aarch64,
+                &plan(),
+                intent,
+                host(),
+            );
+            assert_eq!(arm, Err(NativeSupervisedRefusal::GuestIsa), "{intent:?}");
+            assert_eq!(native_selection(NativeSupervisedRequest::Auto, arm), Ok(false));
+            assert_eq!(
+                native_selection(NativeSupervisedRequest::On, arm),
+                Err(CompositionError::NativeSupervisedRefused(
+                    NativeSupervisedRefusal::GuestIsa,
+                )),
+            );
+        }
+
+        // This arm executes on the native ARM64 Linux and macOS CI hosts. Those hosts have no
+        // native-supervised implementation: their real capability probe must remain closed before
+        // checkpoint policy can accidentally select an x86-only backend.
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            let actual = native_eligibility_for_request(
+                NativeSupervisedRequest::On,
+                crate::activation::GuestIsa::Aarch64,
+                &plan(),
+                NativeCheckpointIntent::FreshCoordinator,
+                || native_host_capabilities(&plan()),
+            );
+            assert_eq!(
+                actual,
+                Err(NativeSupervisedRefusal::Host),
+                "unsupported host admitted native ARM checkpoint composition",
+            );
+        }
+    }
 }
 
 impl RuntimeFactory for ProductionFactory {
