@@ -81,3 +81,14 @@ test('host events type the pane chooser identity as well as subscribed snapshots
     'strict consumers are incorrectly told that provider selections cannot arrive',
   );
 });
+
+test('event hooks expose typed lifecycle-safe subscriptions', () => {
+  assert.match(
+    declarations,
+    /useHostEvents\(session: Session, listener: \(event: HostEvent, channel: number\) => void\): void;/,
+  );
+  assert.match(
+    declarations,
+    /usePaneSelection\(session: Session, provider\?: string \| null\): PaneSelection \| null;/,
+  );
+});

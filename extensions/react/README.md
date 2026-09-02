@@ -62,25 +62,14 @@ and the stable workspace slot that selected it. Use that event to select the
 view rendered by the extension's existing root:
 
 ```jsx
-import React, { useEffect, useState } from 'react';
-import { connect, render, LogView, Text } from '@husklet/react';
+import React from 'react';
+import { connect, render, LogView, Text, usePaneSelection } from '@husklet/react';
 
-const listeners = new Set();
-const session = await connect({
-  onEvent(event) {
-    if ('pane_provider' in event) {
-      for (const listener of listeners) listener(event);
-    }
-  },
-});
+const session = await connect();
 
 function App() {
-  const [selection, setSelection] = useState(null);
-  useEffect(() => {
-    listeners.add(setSelection);
-    return () => listeners.delete(setSelection);
-  }, []);
-  return selection?.pane_provider === 'logs'
+  const selection = usePaneSelection(session, 'logs');
+  return selection
     ? <LogView value={`Logs selected in ${selection.slot}`} />
     : <Text value="Choose Service logs from a pane menu" />;
 }
@@ -90,7 +79,9 @@ render(<App />, session, { title: 'My Extension' });
 
 The host sends only providers declared by this extension. The `slot` lets state
 and diagnostics remain pane-addressed; it is not a request to open an unrelated
-tab or split.
+tab or split. `usePaneSelection` removes its session observer on unmount and
+when the session changes. `useHostEvents(session, listener)` provides the same
+cleanup and fresh-callback behavior for other typed `HostEvent` handling.
 
 ## Workspace API
 

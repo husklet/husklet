@@ -279,6 +279,12 @@ export class Session {
 
 export function connect(options?: ConnectOptions): Promise<Session>;
 
+/** Observe host events with automatic unmount/session cleanup and a fresh render callback. */
+export function useHostEvents(session: Session, listener: (event: HostEvent, channel: number) => void): void;
+
+/** The latest pane chooser selection, optionally restricted to one provider ID. */
+export function usePaneSelection(session: Session, provider?: string | null): PaneSelection | null;
+
 export interface WorkspaceApi {
   info(): Promise<WorkspaceInfo>;
   list(): Promise<WorkspaceState[]>;
