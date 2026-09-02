@@ -202,6 +202,8 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: '😀'.repeat(129), name: 'worker-1' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', user: 'é'.repeat(128) }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', user: '😀'.repeat(65) }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['VALUE', 'é'.repeat(4096)]] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['VALUE', '😀'.repeat(2049)]] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: '../host', read_only: false }] }).success, false);

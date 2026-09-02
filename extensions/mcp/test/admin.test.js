@@ -175,6 +175,25 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(userOversized.isError, true);
   assert.equal(calls.length, userOversizedStart);
+
+  const exactEnvironment = 'é'.repeat(4096);
+  const environmentExactStart = calls.length;
+  const environmentExact = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'environment-boundary', environment: [['VALUE', exactEnvironment]] },
+  });
+  assert.notEqual(environmentExact.isError, true);
+  assert.equal(calls.length, environmentExactStart + 1);
+  assert.equal(calls[environmentExactStart].call, 'container_create');
+  assert.deepEqual(calls[environmentExactStart].with.spec.environment, [['VALUE', exactEnvironment]]);
+
+  const environmentOversizedStart = calls.length;
+  const environmentOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'environment-overflow', environment: [['VALUE', '😀'.repeat(2049)]] },
+  });
+  assert.equal(environmentOversized.isError, true);
+  assert.equal(calls.length, environmentOversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 

@@ -40,6 +40,10 @@ const containerUser = z.string().min(1).max(256).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 256,
   'container user exceeds 256 UTF-8 bytes',
 );
+const environmentValue = z.string().max(8192).refine(
+  (value) => new TextEncoder().encode(value).byteLength <= 8192,
+  'environment value exceeds 8192 UTF-8 bytes',
+);
 const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, context) => {
   if (argv.length > 0 && argv[0].length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: 'the executable must not be empty' });
   if (argv.some((argument) => argument.includes('\0'))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command arguments cannot contain NUL' });
@@ -53,7 +57,7 @@ const containerCreate = z.object({
   name: containerName,
   entrypoint: command.nullable().default(null),
   command: optionalCommand.default([]),
-  environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(8192)])).max(256).default([]),
+  environment: z.array(z.tuple([z.string().min(1).max(256).regex(/^[A-Za-z_][A-Za-z0-9_]*$/), environmentValue])).max(256).default([]),
   working_directory: z.string().min(1).max(4096).startsWith('/').nullable().default(null),
   user: containerUser.nullable().default(null),
   labels: z.array(z.tuple([z.string().min(1).max(256), z.string().max(4096)])).max(128).default([]),
