@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { Containers, Executions, Images, Networks, Volumes, WorkspaceManager } from '../src/app.js';
-import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource } from '../src/model.js';
+import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource } from '../src/model.js';
 import { host } from './host.js';
 
 const api = {
@@ -131,6 +131,33 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.equal(destructive(volumeFrame, 'Remove'), false);
   assert.equal(destructive(networkFrame, 'Disconnect'), false);
   assert.equal(destructive(networkFrame, 'Remove'), false);
+});
+
+test('network inspection exposes loading, retry, empty and bounded typed details', async () => {
+  let attempts = 0;
+  const controlled = { networks: {
+    ...api.networks,
+    inspect: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('network inspect unavailable');
+      return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' };
+    },
+  } };
+  const resource = { data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }], loading: false, error: null, reload: async () => {} };
+  const details = new NetworkDetailsSource();
+  const stage = host();
+  stage.render(h(Networks, { api: controlled, resource, networkDetails: details }));
+  invoke(stage, 'Inspect'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Reading network details…'));
+  assert.ok(labelled(stage, 'network inspect unavailable'));
+  invoke(stage, 'Retry inspect'); await settled(); await settled();
+  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.equal(details.answer({ source: 204, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length, 4);
+
+  const empty = host();
+  empty.render(h(Networks, { api: { networks: { ...api.networks, inspect: async () => ({}) } }, resource, networkDetails: new NetworkDetailsSource() }));
+  invoke(empty, 'Inspect'); await settled(); await settled();
+  assert.ok(labelled(empty, 'No network details'));
 });
 
 test('container stop and kill cannot call the API before final confirmation', async () => {

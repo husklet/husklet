@@ -4,6 +4,7 @@ import {
   CONTAINER_DETAIL_SOURCE, CONTAINER_DETAIL_WINDOW_LIMIT, ContainerDetailsSource,
   EXECUTION_DETAIL_SOURCE, EXECUTION_DETAIL_WINDOW_LIMIT, ExecutionDetailsSource,
   IMAGE_DETAIL_SOURCE, IMAGE_DETAIL_WINDOW_LIMIT, ImageDetailsSource,
+  NETWORK_DETAIL_SOURCE, NETWORK_DETAIL_WINDOW_LIMIT, NetworkDetailsSource,
   bounded, bytes, logText, processRows, resourceReference, shortId,
 } from '../src/model.js';
 
@@ -21,6 +22,16 @@ test('execution metadata is revisioned and served through bounded windows', asyn
   const window = source.answer({ source: EXECUTION_DETAIL_SOURCE, version: 1, id: 6, range: { start: 0, count: 999 } });
   assert.equal(window.rows.length, EXECUTION_DETAIL_WINDOW_LIMIT);
   assert.deepEqual(window.rows[0].cells, [{ Text: 'Execution ID' }, { Code: 'e1' }]);
+});
+
+test('typed network inspection is revisioned and window bounded', async () => {
+  const mutations = [];
+  const source = new NetworkDetailsSource(async (mutation) => mutations.push(mutation));
+  assert.equal(await source.replace({ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }), 4);
+  assert.deepEqual(mutations, [{ Length: { source: NETWORK_DETAIL_SOURCE, version: 1, rows: 4 } }]);
+  const window = source.answer({ source: NETWORK_DETAIL_SOURCE, version: 1, id: 7, range: { start: 0, count: 99 } });
+  assert.equal(window.rows.length, NETWORK_DETAIL_WINDOW_LIMIT);
+  assert.deepEqual(window.rows[0].cells, [{ Text: 'Network ID' }, { Code: 'n1' }]);
 });
 
 test('typed container inspection exposes only authoritative bounded fields', async () => {

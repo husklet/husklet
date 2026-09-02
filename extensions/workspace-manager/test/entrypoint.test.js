@@ -52,6 +52,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
               ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }] }
+              : name === 'network_inspect'
+                ? { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } }
             : { reply: 'done' };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
       }
@@ -114,6 +116,15 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await until(() => calls.includes('execution_remove'));
     peer.write(encode({ channel: 18, kind: KIND.event, payload: invocation(requests, 'Images') }));
     await until(() => requests.some((request) => request.call === 'event_unsubscribe' && request.with.topic === 'executions'));
+    peer.write(encode({ channel: 19, kind: KIND.event, payload: invocation(requests, 'Networks') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Container ID for connect/disconnect')));
+    peer.write(encode({ channel: 20, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
+    await until(() => calls.includes('network_inspect') && requests.some((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 204));
+    const networkResize = requests.findLast((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 204);
+    assert.deepEqual(networkResize.with.mutation.Length, { source: 204, version: 1, rows: 4 });
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;

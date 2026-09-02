@@ -4,12 +4,12 @@ import {
   EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
 
-export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, initial = {} }) {
+export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -73,7 +73,7 @@ export function WorkspaceManager({ api, selections, containerDetails, executionD
           ? h(Images, { api, resource: images, imageDetails })
           : section === 'volumes'
             ? h(Volumes, { api, resource: volumes })
-            : h(Networks, { api, resource: networks });
+            : h(Networks, { api, resource: networks, networkDetails });
   return h(Row, { grow: true, gap: 0 }, h(Navigation, { section, onSelect: setSection }), h(Separator, { orientation: 'vertical' }), body);
 }
 
@@ -354,22 +354,31 @@ export function Volumes({ api, resource }) {
     h(Omitted, { count: view.omitted }));
 }
 
-export function Networks({ api, resource }) {
+export function Networks({ api, resource, networkDetails }) {
+  const localDetails = useMemo(() => new NetworkDetailsSource(), []);
+  const detailsSource = networkDetails ?? localDetails;
   const [name, setName] = useState('');
   const [container, setContainer] = useState('');
-  const [detail, setDetail] = useState(null);
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (network) => { await api.networks.remove(resourceReference(network)); if (detail?.id === network.id) setDetail(null); await resource.reload(); };
-  const inspect = async (network) => setDetail(await api.networks.inspect(resourceReference(network)));
+  const remove = async (network) => { await api.networks.remove(resourceReference(network)); if (inspection.id === resourceReference(network)) setInspection({ id: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const inspect = async (network) => {
+    const id = resourceReference(network);
+    setInspection({ id, state: 'loading', count: 0, error: null });
+    try {
+      const count = await detailsSource.replace(await api.networks.inspect(id));
+      setInspection({ id, state: 'ready', count, error: null });
+    } catch (error) { setInspection({ id, state: 'error', count: 0, error }); }
+  };
   const attach = async (network, verb) => { await api.networks[verb](resourceReference(network), container.trim()); await resource.reload(); };
   const view = bounded(resource.data);
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
     h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
     h(ErrorText, { error: resource.error }),
-    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: detail?.id === network.id ? 'filled' : 'outline' },
+    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
-      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
         label: 'Disconnect', confirmLabel: 'Confirm disconnect',
         question: `Disconnect ${container.trim() || 'container'} from ${network.name}?`,
         enabled: container.trim().length > 0, onConfirm: () => attach(network, 'disconnect'),
@@ -377,7 +386,14 @@ export function Networks({ api, resource }) {
         label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove network ${network.name}?`,
         onConfirm: () => remove(network),
       })),
-      detail?.id === network.id ? h(CardContent, {}, h(Text, { label: `${detail.id} · ${detail.driver} · ${detail.scope}`, color: 'text-dim', wrap: true })) : null)),
+      inspection.id === resourceReference(network) ? h(CardContent, {},
+        inspection.state === 'loading'
+          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading network details…' }))
+          : inspection.state === 'error'
+            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
+            : inspection.count === 0
+              ? h(EmptyState, { label: 'No network details', detail: 'The host returned no inspectable fields.' })
+              : h(KeyValueTable, { source: NETWORK_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 8 }, maximum: { step: 16 } } })) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
