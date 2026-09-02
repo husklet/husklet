@@ -843,8 +843,8 @@ fn remote_image_progress_precedes_the_consent_prompt() {
         Acquisition::Pulling {
             status: "Pulling from team/tool".to_owned(),
             id: Some("team/tool:latest".to_owned()),
-            current: None,
-            total: None,
+            current: Some(25),
+            total: Some(100),
         },
         Acquisition::ReadingManifest,
         Acquisition::Ready(candidate()),
@@ -864,13 +864,39 @@ fn remote_image_progress_precedes_the_consent_prompt() {
 
     assert!(page.poll());
     assert_eq!(page.notice(), "checking local images");
+    let checking = fixture.view.semantic_snapshot();
+    let progress = checking
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Image acquisition progress"))
+        .expect("semantic clients see acquisition progress");
+    assert_eq!(progress.value.as_deref(), Some("checking local images"));
+    assert!(checking.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Cancel download")
+            && node.actions.contains(&super::super::semantic::ActionKind::Invoke)
+    }));
     assert!(page.poll());
     assert!(page.notice().contains("Pulling from team/tool"));
+    let pulling = fixture.view.semantic_snapshot();
+    assert!(pulling.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Image acquisition progress")
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.contains("25%; 25 of 100 bytes"))
+    }));
     assert!(fixture.roster.borrow().entries().is_empty(), "progress is not consent");
     assert!(page.poll());
     assert_eq!(page.notice(), "reading extension manifest");
     assert!(page.poll());
     assert!(page.notice().contains("asks for"));
+    let ready = fixture.view.semantic_snapshot();
+    assert!(!ready
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Cancel download")));
     assert!(
         fixture.roster.borrow().entries().is_empty(),
         "a ready image still awaits consent"
@@ -916,6 +942,12 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
     assert!(page.poll());
     assert!(fixture.roster.borrow().entries().is_empty());
     assert!(page.notice().contains("nothing was installed"));
+    let cancelled = fixture.view.semantic_snapshot();
+    assert!(cancelled.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Read manifest")
+            && node.value.as_deref() == Some("Retry acquisition")
+            && !node.disabled
+    }));
     page.consent();
     assert!(
         fixture.roster.borrow().entries().is_empty(),
