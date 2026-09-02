@@ -980,6 +980,14 @@ fn an_image_is_read_before_anybody_is_asked() {
     assert!(proposal.contains(&"Image: sample:1".to_owned()));
     assert!(proposal.contains(&"Digest: sha256:bbbb".to_owned()));
     let proposed = fixture.view.semantic_snapshot();
+    let requested = proposed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Requested capabilities"))
+        .expect("consent clients can inspect the exact requested grant");
+    assert_eq!(requested.role, "list");
+    assert_eq!(requested.value.as_deref(), Some("container-read, interface"));
     for label in ["Install", "Cancel"] {
         let action = proposed
             .root
@@ -1045,6 +1053,15 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         labels.iter().any(|line| line == "− container-read"),
         "authority the candidate dropped is called out explicitly: {labels:?}"
     );
+    let semantic = fixture.view.semantic_snapshot();
+    assert!(semantic.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Added capabilities")
+            && node.value.as_deref() == Some("container-control")
+    }));
+    assert!(semantic.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Removed capabilities")
+            && node.value.as_deref() == Some("container-read")
+    }));
     assert_eq!(
         fixture.view.page("sample").as_ref(),
         Some(&old_surface),

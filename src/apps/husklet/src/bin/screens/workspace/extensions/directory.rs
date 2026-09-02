@@ -394,6 +394,16 @@ impl Catalogue {
             &[],
             Rc::new(|_, _| {}),
         );
+        self.semantics.register(
+            "extensions/proposal/capabilities",
+            "list",
+            Some("Requested capabilities"),
+            Some(super::super::semantic::Value::Public(&capability_list(
+                manifest.capabilities.iter(),
+            ))),
+            &[],
+            Rc::new(|_, _| {}),
+        );
         *self.candidate.borrow_mut() = Some(Proposal::Install(candidate));
         self.say("this image asks for the capabilities above");
     }
@@ -451,6 +461,26 @@ impl Catalogue {
             "dialog",
             Some("Update extension"),
             Some(super::super::semantic::Value::Public(&summary)),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        self.semantics.register(
+            "extensions/proposal/added-capabilities",
+            "list",
+            Some("Added capabilities"),
+            Some(super::super::semantic::Value::Public(&capability_list(
+                update.additional.iter().copied(),
+            ))),
+            &[],
+            Rc::new(|_, _| {}),
+        );
+        self.semantics.register(
+            "extensions/proposal/removed-capabilities",
+            "list",
+            Some("Removed capabilities"),
+            Some(super::super::semantic::Value::Public(&capability_list(
+                update.removed.iter().copied(),
+            ))),
             &[],
             Rc::new(|_, _| {}),
         );
@@ -720,6 +750,18 @@ impl Catalogue {
             gtk::glib::ControlFlow::Continue
         });
     }
+}
+
+/// A finite, readable capability list for the consent projection.
+fn capability_list(capabilities: impl IntoIterator<Item = hl_extension::Capability>) -> String {
+    let capabilities = capabilities
+        .into_iter()
+        .map(hl_extension::Capability::as_str)
+        .collect::<Vec<_>>();
+    if capabilities.is_empty() {
+        return "none".to_owned();
+    }
+    capabilities.join(", ")
 }
 
 /// One line of text on the page.
