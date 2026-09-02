@@ -7248,7 +7248,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     uint32_t source_owner_count =
         source_owners == NULL ? 0 : atomic_load_explicit(&source_owners->count, memory_order_acquire);
     if (source_block == NULL || source_block->host_entry_off == 0 || source_block->host_len >= TL_MAX_BYTES ||
-        source_owner_count != 9 ||
+        source_owner_count != 10 ||
         __atomic_load_n(&translit_direct_jmp_ibtc_emitted, __ATOMIC_RELAXED) !=
             emitted_before + 1)
         goto done_direct_ibtc;
