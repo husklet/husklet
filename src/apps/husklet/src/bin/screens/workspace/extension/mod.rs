@@ -390,7 +390,10 @@ impl Interface {
     }
 
     fn draw_at(&mut self, slot: &str, frame: &Frame) {
-        let pane = self.panes.entry(slot.to_owned()).or_insert_with(PaneInterface::new);
+        // Only `pane` registers slot authority. A frame may have been queued
+        // before terminal/lifecycle withdrawal retired that slot; accepting it
+        // here must not recreate an unmounted renderer with no owning pane.
+        let Some(pane) = self.panes.get_mut(slot) else { return };
         match pane.tree.apply(frame, &mut pane.surface) {
             Ok(()) => {
                 (self.ready)();

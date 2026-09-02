@@ -122,6 +122,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         a_rendered_button_reaches_the_sink();
         retained_pane_actions_keep_their_slot();
         retiring_a_pane_discards_its_queued_interaction();
+        retired_panes_ignore_late_frames_until_explicitly_remounted();
         semantics_are_redacted_and_actions_reject_stale_revisions();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
@@ -156,6 +157,53 @@ fn retiring_a_pane_discards_its_queued_interaction() {
     );
 }
 
+fn retired_panes_ignore_late_frames_until_explicitly_remounted() {
+    let mut fixture = Fixture::new();
+    let first = fixture.page.pane("pane-reused");
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-reused".into(),
+            frame: Reconciliation::new().reconcile(&panel("First generation")),
+        })
+        .expect("first generation frame queued");
+    fixture.page.tick();
+    assert!(descendants(&first).iter().any(|widget| {
+        widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().as_str() == "First generation")
+    }));
+
+    fixture.page.retire("pane-reused");
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-reused".into(),
+            frame: Reconciliation::new().reconcile(&panel("Stale generation")),
+        })
+        .expect("late frame queued");
+    fixture.page.tick();
+    assert!(
+        !fixture.page.panes.contains_key("pane-reused"),
+        "a late frame cannot recreate retired slot authority"
+    );
+
+    let replacement = fixture.page.pane("pane-reused");
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: "pane-reused".into(),
+            frame: Reconciliation::new().reconcile(&panel("Replacement generation")),
+        })
+        .expect("replacement frame queued");
+    fixture.page.tick();
+    assert!(descendants(&replacement).iter().any(|widget| {
+        widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().as_str() == "Replacement generation")
+    }));
+}
+
 fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
     let mut found = vec![widget.clone()];
     let mut index = 0;
@@ -168,6 +216,7 @@ fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
 
 fn retained_pane_actions_keep_their_slot() {
     let mut fixture = Fixture::new();
+    let _pane = fixture.page.pane("pane-2");
     let frame = Reconciliation::new().reconcile(&panel("Pane two"));
     fixture
         .post
