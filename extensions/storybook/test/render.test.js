@@ -146,6 +146,24 @@ test('the form story validates submit, recovers on change, and confirms success'
   assert.ok(node(patches, 'Banner', 'Defaults saved for api.'), 'valid submission has no success confirmation');
 });
 
+test('the tag input retains a submitted value and removes only the activated tag', () => {
+  const stage = host();
+  const first = stage.render(h(ValidatedSettingsFormStory));
+  const input = created(first.patches).find((entry) => entry.tag === 'TagInput')?.id;
+  const backend = node(first.patches, 'ToggleButton', 'backend');
+  assert.ok(input && backend);
+
+  stage.surface.dispatch({ trigger: 'Change', node: input, id: `${input}:Change`, value: 'urgent' });
+  const beforeAdd = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Submit', node: input, id: `${input}:Submit` });
+  assert.ok(node(stage.since(beforeAdd), 'ToggleButton', 'urgent'));
+
+  const beforeRemove = stage.frames.length;
+  stage.surface.dispatch({ trigger: 'Toggle', node: backend, id: `${backend}:Toggle`, value: false });
+  const removed = stage.since(beforeRemove);
+  assert.ok(removed.some((patch) => 'Remove' in patch), JSON.stringify(removed));
+});
+
 test('the validated form is selectable as a canonical end-user flow', () => {
   const stage = host();
   const first = stage.render(h(Playground));

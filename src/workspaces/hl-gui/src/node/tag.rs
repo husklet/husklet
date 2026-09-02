@@ -234,6 +234,7 @@ catalogue! {
     Entry: leaf, props[Value, Placeholder, Secret, Enabled, Tone], triggers[Change, Submit, Key, Focus, Context],
     Search: leaf, props[Value, Placeholder, Enabled], triggers[Change, Submit, Key, Focus, Context],
     CommandPalette: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
+    TagInput: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
     NumberEntry: leaf, props[Value, Minimum, Maximum, Step, Enabled], triggers[Change, Key, Focus, Context],
     TextArea: leaf, props[Value, Monospace, Enabled], triggers[Change, Key, Focus, Context],
     PasswordEntry: leaf, props[Value, Placeholder, Secret, Enabled], triggers[Change, Key, Focus, Context],

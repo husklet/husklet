@@ -86,6 +86,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Entry
         | Tag::Search
         | Tag::CommandPalette
+        | Tag::TagInput
         | Tag::NumberEntry
         | Tag::TextArea
         | Tag::PasswordEntry

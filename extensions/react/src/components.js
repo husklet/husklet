@@ -76,6 +76,7 @@ export const {
   Entry,
   Search,
   CommandPalette,
+  TagInput,
   NumberEntry,
   TextArea,
   PasswordEntry,

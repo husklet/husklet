@@ -13,7 +13,9 @@ import {
   Row,
   Select,
   Switch,
+  TagInput,
   Text,
+  ToggleButton,
 } from '@husklet/react';
 
 const { createElement: h, useState } = React;
@@ -32,6 +34,8 @@ export function ValidatedSettingsFormStory() {
   const [restart, setRestart] = useState(true);
   const [attempted, setAttempted] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [tag, setTag] = useState('');
+  const [tags, setTags] = useState(['backend', 'managed']);
   const invalid = attempted && name.trim().length < 3;
   const changeName = (event) => {
     setName(String(event.value ?? ''));
@@ -94,6 +98,29 @@ export function ValidatedSettingsFormStory() {
           setSaved(false);
         },
       }),
+    ),
+    h(
+      FormControl,
+      { key: 'tags', gap: 1 },
+      h(FormLabel, { label: 'Workspace tags' }),
+      h(TagInput, {
+        value: tag,
+        placeholder: 'Add a tag',
+        gap: 1,
+        onChange: (event) => setTag(String(event.value ?? '')),
+        onSubmit: () => {
+          const next = tag.trim();
+          if (next && !tags.includes(next)) setTags([...tags, next]);
+          setTag('');
+        },
+      }, ...tags.map((held) => h(ToggleButton, {
+        key: held,
+        label: held,
+        checked: true,
+        tooltip: `Remove ${held}`,
+        onToggle: () => setTags(tags.filter((candidate) => candidate !== held)),
+      }))),
+      h(FormHelperText, { label: 'Press Enter to retain a tag; activate a tag to remove it.' }),
     ),
     ...(invalid
       ? [h(InlineMessage, { key: 'invalid', label: 'Fix the highlighted field before saving.', tone: 'danger' })]

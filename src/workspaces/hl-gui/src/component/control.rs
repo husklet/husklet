@@ -117,6 +117,14 @@ impl Element {
             .on(Trigger::Submit, submit)
     }
 
+    /// A multi-value field whose children show the values already retained.
+    #[must_use]
+    pub fn tag_input(change: EventId, submit: EventId) -> Self {
+        Self::new(Tag::TagInput)
+            .on(Trigger::Change, change)
+            .on(Trigger::Submit, submit)
+    }
+
     /// A calendar date, written as an ISO 8601 day.
     #[must_use]
     pub fn date_picker(day: impl Into<String>, event: EventId) -> Self {

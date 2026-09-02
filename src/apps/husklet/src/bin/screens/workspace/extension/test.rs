@@ -126,12 +126,34 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         oversized_tree_growth_is_atomic_isolated_and_remountable();
         semantics_are_redacted_and_actions_reject_stale_revisions();
         command_palette_exposes_typed_semantic_actions();
+        tag_input_exposes_value_actions_and_authored_tags();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn tag_input_exposes_value_actions_and_authored_tags() {
+    let mut fixture = Fixture::new();
+    let described = Element::tag_input(EventId::new("tag-change"), EventId::new("tag-submit"))
+        .value("new")
+        .child(Element::toggle_button("backend", EventId::new("remove-backend")));
+    fixture.describe(&described);
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let input = &tree.root.children[0];
+    assert_eq!(input.role, "TagInput");
+    assert_eq!(input.value.as_deref(), Some("new"));
+    assert_eq!(input.children[0].label.as_deref(), Some("backend"));
+    assert_eq!(
+        input.actions,
+        vec![
+            hl_extension::SemanticActionKind::Change,
+            hl_extension::SemanticActionKind::Submit,
+        ]
+    );
 }
 
 fn command_palette_exposes_typed_semantic_actions() {

@@ -1851,6 +1851,45 @@ export interface CommandPaletteProps extends NodeProps {
   onContext?: (report: Report) => void;
 }
 
+export interface TagInputProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** prompt shown by an empty field */
+  placeholder?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** defaults to enabled when absent */
+  enabled?: boolean;
+  onChange?: (report: Report) => void;
+  onSubmit?: (report: Report) => void;
+  onKey?: (report: Report) => void;
+  onFocus?: (report: Report) => void;
+  onContext?: (report: Report) => void;
+}
+
 export interface NumberEntryProps extends NodeProps {
   /** marks an action as irreversible so automation requires confirmation */
   destructive?: boolean;
@@ -4371,6 +4410,7 @@ export const Overflow: ComponentType<OverflowProps>;
 export const Entry: ComponentType<EntryProps>;
 export const Search: ComponentType<SearchProps>;
 export const CommandPalette: ComponentType<CommandPaletteProps>;
+export const TagInput: ComponentType<TagInputProps>;
 export const NumberEntry: ComponentType<NumberEntryProps>;
 export const TextArea: ComponentType<TextAreaProps>;
 export const PasswordEntry: ComponentType<PasswordEntryProps>;

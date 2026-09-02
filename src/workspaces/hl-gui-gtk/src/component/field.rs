@@ -18,6 +18,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Entry => entry().upcast(),
         Tag::Search => gtk::SearchEntry::new().upcast(),
         Tag::CommandPalette => command_palette().upcast(),
+        Tag::TagInput => tag_input().upcast(),
         Tag::NumberEntry => counter(0.0, 100.0).upcast(),
         Tag::TextArea => editor(true).upcast(),
         Tag::PasswordEntry => secret().upcast(),
@@ -40,6 +41,15 @@ fn command_palette() -> gtk::Box {
     search.set_hexpand(true);
     slot::field(&search);
     widget.append(&search);
+    widget
+}
+
+fn tag_input() -> gtk::Box {
+    let widget = axis::row(4);
+    widget.add_css_class("linked");
+    let entry = entry();
+    entry.set_hexpand(true);
+    widget.append(&entry);
     widget
 }
 
@@ -164,6 +174,14 @@ pub(crate) fn view(widget: &gtk::Widget) -> Option<gtk::TextView> {
 
 /// Places an adornment beside the value it decorates rather than under it.
 pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) -> bool {
+    if super::belongs(parent, Tag::TagInput) {
+        let Some(container) = parent.downcast_ref::<gtk::Box>() else {
+            return false;
+        };
+        let entry = slot::editable(parent);
+        container.insert_child_after(child, entry.as_ref().and_then(gtk::Widget::prev_sibling).as_ref());
+        return true;
+    }
     if tag != Tag::InputAdornment {
         return false;
     }

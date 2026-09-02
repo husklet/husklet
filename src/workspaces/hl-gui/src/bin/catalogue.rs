@@ -321,6 +321,7 @@ fn family(tag: Tag) -> &'static str {
         Tag::Entry
         | Tag::Search
         | Tag::CommandPalette
+        | Tag::TagInput
         | Tag::NumberEntry
         | Tag::TextArea
         | Tag::PasswordEntry

@@ -799,6 +799,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::Entry
         | Tag::Search
         | Tag::CommandPalette
+        | Tag::TagInput
         | Tag::TextArea
         | Tag::PasswordEntry
         | Tag::TextField
@@ -853,6 +854,16 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_trailing_action_is_the_last_thing_in_its_row();
     a_tree_nests_an_item_inside_the_item_that_holds_it();
     a_drawer_panel_covers_the_content_instead_of_joining_it();
+    a_tag_input_keeps_retained_tags_before_its_editor();
+}
+
+fn a_tag_input_keeps_retained_tags_before_its_editor() {
+    let session = placed(Tag::TagInput, &[Tag::Chip, Tag::ToggleButton]);
+    let input = session.tagged(Tag::TagInput).expect("a tag input renders");
+    let parts = offspring(&input);
+    assert!(parts.first().is_some_and(|part| part.has_css_class("hl-chip")));
+    assert!(parts.get(1).is_some_and(|part| part.has_css_class("hl-togglebutton")));
+    assert!(parts.last().is_some_and(|part| part.has_css_class("hl-field")));
 }
 
 /// One parent, one part, rendered: the shape every slot scenario needs.
