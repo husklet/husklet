@@ -26,6 +26,11 @@ socket. Both arguments are mandatory, duplicates and unknown flags are refused,
 and startup verifies `workspace_info.name` before exposing MCP tools. Diagnostics
 go to stderr so they cannot corrupt the JSON-RPC stream on stdout. This command
 does not install extensions, discover credentials, or modify client settings.
+Startup abandons a socket that does not complete its host greeting within five
+seconds. Host EOF or socket removal terminates the MCP process with an actionable
+stderr diagnostic; client EOF, SIGINT, and SIGTERM close both transports cleanly.
+The CLI never reconnects automatically: a replacement socket may carry different
+authority and must be selected and workspace-verified explicitly by the client.
 
 Tools use strict schemas and bounded, redacted results. Pane snapshots are
 deterministic XML-like text carrying stable revisions, node IDs, roles, state,

@@ -22,13 +22,15 @@ const SNAPSHOT_TOPICS = Object.freeze(['containers', 'images', 'volumes', 'netwo
  * The socket path comes from `HUSKLET_EXTENSION_SOCKET`, which the host mounts
  * into the container; an extension is never asked to know where it is.
  */
-export async function connect({ path, onRows, onReply, onEvent, onEventError, pendingLimit, timeout } = {}) {
+export async function connect({ path, onRows, onReply, onEvent, onEventError, onClose, pendingLimit, timeout, connectTimeout } = {}) {
   let session;
   session = await Session.connect(path, {
     onRows,
     pendingLimit,
     timeout,
+    connectTimeout,
     onEventError,
+    onClose,
     onEvent: (payload, channel) => {
       deliver(session, payload);
       if (onEvent) onEvent(payload, channel);

@@ -37,6 +37,7 @@ export class Session {
   #onReply;
   #onRows;
   #onEventError;
+  #onClose;
   #events = new Set();
   #pending = [];
   #limit;
@@ -45,9 +46,10 @@ export class Session {
   #granted = [];
   #greeted;
   #ready;
+  #rejectReady;
 
   constructor(socket, {
-    onReply = () => {}, onRows = () => {}, onEvent = () => {}, onEventError = () => {}, pendingLimit = 64, timeout = 30_000,
+    onReply = () => {}, onRows = () => {}, onEvent = () => {}, onEventError = () => {}, onClose = () => {}, pendingLimit = 64, timeout = 30_000,
   } = {}) {
     if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1) throw new RangeError('pendingLimit must be a positive integer');
     if (!Number.isFinite(timeout) || timeout <= 0) throw new RangeError('timeout must be positive');
@@ -58,12 +60,14 @@ export class Session {
     // be sent before that: the host reads the first frame it receives as the
     // greeting, so a call written earlier is swallowed and every call after it
     // arrives one step out of order.
-    this.#greeted = new Promise((resolve) => {
+    this.#greeted = new Promise((resolve, reject) => {
       this.#ready = resolve;
+      this.#rejectReady = reject;
     });
     this.#onReply = onReply;
     this.#onRows = onRows;
     this.#onEventError = onEventError;
+    this.#onClose = onClose;
     this.#events.add(onEvent);
     socket.on('data', (chunk) => this.#receive(chunk));
     socket.on('close', () => this.#finish(new Error('extension host connection closed')));
@@ -81,16 +85,38 @@ export class Session {
   }
 
   /** Opens the socket the host provided. */
-  static connect(path = process.env[SOCKET], handlers) {
+  static connect(path = process.env[SOCKET], handlers = {}) {
     if (!path) throw new Error(`${SOCKET} is not set; an extension runs inside a workspace`);
+    const connectTimeout = handlers.connectTimeout ?? 30_000;
+    if (!Number.isFinite(connectTimeout) || connectTimeout <= 0) throw new RangeError('connectTimeout must be positive');
     return new Promise((resolve, reject) => {
       const socket = net.createConnection(path);
-      socket.once('error', reject);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        reject(new Error(`extension host handshake timed out after ${connectTimeout}ms`));
+      }, connectTimeout);
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        reject(error);
+      };
+      socket.once('error', fail);
       // Resolve only after the handshake, so a caller that renders straight
       // away cannot outrun it.
       socket.once('connect', () => {
         const session = new Session(socket, handlers);
-        session.ready.then(() => resolve(session)).catch(reject);
+        session.ready.then(() => {
+          if (settled) return session.close();
+          settled = true;
+          clearTimeout(timer);
+          socket.removeListener('error', fail);
+          resolve(session);
+        }).catch(fail);
       });
     });
   }
@@ -139,8 +165,11 @@ export class Session {
   }
 
   #receive(chunk) {
-    for (const frame of this.#reader.take(chunk)) {
-      this.#handle(frame);
+    try {
+      for (const frame of this.#reader.take(chunk)) this.#handle(frame);
+    } catch (error) {
+      this.#finish(error);
+      this.#socket.destroy();
     }
   }
 
@@ -181,10 +210,12 @@ export class Session {
   #finish(error) {
     if (this.#closed) return;
     this.#closed = true;
+    this.#rejectReady(error);
     for (const pending of this.#pending.splice(0)) {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
+    try { this.#onClose(error); } catch { /* Lifecycle reporting cannot prevent closure. */ }
   }
 
   /** The host speaks first and states the grant, so an extension knows what it

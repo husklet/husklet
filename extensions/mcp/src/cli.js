@@ -11,27 +11,46 @@ credential for NAME; the server refuses a socket belonging to another workspace.
 
 let session;
 let server;
+let stopping = false;
+
+const stop = async ({ diagnostic, code = 0 } = {}) => {
+  if (stopping) return;
+  stopping = true;
+  if (diagnostic) process.stderr.write(`husklet-mcp: ${diagnostic}\n`);
+  const forced = setTimeout(() => process.exit(code), 1_000);
+  forced.unref();
+  try { await server?.close(); } catch { /* The MCP peer may already be gone. */ }
+  session?.close();
+  process.exitCode = code;
+};
+
 try {
   const options = parseCli(process.argv.slice(2));
   if (options.help) {
     process.stdout.write(`${usage}\n`);
   } else {
-    session = await connect({ path: options.socket, pendingLimit: 32, timeout: 30_000 });
+    let connected = false;
+    session = await connect({
+      path: options.socket,
+      pendingLimit: 32,
+      timeout: 30_000,
+      connectTimeout: 5_000,
+      onClose: (error) => {
+        if (connected && !stopping) void stop({ diagnostic: `host authority connection ended: ${error.message}`, code: 1 });
+      },
+    });
+    connected = true;
     const hosting = await workspace(session).info();
     assertWorkspace(hosting, options.workspace);
     server = createServer(session);
     await server.connect(new StdioServerTransport());
   }
 } catch (error) {
-  session?.close();
-  process.stderr.write(`husklet-mcp: ${error instanceof Error ? error.message : String(error)}\n`);
+  await stop({ code: 1 });
+  process.stderr.write(`husklet-mcp: startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.stderr.write(`Run husklet-mcp --help for usage.\n`);
-  process.exitCode = 1;
 }
 
-const close = async () => {
-  try { await server?.close(); } catch { /* The transport may already be gone. */ }
-  session?.close();
-};
-process.once('SIGINT', () => { void close(); });
-process.once('SIGTERM', () => { void close(); });
+process.stdin.once('end', () => { void stop(); });
+process.once('SIGINT', () => { void stop(); });
+process.once('SIGTERM', () => { void stop(); });
