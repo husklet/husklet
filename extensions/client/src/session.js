@@ -413,10 +413,11 @@ export class Session {
     if (welcome.protocol !== PROTOCOL) {
       throw new Error(`host speaks protocol ${welcome.protocol}, this extension speaks ${PROTOCOL}`);
     }
-    if (!Array.isArray(welcome.granted) || welcome.granted.some((capability) => typeof capability !== 'string' || !CAPABILITIES.has(capability))) {
+    const granted = welcome.granted ?? [];
+    if (!Array.isArray(granted) || granted.some((capability) => typeof capability !== 'string' || !CAPABILITIES.has(capability))) {
       throw new TypeError('host greeting contains an unknown capability');
     }
-    this.#granted = Object.freeze([...new Set(welcome.granted)]);
+    this.#granted = Object.freeze([...new Set(granted)]);
     this.#write(
       {
         channel: CONTROL,
