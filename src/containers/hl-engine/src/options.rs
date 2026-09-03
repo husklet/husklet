@@ -344,6 +344,11 @@ const DEFINITIONS: &[Definition] = &[
         "snapshot-authenticated executable content identities",
         Records
     ),
+    internal!(
+        "HL_PCACHE_LAUNCH_ONLY",
+        "confine persistent caching to the authenticated launch image",
+        Flag
+    ),
     launch!(
         "HL_TRANSLIT_RIPREL_READONLY",
         "control default-on read-only RIP-relative lowering in the same-ISA backend",

@@ -117,6 +117,7 @@ impl TryFrom<&ProcessConfig> for Spec {
         let executable = GuestPath::host_executable(std::path::Path::new(&guest_program), &roots);
         let mut executable_digests = Vec::new();
         if launch.translation_cache.is_some() {
+            Self::flag(&mut options, "HL_PCACHE_LAUNCH_ONLY", true)?;
             executable_digests = match (&launch.executable_digest_authority, &executable) {
                 (Some(authority), Some(host)) if std::path::Path::new(&guest_program).is_absolute() => authority
                     .authenticate(std::path::Path::new(&guest_program), host)?

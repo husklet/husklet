@@ -33,9 +33,20 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
         cache.path().read_dir().unwrap().next().is_some(),
         "cold run published no cache artifact: {cold}"
     );
+    let artifacts = || {
+        cache
+            .path()
+            .read_dir()
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "x64pcache"))
+            .count()
+    };
+    assert_eq!(artifacts(), 1, "nested developer tools published unauthorised cache artifacts");
     let warm = run("warm");
     assert!(
         warm.contains("[pcache] HIT (translation skipped)"),
         "warm run did not reuse translated code: {warm}"
     );
+    assert_eq!(artifacts(), 1, "warm nested execs expanded the authenticated cache surface");
 }

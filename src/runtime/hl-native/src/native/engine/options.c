@@ -191,6 +191,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_PCACHE_EXEC_AUTHORITY", "snapshot-authenticated executable content identities",
                        HL_OPTION_RECORDS),
+    HL_INTERNAL_OPTION("HL_PCACHE_LAUNCH_ONLY", "confine persistent caching to the authenticated launch image",
+                       HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_TRANSLIT_RIPREL_READONLY",
                      "control default-on read-only RIP-relative lowering in the same-ISA backend",
                      HL_OPTION_FLAG),

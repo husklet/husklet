@@ -3697,6 +3697,15 @@ static void pcache_exec_force_interp(void) {
 static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
                                uint64_t jump) {
     if (!g_pcache) return;
+    /* The launch boundary authenticates one image.  Guest-initiated exec is not another launch:
+       even when it names the same shell, restoring cache-mode code makes short-lived children pay
+       the per-block persistence census again (measured 1.67x instructions across a developer
+       session).  The daemon gives each user-requested exec its own authenticated worker; nested
+       guest execs therefore use ordinary translation until persistence bookkeeping is cheaper. */
+    if (hl_option_get("HL_PCACHE_LAUNCH_ONLY") != NULL) {
+        g_pcache = 0;
+        return;
+    }
     g_x64_pc_observe_library_ns = 0;
     g_x64_pc_observe_library_bytes = 0;
     g_x64_pc_observe_library_files = 0;

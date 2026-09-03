@@ -618,6 +618,9 @@ fn rootfs_plan(
         options
             .set("HL_PCACHE_DIR", &cache.to_string_lossy(), true)
             .map_err(|error| Failure::Request(format!("cannot set the translation-cache directory: {error:?}")))?;
+        options
+            .set("HL_PCACHE_LAUNCH_ONLY", "1", true)
+            .map_err(|error| Failure::Request(format!("cannot confine translation caching to the launch image: {error:?}")))?;
     }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
@@ -1182,6 +1185,7 @@ mod tests {
         );
         assert_eq!(plan.options.get("HL_PCACHE"), Some("1"));
         assert_eq!(plan.options.get("HL_PCACHE_DIR"), cache.to_str());
+        assert_eq!(plan.options.get("HL_PCACHE_LAUNCH_ONLY"), Some("1"));
         let observed = rootfs_plan(
             root.path(),
             &launch(&[
