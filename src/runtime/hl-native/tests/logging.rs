@@ -9,7 +9,7 @@ fn jitdump_is_one_process_lifetime_stream_across_cache_generations() {
 #[cfg(feature = "native-test-hooks")]
 #[test]
 fn forward_jcc_link_emits_only_a_live_state_jump() {
-    assert_eq!(hl_native::x86_64_translit_displaced_test(218), 0);
+    assert_eq!(hl_native::x86_64_translit_displaced_test(233), 0);
 }
 
 #[test]

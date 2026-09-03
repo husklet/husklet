@@ -563,7 +563,7 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in 227..=228 {
+        for scenario in [227, 234] {
             // SAFETY: each selector runs one isolated child fixture and returns only its exit status.
             assert_eq!(unsafe { hook(scenario) }, 0, "SSE RIP-relative census scenario {scenario}");
         }

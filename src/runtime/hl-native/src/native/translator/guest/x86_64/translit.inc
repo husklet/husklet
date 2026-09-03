@@ -3692,7 +3692,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 226) return translit_control_mem_signal_stage_test(1) ? 0 : 226;
     if (scenario == 223) return translit_movsd_far_fixture_test();
     if (scenario == 219) return translit_movsd_memory_fixture_test();
-    if (scenario == 218) return translit_jcc_live_forward_shape_test() ? 0 : 218;
+    if (scenario == 233) return translit_jcc_live_forward_shape_test() ? 0 : 233;
     if (scenario == 217) return translit_jitdump_lifecycle_test();
     if (scenario == 230) return translit_profile_private_failure_test();
     if (scenario == 231) {
@@ -4004,7 +4004,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return 0;
     }
     if (scenario == 205) return translit_single_fetch_test();
-    if (scenario == 227 || scenario == 228) {
+    if (scenario == 227 || scenario == 234) {
         pid_t child = fork();
         if (child < 0) return 97;
         if (child == 0) _exit(translit_fall_fixture_test(scenario));
@@ -7198,7 +7198,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     default: return 90;
     }
     uint8_t *far_guest = MAP_FAILED;
-    if (scenario == 227 || scenario == 228) {
+    if (scenario == 227 || scenario == 234) {
         far_guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
         if (far_guest == MAP_FAILED) {
@@ -7230,9 +7230,9 @@ static int translit_fall_fixture_test(unsigned scenario) {
     hl_x86_hot_context *context =
         hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL,
                                   scenario >= 78 && scenario <= 80 ? hl_guest_fetch_authority_source() : NULL);
-    if ((scenario == 227 || scenario == 228) && context != NULL)
+    if ((scenario == 227 || scenario == 234) && context != NULL)
         context->authority_source = &fixture_authority;
-    if ((scenario == 227 || scenario == 228) && context != NULL &&
+    if ((scenario == 227 || scenario == 234) && context != NULL &&
         jit_body_owner_set_for(g_cache_gen, 1) == NULL) {
         hl_x86_hot_context_destroy(context);
         context = NULL;
@@ -7326,7 +7326,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     uint64_t expected_sse_riprel_form = block->profile_sse_riprel_form;
     // A chained terminal returns through the dispatcher-entered source descriptor, whose hook key
     // need not describe the terminal block. Model that lifecycle explicitly for the second form.
-    if (scenario == 228) block->profile_sse_riprel_form = 0;
+    if (scenario == 234) block->profile_sse_riprel_form = 0;
     struct cpu fixture_cpu = {0};
     fixture_cpu.rip = translit_fall_fixture_guest;
     fixture_cpu.fs_base = (uint64_t)(uintptr_t)(arena + arena_size - 8) - UINT64_C(0x12340);
@@ -7342,7 +7342,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
                    summary.translated_fall_stop[expected] == 1;
     for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; reason++)
         if (reason != expected && summary.translated_fall_stop[reason] != 0) executed = 0;
-    if (scenario == 227 || scenario == 228) {
+    if (scenario == 227 || scenario == 234) {
         uint64_t keys[8] = {0}, counts[8] = {0};
         uint64_t keyed = 0, overflow = 0, unique = 0, collisions = 0;
         hl_backend_tree_sse_riprel_snapshot(keys, counts, &keyed, &overflow, &unique, &collisions);
@@ -7351,7 +7351,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
                     counts[0] == 1 && keys[0] == expected_sse_riprel_form;
         /* A chained terminal whose runtime identity cannot be decoded must never inherit the
            dispatcher-entered source descriptor's plausible but unrelated key. */
-        if (scenario == 228) {
+        if (scenario == 234) {
             hl_x86_hot_context *begin_refused_context =
                 hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
             uint64_t begin_refused_key = begin_refused_context == NULL ? UINT64_MAX :
@@ -7383,7 +7383,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_cache_gen = saved_generation;
     if (far_guest != MAP_FAILED) munmap(far_guest, 4096);
     munmap(arena, arena_size);
-    if (scenario == 227 || scenario == 228)
+    if (scenario == 227 || scenario == 234)
         return built && cap_exact && executed ? 0 : 200 + (!built ? 1 : 0) + (!cap_exact ? 2 : 0) + (!executed ? 4 : 0);
     return built && cap_exact && executed ? 0 : 100 + (int)(scenario - 71);
 }
