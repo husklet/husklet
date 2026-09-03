@@ -175,7 +175,7 @@ catalogue! {
     Splitter: children, props[Orientation, Position], triggers[],
     Stack: children, props[], triggers[],
     Overlay: children, props[], triggers[],
-    Container: children, props[Gap], triggers[],
+    Container: children, props[Gap], triggers[Drag, Drop],
     Spacer: leaf, props[], triggers[],
     Separator: leaf, props[Orientation], triggers[],
 

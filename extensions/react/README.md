@@ -98,7 +98,10 @@ cleanup and fresh-callback behavior for other typed `HostEvent` handling.
 Current interface events form a discriminated union on `interaction`: checking
 for `"key"`, for example, makes `key`, `keycode`, `modifiers`, and `pressed`
 required, while a pointer event exposes its finite phase vocabulary and nullable
-coordinates. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
+coordinates. A `Container` can bind `onDrag` and `onDrop` for in-process
+reordering: drop reports only the bounded source node identity and local `x`/`y`
+coordinates. Arbitrary files, MIME data, clipboard contents, and cross-process
+payloads are deliberately not exposed. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
 that used the older `event` envelope; new code should narrow `InterfaceEvent`.
 
 ## Workspace API

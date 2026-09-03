@@ -174,7 +174,55 @@ fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, re
         Trigger::Key => key(&target, node, slot, reports),
         Trigger::Focus => focus(&target, node, slot, reports),
         Trigger::Pointer => pointer(widget, node, slot, reports),
+        Trigger::Drag => drag(widget, node, slot, reports),
+        Trigger::Drop => drop_target(widget, node, slot, reports),
     }
+}
+
+fn drag(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let source = gtk::DragSource::new();
+    source.set_actions(gtk::gdk::DragAction::MOVE);
+    let slot = slot.clone();
+    let reports = reports.clone();
+    source.connect_prepare(move |_, _, _| {
+        let id = slot.id()?;
+        reports.push(Event::Drag { node, id });
+        let marker = format!("husklet-node:{}", node.raw());
+        Some(gtk::gdk::ContentProvider::for_value(&marker.to_value()))
+    });
+    widget.add_controller(source);
+}
+
+fn drop_target(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let target = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
+    let slot = slot.clone();
+    let reports = reports.clone();
+    target.connect_drop(move |_, value, x, y| {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let Ok(marker) = value.get::<String>() else {
+            return false;
+        };
+        let Some(raw) = marker
+            .strip_prefix("husklet-node:")
+            .and_then(|raw| raw.parse::<u64>().ok())
+        else {
+            return false;
+        };
+        let Some(id) = slot.id() else {
+            return false;
+        };
+        reports.push(Event::Drop {
+            node,
+            id,
+            source: NodeId::new(raw),
+            x,
+            y,
+        });
+        true
+    });
+    widget.add_controller(target);
 }
 
 fn invoke(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {

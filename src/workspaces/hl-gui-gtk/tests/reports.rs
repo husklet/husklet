@@ -119,6 +119,7 @@ fn identified(event: &Event) -> bool {
         | Event::Key { id, .. }
         | Event::Focus { id, .. }
         | Event::Pointer { id, .. } => id.as_str() == "reported",
+        Event::Drag { id, .. } | Event::Drop { id, .. } => id.as_str() == "reported",
         _ => false,
     }
 }
@@ -255,6 +256,19 @@ fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
                     controller.emit_by_name::<()>("pressed", &[&1_i32, &2.0_f64, &3.0_f64]);
                     return true;
                 }
+            }
+            Trigger::Drag if controller.is::<gtk::DragSource>() => {
+                let provider =
+                    controller.emit_by_name::<Option<gtk::gdk::ContentProvider>>("prepare", &[&2.0_f64, &3.0_f64]);
+                assert!(provider.is_some(), "a drag publishes a bounded node marker");
+                return true;
+            }
+            Trigger::Drop if controller.is::<gtk::DropTarget>() => {
+                let marker = "husklet-node:1".to_value();
+                let boxed = gtk::glib::BoxedValue(marker);
+                let accepted = controller.emit_by_name::<bool>("drop", &[&boxed, &2.0_f64, &3.0_f64]);
+                assert!(accepted, "an internal bounded node marker is accepted");
+                return true;
             }
             _ => {}
         }

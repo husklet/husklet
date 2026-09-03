@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 
 import { connect, render, useHostEvents, usePaneSelection } from '../src/index.js';
-import { Button, Column, Text } from '../src/components.js';
+import { Button, Column, Container, Text } from '../src/components.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -184,6 +184,28 @@ test('bounded keyboard, focus and pointer details reach their React handlers', a
   assert.equal(seen[0].key, 'a');
   assert.equal(seen[1].focused, true);
   assert.deepEqual([seen[2].x, seen[2].y], [2, 3]);
+  session.close();
+  stage.close();
+});
+
+test('bounded internal drag and drop metadata reaches the exact React handlers', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const seen = [];
+  render(h(Column, null, h(Container, {
+    onDrag: (event) => seen.push(event),
+    onDrop: (event) => seen.push(event),
+  })), session, { title: 'Drag and drop' });
+  await until(() => stage.calls.length >= 2);
+  const patches = stage.calls.find(({ call }) => call === 'interface_render_at').with.frame.patches;
+  const drag = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Drag').SetHandler;
+  const drop = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Drop').SetHandler;
+  await stage.push({ interaction: 'drag', trigger: 'Drag', node: drag.id, id: drag.handler.id, slot: 'surface-1' });
+  await stage.push({ interaction: 'drop', trigger: 'Drop', node: drop.id, id: drop.handler.id, slot: 'surface-1', source: 4, x: 2, y: 3 });
+  await until(() => seen.length === 2);
+  assert.deepEqual(seen.map(({ trigger }) => trigger), ['Drag', 'Drop']);
+  assert.equal(seen[0].slot, 'surface-1');
+  assert.deepEqual([seen[1].source, seen[1].x, seen[1].y], [4, 2, 3]);
   session.close();
   stage.close();
 });

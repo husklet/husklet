@@ -182,6 +182,9 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
   assert.deepEqual(protocolCoverage.unavailable.extensions, []);
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
+  assert.ok(protocolCoverage.available.interfaceEvents.includes('drag'));
+  assert.ok(protocolCoverage.available.interfaceEvents.includes('drop'));
+  assert.ok(!protocolCoverage.unavailable.events.includes('drag'));
   const api = workspace({ call() { throw new Error('not called'); } });
   assert.equal(api.renameWorkspace, undefined);
   assert.equal(typeof api.containers.processes, 'function');

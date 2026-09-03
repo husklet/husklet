@@ -381,7 +381,9 @@ export type InterfaceEvent =
   | (InterfaceEventBase<'pointer', 'Pointer'> & {
       phase: 'enter' | 'motion' | 'leave' | 'press' | 'release';
       x: number | null; y: number | null; button: number; modifiers: number;
-    });
+    })
+  | InterfaceEventBase<'drag', 'Drag'>
+  | (InterfaceEventBase<'drop', 'Drop'> & { source: number; x: number; y: number });
 /** Protocol-1 interface spellings accepted from older hosts by the event router. */
 export type LegacyInterfaceEvent =
   | { slot?: string; event: string; node: number; id: string; value?: unknown }

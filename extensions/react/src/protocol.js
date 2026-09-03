@@ -73,7 +73,7 @@ export const PROPS = new Map(Object.keys(KIND).map((prop) => [camel(prop), prop]
 
 /** Every trigger, spelled as the React prop that carries its callback. */
 export const TRIGGERS = new Map(
-  ['Invoke', 'Change', 'Submit', 'Select', 'Activate', 'Toggle', 'Expand', 'Scroll', 'Close', 'Context', 'Key', 'Focus', 'Pointer'].map(
+  ['Invoke', 'Change', 'Submit', 'Select', 'Activate', 'Toggle', 'Expand', 'Scroll', 'Close', 'Context', 'Key', 'Focus', 'Pointer', 'Drag', 'Drop'].map(
     (trigger) => [`on${trigger}`, trigger],
   ),
 );

@@ -99,6 +99,19 @@ pub enum Event {
         button: u32,
         modifiers: u32,
     },
+    /// A bounded in-process drag began from this node. No host or file data is exposed.
+    Drag {
+        node: NodeId,
+        id: EventId,
+    },
+    /// A bounded in-process node marker was dropped on this node.
+    Drop {
+        node: NodeId,
+        id: EventId,
+        source: NodeId,
+        x: f64,
+        y: f64,
+    },
     /// The host needs a window of rows it does not have cached.
     Rows(RowRequest),
 }
