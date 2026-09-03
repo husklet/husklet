@@ -551,7 +551,9 @@ export function Volumes({ api, resource, volumeDetails }) {
   const currentVolumes = useRef(new Map());
   currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
   const remove = async (volume) => {
-    if (currentVolumes.current.get(volume.name) !== volume.generation) return;
+    if (currentVolumes.current.get(volume.name) !== volume.generation) {
+      throw new Error(`Volume ${volume.name} changed generation; inspect and confirm again.`);
+    }
     await api.volumes.remove(volume.name, volume.generation);
     if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
     await resource.reload();

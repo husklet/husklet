@@ -796,6 +796,28 @@ test('a failed final confirmation stays visible and retryable', async () => {
   assert.equal(attempts, 1, 'cancelling after failure does not retry');
 });
 
+test('stale volume generation refuses authority and remains visibly retryable', async () => {
+  const calls = [];
+  const oldGeneration = 'd'.repeat(32);
+  const currentGeneration = 'e'.repeat(32);
+  const controlled = { volumes: {
+    inspect: async () => ({}), create: async () => ({}),
+    remove: async (...args) => calls.push(args),
+  } };
+  const resource = { data: [
+    { name: 'cache', driver: 'local', generation: oldGeneration },
+    { name: 'cache', driver: 'local', generation: currentGeneration },
+  ], loading: false, error: null, reload: async () => {} };
+  const stage = host(); stage.render(h(Volumes, { api: controlled, resource }));
+  const removes = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Remove');
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: removes[0].SetProp.id, id: `${removes[0].SetProp.id}:Invoke`, value: null }));
+  invoke(stage, 'Confirm remove'); await settled(); await settled();
+  assert.deepEqual(calls, []);
+  assert.ok(labelled(stage, 'Volume cache changed generation; inspect and confirm again.'));
+  assert.equal(isDestructive(stage, 'Confirm remove'), true);
+});
+
 function labelled(stage, label) {
   return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
     'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value?.Text === label).at(-1);
