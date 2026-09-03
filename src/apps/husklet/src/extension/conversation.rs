@@ -2297,6 +2297,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unfinished_request_frame_never_dispatches_or_steals_the_next_reply() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let mut unfinished = codec::request(&Request::ContainerList).expect("encoded request");
+        unfinished.flags = hl_extension::Flags::none();
+        wire.send(&unfinished).expect("unfinished frame sent over Unix socket");
+        let refused = wire.receive().expect("unfinished request is answered");
+        assert!(codec::is_failure(&refused));
+        assert!(ledger.reached().is_empty(), "an unfinished logical request never reaches authority");
+
+        let answered = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answered), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
     fn a_closed_socket_ends_the_conversation_rather_than_faulting() {
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::new(Ledger::default()));
         let mut wire = Wire::new(theirs);

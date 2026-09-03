@@ -78,6 +78,9 @@ pub fn request(request: &Request) -> Result<Frame, Coding> {
 /// channel, or names a call this host does not implement.
 pub fn read_request(frame: &Frame) -> Result<Request, Coding> {
     expect(frame, Kind::Request, CALLS)?;
+    if !frame.flags.has(Flags::END) || frame.flags.has(Flags::ERROR) || frame.flags.has(Flags::COALESCED) {
+        return Err(Coding::Malformed("a call must be one complete, unflagged request".into()));
+    }
     parse(frame)
 }
 
