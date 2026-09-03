@@ -217,6 +217,10 @@ impl Overview<'_> {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("settings-save-row");
         let status = gtk::Label::new(Some("No unsaved changes."));
+        // Saving, validation, and dirty-state changes all replace this text in
+        // place. Expose it as a status so the result is announced without
+        // moving keyboard focus away from the field or Save button.
+        status.set_accessible_role(gtk::AccessibleRole::Status);
         status.add_css_class("fhint");
         status.set_xalign(0.0);
         status.set_hexpand(true);
@@ -722,6 +726,19 @@ mod tests {
             window.present();
             while gtk::glib::MainContext::default().iteration(false) {}
             let initial_focus = focus_chain(&window);
+            let status = descendants(page.upcast_ref())
+                .into_iter()
+                .find_map(|widget| {
+                    widget.downcast::<gtk::Label>().ok().filter(|label| {
+                        label.text().as_str() == "No unsaved changes."
+                    })
+                })
+                .expect("settings exposes visible save feedback");
+            assert_eq!(
+                status.accessible_role(),
+                gtk::AccessibleRole::Status,
+                "save, validation, and dirty-state feedback must be announced"
+            );
             let eligible: Vec<_> = descendants(page.upcast_ref())
                 .into_iter()
                 .filter(|widget| {
