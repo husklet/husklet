@@ -206,9 +206,10 @@ impl Candidate {
 /// Pins manifest extraction to the image identity that will be persisted.
 /// Docker Hub tags may move after inspection; content digests do not.
 fn immutable_content<'a>(_reference: &str, digest: &'a str) -> Result<&'a str, String> {
-    (!digest.trim().is_empty())
-        .then_some(digest)
-        .ok_or_else(|| "the inspected extension image has no immutable digest".to_owned())
+    digest
+        .parse::<hl_images::Digest>()
+        .map(|_| digest)
+        .map_err(|_| format!("the inspected extension image has no valid immutable SHA-256 digest: {digest}"))
 }
 
 fn platform(inspection: &InspectImage, architecture: &str) -> Result<(), String> {
@@ -473,13 +474,70 @@ mod tests {
 
     #[test]
     fn manifest_extraction_is_pinned_to_the_inspected_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
         assert_eq!(
-            immutable_content("registry/team:latest", "sha256:resolved").expect("digest"),
-            "sha256:resolved"
+            immutable_content("registry/team:latest", &digest).expect("digest"),
+            digest
         );
+        for identity in ["  ", "registry/team:latest", "sha256:short"] {
+            assert!(
+                immutable_content("registry/team:latest", identity).is_err(),
+                "{identity:?} cannot substitute for an immutable digest"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acquisition_refuses_a_non_digest_image_identity_over_the_real_unix_protocol() {
+        use std::io::{Read as _, Write as _};
+
+        let root = tempfile::TempDir::new().unwrap();
+        let socket = root.path().join("mock.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut chunk).unwrap();
+                assert_ne!(count, 0, "request ended before its headers");
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let body = serde_json::json!({
+                "Id": "registry.test/team/extension:latest",
+                "RepoTags": [], "RepoDigests": [], "Created": "", "Size": 0, "VirtualSize": 0,
+                "Os": "linux", "Architecture": "arm64",
+                "Config": {
+                    "Entrypoint": [], "Cmd": [], "Env": [], "WorkingDir": "", "User": "", "Labels": {},
+                    "OnBuild": [], "ExposedPorts": {}, "Volumes": {}, "Healthcheck": null, "StopSignal": null
+                }
+            })
+            .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ).unwrap();
+            String::from_utf8(request).unwrap().lines().next().unwrap().to_owned()
+        });
+        let (progress, received) = std::sync::mpsc::channel();
+        Candidate::acquire_from_socket(
+            &socket,
+            hl_ws::Arch::Arm64,
+            "registry.test/team/extension:latest",
+            &progress,
+        );
+        let terminal = received
+            .into_iter()
+            .find(|event| matches!(event, Acquisition::Failed(_) | Acquisition::Ready(_)))
+            .unwrap();
         assert!(
-            immutable_content("registry/team:latest", "  ").is_err(),
-            "a mutable tag cannot substitute for a missing digest"
+            matches!(terminal, Acquisition::Failed(reason) if reason.contains("valid immutable SHA-256 digest") && reason.contains("registry.test/team/extension:latest"))
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            "GET /v1.43/images/registry%2Etest%2Fteam%2Fextension%3Alatest/json HTTP/1.1"
         );
     }
 
