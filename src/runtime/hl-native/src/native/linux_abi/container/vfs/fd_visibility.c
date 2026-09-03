@@ -64,6 +64,16 @@ struct fdvis_control {
 };
 static struct fdvis_control *g_fdvis_control;
 static int g_fdvis_fork_parent;
+/* Process-private ownership, deliberately inherited by fork. The shared table is sized for every process in
+ * the workspace, but final-exit cleanup only owns this process's descriptors. Scanning all 131072 shared
+ * slots at every short-lived child exit made fork+exec pay for workspace capacity rather than its handful of
+ * open descriptors. A bit set is complete by construction: the two publication seams below set it, close
+ * clears it, and a fork child inherits exactly the descriptor set whose rows the parent publishes for it. */
+#define FDVIS_OWNED_WORDS ((HL_NFD + 63u) / 64u)
+static uint64_t g_fdvis_owned[FDVIS_OWNED_WORDS];
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t g_fdvis_cleanup_examined;
+#endif
 static uint64_t fdvis_key(int pid, int fd);
 static uint64_t fdvis_process_token(int pid);
 static void fdpath_sweep_stale_locked(void);
@@ -77,11 +87,22 @@ static void fdvis_index_remove_locked(const struct fdvis_slot *slot);
 static void fdvis_slot_clear_locked(struct fdvis_slot *slot);
 static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint64_t object);
 static void proc_fdvis_close(int guest_fd);
+
+static void fdvis_owned_set(int guest_fd) {
+    if (guest_fd >= 0 && guest_fd < HL_NFD)
+        g_fdvis_owned[(unsigned)guest_fd >> 6] |= UINT64_C(1) << ((unsigned)guest_fd & 63u);
+}
+
+static void fdvis_owned_clear(int guest_fd) {
+    if (guest_fd >= 0 && guest_fd < HL_NFD)
+        g_fdvis_owned[(unsigned)guest_fd >> 6] &= ~(UINT64_C(1) << ((unsigned)guest_fd & 63u));
+}
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int fdvis_after_fork_rollback_test(void);
 static int fdvis_stalled_parent_test(void);
 static int fdvis_corpse_holder_test(void);
 static int fdvis_recursive_identity_test(void);
+static int fdvis_sparse_cleanup_test(void);
 #endif
 
 static struct fdpath_slot *fdpath_find(uint64_t key, uint64_t owner_start_ns, int claim) {
@@ -362,6 +383,7 @@ static int fdvis_index_contract_test(void) {
 HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
     if (scenario == 12) return fdvis_recursive_identity_test();
     if (scenario == 14) return fdvis_index_contract_test();
+    if (scenario == 15) return fdvis_sparse_cleanup_test();
     if (scenario >= 8 && scenario <= 11) return fdvis_reservation_sweep_test(scenario);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdpath_slot *saved_paths = g_fdpaths;
@@ -926,6 +948,7 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
     slot->generation = ++g_fdvis_control->generation;
     slot->key = fdvis_key(pid, guest_fd);
     fdvis_index_commit_locked(fdvis_index_publish_locked(slot));
+    fdvis_owned_set(guest_fd);
     fdvis_unlock();
     reservation->active = 0;
 }
@@ -953,6 +976,7 @@ static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint
     int path_status = proc_fdvis_publish_path_locked(pid, owner_start, guest_fd);
     slot->generation = generation;
     fdvis_index_commit_locked(fdvis_index_publish_locked(slot));
+    fdvis_owned_set(guest_fd);
     fdvis_unlock();
     return path_status;
 }
@@ -1049,6 +1073,7 @@ static void proc_fdvis_close(int guest_fd) {
     if (slot) fdvis_slot_clear_locked(slot);
     struct fdpath_slot *path = fdpath_find(fdvis_key(pid, guest_fd), owner_start, 0);
     if (path) fdpath_delete_locked(path);
+    fdvis_owned_clear(guest_fd);
     fdvis_unlock();
 }
 
@@ -1860,9 +1885,87 @@ static void proc_fdvis_cleanup(void) {
     uint64_t owner_start = fdvis_process_token(owner);
     if (!g_fdvis || !g_fdvis_control) return;
     fdvis_lock();
-    for (unsigned index = 0; index < FDVIS_N; ++index)
-        if ((int)(uint32_t)(g_fdvis[index].key >> 32) == owner && g_fdvis[index].owner_start_ns == owner_start)
-            fdvis_slot_clear_locked(&g_fdvis[index]);
-    fdpath_cleanup_owner_locked(owner, owner_start);
+    for (unsigned word_index = 0; word_index < FDVIS_OWNED_WORDS; ++word_index) {
+        uint64_t active = g_fdvis_owned[word_index];
+        while (active != 0) {
+            unsigned bit = (unsigned)__builtin_ctzll(active);
+            int guest_fd = (int)(word_index * 64u + bit);
+            uint64_t key = fdvis_key(owner, guest_fd);
+            struct fdvis_slot *slot = fdvis_find(key, owner_start, 0);
+            if (slot) fdvis_slot_clear_locked(slot);
+            struct fdpath_slot *path = fdpath_find(key, owner_start, 0);
+            if (path) fdpath_delete_locked(path);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            g_fdvis_cleanup_examined++;
+#endif
+            active &= active - 1;
+        }
+        g_fdvis_owned[word_index] = 0;
+    }
     fdvis_unlock();
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* The peer row is the guard against turning the sparse walk into a table reset. The second local row enters
+ * through the reservation seam rather than proc_fdvis_publish(), so removing either ownership publication
+ * reddens this scenario. `examined == 2` is the performance contract: a full physical-table scan can remain
+ * semantically correct and still reintroduce the process-spawn defect. */
+static int fdvis_sparse_cleanup_test(void) {
+    struct fdvis_slot *slots = calloc(FDVIS_N, sizeof *slots);
+    struct fdvis_index_slot *index = calloc(FDVIS_INDEX_N, sizeof *index);
+    struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
+    struct fdvis_control *control = calloc(1, sizeof *control);
+    if (!slots || !index || !paths || !control) {
+        free(slots);
+        free(index);
+        free(paths);
+        free(control);
+        return 0;
+    }
+    struct fdvis_slot *saved_slots = g_fdvis;
+    struct fdvis_index_slot *saved_index = g_fdvis_index;
+    struct fdpath_slot *saved_paths = g_fdpaths;
+    struct fdvis_control *saved_control = g_fdvis_control;
+    uint64_t saved_owned[FDVIS_OWNED_WORDS];
+    memcpy(saved_owned, g_fdvis_owned, sizeof saved_owned);
+    memset(g_fdvis_owned, 0, sizeof g_fdvis_owned);
+    g_fdvis = slots;
+    g_fdvis_index = index;
+    g_fdpaths = paths;
+    g_fdvis_control = control;
+
+    int self = 0;
+    uint64_t self_start = 0;
+    (void)fdvis_self(&self, &self_start);
+    const int ordinary_fd = HL_NFD - 11;
+    const int reserved_fd = HL_NFD - 10;
+    int ordinary_status = proc_fdvis_publish(ordinary_fd, HL_HOST_FD_FILE, 101, 102);
+    struct fdvis_reservation reservation;
+    int reserve_status = proc_fdvis_reserve_at(reserved_fd, &reservation);
+    if (reserve_status == 0)
+        proc_fdvis_reservation_publish(&reservation, reserved_fd, HL_HOST_FD_PIPE, 103, 104);
+
+    const int peer = self == INT_MAX ? self - 1 : self + 1;
+    slots[FDVIS_N - 1] = (struct fdvis_slot){
+        .key = fdvis_key(peer, 7), .generation = 1, .owner_start_ns = self_start, .kind = HL_HOST_FD_FILE};
+    int indexed = fdvis_index_rebuild_locked();
+    g_fdvis_cleanup_examined = 0;
+    proc_fdvis_cleanup();
+    int clean = ordinary_status <= 0 && reserve_status == 0 && indexed &&
+                fdvis_find(fdvis_key(self, ordinary_fd), self_start, 0) == NULL &&
+                fdvis_find(fdvis_key(self, reserved_fd), self_start, 0) == NULL &&
+                fdvis_find(fdvis_key(peer, 7), self_start, 0) == &slots[FDVIS_N - 1] &&
+                g_fdvis_cleanup_examined == 2;
+
+    g_fdvis = saved_slots;
+    g_fdvis_index = saved_index;
+    g_fdpaths = saved_paths;
+    g_fdvis_control = saved_control;
+    memcpy(g_fdvis_owned, saved_owned, sizeof saved_owned);
+    free(slots);
+    free(index);
+    free(paths);
+    free(control);
+    return clean;
+}
+#endif
