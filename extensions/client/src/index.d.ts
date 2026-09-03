@@ -292,6 +292,13 @@ export interface WorkspaceApi {
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
     switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
     switchOccupantObserved(slot: string, generation: number, revision: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
+    /** Arm observation, perform an observed switch, and verify the exact resulting occupant. */
+    switchOccupantAndWait(slot: string, generation: number, revision: number,
+      target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string },
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }; after: { generation: number; revision: number } }
+      >;
   };
   files: {
     list(path: string): Promise<FileEntry[]>;

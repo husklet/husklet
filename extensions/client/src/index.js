@@ -47,6 +47,14 @@ function exactPaneTitle(title) {
   throw new TypeError('pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
 }
 
+function exactOccupantTarget(target) {
+  const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
+  const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
+  const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
+  if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
+  return { ...target };
+}
+
 function exactSemanticAction(action) {
   if (!Number.isSafeInteger(action?.generation) || action.generation < 0
     || !Number.isSafeInteger(action?.revision) || action.revision < 0
@@ -350,19 +358,11 @@ export function workspace(session, { signal } = {}) {
       },
       switchOccupant: (slot, generation, target) => {
         if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('pane generation must be a nonnegative safe integer');
-        const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
-        const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
-        const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
-        if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
-        return done('terminal_switch_occupant', { slot, generation, target: { ...target } });
+        return done('terminal_switch_occupant', { slot, generation, target: exactOccupantTarget(target) });
       },
       switchOccupantObserved: (slot, generation, revision, target) => {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
-        const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
-        const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
-        const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
-        if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
-        return done('terminal_switch_occupant_observed', { slot, generation, revision, target: { ...target } });
+        return done('terminal_switch_occupant_observed', { slot, generation, revision, target: exactOccupantTarget(target) });
       },
     },
     files: {
@@ -518,6 +518,41 @@ export function workspace(session, { signal } = {}) {
         throw new Error('pane change did not advance the readable snapshot cursor');
       }
       return { changed: true, readable };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.switchOccupantAndWait = async (slot, generation, revision, target, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane occupant switch requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
+    }
+    const wanted = exactOccupantTarget(target);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('pane occupant switch wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.switchOccupantObserved(slot, generation, revision, wanted);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, target: wanted, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+      if (!pane) throw new Error(inventory.truncated ? 'switched pane cannot be verified from a truncated inventory' : 'switched pane disappeared');
+      const matches = wanted.kind === 'terminal'
+        ? pane.kind === 'terminal'
+        : pane.kind === 'surface' && pane.provider?.extension === wanted.extension && pane.provider?.provider === wanted.provider;
+      if (!matches) throw new Error('pane changed without installing the requested occupant');
+      return { changed: true, pane };
     } finally {
       clearTimeout(timer);
       await stop();

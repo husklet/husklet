@@ -154,6 +154,49 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
   }
 });
 
+test('real Unix occupant switch arms before CAS and verifies provider inventory', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-switch-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+        if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'terminal_switch_occupant_observed') {
+          socket.write(encode({ channel: 13, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+            slot: 'pane-1', kind: 'surface', generation: 8, revision: 12, coalesced: 0,
+          } } }));
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'pane_list') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [{
+            slot: 'pane-1', generation: 8, revision: 12, kind: 'surface',
+            provider: { extension: 'manager', provider: 'main' }, tab: 'tab', title: 'Manager', focused: true,
+          }], truncated: false } } }));
+        }
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'switch-wait', granted: ['pane-observe', 'terminal-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).terminal.switchOccupantAndWait('pane-1', 7, 11, {
+      kind: 'surface', extension: 'manager', provider: 'main',
+    });
+    assert.equal(result.changed, true); assert.equal(result.pane.provider.extension, 'manager');
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_switch_occupant_observed', 'pane_list', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('negotiated grants are immutable and deny calls and topics before any socket write', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-grants-'));
   const socketPath = path.join(directory, 'host.sock');

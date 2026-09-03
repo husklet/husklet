@@ -39,6 +39,17 @@ const next = await host.extensions.waitForAcquisition(job, current.revision);
 if (next.changed) console.log(next.status.state, next.status.progress);
 ```
 
+Pane occupant changes can likewise be armed and verified without racing a raw
+subscription against the mutation:
+
+```js
+const switched = await host.terminal.switchOccupantAndWait(
+  pane.slot, pane.generation, pane.revision,
+  { kind: 'surface', extension: 'workspace-manager', provider: 'main' },
+);
+if (switched.changed) console.log(switched.pane.provider);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

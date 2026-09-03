@@ -389,6 +389,51 @@ test('terminal occupant switching validates and preserves the exact CAS wire sha
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('occupant switch wait arms before authority and verifies exact provider identity', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const target = { kind: 'surface', extension: 'manager', provider: 'main' };
+  const pending = api.terminal.switchOccupantAndWait('pane-1', 7, 11, target, { timeoutMs: 1_000 });
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'terminal_switch_occupant_observed', with: {
+    slot: 'pane-1', generation: 7, revision: 11, target,
+  } });
+  stage.host.write(encode({ channel: 22, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+    slot: 'pane-1', kind: 'surface', generation: 8, revision: 12, coalesced: 0,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  const pane = { slot: 'pane-1', generation: 8, revision: 12, kind: 'surface', provider: {
+    extension: 'manager', provider: 'main',
+  }, tab: 'tab-1', title: 'Manager', focused: true };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await pending, { changed: true, pane });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('occupant switch wait rejects a mismatched resulting provider and still disposes', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const pending = api.terminal.switchOccupantAndWait('pane-1', 7, 11, {
+    kind: 'surface', extension: 'manager', provider: 'main',
+  });
+  await next(); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await next(); stage.host.write(encode({ channel: 22, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+    slot: 'pane-1', kind: 'surface', generation: 8, revision: 12, coalesced: 0,
+  } } }));
+  await next(); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await next(); stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [{
+    slot: 'pane-1', generation: 8, revision: 12, kind: 'surface', provider: { extension: 'other', provider: 'main' },
+    tab: 'tab-1', title: 'Other', focused: true,
+  }], truncated: false } } }));
+  assert.equal((await next()).payload.call, 'event_unsubscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await assert.rejects(pending, /without installing the requested occupant/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('extension inventory and acquisition watchers use separate exact topics', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const inventory = []; const acquisitions = [];
