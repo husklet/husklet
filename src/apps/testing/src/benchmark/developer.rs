@@ -111,7 +111,9 @@ enum ExecutionBackend {
     NativeSupervised,
     /// The x86 guest translator emits x86 on x86 and AArch64 on ARM hosts.
     X86Transliterator,
-    /// AArch64 guests are interpreter-only today, including on an x86 host.
+    /// The AArch64 guest translator emits AArch64 on an AArch64 host.
+    Aarch64Transliterator,
+    /// AArch64 guests are interpreter-only on an x86 host today.
     Aarch64Interpreter,
 }
 
@@ -268,6 +270,7 @@ const fn execution_backend(mode: Mode, guest_isa: GuestIsa) -> ExecutionBackend 
         Mode::Supervised => ExecutionBackend::NativeSupervised,
         Mode::Translated => match guest_isa {
             GuestIsa::X86_64 => ExecutionBackend::X86Transliterator,
+            GuestIsa::Aarch64 if cfg!(target_arch = "aarch64") => ExecutionBackend::Aarch64Transliterator,
             GuestIsa::Aarch64 => ExecutionBackend::Aarch64Interpreter,
         },
     }
@@ -325,17 +328,18 @@ set -eu
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 cd /work
 mark(){ printf 'HL_PHASE %s\n' "$1" >&2; }
+semantic(){ name=$1; hash=$(sha256sum | cut -d' ' -f1); printf 'HL_SEM %s=%s\n' "$name" "$hash"; }
 mark prompt; printf 'prompt-ok:%s\n' "$(id -u)"
 mark git; rm -rf checkout; git clone -q /fixture.git checkout; cd checkout; git status --porcelain=v1
-mark search; rg -n 'unit_(001|064|128)' src | LC_ALL=C sort | sha256sum; find src -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum; LC_ALL=C ls -R src | sha256sum
-mark full-build; make -s -j2 all; sha256sum build/devlib.a
+mark search; rg -n 'unit_(001|064|128)' src | LC_ALL=C sort | semantic search-content; find src -type f -print0 | sort -z | xargs -0 sha256sum | semantic search-files; LC_ALL=C ls -R src | semantic search-tree
+mark full-build; make -s -j2 all; semantic full-build-artifact <build/devlib.a
 mark edit; printf '\n/* incremental edit */\n' >>src/unit_064.c
-mark incremental-build; make -s -j2 all; sha256sum build/devlib.a
+mark incremental-build; make -s -j2 all; semantic incremental-build-artifact <build/devlib.a
 mark test; make -s test
-mark archive; tar -cf package.tar src Makefile; rm -rf extracted; mkdir extracted; tar -xf package.tar -C extracted; find extracted -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
-mark package-metadata; apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | sha256sum
+mark archive; tar -cf package.tar src Makefile; rm -rf extracted; mkdir extracted; tar -xf package.tar -C extracted; find extracted -type f -print0 | sort -z | xargs -0 sha256sum | semantic archive-source
+mark package-metadata; apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | semantic package-metadata
 mark spawn; i=0; while [ "$i" -lt 300 ]; do /bin/sh -c ':'; i=$((i+1)); done
-mark final; git diff -- src/unit_064.c | sha256sum
+mark final; git diff -- src/unit_064.c | semantic final-diff
 printf 'HL_DONE\n' >&2
 "#
 }
@@ -548,41 +552,42 @@ fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str)
             .find(|line| line.starts_with("[hl-native-supervised]") && line.contains("selected=1"))
             .map(str::to_owned)
             .ok_or_else(|| -> Error { "native-supervised arm did not prove selected=1".into() })?,
-        ExecutionBackend::X86Transliterator => stderr
-            .lines()
-            .find(|line| {
-                line.starts_with("[prof] translit:")
-                    && positive_field(line, "blocks")
-                    && positive_field(line, "entries")
-            })
-            .map(str::to_owned)
-            .ok_or_else(|| -> Error { "x86 transliterator did not prove nonzero blocks and entries".into() })?,
-        ExecutionBackend::Aarch64Interpreter => stderr
-            .lines()
-            .find(|line| {
-                line.starts_with("[diag] backend-tree ")
-                    && positive_field(line, "crossings")
-                    && positive_field(line, "interpreted_entries")
-            })
-            .map(str::to_owned)
-            .ok_or_else(|| -> Error { "AArch64 interpreter did not prove nonzero entries".into() })?,
+        ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator => {
+            let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
+                .ok_or("translated arm emitted no backend-shape receipt")?;
+            if shape.get("translation_codegen_available") != Some(&1)
+                || !shape.get("translated_entries").is_some_and(|value| *value > 0)
+            {
+                return Err("translated arm did not prove available codegen and nonzero translated entries".into());
+            }
+            stderr
+                .lines()
+                .find(|line| line.starts_with("[diag] backend-shape "))
+                .expect("typed parser established one backend-shape record")
+                .to_owned()
+        }
+        ExecutionBackend::Aarch64Interpreter => {
+            let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
+                .ok_or("interpreter arm emitted no backend-shape receipt")?;
+            if shape.get("translation_codegen_available") != Some(&0)
+                || !shape.get("interpreted_entries").is_some_and(|value| *value > 0)
+                || shape.get("translated_entries") != Some(&0)
+            {
+                return Err(
+                    "AArch64 interpreter did not prove unavailable codegen and exclusive interpreted execution".into(),
+                );
+            }
+            stderr
+                .lines()
+                .find(|line| line.starts_with("[diag] backend-shape "))
+                .expect("typed parser established one backend-shape record")
+                .to_owned()
+        }
     };
     Ok(format!(
         "guest_isa={} backend={backend:?} {evidence}",
         guest_isa.as_str()
     ))
-}
-
-fn positive_field(line: &str, name: &str) -> bool {
-    line.split_ascii_whitespace()
-        .find_map(|field| {
-            field
-                .strip_prefix(&format!("{name}="))?
-                .trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse::<u64>()
-                .ok()
-        })
-        .is_some_and(|value| value > 0)
 }
 
 fn read_ledger(path: &Path, samples: u32) -> Result<Vec<Row>, Error> {
@@ -706,7 +711,7 @@ fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 fn semantic_sha256(output: &[u8]) -> String {
     let semantic = output
         .split(|byte| *byte == b'\n')
-        .filter(|line| line.len() == 67 && line[64..] == *b"  -")
+        .filter(|line| line.starts_with(b"HL_SEM "))
         .flatten()
         .copied()
         .collect::<Vec<_>>();
@@ -716,9 +721,18 @@ fn semantic_sha256(output: &[u8]) -> String {
 fn portable_semantic_sha256(output: &[u8]) -> String {
     let mut portable = Vec::with_capacity(output.len());
     for line in output.split_inclusive(|byte| *byte == b'\n') {
-        if line.len() >= 67 && line[..64].iter().all(u8::is_ascii_hexdigit) && line[64..].starts_with(b"  -") {
-            portable.extend_from_slice(b"<architecture-bound-sha256>  -");
-            portable.extend_from_slice(&line[67..]);
+        let architecture_bound = [
+            b"HL_SEM full-build-artifact=".as_slice(),
+            b"HL_SEM incremental-build-artifact=".as_slice(),
+        ]
+        .into_iter()
+        .find(|prefix| line.starts_with(prefix));
+        if let Some(prefix) = architecture_bound {
+            portable.extend_from_slice(prefix);
+            portable.extend_from_slice(b"<architecture-bound-sha256>");
+            if line.ends_with(b"\n") {
+                portable.push(b'\n');
+            }
         } else {
             portable.extend_from_slice(line);
         }
@@ -811,14 +825,6 @@ mod tests {
                 GuestIsa::X86_64,
                 "[prof] translit: blocks=9 entries=4"
             )
-            .is_ok()
-        );
-        assert!(
-            backend_receipt(
-                ExecutionBackend::X86Transliterator,
-                GuestIsa::X86_64,
-                "[prof] translit: blocks=9 entries=0"
-            )
             .is_err()
         );
         assert!(
@@ -827,7 +833,7 @@ mod tests {
                 GuestIsa::Aarch64,
                 "[diag] backend-tree crossings=19 translated_entries=0 interpreted_entries=19"
             )
-            .is_ok()
+            .is_err()
         );
         assert!(
             backend_receipt(
@@ -865,7 +871,7 @@ mod tests {
         );
         assert!(
             fixture.contains(
-                "apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | sha256sum"
+                "apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | semantic package-metadata"
             ),
             "a missing package producer must not be hidden by a successful pipeline tail"
         );
@@ -979,11 +985,15 @@ mod tests {
 
     #[test]
     fn portable_semantics_ignore_only_architecture_bound_digest_values() {
-        let x86 = b"prefix\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  -\n";
-        let arm = b"prefix\nfedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210  -\n";
+        let x86 = b"prefix\nHL_SEM search-content=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nHL_SEM full-build-artifact=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let arm = b"prefix\nHL_SEM search-content=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nHL_SEM full-build-artifact=fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\n";
         assert_ne!(semantic_sha256(x86), semantic_sha256(arm));
         assert_eq!(portable_semantic_sha256(x86), portable_semantic_sha256(arm));
-        assert_ne!(portable_semantic_sha256(x86), portable_semantic_sha256(b"changed\n"));
+        let corrupted_search = b"prefix\nHL_SEM search-content=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nHL_SEM full-build-artifact=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        assert_ne!(
+            portable_semantic_sha256(x86),
+            portable_semantic_sha256(corrupted_search)
+        );
     }
 
     #[test]
