@@ -289,6 +289,28 @@ mod unix {
                 "needle",
                 "only an accepted newer window replaces the controlled cell"
             );
+            let hl_gui::Event::Edit { node, id, mut edit } = event.clone() else {
+                unreachable!("the DataTable representative event is an edit")
+            };
+            edit.version = hl_gui::Version::new(1);
+            edit.value = "stale overwrite".to_owned();
+            let stale = hl_gui::Event::Edit { node, id, edit };
+            let payload = codec::interaction(&stale, Some("storybook-main")).expect("stale edit has a wire representation");
+            wire.send(&Frame::new(ChannelId::new(98), Kind::Event, payload))
+                .expect("stale native edit returns to Node");
+            let rejected = receive_rejected_edit(&mut wire);
+            tree.apply(&rejected, &mut surface)
+                .expect("stale-edit rejection renders in GTK");
+            settle_toolkit();
+            assert_eq!(
+                find::<gtk::Entry>(&root, |entry| entry.text() == "needle").text(),
+                "needle",
+                "a stale edit cannot replace authoritative row text"
+            );
+            assert!(
+                find::<gtk::Label>(&root, |label| label.text().contains("edit refused: stale version")).is_visible(),
+                "the stale rejection is visible in the bounded operation history"
+            );
             let view = find::<gtk::ColumnView>(&root, |_| true);
             let column = view
                 .columns()
@@ -374,6 +396,28 @@ mod unix {
             }
         }
         panic!("{story} did not rerender after its GTK interaction")
+    }
+
+    fn receive_rejected_edit(wire: &mut Wire<std::os::unix::net::UnixStream>) -> hl_gui::Frame {
+        for _ in 0..8 {
+            let carried = wire.receive().expect("Node answers the stale native edit");
+            if carried.kind == Kind::Credit {
+                continue;
+            }
+            match codec::read_request(&carried).expect("stale-edit response decodes") {
+                Request::InterfaceRenderAt { slot, frame } => {
+                    assert_eq!(slot, "storybook-main");
+                    wire.send(&codec::reply(&Reply::Done).expect("rejection acknowledgement encodes"))
+                        .expect("rejection acknowledgement sends");
+                    return frame;
+                }
+                Request::SourceResizeAt { mutation, .. } => {
+                    panic!("rejected stale edit advanced its source: {mutation:?}")
+                }
+                other => panic!("unexpected stale-edit call: {other:?}"),
+            }
+        }
+        panic!("stale edit produced no visible rejection")
     }
 
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
