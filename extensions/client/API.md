@@ -147,6 +147,7 @@ wrong caller.
 - `host.extensions.install(...)` — `extension_install`, requires `extension-install`.
 - `host.extensions.update(...)` — `extension_update`, requires `extension-install`.
 - `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extension-install`.
+- `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extension-read` and `extension-control`.
 
 ## Semantics
 

@@ -192,6 +192,11 @@ export interface WorkspaceApi {
     list(): Promise<ExtensionSummary[]>;
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string, imageDigest: string): Promise<void>;
+    /** Arm inventory observation, enable this exact digest, then verify its durable enabled state. */
+    enableAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string }
+    >;
     disable(name: string, imageDigest: string): Promise<void>;
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;

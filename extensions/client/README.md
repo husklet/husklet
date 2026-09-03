@@ -39,6 +39,14 @@ const next = await host.extensions.waitForAcquisition(job, current.revision);
 if (next.changed) console.log(next.status.state, next.status.progress);
 ```
 
+Enable an installed digest and observe its durable roster state without racing
+the inventory subscription:
+
+```js
+const enabled = await host.extensions.enableAndWait(extension.name, extension.image_digest);
+if (enabled.changed) console.log(enabled.extension.status);
+```
+
 Pane occupant changes can likewise be armed and verified without racing a raw
 subscription against the mutation:
 

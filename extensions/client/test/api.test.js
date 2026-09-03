@@ -665,6 +665,25 @@ test('extension facade preserves exact read and control request shapes', async (
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('extension enable wait arms inventory before authority and verifies the exact digest', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const pending = api.extensions.enableAndWait('manager', digest, { timeoutMs: 1_000 });
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'extensions' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'extension_enable', with: { name: 'manager', image_digest: digest } });
+  stage.host.write(encode({ channel: 23, kind: KIND.event, payload: { snapshot: 'extensions', of: [{
+    name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true, pane_providers: [],
+  }] } }));
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await next()).payload.call, 'event_unsubscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const result = await pending;
+  assert.equal(result.changed, true); assert.equal(result.extension.image_digest, digest);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('volume and network facades preserve safe request shapes', async () => {
   const stage = await pair();
   const next = frames(stage.host);

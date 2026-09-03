@@ -29,6 +29,7 @@ groups.get('Terminal and panes').push(
 );
 groups.get('Extensions').push(
   '- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extension-install`.',
+  '- `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extension-read` and `extension-control`.',
 );
 
 const topicCapability = Object.fromEntries(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
