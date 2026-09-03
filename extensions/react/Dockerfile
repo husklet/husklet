@@ -64,6 +64,7 @@ LABEL husklet.extension.node.version="${NODE_VERSION}"
 LABEL husklet.extension.npm.version="${NPM_VERSION}"
 LABEL org.opencontainers.image.base.name="${NODE_IMAGE}"
 LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"
 # A base image declares no manifest: it is not an extension, it is what
 # extensions are built from. Each of those copies its own extension.toml
 # and points this label at it.
