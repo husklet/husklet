@@ -326,7 +326,10 @@ impl Console {
             .find(|pane| pane.slot == slot)
             .ok_or_else(|| absent(slot))?;
         if observed.kind != PaneKind::Terminal || observed.generation != generation || observed.revision != revision {
-            return Err(HostError::Conflict(format!("stale pane identity for {slot}")));
+            return Err(HostError::Conflict(format!(
+                "stale pane identity for {slot}: expected {generation}/{revision}, current {}/{} ({:?})",
+                observed.generation, observed.revision, observed.kind
+            )));
         }
         let terminal = Window::pane(window, slot).ok_or_else(|| absent(slot))?;
         terminal.feed_child(contents);

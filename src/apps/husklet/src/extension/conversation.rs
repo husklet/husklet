@@ -671,14 +671,48 @@ impl Conversation {
                 hash.finish()
             });
             let inventory = services.terminal.pane_inventory()?;
-            let pane = inventory.panes.iter().find(|pane| pane.slot == *slot).ok_or_else(|| Failure::Absent {
-                detail: format!("pane {slot} is absent"),
-            })?;
+            let pane = inventory
+                .panes
+                .iter()
+                .find(|pane| pane.slot == *slot)
+                .ok_or_else(|| Failure::Absent {
+                    detail: format!("pane {slot} is absent"),
+                })?;
             let (_, _, observed, _) = self.pane_state(services, pane, topology);
             if *generation != observed {
-                return Err(Failure::Conflict { detail: format!("pane {slot} changed since generation {generation}") });
+                return Err(Failure::Conflict {
+                    detail: format!("pane {slot} changed since generation {generation}"),
+                });
             }
             *generation = pane.generation;
+        } else if let hl_extension::Request::TerminalWritePane {
+            slot,
+            generation,
+            revision,
+            ..
+        } = &mut request
+        {
+            let topology = services.terminal.topology().ok().map(|topology| {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+                hash.finish()
+            });
+            let inventory = services.terminal.pane_inventory()?;
+            let pane = inventory
+                .panes
+                .iter()
+                .find(|pane| pane.slot == *slot)
+                .ok_or_else(|| Failure::Absent {
+                    detail: format!("pane {slot} is absent"),
+                })?;
+            let (_, observed_revision, observed_generation, _) = self.pane_state(services, pane, topology);
+            if *generation != observed_generation || *revision != observed_revision {
+                return Err(Failure::Conflict {
+                    detail: format!("pane {slot} changed since generation {generation} revision {revision}"),
+                });
+            }
+            *generation = pane.generation;
+            *revision = pane.revision;
         }
         let mut answer = self.session.dispatch(&request, services);
         if let Ok(reply) = &mut answer {

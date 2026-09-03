@@ -111,10 +111,19 @@ const outerIdentity = initialXml.match(/<husklet-pane[^>]*generation="(\d+)"[^>]
 if (!outerIdentity || Number(outerIdentity[1]) < 1 || !Number.isSafeInteger(Number(outerIdentity[2]))) {
   throw new Error(`terminal pane read did not preserve its observed immutable identity: ${initialXml}`);
 }
-const written = await client.callTool({
-  name: 'husklet_terminal_write',
-  arguments: { slot: terminalSlot, generation: terminal.generation, revision: terminal.revision, input: 'agent-status\n' },
-});
+let writeIdentity = outerIdentity;
+let written;
+const writeDeadline = Date.now() + 5_000;
+do {
+  written = await client.callTool({
+    name: 'husklet_terminal_write',
+    arguments: { slot: terminalSlot, generation: Number(writeIdentity[1]), revision: Number(writeIdentity[2]), input: 'agent-status\n' },
+  });
+  if (!written.isError || !written.content?.[0]?.text?.includes('stale pane identity')) break;
+  const refreshed = await client.callTool({ name: 'husklet_pane_read', arguments: { slot: terminalSlot, lines: 100 } });
+  writeIdentity = refreshed.content?.[0]?.text?.match(/<husklet-pane[^>]*generation="(\d+)"[^>]*revision="(\d+)"/);
+  if (!writeIdentity) throw new Error(`terminal identity refresh failed: ${refreshed.content?.[0]?.text}`);
+} while (Date.now() < writeDeadline);
 if (written.isError) throw new Error(`terminal input failed: ${written.content?.[0]?.text}`);
 
 const deadline = Date.now() + 5_000;
