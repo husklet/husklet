@@ -749,6 +749,18 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             .and_then(|button| button.label()),
         Some("Enable".into())
     );
+    gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>()
+        .expect("focused Enable button")
+        .emit_clicked();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Disable".into()),
+        "keyboard lifecycle activation keeps focus on its logical replacement"
+    );
 
     let removal = fixture.view.semantic_snapshot();
     let remove = removal

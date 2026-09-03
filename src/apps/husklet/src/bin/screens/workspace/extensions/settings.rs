@@ -271,7 +271,12 @@ fn action(
     let name = entry.name.clone();
     let image_digest = entry.image_digest.clone();
     let refusal = refusal.clone();
-    button.connect_clicked(move |_| commit(&shelf, &name, &image_digest, deed, &refusal));
+    button.connect_clicked(move |button| {
+        let restore_focus = button.has_focus();
+        if commit(&shelf, &name, &image_digest, deed, &refusal) && restore_focus {
+            focus_replacement(&shelf, deed);
+        }
+    });
     let name = entry.name.clone();
     let image_digest = entry.image_digest.clone();
     let semantic_button = button.clone();
@@ -286,7 +291,7 @@ fn action(
         ],
         Rc::new(move |action, _| match action {
             super::super::semantic::ActionKind::Invoke => {
-                commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal)
+                let _ = commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal);
             }
             super::super::semantic::ActionKind::Focus => {
                 semantic_button.grab_focus();
@@ -301,14 +306,37 @@ fn action(
 ///
 /// A refusal is shown on the page rather than logged, because the person is
 /// standing in front of the thing they just asked for.
-fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label) {
+fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label) -> bool {
     let done = apply(shelf, name, image_digest, deed);
     if let Err(fault) = done {
         refusal.set_text(&fault.to_string());
         refusal.set_visible(true);
-        return;
+        return false;
     }
     shelf.refresh(name);
+    true
+}
+
+fn focus_replacement(shelf: &Shelf, deed: Deed) {
+    let class = match deed {
+        Deed::Enable | Deed::Retry => DISABLE,
+        Deed::Disable => ENABLE,
+    };
+    let Some(page) = shelf.view().and_then(|view| view.page(super::super::Page::Extensions.title())) else {
+        return;
+    };
+    let mut pending = vec![page];
+    while let Some(widget) = pending.pop() {
+        if widget.has_css_class(class) {
+            widget.grab_focus();
+            return;
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            pending.push(current);
+        }
+    }
 }
 
 /// The roster call one deed stands for, with the borrow released before the
