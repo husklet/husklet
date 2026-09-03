@@ -95,6 +95,21 @@ fn a_handler_reports_exactly_the_identity_it_is_currently_bound_to() {
     queued_interaction_is_withdrawn_when_its_handler_is_cleared();
     queued_interaction_is_withdrawn_when_its_node_is_removed();
     a_handler_bound_again_after_clearing_reports_once_more();
+    activation_keeps_its_bound_trigger_and_opaque_identity();
+}
+
+fn activation_keeps_its_bound_trigger_and_opaque_identity() {
+    let mut session = Session::new();
+    session.apply(Patch::SetHandler {
+        id: session.button,
+        handler: hl_gui::Handler::new(Trigger::Activate, EventId::new("arbitrary/id:do-not-parse")),
+    });
+    session.button().emit_clicked();
+
+    assert!(matches!(
+        session.surface.reports().drain().as_slice(),
+        [Event::Activate { id, .. }] if id.as_str() == "arbitrary/id:do-not-parse"
+    ));
 }
 
 fn queued_interaction_is_withdrawn_when_its_handler_is_cleared() {

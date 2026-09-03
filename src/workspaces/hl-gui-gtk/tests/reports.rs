@@ -110,7 +110,10 @@ impl Session {
 fn identified(event: &Event) -> bool {
     match event {
         Event::Invoke { id, .. }
+        | Event::Activate { id, .. }
         | Event::Change { id, .. }
+        | Event::Toggle { id, .. }
+        | Event::Expand { id, .. }
         | Event::Submit { id, .. }
         | Event::Select { id, .. }
         | Event::Scroll { id, .. }

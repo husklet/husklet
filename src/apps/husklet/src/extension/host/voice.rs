@@ -50,8 +50,11 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     if matches!(
         event,
         hl_gui::Event::Invoke { .. }
+            | hl_gui::Event::Activate { .. }
             | hl_gui::Event::Submit { .. }
             | hl_gui::Event::Change { .. }
+            | hl_gui::Event::Toggle { .. }
+            | hl_gui::Event::Expand { .. }
             | hl_gui::Event::Select { .. }
             | hl_gui::Event::Focus { .. }
     ) {
@@ -60,8 +63,11 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     let mut value = match event {
         hl_gui::Event::Rows(request) => serde_json::to_value(request).ok()?,
         hl_gui::Event::Invoke { .. }
+        | hl_gui::Event::Activate { .. }
         | hl_gui::Event::Submit { .. }
         | hl_gui::Event::Change { .. }
+        | hl_gui::Event::Toggle { .. }
+        | hl_gui::Event::Expand { .. }
         | hl_gui::Event::Select { .. }
         | hl_gui::Event::Focus { .. } => unreachable!("shared interaction encoder handled this event"),
         hl_gui::Event::Scroll { node, id, dx, dy } => {

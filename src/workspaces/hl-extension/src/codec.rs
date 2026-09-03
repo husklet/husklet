@@ -148,17 +148,20 @@ pub fn is_failure(frame: &Frame) -> bool {
 #[must_use]
 pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     use hl_gui::Event;
-    let (name, node, id, detail) = match event {
-        Event::Invoke { node, id } => ("invoke", node, id, serde_json::Value::Null),
-        Event::Submit { node, id } => ("submit", node, id, serde_json::Value::Null),
-        Event::Change { node, id, value } => ("change", node, id, serde_json::json!({ "value": value })),
+    let (name, trigger, node, id, detail) = match event {
+        Event::Invoke { node, id } => ("invoke", "Invoke", node, id, serde_json::Value::Null),
+        Event::Activate { node, id } => ("invoke", "Activate", node, id, serde_json::Value::Null),
+        Event::Submit { node, id } => ("submit", "Submit", node, id, serde_json::Value::Null),
+        Event::Change { node, id, value } => ("change", "Change", node, id, serde_json::json!({ "value": value })),
+        Event::Toggle { node, id, value } => ("change", "Toggle", node, id, serde_json::json!({ "value": value })),
+        Event::Expand { node, id, value } => ("change", "Expand", node, id, serde_json::json!({ "value": value })),
         Event::Select {
             node,
             id,
             rows,
             collection,
         } => (
-            "select",
+            "select", "Select",
             node,
             id,
             serde_json::json!({ "rows": rows, "collection": collection.as_ref().map(|selected| serde_json::json!({
@@ -167,9 +170,9 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
                 "rows": selected.rows.iter().map(|row| serde_json::json!({ "index": row.index, "id": row.id.to_string() })).collect::<Vec<_>>(),
             })) }),
         ),
-        Event::Scroll { node, id, dx, dy } => ("scroll", node, id, serde_json::json!({ "dx": dx, "dy": dy })),
-        Event::Close { node, id } => ("close", node, id, serde_json::Value::Null),
-        Event::Context { node, id, x, y } => ("context", node, id, serde_json::json!({ "x": x, "y": y })),
+        Event::Scroll { node, id, dx, dy } => ("scroll", "Scroll", node, id, serde_json::json!({ "dx": dx, "dy": dy })),
+        Event::Close { node, id } => ("close", "Close", node, id, serde_json::Value::Null),
+        Event::Context { node, id, x, y } => ("context", "Context", node, id, serde_json::json!({ "x": x, "y": y })),
         Event::Key {
             node,
             id,
@@ -178,7 +181,7 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
             modifiers,
             pressed,
         } => (
-            "key",
+            "key", "Key",
             node,
             id,
             serde_json::json!({
@@ -188,7 +191,7 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
                 "pressed": pressed,
             }),
         ),
-        Event::Focus { node, id, focused } => ("focus", node, id, serde_json::json!({ "focused": focused })),
+        Event::Focus { node, id, focused } => ("focus", "Focus", node, id, serde_json::json!({ "focused": focused })),
         Event::Pointer {
             node,
             id,
@@ -198,7 +201,7 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
             button,
             modifiers,
         } => (
-            "pointer",
+            "pointer", "Pointer",
             node,
             id,
             serde_json::json!({
@@ -215,17 +218,15 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
                 "modifiers": modifiers,
             }),
         ),
-        Event::Drag { node, id } => ("drag", node, id, serde_json::Value::Null),
+        Event::Drag { node, id } => ("drag", "Drag", node, id, serde_json::Value::Null),
         Event::Drop { node, id, source, x, y } => (
-            "drop",
+            "drop", "Drop",
             node,
             id,
             serde_json::json!({ "source": source, "x": x, "y": y }),
         ),
         _ => return None,
     };
-    let mut trigger = name.to_owned();
-    trigger.get_mut(0..1)?.make_ascii_uppercase();
     let mut value = serde_json::json!({
         "interaction": name, "trigger": trigger, "node": node, "id": id,
     });
@@ -353,6 +354,34 @@ mod tests {
                 "source": 7, "version": 3, "rows": [{ "index": 42, "id": "90042" }]
             })
         );
+    }
+
+    #[test]
+    fn aliased_toolkit_signals_preserve_the_bound_trigger_and_opaque_event_id() {
+        let node = NodeId::new(7);
+        for (event, interaction_name, trigger) in [
+            (
+                Event::Activate { node, id: EventId::new("opaque/not-a-trigger") },
+                "invoke",
+                "Activate",
+            ),
+            (
+                Event::Toggle { node, id: EventId::new("opaque/not-a-trigger"), value: hl_gui::PropValue::Flag(true) },
+                "change",
+                "Toggle",
+            ),
+            (
+                Event::Expand { node, id: EventId::new("opaque/not-a-trigger"), value: hl_gui::PropValue::Flag(true) },
+                "change",
+                "Expand",
+            ),
+        ] {
+            let payload = interaction(&event, Some("pane-7")).expect("interaction payload");
+            let value: serde_json::Value = serde_json::from_slice(&payload).expect("JSON event");
+            assert_eq!(value["interaction"], interaction_name);
+            assert_eq!(value["trigger"], trigger);
+            assert_eq!(value["id"], "opaque/not-a-trigger");
+        }
     }
 
     #[test]

@@ -70,7 +70,10 @@ impl Reports {
 fn event_authority(event: &Event) -> Option<(NodeId, Trigger)> {
     Some(match event {
         Event::Invoke { node, .. } => (*node, Trigger::Invoke),
+        Event::Activate { node, .. } => (*node, Trigger::Activate),
         Event::Change { node, .. } => (*node, Trigger::Change),
+        Event::Toggle { node, .. } => (*node, Trigger::Toggle),
+        Event::Expand { node, .. } => (*node, Trigger::Expand),
         Event::Submit { node, .. } => (*node, Trigger::Submit),
         Event::Select { node, .. } => (*node, Trigger::Select),
         Event::Scroll { node, .. } => (*node, Trigger::Scroll),
@@ -189,7 +192,8 @@ impl Bindings {
 fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, reports: &Reports) {
     let target = crate::component::slot::editable(widget).unwrap_or_else(|| widget.clone());
     match trigger {
-        Trigger::Invoke | Trigger::Activate => invoke(widget, node, slot, reports),
+        Trigger::Invoke => invoke(widget, node, slot, reports),
+        Trigger::Activate => activate(widget, node, slot, reports),
         Trigger::Change => change(&target, node, slot, reports),
         Trigger::Submit => submit(&target, node, slot, reports),
         Trigger::Toggle => toggle(widget, node, slot, reports),
@@ -263,6 +267,13 @@ fn invoke(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
             reports.push(Event::Invoke { node, id });
         }
     });
+}
+
+fn activate(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let Some(button) = widget.downcast_ref::<gtk::Button>() else { return };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    button.connect_clicked(move |_| identified(&reports, &slot, |id| Event::Activate { node, id }));
 }
 
 /// Connects whichever way this widget holds a value.
@@ -637,7 +648,7 @@ fn expand(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let Some(id) = slot.id() else {
             return;
         };
-        reports.push(Event::Change {
+        reports.push(Event::Expand {
             node,
             id,
             value: PropValue::Flag(expander.is_expanded()),
@@ -681,7 +692,7 @@ fn pressed(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let Some(id) = slot.id() else {
             return;
         };
-        reports.push(Event::Change {
+        reports.push(Event::Toggle {
             node,
             id,
             value: PropValue::Flag(toggle.is_active()),
@@ -699,7 +710,7 @@ fn check(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let Some(id) = slot.id() else {
             return;
         };
-        reports.push(Event::Change {
+        reports.push(Event::Toggle {
             node,
             id,
             value: PropValue::Flag(check.is_active()),
@@ -715,7 +726,7 @@ fn switch(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     let slot = slot.clone();
     switch.connect_state_set(move |_, state| {
         if let Some(id) = slot.id() {
-            reports.push(Event::Change {
+            reports.push(Event::Toggle {
                 node,
                 id,
                 value: PropValue::Flag(state),

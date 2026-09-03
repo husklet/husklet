@@ -46,7 +46,23 @@ pub enum Event {
         node: NodeId,
         id: EventId,
     },
+    /// Activation is distinct from invocation even when a toolkit exposes
+    /// both through the same signal.
+    Activate {
+        node: NodeId,
+        id: EventId,
+    },
     Change {
+        node: NodeId,
+        id: EventId,
+        value: crate::node::PropValue,
+    },
+    Toggle {
+        node: NodeId,
+        id: EventId,
+        value: crate::node::PropValue,
+    },
+    Expand {
         node: NodeId,
         id: EventId,
         value: crate::node::PropValue,
