@@ -533,3 +533,38 @@ test('a real Unix reply on an uncorrelated channel fails the ordered session clo
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('real Unix install wait inspects revision, arms inventory, then commits exact candidate', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-install-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const candidate = { name: 'sample', version: '1', image_digest: digest, requested: ['extension-read'], installed_image_digest: null };
+  const summary = { name: 'sample', image_digest: digest, version: '1', status: 'standby', enabled: false, pane_providers: [] };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'extension_acquisition_status') socket.write(encode({ channel: 2, kind: KIND.response, payload: {
+        reply: 'extension_acquisition', with: { job: 'job-1', reference: 'sample:1', revision: 7, state: 'ready', progress: null, candidate, error: null },
+      } }));
+      else if (frame.payload.call === 'extension_install') {
+        socket.write(encode({ channel: 21, kind: KIND.event, payload: { snapshot: 'extensions', of: [summary] } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }));
+      } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'install-wait', granted: ['extension-read', 'extension-install'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.installAndWait('job-1', 7, ['extension-read']);
+    assert.equal(result.changed, true);
+    assert.deepEqual(calls, ['extension_acquisition_status', 'event_subscribe', 'extension_install', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});

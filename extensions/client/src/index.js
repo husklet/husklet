@@ -722,6 +722,56 @@ export function workspace(session, { signal } = {}) {
     }
   };
   api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
+  const commitAcquisitionAndWait = async (operation, job, revision, granted, { timeoutMs = 30_000 } = {}) => {
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError(`extension ${operation} wait requires a nonnegative safe integer revision`);
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError(`extension ${operation} wait timeout must be between 1 and 30000ms`);
+    }
+    const status = await api.extensions.acquisition(job);
+    if (status.job !== job || status.revision !== revision || status.state !== 'ready' || !status.candidate) {
+      throw new Error(`extension ${operation} requires the exact ready acquisition revision`);
+    }
+    const candidate = status.candidate;
+    const digest = immutableDigest(candidate.image_digest, 'extension candidate image');
+    if ((operation === 'install') !== (candidate.installed_image_digest == null)) {
+      throw new Error(`extension candidate is not eligible for ${operation}`);
+    }
+    let observed;
+    let authorityReturned = false;
+    let latest;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === candidate.name);
+        if (!authorityReturned) { latest = current ?? null; return; }
+        if (current?.image_digest === digest) resolve(current);
+        else reject(new Error(`extension ${candidate.name} was replaced or disappeared after ${operation}`));
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      const committed = await api.extensions[operation](job, revision, granted);
+      if (committed.name !== candidate.name || committed.image_digest !== digest) {
+        throw new Error(`extension ${operation} returned a different candidate identity`);
+      }
+      authorityReturned = true;
+      if (latest !== undefined) observed(latest === null ? [] : [latest]);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name: candidate.name, image_digest: digest, revision }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.extensions.installAndWait = (job, revision, granted, options) => commitAcquisitionAndWait('install', job, revision, granted, options);
+  api.extensions.updateAndWait = (job, revision, granted, options) => commitAcquisitionAndWait('update', job, revision, granted, options);
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (typeof job !== 'string' || job.length === 0 || new TextEncoder().encode(job).byteLength > 128) {
       throw new TypeError('extension acquisition wait requires a 1..128 byte job identity');

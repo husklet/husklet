@@ -224,7 +224,17 @@ export interface WorkspaceApi {
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
+    installAndWait(job: string, revision: number, granted: ExtensionCapability[], options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string; revision: number }
+    >;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
+    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string; revision: number }
+    >;
     /** Enabled manifest declarations, independent of whether a provider currently occupies a pane. */
     providers(): Promise<ExtensionProviderCatalogue>;
     /** Wait for the extension lifecycle cursor to change, then return its enabled provider catalogue. */

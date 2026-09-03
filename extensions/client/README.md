@@ -53,6 +53,9 @@ const retried = await host.extensions.retryAndWait(extension.name, extension.ima
 if (disabled.changed) console.log(disabled.extension.status); // durable standby; provider withdrawal is observed separately
 
 const removed = await host.extensions.removeAndWait(extension.name, extension.image_digest);
+
+// Consent is bound to this ready revision. Inventory is armed before commit.
+const installed = await host.extensions.installAndWait(status.job, status.revision, status.candidate.requested);
 if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
 ```
 
