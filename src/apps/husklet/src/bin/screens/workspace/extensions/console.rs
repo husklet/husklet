@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use hl::extension::{Answer, Errand, Errands, Request};
 use hl_extension::port::{
-    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PaneInventory, PaneKind,
-    PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology, PANE_INVENTORY_LIMIT,
+    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PANE_INVENTORY_LIMIT, PaneInventory,
+    PaneKind, PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology,
 };
 use vte4::prelude::*;
 
@@ -142,6 +142,8 @@ impl Console {
         if Window::gallery(window).is_some_and(|gallery| gallery.native_semantics("workspace").is_ok()) {
             panes.push(InspectablePane {
                 slot: "workspace".into(),
+                generation: 0,
+                revision: 0,
                 kind: PaneKind::Native,
                 provider: None,
                 tab: None,
@@ -158,6 +160,8 @@ impl Console {
         match node {
             LayoutNode::Pane { pane, focused, .. } => panes.push(InspectablePane {
                 slot: pane.slot.clone(),
+                generation: 0,
+                revision: 0,
                 kind: if pane.occupant == Occupant::Surface {
                     PaneKind::Surface
                 } else {

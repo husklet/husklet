@@ -18,6 +18,10 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Sparkline => sparkline().upcast(),
         Tag::FlameGraph => flame_graph().upcast(),
         Tag::MemoryMap => memory_map().upcast(),
+        Tag::DisassemblyView => memory_map().upcast(),
+        Tag::TimelineView => memory_map().upcast(),
+        Tag::TestReportView => memory_map().upcast(),
+        Tag::CoverageView => memory_map().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -325,6 +329,184 @@ pub(crate) fn regions(widget: &gtk::Widget, value: &str) -> bool {
                 _ => 24,
             });
             label.set_hexpand(index == 3);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+/// Replaces a decoded instruction listing with four selectable columns.
+pub(crate) fn instructions(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for line in value.lines().take(hl_gui::DISASSEMBLY_INSTRUCTION_LIMIT) {
+        let columns = line.splitn(4, '\t').collect::<Vec<_>>();
+        if columns.len() != 4 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(text);
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            label.add_css_class("monospace");
+            label.set_width_chars(match index {
+                0 => 16,
+                1 => 47,
+                2 => 10,
+                _ => 24,
+            });
+            label.set_hexpand(index == 3);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+/// Replaces a chronology with four selectable native columns.
+pub(crate) fn timeline(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for line in value.lines().take(hl_gui::TIMELINE_EVENT_LIMIT) {
+        let columns = line.splitn(4, '\t').collect::<Vec<_>>();
+        if columns.len() != 4 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(text);
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            if index == 0 {
+                label.add_css_class("monospace");
+            }
+            label.set_width_chars(match index {
+                0 => 14,
+                1 => 12,
+                2 => 24,
+                _ => 32,
+            });
+            label.set_hexpand(index == 3);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+pub(crate) fn test_report(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for line in value.lines().take(hl_gui::TEST_REPORT_CASE_LIMIT) {
+        let columns = line.splitn(5, '\t').collect::<Vec<_>>();
+        if columns.len() != 5 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(text);
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            if index == 3 || index == 4 {
+                label.add_css_class("monospace");
+            }
+            label.set_width_chars(match index {
+                0 => 16,
+                1 => 28,
+                2 => 8,
+                3 => 10,
+                _ => 36,
+            });
+            label.set_hexpand(index == 4);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+pub(crate) fn coverage(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for (index, line) in value.lines().take(hl_gui::COVERAGE_VIEW_LINE_LIMIT + 1).enumerate() {
+        if index == hl_gui::COVERAGE_VIEW_LINE_LIMIT && !line.starts_with("…\t\t… showing ") { break; }
+        let columns = line.splitn(3, '\t').collect::<Vec<_>>();
+        if columns.len() != 3 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        if columns[1] == "0" {
+            row.add_css_class("coverage-missed");
+        }
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(if index == 1 && text == "0" { "—" } else { text });
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            label.add_css_class("monospace");
+            label.set_width_chars(match index {
+                0 => 8,
+                1 => 8,
+                _ => 72,
+            });
+            label.set_hexpand(index == 2);
             row.append(&label);
         }
         rows.append(&row);

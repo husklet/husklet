@@ -24,6 +24,8 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const calls = [];
   const sockets = new Set();
   let failRead = false;
+  let failLifecycleMutation = false;
+  let suppressLifecycle = false;
   let channel = 60;
   let revision = 0;
   const host = net.createServer((socket) => {
@@ -51,9 +53,16 @@ test('admin workflow confines files to socket workspace and cleans success and f
           lifecycle(argument.configuration.name, 'create');
         }
         else if (call === 'container_create') answer(frame, 'identity', 'c'.repeat(64));
+        else if (call === 'network_create') answer(frame, 'identity', 'n'.repeat(32));
+        else if (call === 'workspace_start' && failLifecycleMutation) {
+          failLifecycleMutation = false;
+          socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 3, payload: {
+            error: 'failed', call, detail: 'fixture start failure',
+          } }));
+        }
         else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
-          if (call === 'workspace_start') lifecycle(argument.name, 'start');
+          if (call === 'workspace_start' && !suppressLifecycle) lifecycle(argument.name, 'start');
           if (call === 'workspace_stop') lifecycle(argument.name, 'stop');
           if (call === 'workspace_delete') lifecycle(argument.name, 'remove');
           if (call === 'terminal_write_pane') socket.write(encode({ channel: channel++, kind: KIND.event, payload: {
@@ -94,6 +103,25 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.deepEqual(result.lifecycle.map(({ change }) => [change.workspace, change.action]), [
     ['managed', 'create'], ['managed', 'start'], ['managed', 'stop'], ['managed', 'remove'],
   ]);
+  const workflowEnd = calls.length;
+
+  failLifecycleMutation = true;
+  const failedStart = calls.length;
+  const failed = await client.callTool({ name: 'husklet_workspace_mutate_wait', arguments: {
+    operation: 'start', name: 'managed', timeout_ms: 100,
+  } });
+  assert.equal(failed.isError, true);
+  assert.deepEqual(calls.slice(failedStart).map(({ call }) => call), ['event_subscribe', 'workspace_start', 'event_unsubscribe']);
+
+  suppressLifecycle = true;
+  const timedStart = calls.length;
+  const timed = await client.callTool({ name: 'husklet_workspace_mutate_wait', arguments: {
+    operation: 'start', name: 'managed', timeout_ms: 5,
+  } });
+  suppressLifecycle = false;
+  assert.equal(timed.isError, true);
+  assert.match(timed.content[0].text, /timed out waiting for start/);
+  assert.deepEqual(calls.slice(timedStart).map(({ call }) => call), ['event_subscribe', 'workspace_start', 'event_unsubscribe']);
 
   const beforeMismatch = calls.length;
   await assert.rejects(() => runAgentAdmin(client, { ...options, hostingWorkspace: 'managed' }), /does not match socket workspace/);
@@ -195,6 +223,25 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.equal(environmentOversized.isError, true);
   assert.equal(calls.length, environmentOversizedStart);
 
+  const exactEnvironmentName = 'é'.repeat(128);
+  const environmentNameStart = calls.length;
+  const environmentNameExact = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'environment-name-boundary', environment: [[exactEnvironmentName, 'value']] },
+  });
+  assert.notEqual(environmentNameExact.isError, true);
+  assert.equal(calls.length, environmentNameStart + 1);
+  assert.equal(calls[environmentNameStart].call, 'container_create');
+  assert.deepEqual(calls[environmentNameStart].with.spec.environment, [[exactEnvironmentName, 'value']]);
+
+  const environmentNameOversizedStart = calls.length;
+  const environmentNameOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'environment-name-overflow', environment: [['é'.repeat(129), 'value']] },
+  });
+  assert.equal(environmentNameOversized.isError, true);
+  assert.equal(calls.length, environmentNameOversizedStart);
+
   const exactLabel = 'é'.repeat(2048);
   const labelExactStart = calls.length;
   const labelExact = await client.callTool({
@@ -232,6 +279,52 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(labelNameOversized.isError, true);
   assert.equal(calls.length, labelNameOversizedStart);
+
+  const exactMountTarget = `/${'é'.repeat(2047)}a`;
+  const mountStart = calls.length;
+  const mountExact = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'mount-boundary', mounts: [{ volume: 'cache', target: exactMountTarget }] },
+  });
+  assert.notEqual(mountExact.isError, true);
+  assert.equal(calls.length, mountStart + 1);
+  assert.deepEqual(calls[mountStart].with.spec.mounts, [{ volume: 'cache', target: exactMountTarget, read_only: false }]);
+
+  const mountOversizedStart = calls.length;
+  const mountOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'mount-overflow', mounts: [{ volume: 'cache', target: `/${'😀'.repeat(1024)}a` }] },
+  });
+  assert.equal(mountOversized.isError, true);
+  assert.equal(calls.length, mountOversizedStart);
+
+  const exactVolume = 'v'.repeat(255);
+  const exactNetwork = 'n'.repeat(255);
+  const resourceReferenceStart = calls.length;
+  const resourceReferences = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: {
+      image: 'alpine:3.20', name: 'resource-reference-boundary',
+      mounts: [{ volume: exactVolume, target: '/data' }], network: exactNetwork,
+    },
+  });
+  assert.notEqual(resourceReferences.isError, true);
+  assert.deepEqual(calls.slice(resourceReferenceStart), [{
+    call: 'container_create', with: { spec: {
+      image: 'alpine:3.20', name: 'resource-reference-boundary', entrypoint: null, command: [],
+      environment: [], working_directory: null, user: null, labels: [],
+      mounts: [{ volume: exactVolume, target: '/data', read_only: false }], network: exactNetwork,
+      ports: [], memory_mb: null, cpus: null, pids_limit: null,
+    } },
+  }]);
+
+  const resourceReferenceOversizedStart = calls.length;
+  const resourceReferenceOversized = await client.callTool({
+    name: 'husklet_container_create',
+    arguments: { image: 'alpine:3.20', name: 'resource-reference-overflow', network: 'n'.repeat(256) },
+  });
+  assert.equal(resourceReferenceOversized.isError, true);
+  assert.equal(calls.length, resourceReferenceOversizedStart);
 
   const exactCommand = ['printf', '%s', '$(touch /tmp/not-run)', 'two words', "single'quote", ''];
   const spawnStart = calls.length;
@@ -281,10 +374,27 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(signalOversized.isError, true);
   assert.equal(calls.length, signalOversizedStart);
+
+  const exactResourceName = 'n'.repeat(255);
+  const resourceStart = calls.length;
+  const resourceCreated = await client.callTool({
+    name: 'husklet_network_create', arguments: { name: exactResourceName },
+  });
+  assert.notEqual(resourceCreated.isError, true);
+  assert.deepEqual(calls.slice(resourceStart), [{
+    call: 'network_create', with: { name: exactResourceName },
+  }]);
+
+  const resourceOversizedStart = calls.length;
+  const resourceOversized = await client.callTool({
+    name: 'husklet_network_create', arguments: { name: 'n'.repeat(256) },
+  });
+  assert.equal(resourceOversized.isError, true);
+  assert.equal(calls.length, resourceOversizedStart);
   await client.close();
   assert.equal(diagnostics, '');
 
-  assert.deepEqual(calls.slice(0, beforeMismatch).map(({ call }) => call), [
+  assert.deepEqual(calls.slice(0, workflowEnd).map(({ call }) => call), [
     'workspace_info', 'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
     'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir',
     'filesystem_write', 'filesystem_read', 'event_subscribe', 'terminal_write_pane', 'event_unsubscribe',

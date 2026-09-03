@@ -97,11 +97,112 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     hex_view_is_selectable_and_monospaced();
     flame_graph_is_bounded_selectable_and_proportional();
     memory_map_is_bounded_selectable_and_columnar();
+    disassembly_is_bounded_selectable_and_columnar();
+    timeline_is_bounded_selectable_and_columnar();
+    test_report_is_bounded_selectable_and_columnar();
+    coverage_is_bounded_selectable_and_marks_misses();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn coverage_is_bounded_selectable_and_marks_misses() {
+    let mut session = Session::new();
+    let view = session.producer.create(Tag::CoverageView);
+    session.producer.append(NodeId::ROOT, view);
+    let value = (1..=600)
+        .map(|line| format!("{line}\t{}\tlet value = {line};", line % 2))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(view, Prop::Value, PropValue::text(value));
+    session.flush().expect("coverage renders");
+    let widget = session.tagged(Tag::CoverageView).expect("coverage widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels.len(), 512 * 3);
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert_eq!(labels[1].text(), "1");
+    assert_eq!(labels[4].text(), "—");
+    assert_eq!(
+        subtree(&widget)
+            .iter()
+            .filter(|child| child.has_css_class("coverage-missed"))
+            .count(),
+        256
+    );
+}
+
+fn test_report_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let report = session.producer.create(Tag::TestReportView);
+    session.producer.append(NodeId::ROOT, report);
+    let value = (0..300)
+        .map(|index| format!("api\tcase-{index}\tfailed\t{index}\texpected true"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(report, Prop::Value, PropValue::text(value));
+    session.flush().expect("report renders");
+    let widget = session.tagged(Tag::TestReportView).expect("report widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(labels.len(), 256 * 5, "256 test cases each retain five native columns");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert_eq!(labels[2].text(), "failed");
+    assert_eq!(labels[4].text(), "expected true");
+}
+
+fn timeline_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let timeline = session.producer.create(Tag::TimelineView);
+    session.producer.append(NodeId::ROOT, timeline);
+    let value = (0..300)
+        .map(|index| format!("{index}\truntime\tevent-{index}\tdetail-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(timeline, Prop::Value, PropValue::text(value));
+    session.flush().expect("timeline renders");
+    let widget = session.tagged(Tag::TimelineView).expect("timeline widget");
+    let timestamps = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timestamps.len(),
+        256,
+        "the adapter independently caps native event rows"
+    );
+    assert!(timestamps.iter().all(gtk::Label::is_selectable));
+    assert_eq!(timestamps[0].text(), "0");
+}
+
+fn disassembly_is_bounded_selectable_and_columnar() {
+    let mut session = Session::new();
+    let listing = session.producer.create(Tag::DisassemblyView);
+    session.producer.append(NodeId::ROOT, listing);
+    let value = (0..300)
+        .map(|index| format!("{index:016x}\t48 89 e5\tmov\trbp, rsp"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    session.producer.set(listing, Prop::Value, PropValue::text(value));
+    session.flush().expect("disassembly renders");
+    let widget = session.tagged(Tag::DisassemblyView).expect("disassembly widget");
+    let labels = subtree(&widget)
+        .into_iter()
+        .filter_map(|child| child.downcast::<gtk::Label>().ok())
+        .filter(|label| label.has_css_class("monospace"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels.len(), 256 * 4, "256 instructions each retain four columns");
+    assert!(labels.iter().all(gtk::Label::is_selectable));
+    assert_eq!(labels[2].text(), "mov");
+    assert_eq!(labels[3].text(), "rbp, rsp");
 }
 
 fn memory_map_is_bounded_selectable_and_columnar() {
@@ -906,6 +1007,10 @@ fn principal(tag: Tag) -> Aspect {
         Tag::Sparkline => Aspect::Value,
         Tag::FlameGraph => Aspect::Value,
         Tag::MemoryMap => Aspect::Value,
+        Tag::DisassemblyView => Aspect::Value,
+        Tag::TimelineView => Aspect::Value,
+        Tag::TestReportView => Aspect::Value,
+        Tag::CoverageView => Aspect::Value,
         _ => structural(tag),
     }
 }

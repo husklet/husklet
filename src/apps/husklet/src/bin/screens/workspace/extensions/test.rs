@@ -2079,6 +2079,8 @@ mod ports {
         fn read(&self, slot: &str, _lines: usize) -> Result<PaneText, HostError> {
             Ok(PaneText {
                 slot: slot.to_owned(),
+                generation: 0,
+                revision: 0,
                 lines: Vec::new(),
                 cursor_column: 0,
                 cursor_row: 0,

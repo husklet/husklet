@@ -32,7 +32,10 @@ mod size;
 mod style;
 
 pub use builder::Surface;
-pub use component::{FlameFrame, HexSource, HexView, MemoryRegion};
+pub use component::{
+    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase,
+    TestStatus, TimelineEvent,
+};
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
     Version,
@@ -65,3 +68,14 @@ pub const FLAME_GRAPH_FRAME_LIMIT: usize = 64;
 
 /// Maximum number of address regions retained by a [`Tag::MemoryMap`].
 pub const MEMORY_MAP_REGION_LIMIT: usize = 128;
+
+/// Maximum number of decoded instructions retained by a [`Tag::DisassemblyView`].
+pub const DISASSEMBLY_INSTRUCTION_LIMIT: usize = 256;
+
+/// Maximum number of chronological events retained by a [`Tag::TimelineView`].
+pub const TIMELINE_EVENT_LIMIT: usize = 256;
+
+pub const TEST_REPORT_CASE_LIMIT: usize = 256;
+pub const TEST_REPORT_FAILURE_CHARACTER_LIMIT: usize = 512;
+pub const COVERAGE_VIEW_LINE_LIMIT: usize = 512;
+pub const COVERAGE_VIEW_SOURCE_CHARACTER_LIMIT: usize = 512;

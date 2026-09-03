@@ -63,6 +63,178 @@ impl MemoryRegion {
     }
 }
 
+/// One decoded machine instruction with its original bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Instruction {
+    address: u64,
+    bytes: Vec<u8>,
+    mnemonic: String,
+    operands: String,
+}
+
+impl Instruction {
+    /// Makes an instruction. Empty or implausibly long encodings are omitted.
+    #[must_use]
+    pub fn new(
+        address: u64,
+        bytes: impl Into<Vec<u8>>,
+        mnemonic: impl Into<String>,
+        operands: impl Into<String>,
+    ) -> Option<Self> {
+        let bytes = bytes.into();
+        let mnemonic = mnemonic.into().replace(['\t', '\n', '\r'], " ");
+        let operands = operands.into().replace(['\t', '\n', '\r'], " ");
+        (!bytes.is_empty() && bytes.len() <= 16 && !mnemonic.trim().is_empty()).then_some(Self {
+            address,
+            bytes,
+            mnemonic,
+            operands,
+        })
+    }
+}
+
+/// One timestamped event in a developer chronology.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimelineEvent {
+    timestamp_ms: i64,
+    category: String,
+    label: String,
+    detail: String,
+}
+
+impl TimelineEvent {
+    /// Makes a readable event; blank labels are omitted and wire separators are neutralized.
+    #[must_use]
+    pub fn new(
+        timestamp_ms: i64,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Option<Self> {
+        fn clean(value: String) -> String {
+            value.replace(['\t', '\n', '\r'], " ")
+        }
+        let category = clean(category.into());
+        let label = clean(label.into());
+        let detail = clean(detail.into());
+        (!label.trim().is_empty()).then_some(Self {
+            timestamp_ms,
+            category,
+            label,
+            detail,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TestStatus {
+    Passed,
+    Failed,
+    Skipped,
+}
+impl TestStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TestCase {
+    suite: String,
+    name: String,
+    status: TestStatus,
+    duration_ms: u64,
+    failure: String,
+}
+impl TestCase {
+    #[must_use]
+    pub fn new(
+        suite: impl Into<String>,
+        name: impl Into<String>,
+        status: TestStatus,
+        duration_ms: u64,
+        failure: impl Into<String>,
+    ) -> Option<Self> {
+        fn clean(value: String) -> String {
+            value.replace(['\t', '\n', '\r'], " ")
+        }
+        let suite = clean(suite.into());
+        let name = clean(name.into());
+        let failure = clean(failure.into())
+            .chars()
+            .take(crate::TEST_REPORT_FAILURE_CHARACTER_LIMIT)
+            .collect();
+        (!suite.trim().is_empty() && !name.trim().is_empty()).then_some(Self {
+            suite,
+            name,
+            status,
+            duration_ms,
+            failure,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoverageLine {
+    line: u32,
+    hits: u64,
+    source: String,
+}
+impl CoverageLine {
+    #[must_use]
+    pub fn new(line: u32, hits: u64, source: impl Into<String>) -> Option<Self> {
+        let source = source
+            .into()
+            .replace(['\t', '\n', '\r'], " ")
+            .chars()
+            .take(crate::COVERAGE_VIEW_SOURCE_CHARACTER_LIMIT)
+            .collect();
+        (line > 0).then_some(Self { line, hits, source })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CoverageSource<'a> {
+    Exact(&'a [CoverageLine]),
+    Bounded {
+        prefix: &'a [CoverageLine],
+        total_lines: usize,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoverageView(String);
+impl CoverageView {
+    #[must_use]
+    pub fn new(source: CoverageSource<'_>) -> Self {
+        let (lines, total) = match source {
+            CoverageSource::Exact(lines) => (lines, lines.len()),
+            CoverageSource::Bounded { prefix, total_lines } => (prefix, total_lines.max(prefix.len())),
+        };
+        let shown = lines.len().min(crate::COVERAGE_VIEW_LINE_LIMIT);
+        let mut value = lines[..shown]
+            .iter()
+            .map(|line| format!("{}\t{}\t{}", line.line, line.hits, line.source))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if total > shown {
+            if !value.is_empty() {
+                value.push('\n');
+            }
+            value.push_str(&format!("…\t\t… showing {shown} of {total} lines …"));
+        }
+        Self(value)
+    }
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -341,6 +513,70 @@ impl Element {
         Self::new(Tag::MemoryMap).value(value)
     }
 
+    /// A bounded decoded instruction listing with exact source bytes.
+    #[must_use]
+    pub fn disassembly_view(instructions: impl IntoIterator<Item = Instruction>) -> Self {
+        let value = instructions
+            .into_iter()
+            .take(crate::DISASSEMBLY_INSTRUCTION_LIMIT)
+            .map(|instruction| {
+                let bytes = instruction
+                    .bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "{:016x}\t{}\t{}\t{}",
+                    instruction.address, bytes, instruction.mnemonic, instruction.operands
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::DisassemblyView).value(value)
+    }
+
+    /// A bounded chronological event view.
+    #[must_use]
+    pub fn timeline_view(events: impl IntoIterator<Item = TimelineEvent>) -> Self {
+        let value = events
+            .into_iter()
+            .take(crate::TIMELINE_EVENT_LIMIT)
+            .map(|event| {
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    event.timestamp_ms, event.category, event.label, event.detail
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::TimelineView).value(value)
+    }
+
+    #[must_use]
+    pub fn test_report_view(cases: impl IntoIterator<Item = TestCase>) -> Self {
+        let value = cases
+            .into_iter()
+            .take(crate::TEST_REPORT_CASE_LIMIT)
+            .map(|case| {
+                format!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    case.suite,
+                    case.name,
+                    case.status.as_str(),
+                    case.duration_ms,
+                    case.failure
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self::new(Tag::TestReportView).value(value)
+    }
+    #[must_use]
+    pub fn coverage_view(source: CoverageSource<'_>) -> Self {
+        Self::new(Tag::CoverageView).value(CoverageView::new(source).0)
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -350,7 +586,10 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlameFrame, HexSource, HexView, MemoryRegion};
+    use super::{
+        CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion,
+        TestCase, TestStatus, TimelineEvent,
+    };
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -463,5 +702,127 @@ mod tests {
             "the public region ceiling is a fixed contract"
         );
         assert!(value.starts_with("0000000000000000-0000000000001000\tr-xp\t4096\tsegment 0"));
+    }
+
+    #[test]
+    fn disassembly_rejects_invalid_encodings_and_has_an_independent_ceiling() {
+        assert!(Instruction::new(0, [], "ret", "").is_none());
+        assert!(Instruction::new(0, [0xc3], " ", "").is_none());
+        let instructions = (0..300).filter_map(|index| Instruction::new(index, [0x48, 0x89, 0xe5], "mov", "rbp\t rsp"));
+        let element = Element::disassembly_view(instructions);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("disassembly value");
+        assert_eq!(
+            value.lines().count(),
+            256,
+            "the instruction ceiling is a fixed contract"
+        );
+        assert!(value.starts_with("0000000000000000\t48 89 e5\tmov\trbp  rsp"));
+    }
+
+    #[test]
+    fn timeline_rejects_blank_events_and_has_an_independent_ceiling() {
+        assert!(TimelineEvent::new(0, "runtime", " ", "ignored").is_none());
+        let events =
+            (0..300).filter_map(|index| TimelineEvent::new(index, "runtime", format!("event\t{index}"), "detail"));
+        let element = Element::timeline_view(events);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("timeline value");
+        assert_eq!(value.lines().count(), 256, "the event ceiling is a fixed contract");
+        assert!(value.starts_with("0\truntime\tevent 0\tdetail"));
+    }
+
+    #[test]
+    fn test_report_bounds_cases_and_failure_detail_independently() {
+        assert!(TestCase::new("", "works", TestStatus::Passed, 1, "").is_none());
+        let cases = (0..300).filter_map(|index| {
+            TestCase::new(
+                "api",
+                format!("case\t{index}"),
+                TestStatus::Failed,
+                index,
+                "x".repeat(600),
+            )
+        });
+        let element = Element::test_report_view(cases);
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        let value = frame
+            .patches
+            .iter()
+            .find_map(|patch| match patch {
+                crate::Patch::SetProp {
+                    prop: crate::Prop::Value,
+                    value,
+                    ..
+                } => value.as_text(),
+                _ => None,
+            })
+            .expect("report value");
+        assert_eq!(value.lines().count(), 256, "the case ceiling is fixed");
+        assert_eq!(
+            value
+                .lines()
+                .next()
+                .unwrap()
+                .split('\t')
+                .nth(4)
+                .unwrap()
+                .chars()
+                .count(),
+            512,
+            "failure detail is independently bounded"
+        );
+        assert!(value.starts_with("api\tcase 0\tfailed\t0\t"));
+    }
+
+    #[test]
+    fn coverage_has_fixed_row_text_bounds_and_visible_truncation() {
+        assert!(CoverageLine::new(0, 1, "invalid").is_none());
+        let lines = (1..=600)
+            .filter_map(|line| CoverageLine::new(line, u64::from(line % 2), format!("source\t{}", "x".repeat(600))))
+            .collect::<Vec<_>>();
+        let view = CoverageView::new(CoverageSource::Bounded {
+            prefix: &lines,
+            total_lines: 900,
+        });
+        assert_eq!(view.as_str().lines().count(), 513, "512 rows plus truncation marker");
+        assert!(view.as_str().ends_with("… showing 512 of 900 lines …"));
+        assert_eq!(
+            view.as_str()
+                .lines()
+                .next()
+                .unwrap()
+                .split('\t')
+                .nth(2)
+                .unwrap()
+                .chars()
+                .count(),
+            512
+        );
     }
 }

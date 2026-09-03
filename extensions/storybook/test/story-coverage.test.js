@@ -21,6 +21,10 @@ import { ResourceMetricsStory } from '../src/resource-metrics.js';
 import { FileBrowserStory } from '../src/file-browser.js';
 import { ProfileInspectionStory, boundedFrames, FRAME_LIMIT } from '../src/profile-inspection.js';
 import { MemoryInspectionStory, boundedRegions, REGION_LIMIT } from '../src/memory-inspection.js';
+import { DisassemblyInspectionStory, boundedInstructions, INSTRUCTION_LIMIT } from '../src/disassembly-inspection.js';
+import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/timeline-inspection.js';
+import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src/test-report.js';
+import { CoverageInspectionStory, boundedCoverage, COVERAGE_LIMIT, SOURCE_LIMIT } from '../src/coverage-inspection.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -68,6 +72,10 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['file browser', h(FileBrowserStory)],
     ['profile inspection', h(ProfileInspectionStory)],
     ['memory inspection', h(MemoryInspectionStory)],
+    ['disassembly inspection', h(DisassemblyInspectionStory)],
+    ['timeline view', h(TimelineInspectionStory)],
+    ['test report', h(TestReportStory)],
+    ['coverage inspection', h(CoverageInspectionStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -77,6 +85,32 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('coverage inspection bounds rows and source independently with visible truncation', () => {
+  const lines = Array.from({ length: COVERAGE_LIMIT + 4 }, (_, index) => ({ line: index + 1, hits: index % 2, source: 'x'.repeat(SOURCE_LIMIT + 9) })); const value = boundedCoverage(lines, 900);
+  assert.equal(value.split('\n').length, COVERAGE_LIMIT + 1); assert.equal(value.split('\n')[0].split('\t')[2].length, SOURCE_LIMIT); assert(value.endsWith(`… showing ${COVERAGE_LIMIT} of 900 lines …`));
+});
+
+test('test report bounds cases and failure detail independently', () => {
+  const cases = Array.from({ length: CASE_LIMIT + 3 }, (_, index) => ({ suite: 'api', name: `case-${index}`, status: 'failed', durationMs: index, failure: 'x'.repeat(FAILURE_LIMIT + 20) }));
+  cases.splice(1, 0, { suite: '', name: 'invalid', status: 'passed', durationMs: 1, failure: '' }); const value = boundedCases(cases);
+  assert.equal(value.split('\n').length, CASE_LIMIT); assert(!value.includes('invalid')); assert.equal(value.split('\n')[0].split('\t')[4].length, FAILURE_LIMIT);
+});
+
+test('timeline view rejects blank events and enforces its hard ceiling', () => {
+  const events = Array.from({ length: TIMELINE_LIMIT + 5 }, (_, index) => ({ timestampMs: index, category: 'runtime', label: `event-${index}`, detail: 'observed' }));
+  events.splice(1, 0, { timestampMs: 1, category: 'runtime', label: '', detail: 'blank' });
+  const value = boundedEvents(events); assert.equal(value.split('\n').length, TIMELINE_LIMIT); assert(!value.includes('blank')); assert(value.startsWith('0\truntime\tevent-0\tobserved'));
+});
+
+test('disassembly inspection rejects invalid instructions and enforces its hard ceiling', () => {
+  const instructions = Array.from({ length: INSTRUCTION_LIMIT + 7 }, (_, index) => ({ address: index, bytes: [0xc3], mnemonic: 'ret', operands: '' }));
+  instructions.splice(1, 0, { address: 2, bytes: [], mnemonic: 'bad', operands: '' });
+  const value = boundedInstructions(instructions);
+  assert.equal(value.split('\n').length, INSTRUCTION_LIMIT);
+  assert(!value.includes('\t\tbad\t'));
+  assert(value.startsWith('0000000000000000\tc3\tret\t'));
 });
 
 test('memory inspection rejects invalid regions and enforces its hard ceiling', () => {

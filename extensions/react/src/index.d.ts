@@ -4592,6 +4592,122 @@ export interface MemoryMapProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface DisassemblyViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface TimelineViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface TestReportViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface CoverageViewProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 export interface DiffViewerProps extends NodeProps {
   children?: ReactNode;
   /** marks an action as irreversible so automation requires confirmation */
@@ -4860,6 +4976,10 @@ export const Chart: ComponentType<ChartProps>;
 export const Sparkline: ComponentType<SparklineProps>;
 export const FlameGraph: ComponentType<FlameGraphProps>;
 export const MemoryMap: ComponentType<MemoryMapProps>;
+export const DisassemblyView: ComponentType<DisassemblyViewProps>;
+export const TimelineView: ComponentType<TimelineViewProps>;
+export const TestReportView: ComponentType<TestReportViewProps>;
+export const CoverageView: ComponentType<CoverageViewProps>;
 export const DiffViewer: ComponentType<DiffViewerProps>;
 export const DiffLine: ComponentType<DiffLineProps>;
 export const StackTrace: ComponentType<StackTraceProps>;
@@ -4949,9 +5069,9 @@ export interface PaneSummary {
   provider: { extension: string; provider: string } | null;
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
+export interface PaneText { slot: string; generation: number; revision: number; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
-export interface InspectablePane { slot: string; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
+export interface InspectablePane { slot: string; generation: number; revision: number; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
 export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
 export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
 export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }

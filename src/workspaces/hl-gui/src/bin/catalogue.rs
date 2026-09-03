@@ -409,6 +409,10 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Sparkline
         | Tag::FlameGraph
         | Tag::MemoryMap
+        | Tag::DisassemblyView
+        | Tag::TimelineView
+        | Tag::TestReportView
+        | Tag::CoverageView
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",

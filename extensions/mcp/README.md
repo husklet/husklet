@@ -100,8 +100,30 @@ ready after the client last inspected the job; no MCP call performs an
 unobservable blocking pull.
 `husklet_extension_wait` follows the host's credit-controlled extension topics,
 returning either the newest bounded inventory snapshot or acquisition job/revision
-metadata. Acquisition notifications never carry manifest contents; clients fetch
+metadata. A job-specific wait requires the revision already observed and returns
+only a strictly newer revision, so clients can arm before acting without accepting
+queued old state. Acquisition notifications never carry manifest contents; clients fetch
 status only after an invalidation, and coalescing is reported explicitly.
+
+`husklet_pane_wait` applies the same rule to a specific pane: pass the last
+observed generation and revision, and the wait ignores the host's unchanged
+initial scan. A replacement generation is newer even when its content revision
+starts again at zero.
+
+Pane inventory entries and the outer `husklet_pane_read` XML element carry that
+authoritative generation/revision cursor. The packaged day-one workflow reads
+the cursor before arming its wait and passes both values back explicitly.
+
+`husklet_container_change_wait` accepts the exact `state` and `created` values
+last observed for its immutable container ID. Supplying that cursor prevents the
+subscription's unchanged initial catalogue from completing the wait; a state
+transition, disappearance, or changed creation identity completes it.
+
+Administrative clients should use `husklet_workspace_mutate_wait` for workspace
+create/start/stop/delete workflows. It waits for the host subscription
+acknowledgement before invoking control authority, ignores unrelated changes,
+and unsubscribes after success, failure, or its bounded timeout. Existing
+standalone mutation and wait tools remain available.
 
 Container creation accepts only a bounded image reference and name, while exec
 accepts an argv vector rather than shell text. Stopping or signaling the owning

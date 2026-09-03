@@ -9,7 +9,10 @@
 
 mod content;
 
-pub use content::{FlameFrame, HexSource, HexView, MemoryRegion};
+pub use content::{
+    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase,
+    TestStatus, TimelineEvent,
+};
 mod control;
 mod structure;
 

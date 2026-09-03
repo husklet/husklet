@@ -332,6 +332,8 @@ impl TerminalSurface for Host {
         Ok(hl_extension::port::PaneInventory {
             panes: vec![hl_extension::port::InspectablePane {
                 slot: "workspace".into(),
+                generation: 0,
+                revision: 0,
                 kind: hl_extension::port::PaneKind::Native,
                 provider: None,
                 tab: None,
@@ -383,6 +385,8 @@ impl TerminalSurface for Host {
         if slot == "oversized" {
             return Ok(PaneText {
                 slot: slot.into(),
+                generation: 0,
+                revision: 0,
                 lines: vec!["old".repeat(hl_extension::port::PANE_TEXT_BYTES / 3), "new".into()],
                 cursor_column: 0,
                 cursor_row: 0,
@@ -391,6 +395,8 @@ impl TerminalSurface for Host {
         }
         Ok(PaneText {
             slot: slot.into(),
+            generation: 0,
+            revision: 0,
             lines: vec![format!("at most {lines}")],
             cursor_column: 12,
             cursor_row: 3,
@@ -1291,6 +1297,33 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     );
     assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
 
+    let mut boundary = spec.clone();
+    boundary.environment = vec![("é".repeat(128), "value".into()), ("release-name".into(), "value".into())];
+    boundary.mounts[0].volume = "v".repeat(255);
+    assert_eq!(
+        authorized.dispatch(&Request::ContainerCreate { spec: boundary.clone() }, &services(&host)),
+        Ok(Reply::Identity("id-worker".into()))
+    );
+
+    let mut oversized_environment_name = boundary;
+    oversized_environment_name.environment[0].0.push('é');
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: oversized_environment_name }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    let mut invalid_name = spec.clone();
+    invalid_name.environment = vec![("BAD=NAME".into(), "value".into())];
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: invalid_name }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    let mut oversized_volume = spec.clone();
+    oversized_volume.mounts[0].volume = "v".repeat(256);
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: oversized_volume }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+
     let mut insufficient = session(&[Capability::ContainerControl], &[]);
     assert!(matches!(
         insufficient.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
@@ -1305,7 +1338,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     ));
     assert_eq!(
         host.ledger.reached(),
-        ["containers.create_spec"],
+        ["containers.create_spec", "containers.create_spec"],
         "invalid mounts never reach control"
     );
 }

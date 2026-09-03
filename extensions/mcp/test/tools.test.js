@@ -186,13 +186,37 @@ test('extension wait filters acquisition jobs and disposes its credit-controlled
   api.watchExtensionAcquisitions = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_extension_wait');
   assert.equal(wait.inputSchema.safeParse({ kind: 'inventory', job: 'j', timeout_ms: 10 }).success, false);
-  const pending = wait.run({ kind: 'acquisition', job: 'wanted', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ kind: 'acquisition', job: 'wanted', timeout_ms: 10 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ kind: 'acquisition', after_revision: 1, timeout_ms: 10 }).success, false);
+  const pending = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 2, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
   listener({ job: 'other', revision: 1, state: 'ready', coalesced: 0 });
   listener({ job: 'wanted', revision: 2, state: 'ready', coalesced: 3 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the already-observed revision must not settle or dispose the wait');
+  listener({ job: 'wanted', revision: 3, state: 'committing', coalesced: 0 });
   const answer = await pending;
-  assert.deepEqual(JSON.parse(answer.content[0].text), { changed: true, change: { job: 'wanted', revision: 2, state: 'ready', coalesced: 3 } });
+  assert.deepEqual(JSON.parse(answer.content[0].text), { changed: true, change: { job: 'wanted', revision: 3, state: 'committing', coalesced: 0 } });
   assert.equal(disposed, 1);
+});
+
+test('concurrent extension waits advance independently from their exact observed revisions', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchExtensionAcquisitions = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_extension_wait');
+  const first = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 1, timeout_ms: 1000 });
+  const second = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 2, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener({ job: 'wanted', revision: 2, state: 'ready', coalesced: 0 });
+  assert.equal(JSON.parse((await first).content[0].text).change.revision, 2);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener({ job: 'wanted', revision: 3, state: 'committing', coalesced: 0 });
+  assert.equal(JSON.parse((await second).content[0].text).change.revision, 3);
+  assert.equal(disposed, 2);
+  assert.equal(listeners.size, 0);
 });
 
 test('container create and exec accept only bounded structured authority', async () => {
@@ -208,6 +232,10 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', user: '😀'.repeat(65) }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['VALUE', 'é'.repeat(4096)]] }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['VALUE', '😀'.repeat(2049)]] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['é'.repeat(128), 'value']] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['é'.repeat(129), 'value']] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['release-name', 'value']] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', environment: [['BAD=NAME', 'value']] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', labels: [['note', 'é'.repeat(2048)]] }).success, true);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', labels: [['note', '😀'.repeat(1025)]] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker-1', labels: [['é'.repeat(128), 'note']] }).success, true);
@@ -215,6 +243,13 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine latest', name: 'worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: '../worker' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: '../host', read_only: false }] }).success, false);
+  const exactTarget = `/${'é'.repeat(2047)}a`;
+  const oversizedTarget = `/${'😀'.repeat(1024)}a`;
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: exactTarget }] }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'cache', target: oversizedTarget }] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'v'.repeat(255), target: '/data' }], network: 'n'.repeat(255) }).success, true);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'v'.repeat(256), target: '/data' }] }).success, false);
+  assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', network: '-invalid' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', ports: [{ container: 80, host: 0, protocol: 'tcp' }] }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
   assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
@@ -444,6 +479,10 @@ test('volume and network tools preserve typed read/control operations and confir
   assert.equal(byName('husklet_network_remove').inputSchema.safeParse({ reference: 'private' }).success, false);
   assert.equal(byName('husklet_network_disconnect').inputSchema.safeParse({ reference: 'private', container: 'c1' }).success, false);
   assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: 'private', container: 'c1', extra: true }).success, false);
+  assert.equal(byName('husklet_volume_create').inputSchema.safeParse({ name: 'a'.repeat(255) }).success, true);
+  assert.equal(byName('husklet_volume_create').inputSchema.safeParse({ name: 'a'.repeat(256) }).success, false);
+  assert.equal(byName('husklet_volume_create').inputSchema.safeParse({ name: '-leading' }).success, false);
+  assert.equal(byName('husklet_network_create').inputSchema.safeParse({ name: 'é' }).success, false);
   const networkId = 'a'.repeat(32);
   const containerId = 'b'.repeat(64);
   assert.equal(byName('husklet_network_connect').inputSchema.safeParse({ reference: networkId, container: 'friendly' }).success, false);
@@ -476,7 +515,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
     semantics: async () => { throw new Error('not semantic'); },
   };
   const xml = await paneXml(terminal, 'term-1', 20);
-  assert.match(xml, /^<husklet-pane slot="term-1" occupant="terminal"><terminal /);
+  assert.match(xml, /^<husklet-pane slot="term-1" occupant="terminal" generation="0" revision="0"><terminal /);
   assert.match(xml, /active="true" focused="true" columns="120" rows="40"/);
   assert.match(xml, /title="Shell &amp; work"/);
   assert.match(xml, /<line index="0">one &lt; two<\/line>/);
@@ -500,7 +539,7 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
     },
   };
   const xml = await paneXml(terminal, 'surface-1');
-  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
+  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface" generation="0" revision="0"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
   await assert.rejects(() => paneXml(terminal, 'missing'), /absent from pane inventory/);
@@ -595,18 +634,42 @@ test('pane wait returns only bounded invalidation metadata and releases its subs
   let disposed = 0;
   api.watchPaneChanges = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_pane_wait');
-  const pending = wait.run({ slot: 'pane-2', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ slot: 'pane-2', after_generation: 2, timeout_ms: 10 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ after_generation: 2, after_revision: 8, timeout_ms: 10 }).success, false);
+  const pending = wait.run({ slot: 'pane-2', after_generation: 2, after_revision: 8, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
   listener({ slot: 'pane-1', kind: 'terminal', revision: 0, generation: 1, coalesced: 0 });
   listener({ slot: 'pane-2', kind: 'native', revision: 8, generation: 2, coalesced: 6 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the initial scan at the observed cursor must not settle the wait');
+  listener({ slot: 'pane-2', kind: 'native', revision: 0, generation: 3, coalesced: 0 });
   const answer = await pending;
   assert.deepEqual(JSON.parse(answer.content[0].text), {
     changed: true,
-    change: { slot: 'pane-2', kind: 'native', revision: 8, generation: 2, coalesced: 6 },
+    change: { slot: 'pane-2', kind: 'native', revision: 0, generation: 3, coalesced: 0 },
   });
   assert.equal(disposed, 1);
   assert(!answer.content[0].text.includes('lines'));
   assert(!answer.content[0].text.includes('value'));
+});
+
+test('concurrent pane waits advance independently from exact generation and revision cursors', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchPaneChanges = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_pane_wait');
+  const first = wait.run({ slot: 'pane-2', after_generation: 2, after_revision: 7, timeout_ms: 1000 });
+  const second = wait.run({ slot: 'pane-2', after_generation: 2, after_revision: 8, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener({ slot: 'pane-2', kind: 'native', generation: 2, revision: 8, coalesced: 0 });
+  assert.equal(JSON.parse((await first).content[0].text).change.revision, 8);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener({ slot: 'pane-2', kind: 'native', generation: 2, revision: 9, coalesced: 0 });
+  assert.equal(JSON.parse((await second).content[0].text).change.revision, 9);
+  assert.equal(disposed, 2);
+  assert.equal(listeners.size, 0);
 });
 
 test('workspace event wait filters one bounded batch and always disposes', async () => {
@@ -620,6 +683,34 @@ test('workspace event wait filters one bounded batch and always disposes', async
   const answer = JSON.parse((await pending).content[0].text);
   assert.equal(answer.observed, true); assert.equal(answer.event.event, 'key'); assert.equal(answer.dropped, 4);
   assert.equal(disposed, 1);
+});
+
+test('workspace composite mutation arms before authority, ignores unrelated changes, and disposes', async () => {
+  const { api } = fake(); const order = []; let listener; let disposed = 0;
+  api.watchWorkspaceLifecycle = async (next) => { order.push('subscribe'); listener = next; return async () => { order.push('unsubscribe'); disposed += 1; }; };
+  api.start = async (name) => {
+    order.push(`start:${name}`);
+    listener({ workspace: 'other', action: 'start', revision: 1, coalesced: 0 });
+    listener({ workspace: name, action: 'start', revision: 2, coalesced: 0 });
+  };
+  const mutate = tools(api).find(({ name }) => name === 'husklet_workspace_mutate_wait');
+  assert.equal(mutate.inputSchema.safeParse({ operation: 'delete', name: 'managed', generation }).success, false);
+  const answer = JSON.parse((await mutate.run({ operation: 'start', name: 'managed', timeout_ms: 1000 })).content[0].text);
+  assert.deepEqual(answer, { result: { done: true }, change: { workspace: 'managed', action: 'start', revision: 2, coalesced: 0 } });
+  assert.deepEqual(order, ['subscribe', 'start:managed', 'unsubscribe']);
+  assert.equal(disposed, 1);
+});
+
+test('workspace composite mutation disposes on authority failure and observation timeout', async () => {
+  const { api } = fake(); let disposed = 0;
+  api.watchWorkspaceLifecycle = async () => async () => { disposed += 1; };
+  api.stop = async () => { throw new Error('stop refused'); };
+  const mutate = tools(api).find(({ name }) => name === 'husklet_workspace_mutate_wait');
+  await assert.rejects(() => mutate.run({ operation: 'stop', name: 'managed', timeout_ms: 1000 }), /stop refused/);
+  assert.equal(disposed, 1);
+  api.stop = async () => {};
+  await assert.rejects(() => mutate.run({ operation: 'stop', name: 'managed', timeout_ms: 1 }), /timed out waiting for stop/);
+  assert.equal(disposed, 2);
 });
 
 test('execution change wait filters immutable identity and returns subscription credit', async () => {
@@ -638,17 +729,39 @@ test('execution change wait filters immutable identity and returns subscription 
   assert.equal(disposed, 1);
 });
 
-test('container change wait filters identity/state and disposes after match', async () => {
+test('container change wait rejects its unchanged initial cursor and disposes after a transition', async () => {
   const { api } = fake(); let listener; let disposed = 0;
   api.watchContainers = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_container_change_wait');
   assert.equal(wait.inputSchema.safeParse({ id: 'c1', state: 'running', absent: true }).success, false);
-  const pending = wait.run({ id: 'c2', state: 'exited', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ id: 'c2', after: { state: 'running' } }).success, false);
+  const pending = wait.run({ id: 'c2', after: { state: 'running', created: 41 }, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
-  listener([{ id: 'c1', state: 'exited' }, { id: 'c2', state: 'running' }]);
-  listener([{ id: 'c2', state: 'exited', name: 'worker' }]);
-  assert.deepEqual(JSON.parse((await pending).content[0].text), { changed: true, container: { id: 'c2', state: 'exited', name: 'worker' } });
+  listener([{ id: 'c1', state: 'exited' }, { id: 'c2', state: 'running', created: 41 }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the subscription initial snapshot must not settle at the observed cursor');
+  listener([{ id: 'c2', state: 'exited', created: 41, name: 'worker' }]);
+  assert.deepEqual(JSON.parse((await pending).content[0].text), { changed: true, container: { id: 'c2', state: 'exited', created: 41, name: 'worker' } });
   assert.equal(disposed, 1);
+});
+
+test('container change wait treats a changed creation identity as replacement and isolates concurrent cursors', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchContainers = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_container_change_wait');
+  const replaced = wait.run({ id: 'c2', after: { state: 'running', created: 41 }, timeout_ms: 1000 });
+  const stopped = wait.run({ id: 'c2', after: { state: 'running', created: 42 }, state: 'exited', timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener([{ id: 'c2', state: 'running', created: 42 }]);
+  assert.equal(JSON.parse((await replaced).content[0].text).container.created, 42);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener([{ id: 'c2', state: 'exited', created: 42 }]);
+  assert.equal(JSON.parse((await stopped).content[0].text).container.state, 'exited');
+  assert.equal(disposed, 2);
+  assert.equal(listeners.size, 0);
 });
 
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
@@ -887,7 +1000,7 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
   for (const [slot, tab, active, focused, columns, rows, truncated] of expected) {
     const answer = await client.callTool({ name: 'husklet_pane_read', arguments: { slot, lines: 10 } });
     const xml = answer.content[0].text;
-    assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal">`));
+    assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal" generation="0" revision="0">`));
     assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}" cursor-column="6" cursor-row="7"[^>]*truncated="${truncated}">`));
     assert.match(xml, new RegExp(`visible &lt;${slot}&gt;`));
   }

@@ -6,7 +6,7 @@ const text = (answer, tool) => {
 const call = async (client, name, args = {}) => text(await client.callTool({ name, arguments: args }), name);
 const json = async (client, name, args) => JSON.parse(await call(client, name, args));
 const xmlNumber = (xml, name) => {
-  const match = xml.match(new RegExp(`(?:<pane|<node)[^>]*\\b${name}="(\\d+)"`));
+  const match = xml.match(new RegExp(`(?:<husklet-pane|<pane|<node)[^>]*\\b${name}="(\\d+)"`));
   if (!match) throw new Error(`semantic snapshot has no numeric ${name}`);
   return Number(match[1]);
 };
@@ -74,14 +74,24 @@ export async function runAgentDayOne(client, {
     const semantic = inventory.panes?.find(({ kind }) => kind === 'surface' || kind === 'native');
     if (!terminal || !semantic) throw new Error('one terminal and one semantic pane are required');
     const terminalBefore = await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 });
-    const terminalWaiting = json(client, 'husklet_pane_wait', { slot: terminal.slot, timeout_ms: waitMs });
+    const terminalWaiting = json(client, 'husklet_pane_wait', {
+      slot: terminal.slot,
+      after_generation: xmlNumber(terminalBefore, 'generation'),
+      after_revision: xmlNumber(terminalBefore, 'revision'),
+      timeout_ms: waitMs,
+    });
     await call(client, 'husklet_terminal_write', { slot: terminal.slot, input: terminalInput });
     const terminalChanged = await terminalWaiting;
 
     const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });
     const revision = xmlNumber(semanticBefore, 'revision');
     const node = nodeForLabel(semanticBefore, actionLabel);
-    const semanticWaiting = json(client, 'husklet_pane_wait', { slot: semantic.slot, timeout_ms: waitMs });
+    const semanticWaiting = json(client, 'husklet_pane_wait', {
+      slot: semantic.slot,
+      after_generation: semantic.generation,
+      after_revision: semantic.revision,
+      timeout_ms: waitMs,
+    });
     await call(client, 'husklet_pane_action', { slot: semantic.slot, revision, node, action: 'invoke' });
     const semanticChanged = await semanticWaiting;
     const semanticAfter = semanticChanged.changed

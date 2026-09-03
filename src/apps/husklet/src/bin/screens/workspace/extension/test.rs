@@ -137,12 +137,95 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         file_browser_keeps_its_semantic_role();
         flame_graph_projects_profile_frames_into_semantics();
         memory_map_projects_exact_regions_into_semantics();
+        disassembly_projects_exact_instructions_into_semantics();
+        timeline_projects_exact_events_into_semantics();
+        test_report_projects_exact_cases_into_semantics();
+        coverage_projects_exact_bounded_source_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn coverage_projects_exact_bounded_source_into_semantics() {
+    let mut fixture = Fixture::new();
+    let lines = [
+        hl_gui::CoverageLine::new(1, 3, "fn main() {").expect("line"),
+        hl_gui::CoverageLine::new(2, 0, "    unreachable();").expect("line"),
+    ];
+    fixture.describe(&Element::coverage_view(hl_gui::CoverageSource::Bounded {
+        prefix: &lines,
+        total_lines: 4,
+    }));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let coverage = &tree.root.children[0];
+    assert_eq!(coverage.role, "CoverageView");
+    assert_eq!(
+        coverage.value.as_deref(),
+        Some("1\t3\tfn main() {\n2\t0\t    unreachable();\n…\t\t… showing 2 of 4 lines …")
+    );
+    assert!(coverage.actions.is_empty());
+}
+
+fn test_report_projects_exact_cases_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::test_report_view([
+        hl_gui::TestCase::new("api", "creates user", hl_gui::TestStatus::Passed, 14, "").expect("case"),
+        hl_gui::TestCase::new(
+            "api",
+            "rejects duplicate",
+            hl_gui::TestStatus::Failed,
+            8,
+            "expected 409",
+        )
+        .expect("case"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let report = &tree.root.children[0];
+    assert_eq!(report.role, "TestReportView");
+    assert_eq!(
+        report.value.as_deref(),
+        Some("api\tcreates user\tpassed\t14\t\napi\trejects duplicate\tfailed\t8\texpected 409")
+    );
+    assert!(report.actions.is_empty());
+}
+
+fn timeline_projects_exact_events_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::timeline_view([
+        hl_gui::TimelineEvent::new(1700000000123, "deploy", "release started", "v2").expect("event"),
+        hl_gui::TimelineEvent::new(1700000001456, "health", "ready", "3 replicas").expect("event"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let timeline = &tree.root.children[0];
+    assert_eq!(timeline.role, "TimelineView");
+    assert_eq!(
+        timeline.value.as_deref(),
+        Some("1700000000123\tdeploy\trelease started\tv2\n1700000001456\thealth\tready\t3 replicas")
+    );
+    assert!(timeline.actions.is_empty());
+}
+
+fn disassembly_projects_exact_instructions_into_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&Element::disassembly_view([
+        hl_gui::Instruction::new(0x401000, [0x55], "push", "rbp").expect("instruction"),
+        hl_gui::Instruction::new(0x401001, [0x48, 0x89, 0xe5], "mov", "rbp, rsp").expect("instruction"),
+    ]));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let listing = &tree.root.children[0];
+    assert_eq!(listing.role, "DisassemblyView");
+    assert_eq!(
+        listing.value.as_deref(),
+        Some("0000000000401000\t55\tpush\trbp\n0000000000401001\t48 89 e5\tmov\trbp, rsp")
+    );
+    assert!(listing.actions.is_empty());
 }
 
 fn memory_map_projects_exact_regions_into_semantics() {

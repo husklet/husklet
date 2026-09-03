@@ -107,6 +107,18 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::MemoryMap {
         return content::regions(widget, content);
     }
+    if tag == Tag::DisassemblyView {
+        return content::instructions(widget, content);
+    }
+    if tag == Tag::TimelineView {
+        return content::timeline(widget, content);
+    }
+    if tag == Tag::TestReportView {
+        return content::test_report(widget, content);
+    }
+    if tag == Tag::CoverageView {
+        return content::coverage(widget, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }
