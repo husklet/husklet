@@ -171,6 +171,7 @@ wrong caller.
 
 - `host.terminal.semantics(...)` — `pane_semantic_read`, requires `pane-semantic-read`.
 - `host.terminal.act(...)` — `pane_semantic_action`, requires `pane-semantic-control`.
+- `host.terminal.inspectAndAct(slot, proposal, options)` — arms observation, reads the bounded semantic tree, verifies an enabled advertised node action, invokes it at that exact revision, and returns bounded XML before/after; requires `pane-observe`, `pane-semantic-read`, and `pane-semantic-control`.
 
 ## Observe before mutating
 

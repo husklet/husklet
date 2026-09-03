@@ -363,6 +363,12 @@ export interface WorkspaceApi {
       | { changed: true; readable: ReadablePane }
       | { changed: false; after: { generation: number; revision: number } }
     >;
+    /** Inspect and validate an enabled advertised action, then invoke it with that exact semantic cursor. */
+    inspectAndAct(slot: string, proposal: { node: number; action: SemanticActionKind; value?: string | null },
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; before: { snapshot: PaneSemanticTree; text: string }; after: { snapshot: PaneSemanticTree; text: string } }
+        | { changed: false; before: { snapshot: PaneSemanticTree; text: string } }
+      >;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     /** Arm and read before CAS input, then return a later bounded terminal screen revision. */
     writeAndWait(slot: string, generation: number, revision: number, input: string | Iterable<number>,

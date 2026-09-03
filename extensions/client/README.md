@@ -30,6 +30,19 @@ const acted = await host.terminal.actAndWait(pane.slot, {
 if (acted.changed) console.log(acted.readable.text);
 ```
 
+When starting from a node ID rather than an already-inspected action cursor,
+validate the node against the live bounded tree before invoking it:
+
+```js
+const result = await host.terminal.inspectAndAct(pane.slot, { node: 7, action: 'invoke' });
+console.log(result.before.text);
+if (result.changed) console.log(result.after.text);
+```
+
+This refuses missing, truncated-away, disabled, or non-advertised actions before
+authority. The action is bound to the generation and revision read after the
+subscription was armed.
+
 Extension acquisition also has a non-polling cursor. Read status once, then arm
 the exact job before waiting for its next coalesced revision:
 

@@ -781,6 +781,57 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.inspectAndAct = async (slot, proposal, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('inspected semantic action requires a nonempty slot');
+    const actions = ['invoke', 'change', 'submit', 'toggle', 'expand', 'focus'];
+    if (!Number.isSafeInteger(proposal?.node) || proposal.node < 0 || !actions.includes(proposal?.action)) {
+      throw new TypeError('inspected semantic action requires a nonnegative node and known action');
+    }
+    if (proposal.value != null && (typeof proposal.value !== 'string'
+      || new TextEncoder().encode(proposal.value).byteLength > 4096)) {
+      throw new RangeError('inspected semantic action value exceeds 4096 bytes');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('inspected semantic action timeout must be between 1 and 30000ms');
+    }
+    let changed; let cursor;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (cursor && change.slot === slot
+        && (change.generation !== cursor.generation || change.revision !== cursor.revision)) changed(change);
+    });
+    let timer;
+    try {
+      const snapshot = await api.terminal.semantics(slot);
+      cursor = { generation: snapshot.generation, revision: snapshot.revision };
+      const pending = [snapshot.root]; let node;
+      while (pending.length > 0) {
+        const candidate = pending.pop();
+        if (candidate.id === proposal.node) { node = candidate; break; }
+        pending.push(...candidate.children);
+      }
+      if (!node) throw new Error(snapshot.truncated
+        ? 'semantic node cannot be resolved from a truncated tree'
+        : 'semantic node does not exist');
+      if (node.disabled) throw new Error('semantic node is disabled');
+      if (!node.actions.includes(proposal.action)) throw new Error('semantic node does not advertise the requested action');
+      const before = { snapshot, text: semanticXml(snapshot) };
+      await api.terminal.act(slot, { ...cursor, node: proposal.node, action: proposal.action, value: proposal.value ?? null });
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, before };
+      const afterSnapshot = await api.terminal.semantics(slot);
+      if (afterSnapshot.generation === cursor.generation && afterSnapshot.revision === cursor.revision) {
+        throw new Error('pane change did not advance the semantic tree cursor');
+      }
+      return { changed: true, before, after: { snapshot: afterSnapshot, text: semanticXml(afterSnapshot) } };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.splitAndWait = async (slot, generation, revision, division, { timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal split requires a nonempty slot');
     if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {

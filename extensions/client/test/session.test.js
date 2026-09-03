@@ -1062,6 +1062,54 @@ test('real Unix openTabAndWait arms before creation and verifies returned tab id
   }
 });
 
+test('real Unix inspectAndAct validates live semantic authority before revision-bound action', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-inspect-act-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let reads = 0;
+  const slot = 'settings';
+  const tree = (revision, value) => ({ slot, generation: 2, revision, truncated: false, root: {
+    id: 0, role: 'page', label: 'Settings', value: null, disabled: false, destructive: false, actions: [], children: [{
+      id: 7, role: 'button', label: 'Toggle', value, disabled: false, destructive: false, actions: ['invoke'], children: [],
+    }],
+  } });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_semantic_read') {
+        reads += 1; assert.deepEqual(frame.payload.with, { slot });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'semantics', with: tree(reads === 1 ? 4 : 5, reads === 1 ? 'off' : 'on') } }));
+      } else if (frame.payload.call === 'pane_semantic_action') {
+        assert.deepEqual(frame.payload.with, { slot, action: { generation: 2, revision: 4, node: 7, action: 'invoke', value: null } });
+        socket.write(encode({ channel: 140, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+          slot, kind: 'native', generation: 2, revision: 5, coalesced: 0,
+        } } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'inspect-act', granted: ['pane-observe', 'pane-semantic-read', 'pane-semantic-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.inspectAndAct(slot, { node: -1, action: 'invoke' }), /node/);
+    await assert.rejects(terminal.inspectAndAct(slot, { node: 7, action: 'invoke' }, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid proposal or timeout must not subscribe or inspect');
+    const result = await terminal.inspectAndAct(slot, { node: 7, action: 'invoke' });
+    assert.equal(result.changed, true); assert.equal(result.before.snapshot.revision, 4); assert.equal(result.after.snapshot.revision, 5);
+    assert.match(result.before.text, /<value>off<\/value>/); assert.match(result.after.text, /<value>on<\/value>/);
+    assert.deepEqual(calls, ['event_subscribe', 'pane_semantic_read', 'pane_semantic_action', 'pane_semantic_read', 'event_unsubscribe']);
+    calls.length = 0;
+    await assert.rejects(terminal.inspectAndAct(slot, { node: 7, action: 'toggle' }), /does not advertise/);
+    assert.deepEqual(calls, ['event_subscribe', 'pane_semantic_read', 'event_unsubscribe'], 'non-advertised action must not reach authority');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
