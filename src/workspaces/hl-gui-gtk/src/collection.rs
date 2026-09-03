@@ -100,7 +100,9 @@ pub(crate) fn model(widget: &gtk::Widget, source: SourceId) -> Option<Rows> {
         .and_then(|selection| selection.model())
         .and_then(|inner| inner.downcast::<Rows>().ok())
     {
-        return Some(existing);
+        if existing.source() == source {
+            return Some(existing);
+        }
     }
     let rows = Rows::new(source);
     view.set_model(Some(&gtk::MultiSelection::new(Some(rows.clone()))));

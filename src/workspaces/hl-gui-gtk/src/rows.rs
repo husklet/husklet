@@ -120,6 +120,12 @@ impl Rows {
         self.imp().cache.borrow().clone().expect("constructed with a cache")
     }
 
+    /// Producer identity this model is currently authorized to display.
+    #[must_use]
+    pub fn source(&self) -> SourceId {
+        self.cache().borrow().source()
+    }
+
     /// Requests the model has accumulated, taken for sending.
     #[must_use]
     pub fn drain(&self) -> Vec<RowRequest> {

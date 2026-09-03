@@ -14,7 +14,7 @@ use hl_gui::{
     Choice, Column, Element, Event, EventId, Length, Prop, PropValue, Reconciliation, Renderer, Scale, SourceId, Tag,
     Theme, Tone, Tree, Trigger, Variant,
 };
-use hl_gui_gtk::Surface;
+use hl_gui_gtk::{Rows, Surface};
 
 const SOURCE: SourceId = SourceId::new(7);
 
@@ -166,7 +166,45 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     a_keyed_reorder_moves_widgets_rather_than_rebuilding_them();
     a_described_handler_is_wired_to_the_real_signal();
     a_rebound_handler_reports_the_new_identity();
+    rebinding_a_table_retires_its_previous_source();
     a_theme_installs_before_a_description_is_rendered();
+}
+
+fn rebinding_a_table_retires_its_previous_source() {
+    let first = SourceId::new(41);
+    let second = SourceId::new(42);
+    let table = |source| {
+        Element::new(Tag::DataTable)
+            .key("records")
+            .prop(Prop::Source, PropValue::Source(source))
+            .prop(Prop::Schema, PropValue::Schema(vec![Column::new("id", "ID")]))
+    };
+    let mut session = Session::new();
+    session.render(&table(first));
+    session.surface.resize(first, hl_gui::Version::new(1), 100_000).unwrap();
+
+    session.render(&table(second));
+
+    assert!(
+        session.surface.resize(first, hl_gui::Version::new(1), 100_000).is_err(),
+        "a late old-source mutation must not regain routing authority"
+    );
+    session.surface.resize(second, hl_gui::Version::new(2), 100_000).unwrap();
+    let table = session.tagged(Tag::DataTable).expect("rebound table");
+    let view = table
+        .downcast::<gtk::ScrolledWindow>()
+        .expect("table viewport")
+        .child()
+        .and_downcast::<gtk::ColumnView>()
+        .expect("column view");
+    let rows = view
+        .model()
+        .and_downcast::<gtk::MultiSelection>()
+        .and_then(|selection| selection.model())
+        .and_downcast::<Rows>()
+        .expect("windowed rows");
+    assert_eq!(rows.source(), second, "GTK model follows the new sort/filter source");
+    assert_eq!(u64::from(rows.n_items()), 100_000);
 }
 
 fn a_described_panel_materializes_as_widgets() {

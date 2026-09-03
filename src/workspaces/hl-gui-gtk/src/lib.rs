@@ -180,6 +180,7 @@ impl Renderer for Surface {
             }
             Patch::SetProp { id, prop, value } => {
                 if let (Prop::Source, PropValue::Source(source)) = (*prop, value) {
+                    self.sources.retain(|_, node| *node != *id);
                     self.sources.insert(*source, *id);
                 }
                 let (widget, node) = self.describe(*id, tree)?;
