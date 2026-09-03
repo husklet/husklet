@@ -536,12 +536,16 @@ impl<'a> CaseExecution<'a> {
             .enumerate()
         {
             wait_for_marker(&output, marker, deadline).await?;
-            bounded_checkpoint_phase(
+            if let Err(error) = bounded_checkpoint_phase(
                 deadline,
                 "container checkpoint",
                 self.containers.checkpoint(name, remaining(deadline)?),
             )
-            .await?;
+            .await
+            {
+                let logs = self.containers.logs(name).await;
+                return Err(checkpoint_failure_diagnostic(&error.to_string(), logs.as_ref().ok()).into());
+            }
             let logs = self.containers.logs(name).await?;
             let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
             validate_checkpoint_generation(&diagnostics, generation)?;
@@ -567,6 +571,19 @@ impl<'a> CaseExecution<'a> {
         }
         Ok(())
     }
+}
+
+fn checkpoint_failure_diagnostic(error: &str, logs: Option<&hl_container::Logs>) -> String {
+    logs.map_or_else(
+        || format!("container checkpoint failed: {error}; current container logs unavailable"),
+        |logs| {
+            format!(
+                "container checkpoint failed: {error}; stderr={}; stdout={}",
+                logs.stderr.preview(),
+                logs.stdout.preview()
+            )
+        },
+    )
 }
 
 async fn bounded_checkpoint_phase<T, E>(
@@ -664,7 +681,7 @@ fn validate_daily_dev_protocol(text: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod checkpoint_protocol_tests {
-    use super::{checkpoint_generation_logs, validate_daily_dev_protocol};
+    use super::{checkpoint_failure_diagnostic, checkpoint_generation_logs, validate_daily_dev_protocol};
 
     const COMPLETE: &str = "READY leader=1\nSLEEP-READY pid=2\nCYCLE 1 progress=5\nCYCLE 2 progress=10\n\
         DONE progress=11\nJCC-LINK phase=0 value=42\nJCC-LINK phase=1 value=43\n\
@@ -699,6 +716,20 @@ mod checkpoint_protocol_tests {
         assert!(!second_slice.windows(19).any(|bytes| bytes == b"stderr-generation-0"));
         assert!(second_slice.windows(19).any(|bytes| bytes == b"stdout-generation-1"));
         assert!(second_slice.windows(19).any(|bytes| bytes == b"stderr-generation-1"));
+    }
+
+    #[test]
+    fn checkpoint_failure_preserves_cause_and_bounded_current_logs() {
+        let logs = hl_container::Logs {
+            stdout: [b"stdout-marker:".as_slice(), &vec![b'o'; 8_192]].concat(),
+            stderr: [b"stderr-marker:".as_slice(), &vec![b'e'; 8_192]].concat(),
+        };
+        let diagnostic = checkpoint_failure_diagnostic("engine refused capture", Some(&logs));
+        assert!(diagnostic.contains("engine refused capture"), "{diagnostic}");
+        assert!(diagnostic.contains("stdout-marker"), "{diagnostic}");
+        assert!(diagnostic.contains("stderr-marker"), "{diagnostic}");
+        assert!(diagnostic.contains("bytes]"), "{diagnostic}");
+        assert!(diagnostic.len() < 1_024, "diagnostic was {} bytes", diagnostic.len());
     }
 }
 
