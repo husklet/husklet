@@ -396,6 +396,8 @@ impl TerminalSurface for Host {
                 slot: slot.into(),
                 generation: 0,
                 revision: 0,
+                columns: 80,
+                rows: 24,
                 lines: vec!["old".repeat(hl_extension::port::PANE_TEXT_BYTES / 3), "new".into()],
                 cursor_column: 0,
                 cursor_row: 0,
@@ -406,6 +408,8 @@ impl TerminalSurface for Host {
             slot: slot.into(),
             generation: 0,
             revision: 0,
+            columns: 120,
+            rows: 40,
             lines: vec![format!("at most {lines}")],
             cursor_column: 12,
             cursor_row: 3,
@@ -507,6 +511,7 @@ fn terminal_screen_bytes_are_bounded_before_the_reply_is_encoded() {
     assert!(text.truncated);
     assert_eq!(text.lines, vec!["new"]);
     assert_eq!((text.cursor_column, text.cursor_row), (0, 0));
+    assert_eq!((text.columns, text.rows), (80, 24));
 }
 
 #[test]

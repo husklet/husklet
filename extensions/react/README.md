@@ -144,7 +144,8 @@ with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`.
 
 Terminal control is pane-addressed and promise-based as well. `terminal.read`
-returns at most 2,000 lines, `terminal.writeInput` accepts at most 65,536 raw
+returns at most 2,000 lines with the cursor and grid dimensions from the same
+authoritative screen snapshot; `terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
 through 1,000. `terminal.topology()` returns the current nested tab/split tree;
 it is an observation call, not a claimed global change stream.

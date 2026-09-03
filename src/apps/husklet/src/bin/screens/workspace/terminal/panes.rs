@@ -80,6 +80,8 @@ impl Panes {
             slot: slot.to_owned(),
             generation: 0,
             revision: 0,
+            columns: u16::try_from(terminal.column_count()).unwrap_or_default(),
+            rows: u16::try_from(terminal.row_count()).unwrap_or_default(),
             lines,
             cursor_column: u32::try_from(cursor_column).unwrap_or_default(),
             cursor_row: u32::try_from(cursor_row).unwrap_or_default(),

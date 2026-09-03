@@ -145,6 +145,8 @@ impl TerminalSurface for Host {
             slot: slot.into(),
             generation: 0,
             revision: 0,
+            columns: 120,
+            rows: 40,
             lines: vec![format!("at most {lines}")],
             cursor_column: 12,
             cursor_row: 3,
@@ -823,6 +825,30 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
         session.dispatch(&decoded, &services(&host)),
         Err(Failure::Unsupported { call }) if call == "configured container creation is unavailable"
     ));
+}
+
+#[test]
+fn terminal_screen_grid_and_cursor_cross_the_real_socket_together() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("terminal-reader").expect("name"),
+        Grant::new([Capability::TerminalOutput]),
+        Vec::new(),
+    ));
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    let request = Request::TerminalReadPane { slot: "pane-7".into(), lines: Some(20) };
+    sender.send(&codec::request(&request).expect("request encodes")).expect("request crosses socket");
+    let decoded = codec::read_request(&receiver.receive().expect("request arrives")).expect("request decodes");
+    let Reply::Text(screen) = session.dispatch(&decoded, &services(&host)).expect("screen read") else {
+        panic!("wrong terminal reply")
+    };
+    assert_eq!((screen.columns, screen.rows), (120, 40));
+    assert_eq!((screen.cursor_column, screen.cursor_row), (12, 3));
+    receiver.send(&codec::reply(&Reply::Text(screen.clone())).expect("reply encodes")).expect("reply crosses socket");
+    let reply = codec::read_reply(&sender.receive().expect("reply arrives")).expect("reply decodes");
+    assert_eq!(reply, Reply::Text(screen));
 }
 
 #[test]

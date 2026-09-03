@@ -986,6 +986,8 @@ mod tests {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
+                columns: 120,
+                rows: 40,
                 lines: vec![format!("at most {lines}")],
                 cursor_column: 12,
                 cursor_row: 3,

@@ -288,6 +288,12 @@ pub struct PaneText {
     pub generation: u64,
     #[serde(default)]
     pub revision: u64,
+    /// Columns in the exact terminal grid this text and cursor were read from.
+    #[serde(default)]
+    pub columns: u16,
+    /// Rows in the exact terminal grid this text and cursor were read from.
+    #[serde(default)]
+    pub rows: u16,
     pub lines: Vec<String>,
     /// Zero-based cursor column in the terminal's visible grid.
     #[serde(default)]
@@ -1084,6 +1090,8 @@ mod tests {
             slot: "pane".into(),
             generation: 0,
             revision: 0,
+            columns: 80,
+            rows: 24,
             lines: vec![
                 "old".repeat(PANE_TEXT_BYTES / 3),
                 "middle".repeat(PANE_TEXT_BYTES / 6),
@@ -1097,6 +1105,7 @@ mod tests {
         assert!(bounded.truncated);
         assert_eq!(bounded.lines.last().map(String::as_str), Some("new"));
         assert_eq!((bounded.cursor_column, bounded.cursor_row), (4, 2));
+        assert_eq!((bounded.columns, bounded.rows), (80, 24));
         assert!(bounded.lines.iter().map(|line| line.len() + 1).sum::<usize>() <= PANE_TEXT_BYTES);
     }
 

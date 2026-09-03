@@ -609,7 +609,8 @@ test('terminal screen read preserves bounded text, truncation and cursor over fr
     call: 'terminal_read_pane', with: { slot: 's1', lines: 25 },
   });
   const screen = {
-    slot: 's1', lines: ['ready'], cursor_column: 5, cursor_row: 2, truncated: true,
+    slot: 's1', generation: 7, revision: 11, columns: 132, rows: 41,
+    lines: ['ready'], cursor_column: 5, cursor_row: 2, truncated: true,
   };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen } }));
   assert.deepEqual(await reading, screen);

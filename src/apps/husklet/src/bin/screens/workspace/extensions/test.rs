@@ -2476,6 +2476,8 @@ mod ports {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
+                columns: 80,
+                rows: 24,
                 lines: Vec::new(),
                 cursor_column: 0,
                 cursor_row: 0,
@@ -3120,8 +3122,10 @@ mod panes {
             until(|| matches!(
                 Panes::read(&bench.window, &slot, 100),
                 Reading::Text(text) if (text.cursor_column, text.cursor_row) == (12, 3)
+                    && (text.columns, text.rows)
+                        == (u16::try_from(terminal.column_count()).unwrap(), u16::try_from(terminal.row_count()).unwrap())
             )),
-            "the typed pane projection carries the terminal's zero-based cursor"
+            "the typed pane projection carries cursor and grid from the rendered terminal"
         );
         assert_eq!(
             Panes::read(&bench.window, "no-such-pane", 100),

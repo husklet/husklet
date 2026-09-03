@@ -1000,6 +1000,8 @@ mod tests {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
+                columns: 80,
+                rows: 24,
                 lines: Vec::new(),
                 cursor_column: 0,
                 cursor_row: 0,

@@ -593,10 +593,10 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
   const terminal = {
     panes: async () => ({ panes: [{ slot: 'term-1', kind: 'terminal' }], truncated: false }),
     topology: async () => ({ active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Shell & work', root: {
-      kind: 'pane', focused: true, grid: { columns: 120, rows: 40 },
+      kind: 'pane', focused: true, grid: { columns: 80, rows: 24 },
       pane: { slot: 'term-1', occupant: 'terminal', working_directory: '/work<&>', command: 'bash', provider: null },
     } }] }),
-    read: async () => ({ slot: 'term-1', lines: ['one < two', 'token output remains screen data'], truncated: false }),
+    read: async () => ({ slot: 'term-1', columns: 120, rows: 40, lines: ['one < two', 'token output remains screen data'], truncated: false }),
     semantics: async () => { throw new Error('not semantic'); },
   };
   const xml = await paneXml(terminal, 'term-1', 20);
@@ -1107,6 +1107,12 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
     kind: 'pane', focused, grid: { columns, rows },
     pane: { slot, occupant: 'terminal', working_directory: `/work/${slot}`, command: `shell-${slot}`, provider: null },
   });
+  const leafGrid = (slot) => {
+    if (slot === 'left') return [72, 30];
+    if (slot === 'upper') return [48, 12];
+    if (slot === 'right') return changed ? [132, 41] : [48, 18];
+    return [90, 25];
+  };
   const session = { call: async (name, argument) => {
     calls.push([name, argument]);
     if (name === 'pane_list') {
@@ -1123,7 +1129,8 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
       ],
     } };
     if (name === 'terminal_read_pane') return { reply: 'text', with: {
-      slot: argument.slot, lines: [`visible <${argument.slot}>`], cursor_column: 6, cursor_row: 7,
+      slot: argument.slot, columns: leafGrid(argument.slot)[0], rows: leafGrid(argument.slot)[1],
+      lines: [`visible <${argument.slot}>`], cursor_column: 6, cursor_row: 7,
       truncated: argument.slot === 'upper',
     } };
     // A stale host cache must never make a removed split leaf look native.
