@@ -223,6 +223,7 @@ fn makefile() -> &'static str {
 fn fixture_source() -> &'static str {
     r#"#!/bin/sh
 set -eu
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 cd /work
 mark(){ printf 'HL_PHASE %s\n' "$1" >&2; }
 mark prompt; printf 'prompt-ok:%s\n' "$(id -u)"
@@ -233,7 +234,7 @@ mark edit; printf '\n/* incremental edit */\n' >>src/unit_064.c
 mark incremental-build; make -s -j2 all; sha256sum build/devlib.a
 mark test; make -s test
 mark archive; tar -cf package.tar src Makefile; rm -rf extracted; mkdir extracted; tar -xf package.tar -C extracted; find extracted -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
-mark package-metadata; apk info -vv | LC_ALL=C sort | sha256sum
+mark package-metadata; apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | sha256sum
 mark spawn; i=0; while [ "$i" -lt 300 ]; do /bin/sh -c ':'; i=$((i+1)); done
 mark final; git diff -- src/unit_064.c | sha256sum
 printf 'HL_DONE\n' >&2
@@ -604,6 +605,16 @@ mod tests {
                 Mode::Supervised,
                 Mode::Native
             ]
+        );
+    }
+
+    #[test]
+    fn developer_fixture_closes_over_the_same_guest_path_for_every_backend() {
+        assert!(
+            fixture_source().starts_with(
+                "#!/bin/sh\nset -eu\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+            ),
+            "the host environment must not decide which guest tools the workload executes"
         );
     }
 
