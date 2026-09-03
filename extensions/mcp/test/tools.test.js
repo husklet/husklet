@@ -755,6 +755,8 @@ test('execution change wait ignores its unchanged initial cursor and returns sub
   const wait = tools(api).find(({ name }) => name === 'husklet_execution_change_wait');
   const after = { container_id: 'a'.repeat(64), running: true, exit_code: 0, pid: 17, command: ['/bin/job'], user: 'app' };
   assert.equal(wait.inputSchema.safeParse({ id: 'e2', after: { ...after, pid: 1.5 } }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ id: 'e2', absent: true }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ id: 'e2', after, absent: true, running: false }).success, false);
   const pending = wait.run({ id: 'e2', after, running: false, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
   listener({ executions: [{ id: 'e1', ...after }, { id: 'e2', ...after }], truncated: false });
@@ -781,6 +783,23 @@ test('execution waits detect impossible same-id replacement and dispose concurre
   for (const listener of [...listeners]) listener({ executions: [{ id: 'e2', ...after, container_id: 'b'.repeat(64), running: false, pid: 0 }], truncated: false });
   assert.equal(JSON.parse((await transition).content[0].text).replaced, false);
   assert.equal(disposed, 2);
+});
+
+test('execution removal wait ignores its present initial record and settles only on later absence', async () => {
+  const { api } = fake(); let listener; let disposed = 0;
+  api.watchExecutions = async (next) => { listener = next; return async () => { disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_execution_change_wait');
+  const after = { container_id: 'a'.repeat(64), running: false, exit_code: 0, pid: 0, command: ['/bin/job'], user: 'app' };
+  const pending = wait.run({ id: 'removed', after, absent: true, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  listener({ executions: [{ id: 'removed', ...after }], truncated: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the observed record in the initial catalogue must not settle removal');
+  listener({ executions: [], truncated: true });
+  assert.deepEqual(JSON.parse((await pending).content[0].text), {
+    changed: true, execution: null, removed: true, truncated: true,
+  });
+  assert.equal(disposed, 1);
 });
 
 test('container change wait rejects its unchanged initial cursor and disposes after a transition', async () => {

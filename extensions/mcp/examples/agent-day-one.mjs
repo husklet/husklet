@@ -15,6 +15,23 @@ export async function waitForInstalledExtensionChange(client, name, waitMs = 30_
     kind: 'inventory', after, timeout_ms: waitMs,
   });
 }
+
+/** Wait until an exactly observed immutable execution record is removed. */
+export async function waitForExecutionRemoval(client, execution, waitMs = 30_000) {
+  return json(client, 'husklet_execution_change_wait', {
+    id: execution.id,
+    after: {
+      container_id: execution.container_id,
+      running: execution.running,
+      exit_code: execution.exit_code,
+      pid: execution.pid,
+      command: execution.command,
+      user: execution.user,
+    },
+    absent: true,
+    timeout_ms: waitMs,
+  });
+}
 const xmlNumber = (xml, name) => {
   const match = xml.match(new RegExp(`(?:<husklet-pane|<pane|<node)[^>]*\\b${name}="(\\d+)"`));
   if (!match) throw new Error(`semantic snapshot has no numeric ${name}`);

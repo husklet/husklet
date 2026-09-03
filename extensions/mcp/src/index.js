@@ -340,8 +340,12 @@ export function tools(api) {
   if (typeof api.watchExecutions === 'function') definitions.push(define(
     'husklet_execution_change_wait',
     'Wait for a bounded execution catalogue change newer than an optional exact observed cursor.',
-    z.object({ id, after: executionCursor.optional(), running: z.boolean().optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
-    ({ id: wanted, after, running, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    z.object({ id, after: executionCursor.optional(), running: z.boolean().optional(), absent: z.boolean().default(false), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+      .superRefine(({ after, running, absent }, context) => {
+        if (absent && running != null) context.addIssue({ code: z.ZodIssueCode.custom, message: 'absent and running are mutually exclusive' });
+        if (absent && after == null) context.addIssue({ code: z.ZodIssueCode.custom, message: 'execution removal waits require the full observed cursor' });
+      }),
+    ({ id: wanted, after, running, absent, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop; let settled = false;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
@@ -350,14 +354,17 @@ export function tools(api) {
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       api.watchExecutions((catalogue) => {
         const execution = catalogue.executions.find(({ id: candidate }) => candidate === wanted);
-        if (!execution) return;
+        if (!execution) {
+          if (absent) finish({ changed: true, execution: null, removed: true, truncated: catalogue.truncated });
+          return;
+        }
         const replaced = after != null && (execution.container_id !== after.container_id
           || execution.user !== after.user
           || JSON.stringify(execution.command) !== JSON.stringify(after.command));
         const unchanged = after != null && !replaced && execution.running === after.running
           && execution.exit_code === after.exit_code && execution.pid === after.pid;
-        if (replaced || (!unchanged && (running == null || execution.running === running))) {
-          finish({ changed: true, ...(after == null ? {} : { replaced }), execution, truncated: catalogue.truncated });
+        if (replaced || (!absent && !unchanged && (running == null || execution.running === running))) {
+          finish({ changed: true, ...(after == null ? {} : { replaced }), ...(absent ? { removed: false } : {}), execution, truncated: catalogue.truncated });
         }
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),

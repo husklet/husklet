@@ -127,7 +127,11 @@ transition, disappearance, or changed creation identity completes it.
 descriptor returned by execution inspect/catalogue as `after`. It ignores the
 subscription's unchanged initial catalogue, reports state transitions, and
 returns `replaced: true` if a host ever reuses an execution ID with a different
-container, command, or user. The day-one workflow supplies this cursor.
+container, command, or user. Set `absent: true` with that full cursor to wait for
+record cleanup; this mode rejects running filters and returns
+`{changed:true, execution:null, removed:true}` only when the observed record is
+absent. The packaged `waitForExecutionRemoval` helper preserves the full cursor,
+and the day-one workflow supplies the same cursor for state changes.
 
 Administrative clients should use `husklet_workspace_mutate_wait` for workspace
 create/start/stop/delete workflows. It waits for the host subscription

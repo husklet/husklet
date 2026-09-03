@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CONTROL, KIND, Reader, encode } from '../../react/src/wire.js';
-import { runAgentDayOne, waitForInstalledExtensionChange } from '../examples/agent-day-one.mjs';
+import { runAgentDayOne, waitForExecutionRemoval, waitForInstalledExtensionChange } from '../examples/agent-day-one.mjs';
 
 const configuration = (image) => ({
   name: 'target', image, architecture: 'amd64', storage: null, shell: null, cpus: 2, memory_mb: 1024,
@@ -28,6 +28,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const credits = [];
   const sockets = new Set();
   let eventChannel = 40;
+  let executionSubscriptions = 0;
   const host = net.createServer((socket) => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     const reader = new Reader();
@@ -78,9 +79,17 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
             ] } })));
           });
           if (call === 'event_subscribe' && argument.topic === 'executions') setImmediate(() => {
-            const summary = { id: 'execution-day-one', container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' };
-            socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [summary], truncated: false } } }));
-            setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...summary, running: false, exit_code: 0, pid: 0 }], truncated: false } } })));
+            executionSubscriptions += 1;
+            if (executionSubscriptions === 1) {
+              const removed = { id: 'execution-remove', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
+              const transitioning = { id: 'execution-state', container_id: containerId, running: true, exit_code: 0, pid: 19, command: ['/bin/state'], user: 'app' };
+              socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [removed, transitioning], truncated: false } } }));
+              setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...transitioning, running: false, pid: 0 }], truncated: false } } })));
+            } else {
+              const summary = { id: 'execution-day-one', container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' };
+              socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [summary], truncated: false } } }));
+              setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...summary, running: false, exit_code: 0, pid: 0 }], truncated: false } } })));
+            }
           });
           if (call === 'event_subscribe' && argument.topic === 'extensions') setImmediate(() => {
             const extension = { name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' };
@@ -132,6 +141,17 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   await client.connect(transport);
   const extensionChanged = await waitForInstalledExtensionChange(client, 'manager', 1_000);
   assert.equal(extensionChanged.extension.status, 'duty');
+  const removedExecution = { id: 'execution-remove', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
+  const stateExecution = { id: 'execution-state', container_id: containerId, running: true, exit_code: 0, pid: 19, command: ['/bin/state'], user: 'app' };
+  const [removed, transitioned] = await Promise.all([
+    waitForExecutionRemoval(client, removedExecution, 1_000),
+    client.callTool({ name: 'husklet_execution_change_wait', arguments: { id: stateExecution.id, after: {
+      container_id: stateExecution.container_id, running: stateExecution.running, exit_code: stateExecution.exit_code,
+      pid: stateExecution.pid, command: stateExecution.command, user: stateExecution.user,
+    }, running: false, timeout_ms: 1_000 } }).then(({ content }) => JSON.parse(content[0].text)),
+  ]);
+  assert.equal(removed.removed, true); assert.equal(removed.execution, null);
+  assert.equal(transitioned.execution.running, false);
   const containerChanged = await client.callTool({ name: 'husklet_container_change_wait', arguments: {
     id: containerId, after: { state: 'running', created: 41 }, timeout_ms: 1_000,
   } });
@@ -156,7 +176,8 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'extension_list', 'event_subscribe', 'event_unsubscribe', 'event_subscribe', 'event_unsubscribe',
+    'workspace_info', 'extension_list', 'event_subscribe', 'event_unsubscribe',
+    'event_subscribe', 'event_unsubscribe', 'event_subscribe', 'event_unsubscribe',
     'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
     'workspace_update', 'container_create', 'container_start',
@@ -166,6 +187,10 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     'pane_semantic_read', 'container_stop', 'container_remove', 'workspace_update',
   ]);
   assert.equal(credits.some(({ payload }) => payload === 1), true);
+  assert.equal(calls.filter(({ call, with: value }) => call === 'event_subscribe' && value.topic === 'executions').length, 2,
+    'two concurrent waits share one subscription, followed by the workflow subscription');
+  assert.equal(calls.filter(({ call, with: value }) => call === 'event_unsubscribe' && value.topic === 'executions').length, 2,
+    'the concurrent subscription remains until both waits dispose');
   assert.deepEqual(calls.find(({ call }) => call === 'container_exec').with, {
     id: containerId, command: ['/usr/bin/worker', '--once'], user: null, working_directory: null,
   });
