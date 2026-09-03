@@ -99,10 +99,12 @@ test('schemas are strict, controls map exactly, and terminal spawn accepts argv 
   await spawn.run({ slot: 'pane-1', command: ['printf', '%s\n', 'ready'] });
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
-  await start.run({ id: 'abc' });
+  assert.equal(start.inputSchema.safeParse({ id: 'abc' }).success, false);
+  const immutable = 'a'.repeat(64);
+  await start.run({ id: immutable });
   assert.deepEqual(calls, [
     ['terminal.spawn', 'pane-1', ['printf', '%s\n', 'ready']],
-    ['containers.start', 'abc'],
+    ['containers.start', immutable],
   ]);
 });
 

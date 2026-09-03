@@ -968,7 +968,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerStart { id: "c1".into() },
+            Request::ContainerStart { id: "c".repeat(64) },
             Capability::ContainerControl,
         ),
         (
@@ -980,15 +980,15 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerPause { id: "c1".into() },
+            Request::ContainerPause { id: "c".repeat(64) },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerUnpause { id: "c1".into() },
+            Request::ContainerUnpause { id: "c".repeat(64) },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerRestart { id: "c1".into() },
+            Request::ContainerRestart { id: "c".repeat(64) },
             Capability::ContainerControl,
         ),
         (
@@ -1596,10 +1596,14 @@ fn execution_removal_refuses_aliases_before_control_authority() {
 }
 
 #[test]
-fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
+fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
+        Request::ContainerStart { id: "friendly-name".into() },
+        Request::ContainerPause { id: "a".repeat(12) },
+        Request::ContainerUnpause { id: "friendly-name".into() },
+        Request::ContainerRestart { id: "1".into() },
         Request::ContainerStop {
             id: "friendly-name".into(),
         },

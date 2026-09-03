@@ -206,12 +206,12 @@ export function workspace(session) {
         };
         return expect(await session.call('container_create', { spec: normalized }), 'identity');
       },
-      start: (id) => done('container_start', { id }),
+      start: (id) => done('container_start', { id: immutableIdentity(id, [32, 64], 'container') }),
       stop: (id) => done('container_stop', { id: immutableIdentity(id, [32, 64], 'container') }),
       remove: (id) => done('container_remove', { id: immutableIdentity(id, [32, 64], 'container') }),
-      pause: (id) => done('container_pause', { id }),
-      unpause: (id) => done('container_unpause', { id }),
-      restart: (id) => done('container_restart', { id }),
+      pause: (id) => done('container_pause', { id: immutableIdentity(id, [32, 64], 'container') }),
+      unpause: (id) => done('container_unpause', { id: immutableIdentity(id, [32, 64], 'container') }),
+      restart: (id) => done('container_restart', { id: immutableIdentity(id, [32, 64], 'container') }),
       rename: (id, name) => done('container_rename', {
         id: immutableIdentity(id, [32, 64], 'container'), name: exactContainerName(name),
       }),

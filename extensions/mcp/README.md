@@ -63,6 +63,8 @@ Execution inspection and execution signaling use distinct typed calls: signaling
 targets one complete immutable execution ID under `ContainerControl` and accepts
 only a 1..=32 byte signal name. Container stop, removal, and signaling likewise
 require the complete 32- or 64-hex identity returned by inventory or inspection.
+Start, pause, unpause, and restart use the same immutable identity policy, so a
+mutable name cannot resolve to a replacement between observation and control.
 Names, prefixes, and snapshot PIDs are refused before the socket call. Execution
 signaling does not signal the owning container or parse a shell.
 Execution output replay reports stdout and stderr truncation independently and

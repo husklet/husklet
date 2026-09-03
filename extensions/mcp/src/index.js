@@ -254,7 +254,12 @@ export function tools(api) {
     define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, async (spec) => ({ id: await api.containers.create(spec) })),
     define('husklet_container_exec', 'Execute a bounded argv vector in one complete immutable running container ID without shell parsing.', z.object({ id: containerIdentity, command, user: containerUser.optional(), working_directory: containerAbsolutePath.optional() }).strict(), async ({ id: value, command: argv, user, working_directory: workingDirectory }) => ({ id: await api.containers.exec(value, { command: argv, user, workingDirectory }) })),
     define('husklet_container_attach_terminal', 'Open an ephemeral GUI terminal running an exact bounded argv in a complete immutable container ID; the process is killed when the pane disconnects.', z.object({ id: containerIdentity, command }).strict(), ({ id: value, command: argv }) => api.containers.attachTerminal(value, argv)),
-    ...['start', 'pause', 'unpause', 'restart'].map((action) => define(`husklet_container_${action}`, `${action} one container.`, z.object({ id }).strict(), async ({ id: value }) => { await api.containers[action](value); return { done: true }; })),
+    ...['start', 'pause', 'unpause', 'restart'].map((action) => define(
+      `husklet_container_${action}`,
+      `${action} one container selected by its complete immutable ID; names and prefixes are refused.`,
+      z.object({ id: containerIdentity }).strict(),
+      async ({ id: value }) => { await api.containers[action](value); return { done: true }; },
+    )),
     define('husklet_container_rename', 'Atomically assign a unique name to one complete immutable container ID.', z.object({ id: containerIdentity, name: containerName }).strict(), async ({ id: value, name }) => { await api.containers.rename(value, name); return { done: true }; }),
     define('husklet_container_stop', 'Stop one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.stop(value); return { done: true }; }),
     define('husklet_container_remove', 'Remove one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),

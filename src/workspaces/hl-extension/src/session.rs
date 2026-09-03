@@ -318,7 +318,10 @@ impl Session {
                 validate_container_create(spec)?;
                 Ok(Reply::Identity(port.create_spec(spec)?))
             }
-            Request::ContainerStart { id } => port.start(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerStart { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.start(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ContainerStop { id } => {
                 immutable_identity(id, &[32, 64], "container")?;
                 port.stop(id).map(|()| Reply::Done).map_err(Failure::from)
@@ -327,9 +330,18 @@ impl Session {
                 immutable_identity(id, &[32, 64], "container")?;
                 port.remove(id).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::ContainerPause { id } => port.pause(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerUnpause { id } => port.unpause(id).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerPause { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.pause(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ContainerUnpause { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.unpause(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::ContainerRestart { id } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                port.restart(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ContainerRename { id, name } => {
                 immutable_identity(id, &[32, 64], "container")?;
                 validate_container_name(name)?;
