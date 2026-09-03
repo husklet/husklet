@@ -159,12 +159,30 @@ fn a_failed_replacement_and_cancellation_preserve_old_record_and_runtime() {
 }
 
 #[test]
-fn missing_consent_never_invokes_replacement() {
+fn unselected_optional_update_authority_is_not_granted() {
     let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
     let update = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
     let prepared = installation
         .prepare_update(&update, "sha256:second")
         .expect("inspected");
+    let mut invoked = false;
+    let result = installation.commit_update(prepared, &Grant::default(), 2_000, |_, _| {
+        invoked = true;
+        Ok::<_, ()>(())
+    });
+    assert!(result.is_ok());
+    assert!(invoked);
+    let record = installation.record(&name()).unwrap();
+    assert_eq!(record.image_digest, "sha256:second");
+    assert!(!record.granted.holds(Capability::ContainerControl));
+}
+
+#[test]
+fn an_authored_interface_remains_required_during_update() {
+    let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
+    let mut update = manifest(&[Capability::ContainerRead, Capability::Interface]);
+    update.interface = Some(hl_extension::Presentation { tab_title: "Sample".to_owned(), icon: None });
+    let prepared = installation.prepare_update(&update, "sha256:second").expect("inspected");
     let mut invoked = false;
     let result = installation.commit_update(prepared, &Grant::default(), 2_000, |_, _| {
         invoked = true;

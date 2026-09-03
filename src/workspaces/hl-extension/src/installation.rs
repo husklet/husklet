@@ -317,8 +317,10 @@ impl Installation {
 
     /// Commits an explicitly accepted update after its runtime replacement succeeds.
     ///
-    /// This is the only widening path in the crate, and it takes the consent as
-    /// an argument so that it cannot be reached except from a prompt's answer.
+    /// This is the only widening path in the crate, and it takes the selected
+    /// consent as an argument so that it cannot be reached except from a
+    /// prompt's answer. Optional additions left unselected are not granted;
+    /// interface authority remains mandatory for an authored interface.
     /// The result is still an intersection with what the manifest asks for.
     /// `replace` must be atomic from the host's perspective and leave the old
     /// runtime in service on error; the record changes only after success.
@@ -342,7 +344,11 @@ impl Installation {
         }
         let granted =
             Grant::new(entry.record.granted.iter().chain(consented.iter())).intersect(&update.manifest.capabilities);
-        let missing = granted.missing(&update.manifest.capabilities);
+        let required = Grant::new(
+            (update.manifest.interface.is_some() || !update.manifest.pane_providers.is_empty())
+                .then_some(Capability::Interface),
+        );
+        let missing = granted.missing(&required);
         if !missing.is_empty() {
             return Err(UpdateFailure::Refused(Objection::Consent(missing)));
         }

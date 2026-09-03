@@ -6,12 +6,13 @@
 //! to a recorded grant that skips the middle step.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate};
-use hl_extension::{Grant, Summary, Update};
+use hl_extension::{Capability, Grant, Manifest, Summary, Update};
 
 use super::{moment, Inspection, PendingInspection, Shelf};
 
@@ -31,11 +32,14 @@ pub const CANCEL_ACQUISITION: &str = "hl-extension-cancel-acquisition";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
 pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
+pub const CAPABILITY_CHOICE: &str = "hl-extension-capability-choice";
+
+type Selection = Rc<RefCell<BTreeSet<Capability>>>;
 
 #[derive(Clone)]
 enum Proposal {
-    Install(Candidate),
-    Update { candidate: Candidate, update: Update },
+    Install { candidate: Candidate, selected: Selection },
+    Update { candidate: Candidate, update: Update, selected: Selection },
 }
 
 /// How often the page looks for an inspection that has come back.
@@ -323,17 +327,18 @@ impl Catalogue {
             return;
         };
         match proposal {
-            Proposal::Install(candidate) => {
+            Proposal::Install { candidate, selected } => {
+                let consent = Grant::new(selected.borrow().iter().copied());
                 let recorded = self.shelf.roster().borrow_mut().register(
                     &candidate.manifest,
                     &candidate.digest,
-                    &candidate.manifest.capabilities,
+                    &consent,
                     moment(),
                 );
                 self.settle(&candidate, recorded);
             }
-            Proposal::Update { candidate, update } => {
-                let consent = Grant::new(update.additional.iter().copied());
+            Proposal::Update { candidate, update, selected } => {
+                let consent = Grant::new(selected.borrow().iter().copied());
                 let recorded = self
                     .shelf
                     .roster()
@@ -404,9 +409,11 @@ impl Catalogue {
         if summary.execution {
             self.proposal.append(&text(Summary::EXECUTION_NOTICE, "fhint"));
         }
+        let selected = self.selection(manifest, manifest.capabilities.iter());
         for capability in manifest.capabilities.iter() {
-            self.proposal.append(&text(capability.as_str(), "fhint"));
+            self.proposal.append(&self.capability_choice(manifest, capability, &selected));
         }
+        self.selected_semantics("Selected capabilities", &selected);
         self.proposal.append(&self.answer("Install"));
         self.proposal.set_visible(true);
         let summary = format!("{} {} at {}", manifest.name, manifest.version, candidate.digest);
@@ -428,8 +435,8 @@ impl Catalogue {
             &[],
             Rc::new(|_, _| {}),
         );
-        *self.candidate.borrow_mut() = Some(Proposal::Install(candidate));
-        self.say("this image asks for the capabilities above");
+        *self.candidate.borrow_mut() = Some(Proposal::Install { candidate, selected });
+        self.say("this image asks for the capabilities above; select what to grant; required interface access cannot be removed");
     }
 
     fn propose_update(self: &Rc<Self>, candidate: Candidate, update: Update) {
@@ -456,10 +463,13 @@ impl Catalogue {
         if update.additional.is_empty() && update.removed.is_empty() {
             self.proposal.append(&text("capabilities unchanged", UPDATE_DELTA));
         }
+        let selected = self.selection(&candidate.manifest, update.additional.iter().copied());
         for capability in &update.additional {
             self.proposal
                 .append(&text(&format!("+ {}", capability.as_str()), UPDATE_DELTA));
+            self.proposal.append(&self.capability_choice(&candidate.manifest, *capability, &selected));
         }
+        self.selected_semantics("Selected additional capabilities", &selected);
         for capability in &update.removed {
             self.proposal
                 .append(&text(&format!("− {}", capability.as_str()), UPDATE_DELTA));
@@ -508,8 +518,54 @@ impl Catalogue {
             &[],
             Rc::new(|_, _| {}),
         );
-        *self.candidate.borrow_mut() = Some(Proposal::Update { candidate, update });
-        self.say("review the installed and candidate image changes before accepting");
+        *self.candidate.borrow_mut() = Some(Proposal::Update { candidate, update, selected });
+        self.say("review the image changes and select which additional capabilities to grant");
+    }
+
+    fn selection(&self, manifest: &Manifest, capabilities: impl Iterator<Item = Capability>) -> Selection {
+        Rc::new(RefCell::new(capabilities.filter(|capability| required(manifest, *capability)).collect()))
+    }
+
+    fn capability_choice(&self, manifest: &Manifest, capability: Capability, selected: &Selection) -> gtk::CheckButton {
+        use super::super::semantic::{ActionKind, Value};
+        let required = required(manifest, capability);
+        let choice = gtk::CheckButton::with_label(capability.as_str());
+        choice.add_css_class(CAPABILITY_CHOICE);
+        choice.set_active(required);
+        choice.set_sensitive(!required);
+        let path = format!("extensions/proposal/capability/{}", capability.as_str());
+        let toggled = choice.clone();
+        let selection = Rc::clone(selected);
+        let semantics = self.semantics.clone();
+        let semantic_path = path.clone();
+        let actions = if required { vec![ActionKind::Focus] } else { vec![ActionKind::Toggle, ActionKind::Focus] };
+        self.semantics.register(
+            &path, "checkbox", Some(capability.as_str()),
+            Some(Value::Public(if required { "selected · required" } else { "not selected · optional" })),
+            &actions,
+            Rc::new(move |action, _| match action {
+                ActionKind::Toggle if toggled.is_sensitive() => toggled.set_active(!toggled.is_active()),
+                ActionKind::Focus => { toggled.grab_focus(); }
+                _ => {}
+            }),
+        );
+        choice.connect_toggled(move |choice| {
+            let mut selection = selection.borrow_mut();
+            if choice.is_active() { selection.insert(capability); } else { selection.remove(&capability); }
+            let selected = capability_list(selection.iter().copied());
+            drop(selection);
+            semantics.update(&semantic_path, Value::Public(if choice.is_active() { "selected · optional" } else { "not selected · optional" }), false);
+            semantics.update("extensions/proposal/selected-capabilities", Value::Public(&selected), false);
+        });
+        choice
+    }
+
+    fn selected_semantics(&self, label: &str, selected: &Selection) {
+        self.semantics.register(
+            "extensions/proposal/selected-capabilities", "list", Some(label),
+            Some(super::super::semantic::Value::Public(&capability_list(selected.borrow().iter().copied()))),
+            &[], Rc::new(|_, _| {}),
+        );
     }
 
     /// The two buttons a candidate is answered with.
@@ -815,6 +871,10 @@ impl Drop for Catalogue {
         }
         self.semantics.remove_prefix("extensions/");
     }
+}
+
+fn required(manifest: &Manifest, capability: Capability) -> bool {
+    capability == Capability::Interface && (manifest.interface.is_some() || !manifest.pane_providers.is_empty())
 }
 
 /// A finite, readable capability list for the consent projection.

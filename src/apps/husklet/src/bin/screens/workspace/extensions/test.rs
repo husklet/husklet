@@ -930,11 +930,21 @@ fn inspect_action(page: &Rc<Catalogue>) -> gtk::Button {
 }
 
 fn candidate() -> Candidate {
+    let mut manifest = manifest("sample");
+    manifest.interface = Some(hl_extension::Presentation { tab_title: "Sample".to_owned(), icon: None });
     Candidate {
         reference: "sample:1".to_owned(),
         digest: "sha256:bbbb".to_owned(),
-        manifest: manifest("sample"),
+        manifest,
     }
+}
+
+fn capability_choice(page: &Catalogue, capability: Capability) -> gtk::CheckButton {
+    descendants(page.widget().upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::CheckButton>().ok())
+        .find(|choice| choice.label().as_deref() == Some(capability.as_str()))
+        .unwrap_or_else(|| panic!("missing {} capability choice", capability.as_str()))
 }
 
 fn docker_hub_references_are_explained_and_validated_before_acquisition() {
@@ -1019,6 +1029,16 @@ fn an_image_is_read_before_anybody_is_asked() {
             "{label} is focusable without invoking consent"
         );
     }
+    let interface = capability_choice(&page, Capability::Interface);
+    assert!(interface.is_active());
+    assert!(!interface.is_sensitive(), "an authored interface requires interface authority");
+    let container_read = capability_choice(&page, Capability::ContainerRead);
+    assert!(!container_read.is_active(), "optional authority starts unselected");
+    container_read.set_active(true);
+    assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Selected capabilities")
+            && node.value.as_deref() == Some("container-read, interface")
+    }));
 
     page.consent();
 
@@ -1121,6 +1141,12 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         Some(&old_surface),
         "inspection and prompt leave the old extension live"
     );
+    let container_control = capability_choice(&page, Capability::ContainerControl);
+    assert!(!container_control.is_active(), "new update authority starts unselected");
+    assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Selected additional capabilities") && node.value.as_deref() == Some("none")
+    }));
+    container_control.set_active(true);
 
     page.consent();
     let entry = fixture
@@ -1152,6 +1178,7 @@ fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
     page.inspect();
     assert!(page.poll());
     let old_surface = fixture.view.page("sample").expect("old surface");
+    capability_choice(&page, Capability::ContainerControl).set_active(true);
 
     let winner = update_candidate("sha256:dddd", "1.5.0");
     let prepared = fixture
