@@ -337,22 +337,33 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
 
 export function Processes({ api, resource }) {
   const [snapshots, setSnapshots] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const groups = await Promise.all((resource.data ?? []).map(async (container) => ({ container, rows: await api.containers.processes(container.id) })));
       setSnapshots(groups);
       setError(null);
-    } catch (cause) { setError(cause); }
+    } catch (cause) { setError(cause); } finally { setLoading(false); }
   }, [api, resource.data]);
   useEffect(() => { void load(); }, [load]);
   const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
   const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
   const view = bounded(processes);
+  const failure = error ?? resource.error;
+  const state = loading || resource.loading ? 'loading' : failure ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Processes', subtitle: 'A bounded snapshot across all visible containers.' },
-    h(Toolbar, { loading: resource.loading, onRefresh: load }), h(ErrorText, { error }),
-    h(InventoryEmpty, { resource: { loading: resource.loading, error }, records: view.records, label: 'No running processes', detail: 'Start a container to see its process snapshot here.' }),
-    h(Text, { label: 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
+    h(Toolbar, { loading: state === 'loading', onRefresh: load }),
+    h(ResourceState, {
+      state,
+      loadingLabel: 'Reading processes…',
+      emptyLabel: 'No running processes',
+      emptyDetail: 'Start a container to see its process snapshot here.',
+      error: failure?.message ?? String(failure ?? ''),
+      retryLabel: 'Retry processes',
+      onRetry: resource.error ? resource.reload : load,
+    }, h(Text, { label: 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
     observed > 0 ? h(Text, { label: `Observed ${new Date(observed).toISOString()}`, color: 'text-dim' }) : null,
     ...view.records.map((process, index) => {
       const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
@@ -364,7 +375,7 @@ export function Processes({ api, resource }) {
     }),
     h(Omitted, { count: view.omitted }),
     snapshots.some(({ rows }) => rows.truncated)
-      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
+      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null));
 }
 
 export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {
