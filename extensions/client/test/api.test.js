@@ -303,7 +303,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
     'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune',
   ]);
   assert.deepEqual(protocolCoverage.unavailable.images, []);
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.available.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
