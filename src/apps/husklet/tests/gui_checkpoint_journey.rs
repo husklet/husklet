@@ -5,11 +5,15 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const PRIMARY: &str = "cd /root; sleep 1000 & child=$!; \
-printf 'primary-token\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
+const PRIMARY: &str = "cd /root; token=$(cat /proc/sys/kernel/random/uuid); \
+rm -f /tmp/husklet-container-probe; mkfifo /tmp/husklet-container-probe; \
+(while :; do IFS= read -r probe < /tmp/husklet-container-probe && printf '%s|%s\\n' \"$token\" \"$probe\" >> /tmp/husklet-container-progress; done) & child=$!; \
+printf 'token=%s\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$token\" \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
 wait \"$child\"; exit 91";
-const SECONDARY: &str = "cd /var; sleep 1000 & child=$!; \
-printf 'secondary-token\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
+const SECONDARY: &str = "cd /var; token=$(cat /proc/sys/kernel/random/uuid); \
+rm -f /tmp/husklet-container-probe; mkfifo /tmp/husklet-container-probe; \
+(while :; do IFS= read -r probe < /tmp/husklet-container-probe && printf '%s|%s\\n' \"$token\" \"$probe\" >> /tmp/husklet-container-progress; done) & child=$!; \
+printf 'token=%s\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$token\" \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
 wait \"$child\"; exit 92";
 
 struct RunningJourney {
@@ -108,6 +112,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     );
     let before = slot_state(&rootfs, "before");
     let background_before = background_state(&rootfs, "before");
+    probe_containers(&rootfs, &secondary.rootfs, &containers_before, "before");
     std::fs::write(&initial_ready, b"ready\n").unwrap();
 
     wait_receipt(
@@ -124,6 +129,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         vec!["workspace", secondary.name.as_str()]
     );
     assert_eq!(background_before, background_state(&rootfs, "after-1"));
+    probe_containers(&rootfs, &secondary.rootfs, &containers_before, "after-1");
     let events = std::fs::read_to_string(&receipt).unwrap();
     let restored_ready_ms = unix_millis() - event_time(&events, "manager_reopen_clicked");
     std::fs::write(&cycle_ready, b"ready\n").unwrap();
@@ -142,6 +148,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         vec!["workspace", secondary.name.as_str()]
     );
     assert_eq!(background_before, background_state(&rootfs, "after-2"));
+    probe_containers(&rootfs, &secondary.rootfs, &containers_before, "after-2");
 
     let events = std::fs::read_to_string(&receipt).unwrap();
     for required in [
@@ -202,6 +209,53 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
 
 fn container_states(primary: &Path, secondary: &Path) -> [String; 2] {
     [primary, secondary].map(|root| wait_text(&root.join("tmp/husklet-container-state"), Duration::from_secs(10)))
+}
+
+fn probe_containers(primary: &Path, secondary: &Path, states: &[String; 2], probe: &str) {
+    for (root, state) in [primary, secondary].into_iter().zip(states) {
+        let token = state
+            .lines()
+            .find_map(|line| line.strip_prefix("token="))
+            .unwrap_or_else(|| panic!("container state carries no in-memory token: {state:?}"));
+        let fifo = root.join("tmp/husklet-container-probe");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+            {
+                Ok(mut file) => {
+                    use std::io::Write as _;
+                    writeln!(file, "{probe}").unwrap();
+                    break;
+                }
+                Err(error)
+                    if matches!(error.raw_os_error(), Some(libc::ENXIO) | Some(libc::ENOENT))
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!(
+                    "could not reach restored container child through {}: {error}",
+                    fifo.display()
+                ),
+            }
+        }
+        let expected = format!("{token}|{probe}");
+        let progress = root.join("tmp/husklet-container-progress");
+        loop {
+            if std::fs::read_to_string(&progress).is_ok_and(|text| text.lines().any(|line| line == expected)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "restored container child did not acknowledge {probe:?} with its captured token {token:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 fn container_inventory(storage: &Path) -> Vec<String> {
