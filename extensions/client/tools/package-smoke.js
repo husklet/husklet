@@ -391,8 +391,8 @@ try {
   for (const architecture of ['x86_64', 'aarch64']) {
     await runPackedStarter(starter, starterClient, architecture, 'SIGTERM');
     await runPackedStarter(starter, starterClient, architecture, 'SIGINT');
+    await runPackedStarter(starter, starterClient, architecture, 'SIGTERM', true);
   }
-  await runPackedStarter(starter, starterClient, 'x86_64', 'SIGTERM', true);
   await runPackedProtocolRefusal(starter, starterClient);
   await runPackedTruncatedGreeting(starter, starterClient);
   await runPackedOversizedGreeting(starter, starterClient);
