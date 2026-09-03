@@ -8,6 +8,12 @@ const session = await connect();
 console.log(await workspace(session).info());
 ```
 
+The packaged `examples/agent-control.mjs` is an executable end-to-end consumer:
+it discovers an exact terminal and UI pane, reads terminal text and semantic XML,
+writes exact byte values, and invokes an advertised revision-bound UI action.
+It accepts one JSON argument containing `path`, `terminalSlot`, `uiSlot`, `node`,
+and an `input` byte array; it uses no renderer or private transport imports.
+
 Every discovered pane has one framework-neutral text projection. Terminal panes
 return their interpreted visible screen and cursor snapshot; native and extension
 UI panes return bounded semantic XML:
