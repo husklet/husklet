@@ -133,6 +133,9 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
                 continue;
             }
             let root = options.results.join(format!("root-{sample}-{position}"));
+            if root.exists() {
+                fs::remove_dir_all(&root)?;
+            }
             clone_root(&options.rootfs, &root)?;
             stage_fixture(&root, fixture)?;
             let result = execute(&options, &root, mode, sample, position);
@@ -144,6 +147,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     if rows.len() != options.samples as usize * ORDER.len() {
         return Err("developer benchmark ledger is incomplete".into());
     }
+    validate_outputs(&rows)?;
     publish_report(&options.results, &rows)
 }
 
@@ -387,6 +391,19 @@ fn append(path: &Path, row: &Row) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
+    let Some(first) = rows.first() else {
+        return Err("developer benchmark produced no rows".into());
+    };
+    if rows
+        .iter()
+        .any(|row| row.stdout_sha256 != first.stdout_sha256 || row.semantic_sha256 != first.semantic_sha256)
+    {
+        return Err("developer benchmark backends produced different output".into());
+    }
+    Ok(())
+}
+
 fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
     let mut text = String::from("sample\tposition\tmode\twall_ns\tphase\tphase_ns\n");
     for row in rows {
@@ -455,5 +472,21 @@ mod tests {
                 Mode::Native
             ]
         );
+    }
+
+    #[test]
+    fn every_backend_must_produce_the_same_semantics() {
+        let row = |mode, output: &str| Row {
+            sample: 0,
+            position: 0,
+            mode,
+            wall_ns: 1,
+            phase_ns: Vec::new(),
+            stdout_sha256: output.into(),
+            semantic_sha256: output.into(),
+            backend_receipt: String::new(),
+        };
+        assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Translated, "same")]).is_ok());
+        assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Supervised, "different")]).is_err());
     }
 }
