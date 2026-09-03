@@ -130,6 +130,18 @@ const focused = await host.terminal.focusAndWait(
 if (focused.changed) console.log(focused.pane.focused); // true
 ```
 
+Terminal input can be coupled to a screen transition without claiming that the
+bytes produce any particular text. The helper subscribes and verifies the
+supplied screen cursor before writing, then returns the later bounded screen:
+
+```js
+const written = await host.terminal.writeAndWait(
+  pane.slot, screen.generation, screen.revision, new Uint8Array([0x03]),
+  { lines: 200, timeoutMs: 10_000 },
+);
+if (written.changed) console.log(written.after.lines.join('\n'));
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

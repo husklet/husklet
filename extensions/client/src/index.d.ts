@@ -346,6 +346,12 @@ export interface WorkspaceApi {
       | { changed: false; after: { generation: number; revision: number } }
     >;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
+    /** Arm and read before CAS input, then return a later bounded terminal screen revision. */
+    writeAndWait(slot: string, generation: number, revision: number, input: string | Iterable<number>,
+      options?: { lines?: number; timeoutMs?: number }): Promise<
+        | { changed: true; before: PaneText; after: PaneText }
+        | { changed: false; before: PaneText }
+      >;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;

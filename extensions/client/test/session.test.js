@@ -883,6 +883,51 @@ test('real Unix focusAndWait arms before CAS and verifies exact focused pane ide
   }
 });
 
+test('real Unix writeAndWait subscribes and reads before bytes, then returns advanced screen', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-write-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-input'; let writes = 0; let reads = 0;
+  const screen = (revision, lines) => ({ slot, generation: 4, revision, columns: 80, rows: 24, lines, cursor_column: 0, cursor_row: 1, truncated: false });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_read_pane') {
+        reads += 1; assert.deepEqual(frame.payload.with, { slot, lines: 20 });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen(reads === 1 ? 7 : 8, reads === 1 ? ['$ '] : ['$ ^C']) } }));
+      } else if (frame.payload.call === 'terminal_write_pane') {
+        writes += 1; assert.deepEqual(frame.payload.with, { slot, generation: 4, revision: 7, contents: writes === 1 ? [0, 3, 255] : [3] });
+        if (writes === 1) socket.write(encode({ channel: 100, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 4, revision: 8, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'write-wait', granted: ['pane-observe', 'terminal-output', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.writeAndWait(slot, 4, 7, [256], { lines: 20 }), /0 through 255/);
+    await assert.rejects(terminal.writeAndWait(slot, 4, 7, [3], { lines: 20, timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid input must not subscribe, read, or write');
+    const result = await terminal.writeAndWait(slot, 4, 7, [0, 3, 255], { lines: 20 });
+    assert.equal(result.changed, true); assert.equal(result.before.revision, 7); assert.equal(result.after.revision, 8);
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_write_pane', 'terminal_read_pane', 'event_unsubscribe']);
+    calls.length = 0; reads = 0;
+    assert.deepEqual(await terminal.writeAndWait(slot, 4, 7, [3], { lines: 20, timeoutMs: 5 }), {
+      changed: false, before: screen(7, ['$ ']),
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_write_pane', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

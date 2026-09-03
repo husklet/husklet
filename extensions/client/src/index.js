@@ -88,6 +88,20 @@ function exactCommand(command) {
   return command;
 }
 
+function exactPaneInput(input) {
+  if (typeof input === 'string') {
+    const bytes = new TextEncoder().encode(input);
+    if (bytes.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+    return bytes;
+  }
+  const values = Array.from(input ?? []);
+  if (values.length > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+  if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+    throw new TypeError('terminal input bytes must be integers from 0 through 255');
+  }
+  return Uint8Array.from(values);
+}
+
 function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
     throw new RangeError('execution wait timeout must be an integer from 1 through 30000 milliseconds');
@@ -354,8 +368,7 @@ export function workspace(session, { signal } = {}) {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
           throw new TypeError('terminal input requires nonnegative safe integer generation and revision');
         }
-        const contents = typeof input === 'string' ? new TextEncoder().encode(input) : Uint8Array.from(input);
-        if (contents.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+        const contents = exactPaneInput(input);
         return done('terminal_write_pane', { slot, generation, revision, contents: [...contents] });
       },
       resizeGrid: (slot, columns, rows) => {
@@ -632,6 +645,45 @@ export function workspace(session, { signal } = {}) {
       }, (error) => finish(undefined, error));
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
+  };
+  api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal input wait requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal input wait requires nonnegative safe integer generation and revision');
+    }
+    const contents = exactPaneInput(input);
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
+      throw new TypeError('terminal input wait lines must be a nonnegative safe integer');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal input wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      const before = await api.terminal.read(slot, lines);
+      if (before.generation !== generation || before.revision !== revision) {
+        throw new Error('terminal screen cursor changed before input authority');
+      }
+      await api.terminal.writeInput(slot, generation, revision, contents);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, before };
+      const after = await api.terminal.read(slot, lines);
+      if (after.generation === generation && after.revision === revision) {
+        throw new Error('pane change did not advance the terminal screen cursor');
+      }
+      return { changed: true, before, after };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
   };
   api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane semantic action requires a nonempty slot');

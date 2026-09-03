@@ -97,6 +97,7 @@ wrong caller.
 - `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `pane-observe` and `terminal-control`.
 - `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `pane-observe` and `terminal-control`.
 - `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `pane-observe` and `terminal-control`.
+- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.
 
 ## Files
 
