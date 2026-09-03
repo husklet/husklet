@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -112,6 +112,15 @@ try {
     cwd: starter, stdio: 'pipe',
   });
   execFileSync('npm', ['test'], { cwd: starter, stdio: 'pipe' });
+  const withoutSocket = { ...process.env };
+  delete withoutSocket.HUSKLET_EXTENSION_SOCKET;
+  const missingSocket = spawnSync('npm', ['start', '--silent'], {
+    cwd: starter, env: withoutSocket, encoding: 'utf8',
+  });
+  assert.equal(missingSocket.status, 1);
+  assert.equal(missingSocket.signal, null);
+  assert.equal(missingSocket.stdout, '');
+  assert.equal(missingSocket.stderr, 'client-starter: startup failed: HUSKLET_EXTENSION_SOCKET is not set; an extension runs inside a workspace\n');
   const dockerfile = fs.readFileSync(path.join(starter, 'Dockerfile'), 'utf8');
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine@sha256:[0-9a-f]{64}$/m);
   assert.match(dockerfile, /COPY --chown=node:node package\.json/);
