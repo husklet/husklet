@@ -14,7 +14,7 @@ use hl_gui::{
     Choice, Column, Element, Event, EventId, Length, Prop, PropValue, Reconciliation, Renderer, Scale, SourceId, Tag,
     Theme, Tone, Tree, Trigger, Variant,
 };
-use hl_gui_gtk::{Rows, Surface};
+use hl_gui_gtk::{Failure, Rows, Surface};
 
 const SOURCE: SourceId = SourceId::new(7);
 
@@ -171,40 +171,53 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
 }
 
 fn rebinding_a_table_retires_its_previous_source() {
-    let first = SourceId::new(41);
-    let second = SourceId::new(42);
-    let table = |source| {
-        Element::new(Tag::DataTable)
-            .key("records")
-            .prop(Prop::Source, PropValue::Source(source))
-            .prop(Prop::Schema, PropValue::Schema(vec![Column::new("id", "ID")]))
-    };
-    let mut session = Session::new();
-    session.render(&table(first));
-    session.surface.resize(first, hl_gui::Version::new(1), 100_000).unwrap();
-
-    session.render(&table(second));
-
-    assert!(
-        session.surface.resize(first, hl_gui::Version::new(1), 100_000).is_err(),
-        "a late old-source mutation must not regain routing authority"
+    let source_tags: Vec<_> = Tag::ALL.iter().copied().filter(|tag| tag.accepts(Prop::Source)).collect();
+    assert_eq!(
+        source_tags,
+        [Tag::DataTable, Tag::KeyValueTable, Tag::TreeTable, Tag::EventStream, Tag::FileBrowser],
+        "every source-backed component is audited"
     );
-    session.surface.resize(second, hl_gui::Version::new(2), 100_000).unwrap();
-    let table = session.tagged(Tag::DataTable).expect("rebound table");
-    let view = table
-        .downcast::<gtk::ScrolledWindow>()
-        .expect("table viewport")
-        .child()
-        .and_downcast::<gtk::ColumnView>()
-        .expect("column view");
-    let rows = view
-        .model()
-        .and_downcast::<gtk::MultiSelection>()
-        .and_then(|selection| selection.model())
-        .and_downcast::<Rows>()
-        .expect("windowed rows");
-    assert_eq!(rows.source(), second, "GTK model follows the new sort/filter source");
-    assert_eq!(u64::from(rows.n_items()), 100_000);
+    for (offset, tag) in source_tags.into_iter().enumerate() {
+        let first = SourceId::new(41 + offset as u64 * 2);
+        let second = SourceId::new(42 + offset as u64 * 2);
+        let table = |source| {
+            Element::new(tag)
+                .key("records")
+                .prop(Prop::Source, PropValue::Source(source))
+                .prop(Prop::Schema, PropValue::Schema(vec![Column::new("id", "ID")]))
+        };
+        let mut session = Session::new();
+        session.render(&table(first));
+        session.surface.resize(first, hl_gui::Version::new(1), 100_000).unwrap();
+        session.render(&table(second));
+        assert!(matches!(
+            session.surface.resize(first, hl_gui::Version::new(1), 100_000),
+            Err(Failure::Unbound(source)) if source == first
+        ));
+        session.surface.resize(second, hl_gui::Version::new(2), 100_000).unwrap();
+        let widget = session.tagged(tag).expect("rebound source component");
+        let view = widget
+            .downcast::<gtk::ScrolledWindow>()
+            .expect("table viewport")
+            .child()
+            .and_downcast::<gtk::ColumnView>()
+            .expect("column view");
+        let rows = view
+            .model()
+            .and_downcast::<gtk::MultiSelection>()
+            .and_then(|selection| selection.model())
+            .and_downcast::<Rows>()
+            .expect("windowed rows");
+        assert_eq!(rows.source(), second, "{tag:?} model follows the new sort/filter source");
+        session.render(&Element::column().key("empty"));
+        assert!(
+            matches!(
+                session.surface.resize(second, hl_gui::Version::new(3), 100_000),
+                Err(Failure::Unbound(source)) if source == second
+            ),
+            "removed {tag:?} retires its source route"
+        );
+    }
 }
 
 fn a_described_panel_materializes_as_widgets() {

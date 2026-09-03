@@ -131,6 +131,7 @@ impl Surface {
 
     fn discard(&mut self, id: NodeId) -> Result<(), Failure> {
         let widget = self.registry.remove(id).ok_or(Failure::Unmapped(id))?;
+        self.sources.retain(|_, node| *node != id);
         self.bindings.forget(id);
         self.reports.withdraw(id, None);
         build::detach(&widget);
