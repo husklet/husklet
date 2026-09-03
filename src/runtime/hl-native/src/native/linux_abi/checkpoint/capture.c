@@ -743,7 +743,8 @@ static void ckpt_poll(struct cpu *c) {
     }
     atomic_store_explicit(&g_ckpt_seen_gen, g, memory_order_release);
     if (ckpt_process_coordinates()) {
-        ckpt_coordinate_and_exit(c); // never returns (dumps the tree + _exit)
+        ckpt_coordinate_and_exit(c); // returns only after a non-destructive refusal is fully settled
+        return;
     }
     char pd[64];
     ckpt_self_group(pd, sizeof pd);

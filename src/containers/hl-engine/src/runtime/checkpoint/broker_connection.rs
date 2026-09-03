@@ -18,7 +18,7 @@ pub(super) fn read_authenticated(
 
 pub(super) struct Connection<'a> {
     pub(super) server: &'a Server,
-    pub(super) descriptor: i32,
+    pub(super) token: u64,
     pub(super) id: u64,
     pub(super) peer: Option<hl_native::AuthenticatedCheckpointPeer>,
     /// The capture generation this connection proved membership of, if any.
@@ -29,11 +29,12 @@ pub(super) struct Connection<'a> {
 impl Drop for Connection<'_> {
     fn drop(&mut self) {
         if let Ok(mut channels) = self.server.channels.lock() {
-            channels.remove(&self.descriptor);
+            channels.remove(&self.token);
         }
         if let Ok(mut connections) = self.server.recovery_connections.lock() {
             connections.remove(&self.id);
         }
+        self.server.connection_dropped(self.token);
     }
 }
 
@@ -55,8 +56,7 @@ impl Drop for AcceptedChannel {
         let previous = self.server.connections.fetch_sub(1, Ordering::AcqRel);
         debug_assert_ne!(previous, 0, "checkpoint connection count underflow");
         if previous == 1 && self.server.running.load(Ordering::Acquire) {
-            self.server
-                .fail("every native checkpoint channel closed before capture completion".into());
+            self.server.last_connection_closed();
         }
     }
 }

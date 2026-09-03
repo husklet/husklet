@@ -106,10 +106,10 @@ impl Server {
         accepted: AcceptedChannel,
     ) {
         let channel = Arc::new(channel);
-        let descriptor = channel.as_raw_fd();
+        let token = self.next_connection.fetch_add(1, Ordering::AcqRel);
         let mut connection = Connection {
             server: self,
-            descriptor,
+            token,
             id,
             peer,
             registered: None,
@@ -118,7 +118,7 @@ impl Server {
         let Ok(mut channels) = self.channels.lock() else {
             return;
         };
-        channels.insert(descriptor, Arc::clone(&channel));
+        channels.insert(token, Arc::clone(&channel));
         drop(channels);
         let mut channel = channel.as_ref();
         if let Ok(capture) = self.capture_lock()
@@ -171,7 +171,7 @@ impl Server {
                 // stopped with its whole thread registry held, and a park that
                 // counted as a capture mutation would hold `publish_manifest`
                 // behind the very processes it is waiting to release.
-                let reply = Reply::value(self.release_disposition(request.generation, descriptor));
+                let reply = Reply::value(self.release_disposition(request.generation, token));
                 if reply.write(&mut channel).is_err() {
                     return;
                 }
@@ -197,14 +197,19 @@ impl Server {
                 continue;
             }
             if request.op == REFUSAL_LATCHED {
-                let reply = Reply::value(u64::from(self.refusal_latched(u64::from(request.generation))));
+                let latched = self.refusal_latched(
+                    u64::from(request.generation),
+                    token,
+                    (!name.is_empty()).then_some(name.as_str()),
+                );
+                let reply = Reply::value(u64::from(latched));
                 if reply.write(&mut channel).is_err() {
                     return;
                 }
                 continue;
             }
             if request.op == SETTLE_REFUSAL {
-                let settled = self.settle_refusal(u64::from(request.generation), descriptor);
+                let settled = self.settle_refusal(u64::from(request.generation), token);
                 let reply = settled.map_or_else(|()| Reply::error(), |()| Reply::ok());
                 let _ = reply.write(&mut channel);
                 if settled.is_ok() {
@@ -350,22 +355,60 @@ impl Server {
             CapturePhase::Refusing { id: active, .. } if active == id => return Ok(()),
             _ => return Err(()),
         };
-        capture.phase = CapturePhase::Refusing { id, deadline };
+        capture.phase = CapturePhase::Refusing {
+            id,
+            deadline,
+            coordinator: None,
+        };
         self.refusal_resumed.lock().map_err(|_| ())?.clear();
         self.record_refusal(reason);
         self.capture_changed.notify_all();
         Ok(())
     }
 
-    pub(super) fn refusal_latched(&self, id: u64) -> bool {
-        self.capture_lock()
-            .is_ok_and(|capture| matches!(capture.phase, CapturePhase::Refusing { id: active, .. } if active == id))
+    pub(super) fn refusal_latched(&self, id: u64, connection: u64, reason: Option<&str>) -> bool {
+        let Ok(mut capture) = self.capture_lock() else {
+            return false;
+        };
+        match &mut capture.phase {
+            CapturePhase::Active { id: active, deadline } if *active == id && reason.is_some() => {
+                let deadline = *deadline;
+                capture.phase = CapturePhase::Refusing {
+                    id,
+                    deadline,
+                    coordinator: Some(connection),
+                };
+                drop(capture);
+                if let Ok(mut resumed) = self.refusal_resumed.lock() {
+                    resumed.clear();
+                }
+                self.record_refusal(reason.unwrap_or("the engine refused the capture").to_owned());
+                self.capture_changed.notify_all();
+                true
+            }
+            CapturePhase::Refusing {
+                id: active,
+                coordinator,
+                ..
+            } if *active == id => match coordinator {
+                Some(owner) => *owner == connection,
+                slot @ None => {
+                    *slot = Some(connection);
+                    true
+                }
+            },
+            _ => false,
+        }
     }
 
-    pub(super) fn settle_refusal(&self, id: u64, coordinator: i32) -> Result<(), ()> {
+    pub(super) fn settle_refusal(&self, id: u64, coordinator: u64) -> Result<(), ()> {
         let mut capture = self.capture_lock().map_err(|_| ())?;
         let deadline = match capture.phase {
-            CapturePhase::Refusing { id: active, deadline } if active == id => deadline,
+            CapturePhase::Refusing {
+                id: active,
+                deadline,
+                coordinator: Some(owner),
+            } if active == id && owner == coordinator => deadline,
             _ => return Err(()),
         };
         if std::time::Instant::now() >= deadline {
@@ -390,6 +433,30 @@ impl Server {
         Ok(())
     }
 
+    pub(super) fn connection_dropped(&self, connection: u64) {
+        if let Ok(mut resumed) = self.refusal_resumed.lock() {
+            resumed.remove(&connection);
+        }
+        let coordinator_lost = self.capture_lock().is_ok_and(|capture| {
+            matches!(capture.phase, CapturePhase::Refusing { coordinator: Some(owner), .. } if owner == connection)
+        });
+        if coordinator_lost {
+            self.fail_as(
+                "checkpoint refusal coordinator disconnected before settlement".into(),
+                CaptureFailure::Failed,
+            );
+        }
+    }
+
+    pub(super) fn last_connection_closed(&self) {
+        let awaiting_coordinator = self
+            .capture_lock()
+            .is_ok_and(|capture| matches!(capture.phase, CapturePhase::Refusing { coordinator: None, .. }));
+        if !awaiting_coordinator {
+            self.fail("every native checkpoint channel closed before capture completion".into());
+        }
+    }
+
     fn finish_refusal_terminal(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Refusing { id: active, .. } if active == id) {
@@ -412,7 +479,7 @@ impl Server {
     /// reads the transport failure as `RESUME`, so no crash can leave the tree
     /// frozen. `HOLD` is returned only while this member's own capture is still
     /// running and still inside its deadline.
-    pub(super) fn release_disposition(&self, generation: u32, descriptor: i32) -> u64 {
+    pub(super) fn release_disposition(&self, generation: u32, connection: u64) -> u64 {
         let Ok(capture) = self.capture_lock() else {
             return RELEASE_RESUME;
         };
@@ -426,12 +493,12 @@ impl Server {
                 }
             }
             CapturePhase::Publishing { id } if id == generation => RELEASE_HOLD,
-            CapturePhase::Refusing { id, deadline } if id == generation => {
+            CapturePhase::Refusing { id, deadline, .. } if id == generation => {
                 if std::time::Instant::now() >= deadline {
                     RELEASE_RESUME
                 } else {
                     if let Ok(mut resumed) = self.refusal_resumed.lock() {
-                        resumed.insert(descriptor);
+                        resumed.insert(connection);
                     }
                     RELEASE_RESUME
                 }

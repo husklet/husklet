@@ -1,6 +1,35 @@
 /* Coordinator-only publication and process-tree rendezvous. Included by image.c so it shares the
  * checkpoint translation unit while keeping the capture state machine behind a named boundary. */
 
+static int ckpt_settle_resumable_refusal(const struct ckpt_phase_ledger *phases, enum ckpt_refusal_reason code,
+                                         const char *reason) {
+    fprintf(stderr, "[ckpt] refuse: %s\n", reason);
+    ckpt_stream_capture_refused(reason);
+    if (g_ckpt_capture_destructive) {
+        ckpt_coordinator_publish_refusal_result(code);
+        return -1;
+    }
+    int latched = 0;
+    for (int pass = 0; pass < CKPT_RENDEZVOUS_STALL_PASSES; pass++) {
+        latched = ckpt_stream_refusal_latched(reason);
+        if (latched == 1) break;
+        usleep(10000);
+    }
+    if (latched != 1) {
+        ckpt_coordinator_publish_refusal_result(code);
+        return -1;
+    }
+    for (int pass = 0; pass < CKPT_RENDEZVOUS_STALL_PASSES; pass++) {
+        if (ckpt_stream_settle_refusal() == 0) {
+            ckpt_phase_terminal(phases, "refused_resumed", 0);
+            return 0;
+        }
+        usleep(10000);
+    }
+    ckpt_coordinator_publish_refusal_result(code);
+    return -1;
+}
+
 static void ckpt_publish_manifest(const struct ckpt_phase_ledger *phases, struct ckpt_sink *sink, int nfoll,
                                   int nexempt) {
     // Publish the MANIFEST last: its presence == a complete, restorable checkpoint.
@@ -313,7 +342,12 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                  "%d ms, so no enumeration ever found the tree quiescent and the set of members cannot be "
                  "closed; %d peer(s) were enumerated and %d exempted",
                  CKPT_RENDEZVOUS_CHURN_PASSES * 10, nfoll, nexempt);
-        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
+        if (ckpt_settle_resumable_refusal(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason) == 0) {
+            free(foll);
+            free(completed);
+            return;
+        }
+        ckpt_phase_exit(&phases, 70);
     }
     if (ndone != nfoll) {
         // Name every participant still outstanding at the rendezvous deadline: "the group never committed"
@@ -345,7 +379,12 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 }
             }
         if (!named) snprintf(reason, sizeof reason, "a participant never committed its group");
-        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
+        if (ckpt_settle_resumable_refusal(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason) == 0) {
+            free(foll);
+            free(completed);
+            return;
+        }
+        ckpt_phase_exit(&phases, 70);
     }
     ckpt_phase_finish(&phases, "peer_quiescence", phase, 0);
 

@@ -2301,19 +2301,23 @@ fn refusal_settlement_requires_every_live_peer_to_resume_or_end() {
         .begin_capture(17, std::time::Instant::now() + Duration::from_secs(30))
         .expect("capture admission");
     let (peer, _remote) = UnixStream::pair().expect("peer channel");
-    let descriptor = peer.as_raw_fd();
-    server.channels.lock().unwrap().insert(descriptor, Arc::new(peer));
+    let peer_token = 7;
+    let coordinator_token = 8;
+    server.channels.lock().unwrap().insert(peer_token, Arc::new(peer));
     server
         .decide_refusal(17, "unsupported shared pipe".into())
         .expect("refusal decision");
 
     assert_eq!(
-        server.settle_refusal(17, -1),
+        server.settle_refusal(17, coordinator_token),
         Err(()),
         "an unreleased live peer was ignored"
     );
-    assert_eq!(server.release_disposition(17, descriptor), protocol::RELEASE_RESUME);
-    server.settle_refusal(17, -1).expect("released refusal settlement");
+    assert!(server.refusal_latched(17, coordinator_token, None));
+    assert_eq!(server.release_disposition(17, peer_token), protocol::RELEASE_RESUME);
+    server
+        .settle_refusal(17, coordinator_token)
+        .expect("released refusal settlement");
     assert_eq!(
         server
             .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(2))
@@ -2350,9 +2354,10 @@ fn last_channel_loss_while_refusing_is_terminal() {
     server
         .decide_refusal(29, "decision awaiting settlement".into())
         .expect("refusal decision");
+    assert!(server.refusal_latched(29, 1, None));
     let accepted = super::broker::AcceptedChannel::new(Arc::clone(&server));
     assert_eq!(
-        server.settle_refusal(29, -1),
+        server.settle_refusal(29, 1),
         Err(()),
         "an accepted channel not yet scheduled was treated as terminal"
     );
@@ -2365,6 +2370,64 @@ fn last_channel_loss_while_refusing_is_terminal() {
         Some(Err(CaptureFailure::Failed)),
         "transport loss was reported as a clean refusal"
     );
+}
+
+#[test]
+fn refusal_coordinator_loss_with_a_live_member_is_terminal() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let capture = server
+        .begin_capture(30, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+    let (member, _remote) = UnixStream::pair().expect("member channel");
+    server.channels.lock().unwrap().insert(2, Arc::new(member));
+    server.decide_refusal(30, "refused".into()).expect("decision");
+    assert!(server.refusal_latched(30, 1, None));
+
+    server.connection_dropped(1);
+
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(2))
+            .expect("capture wait"),
+        Some(Err(CaptureFailure::Failed))
+    );
+}
+
+#[test]
+fn a_reused_descriptor_cannot_inherit_refusal_resume_or_coordinator_authority() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let _capture = server
+        .begin_capture(31, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+    let (old_member, _old_remote) = UnixStream::pair().expect("old member channel");
+    server.channels.lock().unwrap().insert(7, Arc::new(old_member));
+    server.decide_refusal(31, "refused".into()).expect("decision");
+    assert!(server.refusal_latched(31, 6, None));
+    assert_eq!(server.release_disposition(31, 7), protocol::RELEASE_RESUME);
+    server.connection_dropped(7);
+    let (new_member, _new_remote) = UnixStream::pair().expect("replacement member channel");
+    server.channels.lock().unwrap().insert(8, Arc::new(new_member));
+
+    assert_eq!(server.settle_refusal(31, 6), Err(()));
+    assert!(
+        !server.refusal_latched(31, 9, None),
+        "another connection inherited coordinator authority"
+    );
+}
+
+#[test]
+fn only_the_connection_that_claimed_a_refusal_may_settle_it() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let _capture = server
+        .begin_capture(32, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+    server.decide_refusal(32, "refused".into()).expect("decision");
+    assert!(server.refusal_latched(32, 41, None));
+    assert_eq!(server.settle_refusal(32, 42), Err(()));
+    server.settle_refusal(32, 41).expect("coordinator settlement");
 }
 
 fn register_ready_payload(executors: &[u32]) -> Vec<u8> {
@@ -3198,10 +3261,10 @@ fn a_parked_member_is_released_to_exit_only_once_the_manifest_has_committed() {
         .begin_capture(9, std::time::Instant::now() + Duration::from_secs(60))
         .expect("capture generation");
     // Running capture: HOLD, and only for this member's own generation.
-    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_HOLD);
-    assert_eq!(server.release_disposition(8, -1), protocol::RELEASE_RESUME);
+    assert_eq!(server.release_disposition(9, 99), protocol::RELEASE_HOLD);
+    assert_eq!(server.release_disposition(8, 99), protocol::RELEASE_RESUME);
     server.publish_manifest(&[0_u8; 8]).expect("publish the manifest");
-    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_EXIT);
+    assert_eq!(server.release_disposition(9, 99), protocol::RELEASE_EXIT);
     assert!(server.committed(), "EXIT was answered without a committed image");
 
     // A capture that is abandoned releases every member to RESUME instead, which is the whole
@@ -3211,9 +3274,9 @@ fn a_parked_member_is_released_to_exit_only_once_the_manifest_has_committed() {
     let id = server
         .begin_capture(9, std::time::Instant::now() + Duration::from_secs(60))
         .expect("capture generation");
-    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_HOLD);
+    assert_eq!(server.release_disposition(9, 99), protocol::RELEASE_HOLD);
     server.abort_capture(id).expect("abort the capture");
-    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_RESUME);
+    assert_eq!(server.release_disposition(9, 99), protocol::RELEASE_RESUME);
     assert!(!server.committed());
 }
 

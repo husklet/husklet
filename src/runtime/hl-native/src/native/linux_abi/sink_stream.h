@@ -54,6 +54,21 @@ static void ckpt_stream_capture_refused(const char *reason) {
     (void)hl_ckpt_channel_notify(&request, reason);
 }
 
+static int ckpt_stream_refusal_latched(const char *reason) {
+    hl_ckpt_reply reply;
+    if (ckpt_stream_call(HL_CKPT_OP_REFUSAL_LATCHED, reason, 0, 0, 0, NULL, 0, &reply, NULL, 0) !=
+        HL_CKPT_STATUS_OK)
+        return -1;
+    return reply.value == 1 ? 1 : 0;
+}
+
+static int ckpt_stream_settle_refusal(void) {
+    return ckpt_stream_call(HL_CKPT_OP_SETTLE_REFUSAL, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
+                   HL_CKPT_STATUS_OK
+               ? 0
+               : -1;
+}
+
 // Ask the broker whether `host_pid` ever proved exact membership (REGISTER_READY) of the capture
 // generation this process is running. Returns 1 registered, 0 never registered, -1 unknown.
 //

@@ -11,7 +11,7 @@ use std::{
     os::unix::net::UnixStream,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -94,6 +94,7 @@ enum CapturePhase {
     Refusing {
         id: u64,
         deadline: std::time::Instant,
+        coordinator: Option<u64>,
     },
     Publishing {
         id: u64,
@@ -150,7 +151,7 @@ pub(crate) struct Server {
     transaction: Mutex<Option<NonZeroU64>>,
     capture: Mutex<CaptureState>,
     capture_changed: Condvar,
-    channels: Mutex<HashMap<i32, Arc<UnixStream>>>,
+    channels: Mutex<HashMap<u64, Arc<UnixStream>>>,
     recovery_connections: Mutex<HashMap<u64, u64>>,
     /// Members of the restored tree that have announced themselves, keyed on the guest pid the image
     /// names each of them by. Outlives the recovery scope: recovery ends exactly when the tree starts
@@ -168,7 +169,7 @@ pub(crate) struct Server {
     /// sends the reason before it exits, and this is where it is held for the report.
     refusal: Mutex<Option<String>>,
     /// Channels which observed `RELEASE_RESUME` for the refusing generation.
-    refusal_resumed: Mutex<HashSet<i32>>,
+    refusal_resumed: Mutex<HashSet<u64>>,
     /// First concrete cause attached to a failed capture generation.
     ///
     /// Generation filtering avoids a success-path clear and first-wins keeps a
@@ -177,6 +178,7 @@ pub(crate) struct Server {
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
+    next_connection: AtomicU64,
     #[cfg(test)]
     dispatches: AtomicUsize,
     #[cfg(test)]
@@ -240,6 +242,7 @@ impl Server {
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
+            next_connection: AtomicU64::new(1),
             #[cfg(test)]
             dispatches: AtomicUsize::new(0),
             #[cfg(test)]
@@ -593,7 +596,9 @@ impl Server {
                         }
                     };
                 }
-                CapturePhase::Refusing { id: active, deadline } if active == id => {
+                CapturePhase::Refusing {
+                    id: active, deadline, ..
+                } if active == id => {
                     let now = std::time::Instant::now();
                     if now >= deadline {
                         capture.phase = CapturePhase::Finished {

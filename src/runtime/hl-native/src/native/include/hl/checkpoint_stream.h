@@ -126,7 +126,12 @@ typedef enum hl_ckpt_stream_op {
        contains and name one it does not. After the seal REGISTER_READY is refused, so no fork and no exit
        can straddle the count. Any status other than OK means the count is unknown, and an unknown count
        refuses the capture -- it is never read as a number. */
-    HL_CKPT_OP_SEAL_MEMBERSHIP = 27
+    HL_CKPT_OP_SEAL_MEMBERSHIP = 27,
+    /* Additive control operations: no frame layout or existing operation changed,
+       so protocol ABI 2 remains wire-compatible. An older broker rejects these
+       operations and the engine fails closed instead of resuming. */
+    HL_CKPT_OP_REFUSAL_LATCHED = 28,
+    HL_CKPT_OP_SETTLE_REFUSAL = 29
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)
