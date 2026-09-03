@@ -412,6 +412,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::DisassemblyView
         | Tag::TimelineView
         | Tag::TestReportView
+        | Tag::CoverageView
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",

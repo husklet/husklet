@@ -32,7 +32,10 @@ mod size;
 mod style;
 
 pub use builder::Surface;
-pub use component::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase, TestStatus, TimelineEvent};
+pub use component::{
+    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase,
+    TestStatus, TimelineEvent,
+};
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
     Version,
@@ -74,3 +77,5 @@ pub const TIMELINE_EVENT_LIMIT: usize = 256;
 
 pub const TEST_REPORT_CASE_LIMIT: usize = 256;
 pub const TEST_REPORT_FAILURE_CHARACTER_LIMIT: usize = 512;
+pub const COVERAGE_VIEW_LINE_LIMIT: usize = 512;
+pub const COVERAGE_VIEW_SOURCE_CHARACTER_LIMIT: usize = 512;

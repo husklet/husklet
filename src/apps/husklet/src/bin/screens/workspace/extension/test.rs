@@ -140,12 +140,34 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         disassembly_projects_exact_instructions_into_semantics();
         timeline_projects_exact_events_into_semantics();
         test_report_projects_exact_cases_into_semantics();
+        coverage_projects_exact_bounded_source_into_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn coverage_projects_exact_bounded_source_into_semantics() {
+    let mut fixture = Fixture::new();
+    let lines = [
+        hl_gui::CoverageLine::new(1, 3, "fn main() {").expect("line"),
+        hl_gui::CoverageLine::new(2, 0, "    unreachable();").expect("line"),
+    ];
+    fixture.describe(&Element::coverage_view(hl_gui::CoverageSource::Bounded {
+        prefix: &lines,
+        total_lines: 4,
+    }));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").expect("semantic snapshot");
+    let coverage = &tree.root.children[0];
+    assert_eq!(coverage.role, "CoverageView");
+    assert_eq!(
+        coverage.value.as_deref(),
+        Some("1\t3\tfn main() {\n2\t0\t    unreachable();\n…\t\t… showing 2 of 4 lines …")
+    );
+    assert!(coverage.actions.is_empty());
 }
 
 fn test_report_projects_exact_cases_into_semantics() {

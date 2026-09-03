@@ -340,6 +340,7 @@ catalogue! {
     DisassemblyView: leaf, props[Value, Tone], triggers[],
     TimelineView: leaf, props[Value, Tone], triggers[],
     TestReportView: leaf, props[Value, Tone], triggers[],
+    CoverageView: leaf, props[Value, Tone], triggers[],
     DiffViewer: children, props[Gap, Orientation], triggers[],
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
     StackTrace: children, props[Gap], triggers[],

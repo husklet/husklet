@@ -168,6 +168,7 @@ export const {
   DisassemblyView,
   TimelineView,
   TestReportView,
+  CoverageView,
   DiffViewer,
   DiffLine,
   StackTrace,

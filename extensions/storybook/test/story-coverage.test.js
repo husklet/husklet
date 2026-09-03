@@ -24,6 +24,7 @@ import { MemoryInspectionStory, boundedRegions, REGION_LIMIT } from '../src/memo
 import { DisassemblyInspectionStory, boundedInstructions, INSTRUCTION_LIMIT } from '../src/disassembly-inspection.js';
 import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/timeline-inspection.js';
 import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src/test-report.js';
+import { CoverageInspectionStory, boundedCoverage, COVERAGE_LIMIT, SOURCE_LIMIT } from '../src/coverage-inspection.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -74,6 +75,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['disassembly inspection', h(DisassemblyInspectionStory)],
     ['timeline view', h(TimelineInspectionStory)],
     ['test report', h(TestReportStory)],
+    ['coverage inspection', h(CoverageInspectionStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -83,6 +85,11 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('coverage inspection bounds rows and source independently with visible truncation', () => {
+  const lines = Array.from({ length: COVERAGE_LIMIT + 4 }, (_, index) => ({ line: index + 1, hits: index % 2, source: 'x'.repeat(SOURCE_LIMIT + 9) })); const value = boundedCoverage(lines, 900);
+  assert.equal(value.split('\n').length, COVERAGE_LIMIT + 1); assert.equal(value.split('\n')[0].split('\t')[2].length, SOURCE_LIMIT); assert(value.endsWith(`… showing ${COVERAGE_LIMIT} of 900 lines …`));
 });
 
 test('test report bounds cases and failure detail independently', () => {

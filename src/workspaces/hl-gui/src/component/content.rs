@@ -178,6 +178,63 @@ impl TestCase {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoverageLine {
+    line: u32,
+    hits: u64,
+    source: String,
+}
+impl CoverageLine {
+    #[must_use]
+    pub fn new(line: u32, hits: u64, source: impl Into<String>) -> Option<Self> {
+        let source = source
+            .into()
+            .replace(['\t', '\n', '\r'], " ")
+            .chars()
+            .take(crate::COVERAGE_VIEW_SOURCE_CHARACTER_LIMIT)
+            .collect();
+        (line > 0).then_some(Self { line, hits, source })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CoverageSource<'a> {
+    Exact(&'a [CoverageLine]),
+    Bounded {
+        prefix: &'a [CoverageLine],
+        total_lines: usize,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoverageView(String);
+impl CoverageView {
+    #[must_use]
+    pub fn new(source: CoverageSource<'_>) -> Self {
+        let (lines, total) = match source {
+            CoverageSource::Exact(lines) => (lines, lines.len()),
+            CoverageSource::Bounded { prefix, total_lines } => (prefix, total_lines.max(prefix.len())),
+        };
+        let shown = lines.len().min(crate::COVERAGE_VIEW_LINE_LIMIT);
+        let mut value = lines[..shown]
+            .iter()
+            .map(|line| format!("{}\t{}\t{}", line.line, line.hits, line.source))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if total > shown {
+            if !value.is_empty() {
+                value.push('\n');
+            }
+            value.push_str(&format!("…\t\t… showing {shown} of {total} lines …"));
+        }
+        Self(value)
+    }
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl HexView {
     /// Formats 16-byte rows without ever inspecting more than the public limit.
     #[must_use]
@@ -515,6 +572,10 @@ impl Element {
             .join("\n");
         Self::new(Tag::TestReportView).value(value)
     }
+    #[must_use]
+    pub fn coverage_view(source: CoverageSource<'_>) -> Self {
+        Self::new(Tag::CoverageView).value(CoverageView::new(source).0)
+    }
 
     /// A playable file.
     #[must_use]
@@ -525,7 +586,10 @@ impl Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase, TestStatus, TimelineEvent};
+    use super::{
+        CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion,
+        TestCase, TestStatus, TimelineEvent,
+    };
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
     #[test]
@@ -734,5 +798,31 @@ mod tests {
             "failure detail is independently bounded"
         );
         assert!(value.starts_with("api\tcase 0\tfailed\t0\t"));
+    }
+
+    #[test]
+    fn coverage_has_fixed_row_text_bounds_and_visible_truncation() {
+        assert!(CoverageLine::new(0, 1, "invalid").is_none());
+        let lines = (1..=600)
+            .filter_map(|line| CoverageLine::new(line, u64::from(line % 2), format!("source\t{}", "x".repeat(600))))
+            .collect::<Vec<_>>();
+        let view = CoverageView::new(CoverageSource::Bounded {
+            prefix: &lines,
+            total_lines: 900,
+        });
+        assert_eq!(view.as_str().lines().count(), 513, "512 rows plus truncation marker");
+        assert!(view.as_str().ends_with("… showing 512 of 900 lines …"));
+        assert_eq!(
+            view.as_str()
+                .lines()
+                .next()
+                .unwrap()
+                .split('\t')
+                .nth(2)
+                .unwrap()
+                .chars()
+                .count(),
+            512
+        );
     }
 }

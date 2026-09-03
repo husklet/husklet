@@ -21,6 +21,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::DisassemblyView => memory_map().upcast(),
         Tag::TimelineView => memory_map().upcast(),
         Tag::TestReportView => memory_map().upcast(),
+        Tag::CoverageView => memory_map().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -461,6 +462,51 @@ pub(crate) fn test_report(widget: &gtk::Widget, value: &str) -> bool {
                 _ => 36,
             });
             label.set_hexpand(index == 4);
+            row.append(&label);
+        }
+        rows.append(&row);
+    }
+    true
+}
+
+pub(crate) fn coverage(widget: &gtk::Widget, value: &str) -> bool {
+    widget.set_tooltip_text(Some(value));
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return false;
+    };
+    let mut held = window.child();
+    let rows = loop {
+        let Some(child) = held else { return false };
+        if let Ok(rows) = child.clone().downcast::<gtk::Box>() {
+            break rows;
+        }
+        held = child.first_child();
+    };
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    for (index, line) in value.lines().take(hl_gui::COVERAGE_VIEW_LINE_LIMIT + 1).enumerate() {
+        if index == hl_gui::COVERAGE_VIEW_LINE_LIMIT && !line.starts_with("…\t\t… showing ") { break; }
+        let columns = line.splitn(3, '\t').collect::<Vec<_>>();
+        if columns.len() != 3 {
+            continue;
+        }
+        let row = super::axis::row(8);
+        if columns[1] == "0" {
+            row.add_css_class("coverage-missed");
+        }
+        for (index, text) in columns.into_iter().enumerate() {
+            let label = super::axis::label();
+            label.set_text(if index == 1 && text == "0" { "—" } else { text });
+            label.set_selectable(true);
+            label.set_xalign(0.0);
+            label.add_css_class("monospace");
+            label.set_width_chars(match index {
+                0 => 8,
+                1 => 8,
+                _ => 72,
+            });
+            label.set_hexpand(index == 2);
             row.append(&label);
         }
         rows.append(&row);
