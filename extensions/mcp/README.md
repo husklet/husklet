@@ -37,7 +37,10 @@ deterministic XML-like text carrying occupant generations, stable revisions,
 node IDs, roles, state, and actions. Semantic actions require both the observed
 generation and revision, so replacement occupants fail closed; other tools use
 JSON. Container execution state is available as a
-read-only inspection tool under the host's `ContainerRead` grant. Container exec
+read-only inspection tool under the host's `ContainerRead` grant. Inspection,
+output replay, and direct waiting accept only the complete immutable execution
+ID returned by the catalogue; names and prefixes are refused before the socket.
+Container exec
 accepts only a complete immutable container ID and bounded argv vector under
 `ContainerControl`. Execution removal likewise requires the complete immutable
 execution ID returned by its catalogue or inspection. The

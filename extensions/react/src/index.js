@@ -178,13 +178,13 @@ export function workspace(session) {
       logs: async (id, { stdout = true, stderr = true } = {}) => expect(
         await session.call('container_logs', { id, stdout, stderr }), 'logs',
       ),
-      execution: async (id) => expect(await session.call('execution_inspect', { id }), 'execution'),
+      execution: async (id) => expect(await session.call('execution_inspect', { id: immutableIdentity(id, [32], 'execution') }), 'execution'),
       executions: async () => expect(await session.call('execution_list'), 'executions'),
       executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(
-        await session.call('execution_logs', { id, stdout, stderr }), 'logs',
+        await session.call('execution_logs', { id: immutableIdentity(id, [32], 'execution'), stdout, stderr }), 'logs',
       ),
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
-        await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
+        await session.call('execution_wait', { id: immutableIdentity(id, [32], 'execution'), timeout_ms: timeoutMs }), 'execution',
       ),
       signalExecution: (id, signal) => done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
       removeExecution: (id) => done('execution_remove', {

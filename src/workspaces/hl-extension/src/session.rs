@@ -272,9 +272,13 @@ impl Session {
             Request::ContainerInspect { id } => Ok(Reply::Container(port.inspect(id)?)),
             Request::ContainerProcesses { id } => Ok(Reply::Processes(port.processes(id)?)),
             Request::ContainerLogs { id, stdout, stderr } => Ok(Reply::Logs(port.logs(id, *stdout, *stderr)?)),
-            Request::ExecutionInspect { id } => Ok(Reply::Execution(port.execution(id)?)),
+            Request::ExecutionInspect { id } => {
+                immutable_identity(id, &[32], "execution")?;
+                Ok(Reply::Execution(port.execution(id)?))
+            }
             Request::ExecutionList => Ok(Reply::Executions(port.executions()?)),
             Request::ExecutionLogs { id, stdout, stderr } => {
+                immutable_identity(id, &[32], "execution")?;
                 if !stdout && !stderr {
                     return Err(Failure::Conflict {
                         detail: "execution logs require stdout or stderr".into(),
@@ -283,6 +287,7 @@ impl Session {
                 Ok(Reply::Logs(port.execution_logs(id, *stdout, *stderr)?))
             }
             Request::ExecutionWait { id, timeout_ms } => {
+                immutable_identity(id, &[32], "execution")?;
                 if !(1..=30_000).contains(timeout_ms) {
                     return Err(Failure::Conflict {
                         detail: "execution wait timeout_ms must be between 1 and 30000".into(),

@@ -928,11 +928,11 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ContainerRead,
         ),
-        (Request::ExecutionInspect { id: "e1".into() }, Capability::ContainerRead),
+        (Request::ExecutionInspect { id: "e".repeat(32) }, Capability::ContainerRead),
         (Request::ExecutionList, Capability::ContainerRead),
         (
             Request::ExecutionLogs {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 stdout: true,
                 stderr: true,
             },
@@ -940,7 +940,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ExecutionWait {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 timeout_ms: 500,
             },
             Capability::ContainerRead,
@@ -1940,14 +1940,14 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
             && !output.stdout_truncated && !output.stderr_truncated));
 
     let execution = session
-        .dispatch(&Request::ExecutionInspect { id: "e1".into() }, &services(&host))
+        .dispatch(&Request::ExecutionInspect { id: "e".repeat(32) }, &services(&host))
         .expect("execution");
-    assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e1" && execution.running));
+    assert!(matches!(execution, Reply::Execution(execution) if execution.id == "e".repeat(32) && execution.running));
 
     let output = session
         .dispatch(
             &Request::ExecutionLogs {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 stdout: true,
                 stderr: true,
             },
@@ -1959,7 +1959,7 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
     let waited = session
         .dispatch(
             &Request::ExecutionWait {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 timeout_ms: 500,
             },
             &services(&host),
@@ -1975,7 +1975,7 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     assert!(session
         .dispatch(
             &Request::ExecutionWait {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 timeout_ms: 30_001
             },
             &services(&host)
@@ -1985,13 +1985,27 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
 }
 
 #[test]
+fn execution_reads_refuse_names_and_prefixes_before_inventory_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    for request in [
+        Request::ExecutionInspect { id: "worker".into() },
+        Request::ExecutionLogs { id: "a".repeat(12), stdout: true, stderr: false },
+        Request::ExecutionWait { id: "7".into(), timeout_ms: 500 },
+    ] {
+        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+    }
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
 fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
     assert!(session
         .dispatch(
             &Request::ExecutionLogs {
-                id: "e1".into(),
+                id: "e".repeat(32),
                 stdout: false,
                 stderr: false
             },

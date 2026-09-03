@@ -360,8 +360,10 @@ test('container execution inspection is a strict bounded read through the typed 
   const execution = tools(api).find(({ name }) => name === 'husklet_container_execution');
   assert(execution);
   assert.equal(execution.inputSchema.safeParse({ id: 'exec-1', extra: true }).success, false);
-  await execution.run({ id: 'exec-1' });
-  assert.deepEqual(calls, [['containers.execution', 'exec-1']]);
+  assert.equal(execution.inputSchema.safeParse({ id: 'exec-1' }).success, false);
+  const immutable = 'e'.repeat(32);
+  await execution.run({ id: immutable });
+  assert.deepEqual(calls, [['containers.execution', immutable]]);
 });
 
 test('process inspection exposes its finite initial-process scope and snapshot PID identity', async () => {
@@ -379,11 +381,12 @@ test('process inspection exposes its finite initial-process scope and snapshot P
 test('execution wait is a strict bounded read and preserves the timeout', async () => {
   const { api, calls } = fake();
   const wait = tools(api).find(({ name }) => name === 'husklet_execution_wait');
+  const execution = 'e'.repeat(32);
   assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 0 }).success, false);
   assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 30_001 }).success, false);
   assert.equal(wait.inputSchema.safeParse({ id: 'e1', timeout_ms: 10, extra: true }).success, false);
-  await wait.run({ id: 'e1', timeout_ms: 1250 });
-  assert.deepEqual(calls, [['containers.waitExecution', 'e1', { timeoutMs: 1250 }]]);
+  await wait.run({ id: execution, timeout_ms: 1250 });
+  assert.deepEqual(calls, [['containers.waitExecution', execution, { timeoutMs: 1250 }]]);
 });
 
 test('execution catalogue and output are finite strict reads', async () => {
@@ -394,12 +397,13 @@ test('execution catalogue and output are finite strict reads', async () => {
   const listed = tools(api);
   const list = listed.find(({ name }) => name === 'husklet_execution_list');
   const logs = listed.find(({ name }) => name === 'husklet_execution_logs');
+  const execution = 'e'.repeat(32);
   assert.equal(logs.inputSchema.safeParse({ id: 'e1', stdout: false, stderr: false }).success, false);
   assert.equal(logs.inputSchema.safeParse({ id: 'e1', extra: true }).success, false);
   await list.run({});
-  const result = await logs.run({ id: 'e1', stdout: true, stderr: false });
+  const result = await logs.run({ id: execution, stdout: true, stderr: false });
   assert.deepEqual(JSON.parse(result.content[0].text), output);
-  assert.deepEqual(calls, [['containers.executions'], ['containers.executionLogs', 'e1', { stdout: true, stderr: false }]]);
+  assert.deepEqual(calls, [['containers.executions'], ['containers.executionLogs', execution, { stdout: true, stderr: false }]]);
 });
 
 test('execution signaling targets an execution with a strict bounded signal', async () => {
@@ -1010,11 +1014,12 @@ test('a real MCP client lists strict tools and calls through the React session c
   const candidate = await client.callTool({ name: 'husklet_extension_acquisition', arguments: { job: 'job-live' } });
   assert.equal(JSON.parse(candidate.content[0].text).candidate.image_digest, 'sha256:def');
   await client.callTool({ name: 'husklet_extension_install', arguments: { job: 'job-live', revision: 3, granted: ['interface'], confirm: true } });
-  const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: 'exec-live' } });
+  const immutableExecution = 'b'.repeat(32);
+  const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: immutableExecution } });
   assert.deepEqual(JSON.parse(execution.content[0].text), {
-    id: 'exec-live', container_id: 'container-1', running: true, exit_code: null,
+    id: immutableExecution, container_id: 'container-1', running: true, exit_code: null,
   });
-  await client.callTool({ name: 'husklet_execution_wait', arguments: { id: 'exec-live', timeout_ms: 250 } });
+  await client.callTool({ name: 'husklet_execution_wait', arguments: { id: immutableExecution, timeout_ms: 250 } });
   await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'b'.repeat(32), signal: 'SIGHUP' } });
   const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
   assert.equal(refusedStop.isError, true);
@@ -1048,8 +1053,8 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_acquisition_start', { reference: 'example:1' }],
     ['extension_acquisition_status', { job: 'job-live' }],
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
-    ['execution_inspect', { id: 'exec-live' }],
-    ['execution_wait', { id: 'exec-live', timeout_ms: 250 }],
+    ['execution_inspect', { id: immutableExecution }],
+    ['execution_wait', { id: immutableExecution, timeout_ms: 250 }],
     ['execution_kill', { id: 'b'.repeat(32), signal: 'SIGHUP' }],
     ['container_stop', { id: 'a'.repeat(64) }],
     ['container_kill', { id: 'a'.repeat(64), signal: 'SIGKILL' }],

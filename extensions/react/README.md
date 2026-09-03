@@ -127,9 +127,9 @@ Container reads include bounded logs, initial-process snapshots, and execution
 inspection. A process snapshot names the complete immutable container ID actually
 sampled; its PIDs remain point-in-time display values and may be reused;
 `start`, `stop`, `pause`, `unpause`, `restart`, `remove`, `kill`, and `exec`
-accept only complete immutable container IDs returned
-by inventory or inspection; `signalExecution` likewise requires an immutable
-execution ID; `removeExecution` requires that same complete immutable identity.
+accept only complete immutable container IDs returned by inventory or inspection.
+Execution inspection, output replay, waiting, signaling, and removal all require
+the complete immutable execution ID returned by the bounded execution catalogue.
 Names, prefixes, and snapshot PIDs remain useful only for bounded
 lookup and display. The explicit control grant covers pause,
 unpause, restart, kill, and detached `exec`. Image inspection and pulls may use

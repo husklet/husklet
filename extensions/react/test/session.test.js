@@ -439,6 +439,9 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const executionId = 'b'.repeat(32);
   assert.throws(() => api.containers.signalExecution('7', 'SIGTERM'), /complete immutable ID/);
   assert.throws(() => api.containers.removeExecution('execution-name'), /complete immutable ID/);
+  await assert.rejects(api.containers.execution('execution-name'), /complete immutable ID/);
+  await assert.rejects(api.containers.executionLogs('abc123'), /complete immutable ID/);
+  await assert.rejects(api.containers.waitExecution('7'), /complete immutable ID/);
   assert.throws(() => api.containers.stop('friendly-name'), /complete immutable ID/);
   assert.throws(() => api.containers.remove('abc123'), /complete immutable ID/);
   assert.throws(() => api.containers.kill('friendly-name', 'SIGTERM'), /complete immutable ID/);
@@ -450,7 +453,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.throws(() => api.containers.rename(containerId, 'x'.repeat(129)), /container name must/);
   const operations = [
     api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
-    api.containers.execution('e1'), api.containers.executions(), api.containers.executionLogs('e1', { stdout: true, stderr: false }), api.containers.waitExecution('e1', { timeoutMs: 250 }), api.containers.start(containerId), api.containers.pause(containerId), api.containers.unpause(containerId),
+    api.containers.execution(executionId), api.containers.executions(), api.containers.executionLogs(executionId, { stdout: true, stderr: false }), api.containers.waitExecution(executionId, { timeoutMs: 250 }), api.containers.start(containerId), api.containers.pause(containerId), api.containers.unpause(containerId),
     api.containers.restart(containerId), api.containers.rename(containerId, 'worker_2.prod'), api.containers.stop(containerId), api.containers.remove(containerId), api.containers.kill(containerId, 'SIGTERM'), api.containers.signalExecution(executionId, 'SIGHUP'), api.containers.removeExecution(executionId),
     api.containers.exec(containerId, { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
     api.subscribe('containers'), api.unsubscribe('containers'),
@@ -460,10 +463,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.deepEqual(calls, [
     { call: 'container_processes', with: { id: 'c1' } },
     { call: 'container_logs', with: { id: 'c1', stdout: true, stderr: false } },
-    { call: 'execution_inspect', with: { id: 'e1' } },
+    { call: 'execution_inspect', with: { id: executionId } },
     { call: 'execution_list' },
-    { call: 'execution_logs', with: { id: 'e1', stdout: true, stderr: false } },
-    { call: 'execution_wait', with: { id: 'e1', timeout_ms: 250 } },
+    { call: 'execution_logs', with: { id: executionId, stdout: true, stderr: false } },
+    { call: 'execution_wait', with: { id: executionId, timeout_ms: 250 } },
     { call: 'container_start', with: { id: containerId } },
     { call: 'container_pause', with: { id: containerId } },
     { call: 'container_unpause', with: { id: containerId } },
