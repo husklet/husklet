@@ -251,6 +251,14 @@ mod unix {
         );
         tree.apply(&rerender, &mut surface)
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
+        if story == "Validated settings form" {
+            assert!(
+                descendants::<gtk::ToggleButton>(&root)
+                    .iter()
+                    .all(|button| button.label().as_deref() != Some("backend")),
+                "the controlled form did not acknowledge removal of the activated tag"
+            );
+        }
         if story == "Navigation and transient UI" {
             assert!(
                 !find::<gtk::Expander>(&root, |_| true).is_expanded(),
@@ -461,7 +469,7 @@ mod unix {
                 find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download")).emit_clicked();
             }
             "Validated settings form" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Save defaults")).emit_clicked();
+                find::<gtk::ToggleButton>(root, |button| button.label().as_deref() == Some("backend")).emit_clicked();
             }
             "Navigation and transient UI" => {
                 find::<gtk::Expander>(root, |_| true).set_expanded(false);
@@ -486,6 +494,21 @@ mod unix {
             "{story} emitted {reports:?} instead of a bounded event"
         );
         let event = reports.into_iter().next().expect("one report");
+        if story == "Validated settings form" {
+            let hl_gui::Event::Toggle { node, id, value } = &event else {
+                panic!("native ToggleButton did not emit its typed Toggle interaction: {event:?}")
+            };
+            assert_eq!(
+                tree.handler(*node, hl_gui::Trigger::Toggle),
+                Some(id),
+                "native ToggleButton must preserve the producer-owned handler identity"
+            );
+            assert_eq!(
+                value,
+                &hl_gui::PropValue::Flag(false),
+                "native ToggleButton must report its released state"
+            );
+        }
         if story == "Navigation and transient UI" {
             let hl_gui::Event::Expand { node, id, value } = &event else {
                 panic!("native Expander did not emit its typed Expand interaction: {event:?}")
