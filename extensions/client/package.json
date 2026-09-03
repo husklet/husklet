@@ -9,7 +9,7 @@
   "types": "./src/index.d.ts",
   "exports": { ".": { "types": "./src/index.d.ts", "import": "./src/index.js", "default": "./src/index.js" }, "./protocol": { "types": "./src/generated-protocol.d.ts", "import": "./src/generated-protocol.js" }, "./wire": "./src/wire.js", "./package.json": "./package.json" },
   "files": ["src", "README.md", "LICENSE"],
-  "scripts": { "test": "node tools/protocol-spec.js && node --test test/*.test.js", "pack:check": "npm pack --dry-run", "protocol:generate": "node tools/protocol-spec.js --write" },
+  "scripts": { "test": "node tools/protocol-spec.js && node --test test/*.test.js && node tools/package-smoke.js", "pack:check": "node tools/package-smoke.js", "protocol:generate": "node tools/protocol-spec.js --write" },
   "engines": { "node": ">=20" },
   "license": "MIT"
 }
