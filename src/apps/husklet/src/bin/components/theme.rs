@@ -107,7 +107,7 @@ button.tabx:hover {{ opacity:1; background-color:rgba(255,255,255,.14); border-r
 stack.pages {{ background-color:{BG2}; }}
 
 /* ---- overview ---- */
-.dside {{ background-color:{BG1}; padding:9px 8px; min-width:130px; }}
+.dside {{ background-color:{BG1}; padding:9px 8px; min-width:100px; }}
 .dsi {{ padding:7px 10px; border-radius:7px; color:{DIM}; font-weight:500; font-size:12.5px; }}
 .dsi:hover {{ background-color:{BG3}; color:{TXT}; }}
 .dsi.on {{ background-color:{BG3}; color:{TXT}; }}

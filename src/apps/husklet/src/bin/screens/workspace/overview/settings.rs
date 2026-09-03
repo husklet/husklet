@@ -725,6 +725,48 @@ mod tests {
                 horizontal.page_size()
             );
             window.close();
+
+            let compact_page = Overview::new(&workspace, None)
+                .settings(&crate::screens::workspace::semantic::Registry::new("workspace"));
+            let shell = crate::screens::workspace::View::new([
+                (crate::screens::workspace::Page::Settings, compact_page.clone().upcast()),
+                (
+                    crate::screens::workspace::Page::Extensions,
+                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+                ),
+            ]);
+            let window = gtk::Window::builder()
+                .default_width(400)
+                .default_height(600)
+                .child(&shell.widget)
+                .build();
+            window.present();
+            while gtk::glib::MainContext::default().iteration(false) {}
+            assert_eq!(window.width(), 400, "the workspace remains at its compact requested width");
+            let navigation = shell
+                .widget
+                .first_child()
+                .and_downcast::<gtk::Paned>()
+                .expect("workspace navigation split");
+            assert!(
+                navigation.position() <= 110,
+                "fixed navigation must yield compact horizontal space to Settings"
+            );
+            let identity = descendants(compact_page.upcast_ref())
+                .into_iter()
+                .find(|widget| widget.has_css_class("settings-identity"))
+                .expect("Settings identity card");
+            assert!(
+                identity.width() <= compact_page.width(),
+                "Settings card must fit its compact viewport: card={} viewport={}",
+                identity.width(),
+                compact_page.width()
+            );
+            assert!(
+                compact_page.hadjustment().upper() <= compact_page.hadjustment().page_size() + 1.0,
+                "fixed navigation must leave Settings horizontally usable at the 400px application minimum"
+            );
+            window.close();
             assert!(
                 widgets.iter().any(|widget| widget.has_css_class("settings-save-row")),
                 "save action is visually separated from editable cards"

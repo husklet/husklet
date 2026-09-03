@@ -73,7 +73,7 @@ impl View {
         split.set_wide_handle(false);
         split.set_start_child(Some(&sidebar));
         split.set_end_child(Some(&pages));
-        split.set_position(140);
+        split.set_position(110);
         split.set_resize_start_child(false);
         // The fixed navigation contains only two short destinations. Keep it
         // compact so settings fields remain usable in a narrow workspace.
