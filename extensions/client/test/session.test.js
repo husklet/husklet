@@ -23,6 +23,9 @@ test('real Unix stream negotiates grants, correlates a call, and returns event c
         observed.push(frame);
         if (frame.channel === 7 && frame.kind === KIND.credit) creditSeen();
         if (frame.channel === CONTROL && frame.kind === KIND.response) continue;
+        if (frame.channel === 2 && frame.payload.call === 'event_subscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
         if (frame.channel === 2 && frame.payload.call === 'workspace_info') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'demo', image: 'alpine', architecture: 'amd64' } } }));
           socket.write(encode({ channel: 7, kind: KIND.event, payload: { snapshot: 'containers', of: [] } }));
@@ -36,6 +39,7 @@ test('real Unix stream negotiates grants, correlates a call, and returns event c
     let pushed;
     const session = await connect({ path: socketPath, onEvent: (event) => { pushed = event; } });
     assert.deepEqual(session.granted, ['workspace-read']);
+    await session.call('event_subscribe', { topic: 'containers' });
     assert.equal((await workspace(session).info()).name, 'demo');
     await credit;
     assert.equal(pushed.snapshot, 'containers');

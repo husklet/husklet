@@ -39,6 +39,25 @@ enum Declaration {
     Alias(syn::ItemType),
 }
 
+/// Successful reply tag for every request tag. There is deliberately no
+/// fallback: adding either enum variant requires updating this wire contract.
+const REQUEST_TO_REPLY: &[(&str, &str)] = &[
+    ("workspace_info", "workspace"), ("workspace_list", "workspaces"), ("workspace_inspect", "workspace_configuration"),
+    ("workspace_create", "workspace_configuration"), ("workspace_adopt", "workspace_configuration"), ("workspace_update", "workspace_configuration"),
+    ("workspace_delete", "done"), ("workspace_start", "done"), ("workspace_stop", "done"), ("workspace_restart", "done"),
+    ("extension_list", "extensions"), ("extension_inspect", "extension"), ("extension_enable", "done"), ("extension_disable", "done"), ("extension_remove", "done"),
+    ("extension_acquisition_start", "extension_acquisition_job"), ("extension_acquisition_status", "extension_acquisition"), ("extension_acquisition_cancel", "done"), ("extension_install", "extension"), ("extension_update", "extension"),
+    ("container_list", "containers"), ("container_inspect", "container"), ("container_processes", "processes"), ("container_logs", "logs"),
+    ("execution_inspect", "execution"), ("execution_list", "executions"), ("execution_logs", "logs"), ("execution_wait", "execution"), ("execution_kill", "done"), ("execution_remove", "done"),
+    ("container_create", "identity"), ("container_start", "done"), ("container_stop", "done"), ("container_remove", "done"), ("container_pause", "done"), ("container_unpause", "done"), ("container_restart", "done"), ("container_rename", "done"), ("container_kill", "done"), ("container_exec", "identity"), ("container_attach_terminal", "identity"),
+    ("image_list", "images"), ("image_pull", "image"), ("image_pull_start", "image_pull_job"), ("image_pull_status", "image_pull"), ("image_pull_cancel", "done"), ("image_inspect", "image_details"), ("image_remove", "done"), ("image_prune", "image_prune"),
+    ("volume_list", "volumes"), ("volume_inspect", "volume"), ("volume_create", "volume"), ("volume_remove", "done"),
+    ("network_list", "networks"), ("network_inspect", "network"), ("network_create", "identity"), ("network_remove", "done"), ("network_connect", "done"), ("network_disconnect", "done"),
+    ("terminal_tabs", "tabs"), ("terminal_topology", "topology"), ("pane_list", "panes"), ("terminal_open_tab", "identity"), ("terminal_split", "identity"), ("terminal_split_observed", "identity"), ("terminal_spawn", "done"), ("terminal_spawn_observed", "done"), ("terminal_read_pane", "text"), ("pane_semantic_read", "semantics"), ("pane_semantic_action", "done"), ("terminal_write_pane", "done"), ("terminal_resize_grid", "done"), ("terminal_resize_grid_observed", "done"), ("terminal_close_pane", "done"), ("terminal_close_pane_observed", "done"), ("terminal_focus_pane", "done"), ("terminal_focus_pane_observed", "done"), ("terminal_retitle_pane", "done"), ("terminal_retitle_pane_observed", "done"), ("terminal_ratio", "done"), ("terminal_ratio_observed", "done"), ("terminal_switch_occupant", "done"), ("terminal_switch_occupant_observed", "done"),
+    ("filesystem_list", "entries"), ("filesystem_read", "contents"), ("filesystem_read_range", "file_range"), ("filesystem_stat", "entry"), ("filesystem_write", "done"), ("filesystem_create_observed", "identity"), ("filesystem_mkdir", "done"), ("filesystem_rename", "done"), ("filesystem_rename_observed", "identity"), ("filesystem_remove", "done"), ("filesystem_remove_observed", "done"),
+    ("interface_open_tab", "identity"), ("interface_split", "identity"), ("interface_withdraw", "done"), ("interface_render", "done"), ("interface_render_at", "done"), ("source_resize", "done"), ("source_resize_at", "done"), ("event_subscribe", "done"), ("event_unsubscribe", "done"),
+];
+
 /// Canonical pretty-printed protocol specification, terminated by one newline.
 /// Panics rather than emitting a partial document when syntax is unsupported or
 /// a named local wire type cannot be resolved.
@@ -95,6 +114,10 @@ pub fn document() -> String {
         })
         .collect::<Vec<_>>();
     let snapshot_variants = enum_wire_names(declarations.get("Snapshot").unwrap());
+    let request_variants = enum_wire_names(declarations.get("Request").unwrap());
+    let reply_variants = enum_wire_names(declarations.get("Reply").unwrap());
+    assert_eq!(REQUEST_TO_REPLY.iter().map(|(request, _)| (*request).to_owned()).collect::<Vec<_>>(), request_variants, "REQUEST_TO_REPLY must cover Request exactly in declaration order");
+    assert!(REQUEST_TO_REPLY.iter().all(|(_, reply)| reply_variants.iter().any(|candidate| candidate == reply)), "REQUEST_TO_REPLY names an absent Reply");
     assert_eq!(
         snapshot_variants.len(),
         Topic::ALL.len(),
@@ -109,6 +132,7 @@ pub fn document() -> String {
             "flags":{"end":1,"error":2,"coalesced":4},"kinds":kinds},
         "capabilities":Capability::ALL.iter().map(|c|json!({"wire":c.as_str(),"mutates":c.mutates(),"executes":c.executes()})).collect::<Vec<_>>(),
         "topics":Topic::ALL.iter().zip(snapshot_variants).map(|(t,snapshot)|json!({"wire":serde_json::to_value(t).unwrap(),"capability":t.capability().as_str(),"snapshot":snapshot})).collect::<Vec<_>>(),
+        "request_to_reply":REQUEST_TO_REPLY.iter().map(|(request,reply)|json!({"request":request,"reply":reply})).collect::<Vec<_>>(),
         "bounds":{
             "semantic_nodes":crate::port::SEMANTIC_NODE_LIMIT,"semantic_depth":crate::port::SEMANTIC_DEPTH_LIMIT,
             "semantic_text_bytes":crate::port::SEMANTIC_TEXT_LIMIT,"semantic_action_value_bytes":crate::port::SEMANTIC_ACTION_VALUE_LIMIT,

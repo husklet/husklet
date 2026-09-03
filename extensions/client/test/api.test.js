@@ -77,6 +77,10 @@ test('an event returns credit only after delivery', async () => {
   const stage = await pair({ onEvent: (event) => seen.push(event) });
   const next = frames(stage.host);
   await next();
+  const subscribed = stage.session.call('event_subscribe', { topic: 'containers' });
+  await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await subscribed;
   stage.host.write(encode({ channel: 4, kind: KIND.event, payload: { snapshot: 'containers', of: [] } }));
   const credit = await next();
   assert.deepEqual(seen, [{ snapshot: 'containers', of: [] }]);
@@ -92,6 +96,10 @@ test('a throwing event listener cannot starve healthy listeners or event credit'
   const stage = await pair({ onEventError: (error) => errors.push(error.message) });
   const next = frames(stage.host);
   await next();
+  const subscribed = stage.session.call('event_subscribe', { topic: 'images' });
+  await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await subscribed;
   stage.session.onEvent(() => { throw new Error('broken observer'); });
   stage.session.onEvent((event) => seen.push(event));
   stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'images', of: [] } }));
@@ -101,6 +109,67 @@ test('a throwing event listener cannot starve healthy listeners or event credit'
   assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, {
     channel: 9, kind: KIND.credit, payload: 1,
   });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('a reply for the wrong operation fails closed and rejects every correlated caller', async () => {
+  const closed = [];
+  const stage = await pair({ onClose: (error) => closed.push(error.message) });
+  const next = frames(stage.host);
+  await next();
+  const first = stage.session.call('workspace_info');
+  const second = stage.session.call('workspace_list');
+  await next(); await next();
+  const disconnected = new Promise((resolve) => stage.host.once('close', resolve));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspaces', with: [] } }));
+  await assert.rejects(first, /reply\.reply must be workspace/);
+  await assert.rejects(second, /reply\.reply must be workspace/);
+  await disconnected;
+  assert.deepEqual(closed, ['reply.reply must be workspace']);
+  stage.server.close();
+});
+
+test('a malformed failure rejects the call and closes the ordered stream', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const pending = stage.session.call('workspace_info');
+  await next();
+  const disconnected = new Promise((resolve) => stage.host.once('close', resolve));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'denied' } }));
+  await assert.rejects(pending, /failure\.capability must be present/);
+  await disconnected;
+  await assert.rejects(stage.session.call('workspace_info'), /closed/);
+  stage.server.close();
+});
+
+test('a malformed subscribed snapshot closes without delivery or returned credit', async () => {
+  const seen = [];
+  const stage = await pair({ onEvent: (event) => seen.push(event) });
+  const next = frames(stage.host);
+  await next();
+  const subscribed = stage.session.call('event_subscribe', { topic: 'containers' });
+  await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await subscribed;
+  const disconnected = new Promise((resolve) => stage.host.once('close', resolve));
+  stage.host.write(encode({ channel: 8, kind: KIND.event, payload: { snapshot: 'containers', of: [{}] } }));
+  await disconnected;
+  assert.deepEqual(seen, []);
+  assert.equal(stage.host.readableLength, 0, 'invalid events return no credit');
+  stage.server.close();
+});
+
+test('separately typed GUI interaction events remain deliverable and return credit', async () => {
+  const seen = [];
+  const stage = await pair({ onEvent: (event) => seen.push(event) });
+  const next = frames(stage.host);
+  await next();
+  const event = { interaction: 'key', trigger: 'Key', node: 7, id: '7:Key', slot: 'pane-1', key: 'a', keycode: 38, modifiers: 4, pressed: true };
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: event }));
+  const credit = await next();
+  assert.deepEqual(seen, [event]);
+  assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, { channel: 9, kind: KIND.credit, payload: 1 });
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -345,7 +414,7 @@ test('image pull jobs and progress watcher preserve exact typed wire shapes', as
   assert.deepEqual((await next()).payload, { call: 'image_pull_start', with: { reference: 'alpine:3.20' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull_job', with: { job: '7' } } }));
   assert.deepEqual((await next()).payload, { call: 'image_pull_status', with: { job: '7' } });
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull', with: { job: '7' } } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_pull', with: { job: '7', reference: 'alpine:3.20', revision: 1, state: 'pulling' } } }));
   assert.deepEqual((await next()).payload, { call: 'image_pull_cancel', with: { job: '7' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await Promise.all(operations);
   const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'image-pulls' });
@@ -434,8 +503,8 @@ test('volume and network facades preserve safe request shapes', async () => {
   assert.deepEqual(aliasOptions, { aliases: ['database.internal', 'database_2'] });
   assert.deepEqual(calls[10].with, { reference: networkId, container: containerId });
   const replies = [
-    { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local' } },
-    { reply: 'volume', with: { name: 'cache', driver: 'local' } }, { reply: 'done' },
+    { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } },
+    { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }, { reply: 'done' },
     { reply: 'networks', with: [] }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } },
     { reply: 'identity', with: 'n1' }, ...Array(7).fill({ reply: 'done' }),
   ];
@@ -459,10 +528,11 @@ test('image inspection and destructive calls preserve explicit request shapes', 
     { call: 'image_remove', with: { reference: digest } },
     { call: 'image_prune' },
   ]);
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: { id: 'i1' } } }));
+  const details = { id: 'i1', references: [], created: '', size: 0, os: 'linux', architecture: 'amd64', entrypoint: [], command: [], working_directory: '', user: '' };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: details } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_prune', with: { deleted: 2, space_reclaimed: 7 } } }));
-  assert.deepEqual(await Promise.all(operations), [{ id: 'i1' }, undefined, { deleted: 2, space_reclaimed: 7 }]);
+  assert.deepEqual(await Promise.all(operations), [details, undefined, { deleted: 2, space_reclaimed: 7 }]);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
@@ -521,10 +591,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
       processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
       scope: 'initial', pid_identity: 'snapshot', truncated: false } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: false } },
-    { reply: 'execution', with: { id: 'e1' } },
+    { reply: 'execution', with: { id: 'e1', container_id: containerId, running: true, exit_code: 0, pid: 2, command: ['true'], user: 'root' } },
     { reply: 'executions', with: { executions: [], truncated: false } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } },
-    { reply: 'execution', with: { id: 'e1', running: false, exit_code: 0 } },
+    { reply: 'execution', with: { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 2, command: ['true'], user: 'root' } },
     ...Array(10).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
     { reply: 'done' },
@@ -749,7 +819,7 @@ test('pane semantics and actions preserve revision and node identity', async () 
   assert.deepEqual(read, { call: 'pane_semantic_read', with: { slot: 'pane-7' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
     reply: 'semantics', with: { slot: 'pane-7', generation: 3, revision: 9, truncated: false,
-      root: { id: 0, role: 'Column', label: null, value: null, disabled: false, actions: [], children: [] } },
+      root: { id: 0, role: 'Column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } },
   } }));
   assert.deepEqual({ generation: (await tree).generation, revision: (await tree).revision }, { generation: 3, revision: 9 });
   assert.throws(

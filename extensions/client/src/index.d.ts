@@ -140,6 +140,7 @@ export type SnapshotEvent =
   | { snapshot: 'workspace_lifecycle'; of: WorkspaceLifecycleChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
+export function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';

@@ -271,7 +271,6 @@ test('the pane-selection hook filters providers and exposes stable slot identity
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
 
-  await stage.push({ pane_provider: 'logs' });
   await stage.push({ pane_provider: 'images', slot: 'pane-wrong' });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(labels().includes('Logs in pane-wrong'), false, 'a different provider changed the selected view');

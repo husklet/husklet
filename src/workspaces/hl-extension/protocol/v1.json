@@ -5786,6 +5786,420 @@
     "payload_limit_bytes": 1048576
   },
   "protocol_version": 1,
+  "request_to_reply": [
+    {
+      "reply": "workspace",
+      "request": "workspace_info"
+    },
+    {
+      "reply": "workspaces",
+      "request": "workspace_list"
+    },
+    {
+      "reply": "workspace_configuration",
+      "request": "workspace_inspect"
+    },
+    {
+      "reply": "workspace_configuration",
+      "request": "workspace_create"
+    },
+    {
+      "reply": "workspace_configuration",
+      "request": "workspace_adopt"
+    },
+    {
+      "reply": "workspace_configuration",
+      "request": "workspace_update"
+    },
+    {
+      "reply": "done",
+      "request": "workspace_delete"
+    },
+    {
+      "reply": "done",
+      "request": "workspace_start"
+    },
+    {
+      "reply": "done",
+      "request": "workspace_stop"
+    },
+    {
+      "reply": "done",
+      "request": "workspace_restart"
+    },
+    {
+      "reply": "extensions",
+      "request": "extension_list"
+    },
+    {
+      "reply": "extension",
+      "request": "extension_inspect"
+    },
+    {
+      "reply": "done",
+      "request": "extension_enable"
+    },
+    {
+      "reply": "done",
+      "request": "extension_disable"
+    },
+    {
+      "reply": "done",
+      "request": "extension_remove"
+    },
+    {
+      "reply": "extension_acquisition_job",
+      "request": "extension_acquisition_start"
+    },
+    {
+      "reply": "extension_acquisition",
+      "request": "extension_acquisition_status"
+    },
+    {
+      "reply": "done",
+      "request": "extension_acquisition_cancel"
+    },
+    {
+      "reply": "extension",
+      "request": "extension_install"
+    },
+    {
+      "reply": "extension",
+      "request": "extension_update"
+    },
+    {
+      "reply": "containers",
+      "request": "container_list"
+    },
+    {
+      "reply": "container",
+      "request": "container_inspect"
+    },
+    {
+      "reply": "processes",
+      "request": "container_processes"
+    },
+    {
+      "reply": "logs",
+      "request": "container_logs"
+    },
+    {
+      "reply": "execution",
+      "request": "execution_inspect"
+    },
+    {
+      "reply": "executions",
+      "request": "execution_list"
+    },
+    {
+      "reply": "logs",
+      "request": "execution_logs"
+    },
+    {
+      "reply": "execution",
+      "request": "execution_wait"
+    },
+    {
+      "reply": "done",
+      "request": "execution_kill"
+    },
+    {
+      "reply": "done",
+      "request": "execution_remove"
+    },
+    {
+      "reply": "identity",
+      "request": "container_create"
+    },
+    {
+      "reply": "done",
+      "request": "container_start"
+    },
+    {
+      "reply": "done",
+      "request": "container_stop"
+    },
+    {
+      "reply": "done",
+      "request": "container_remove"
+    },
+    {
+      "reply": "done",
+      "request": "container_pause"
+    },
+    {
+      "reply": "done",
+      "request": "container_unpause"
+    },
+    {
+      "reply": "done",
+      "request": "container_restart"
+    },
+    {
+      "reply": "done",
+      "request": "container_rename"
+    },
+    {
+      "reply": "done",
+      "request": "container_kill"
+    },
+    {
+      "reply": "identity",
+      "request": "container_exec"
+    },
+    {
+      "reply": "identity",
+      "request": "container_attach_terminal"
+    },
+    {
+      "reply": "images",
+      "request": "image_list"
+    },
+    {
+      "reply": "image",
+      "request": "image_pull"
+    },
+    {
+      "reply": "image_pull_job",
+      "request": "image_pull_start"
+    },
+    {
+      "reply": "image_pull",
+      "request": "image_pull_status"
+    },
+    {
+      "reply": "done",
+      "request": "image_pull_cancel"
+    },
+    {
+      "reply": "image_details",
+      "request": "image_inspect"
+    },
+    {
+      "reply": "done",
+      "request": "image_remove"
+    },
+    {
+      "reply": "image_prune",
+      "request": "image_prune"
+    },
+    {
+      "reply": "volumes",
+      "request": "volume_list"
+    },
+    {
+      "reply": "volume",
+      "request": "volume_inspect"
+    },
+    {
+      "reply": "volume",
+      "request": "volume_create"
+    },
+    {
+      "reply": "done",
+      "request": "volume_remove"
+    },
+    {
+      "reply": "networks",
+      "request": "network_list"
+    },
+    {
+      "reply": "network",
+      "request": "network_inspect"
+    },
+    {
+      "reply": "identity",
+      "request": "network_create"
+    },
+    {
+      "reply": "done",
+      "request": "network_remove"
+    },
+    {
+      "reply": "done",
+      "request": "network_connect"
+    },
+    {
+      "reply": "done",
+      "request": "network_disconnect"
+    },
+    {
+      "reply": "tabs",
+      "request": "terminal_tabs"
+    },
+    {
+      "reply": "topology",
+      "request": "terminal_topology"
+    },
+    {
+      "reply": "panes",
+      "request": "pane_list"
+    },
+    {
+      "reply": "identity",
+      "request": "terminal_open_tab"
+    },
+    {
+      "reply": "identity",
+      "request": "terminal_split"
+    },
+    {
+      "reply": "identity",
+      "request": "terminal_split_observed"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_spawn"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_spawn_observed"
+    },
+    {
+      "reply": "text",
+      "request": "terminal_read_pane"
+    },
+    {
+      "reply": "semantics",
+      "request": "pane_semantic_read"
+    },
+    {
+      "reply": "done",
+      "request": "pane_semantic_action"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_write_pane"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_resize_grid"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_resize_grid_observed"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_close_pane"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_close_pane_observed"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_focus_pane"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_focus_pane_observed"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_retitle_pane"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_retitle_pane_observed"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_ratio"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_ratio_observed"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_switch_occupant"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_switch_occupant_observed"
+    },
+    {
+      "reply": "entries",
+      "request": "filesystem_list"
+    },
+    {
+      "reply": "contents",
+      "request": "filesystem_read"
+    },
+    {
+      "reply": "file_range",
+      "request": "filesystem_read_range"
+    },
+    {
+      "reply": "entry",
+      "request": "filesystem_stat"
+    },
+    {
+      "reply": "done",
+      "request": "filesystem_write"
+    },
+    {
+      "reply": "identity",
+      "request": "filesystem_create_observed"
+    },
+    {
+      "reply": "done",
+      "request": "filesystem_mkdir"
+    },
+    {
+      "reply": "done",
+      "request": "filesystem_rename"
+    },
+    {
+      "reply": "identity",
+      "request": "filesystem_rename_observed"
+    },
+    {
+      "reply": "done",
+      "request": "filesystem_remove"
+    },
+    {
+      "reply": "done",
+      "request": "filesystem_remove_observed"
+    },
+    {
+      "reply": "identity",
+      "request": "interface_open_tab"
+    },
+    {
+      "reply": "identity",
+      "request": "interface_split"
+    },
+    {
+      "reply": "done",
+      "request": "interface_withdraw"
+    },
+    {
+      "reply": "done",
+      "request": "interface_render"
+    },
+    {
+      "reply": "done",
+      "request": "interface_render_at"
+    },
+    {
+      "reply": "done",
+      "request": "source_resize"
+    },
+    {
+      "reply": "done",
+      "request": "source_resize_at"
+    },
+    {
+      "reply": "done",
+      "request": "event_subscribe"
+    },
+    {
+      "reply": "done",
+      "request": "event_unsubscribe"
+    }
+  ],
   "roots": {
     "failure": {
       "kind": "enum",
@@ -8508,7 +8922,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:f9a24e581a820c9c",
+  "source_fingerprint": "fnv1a64:427125fc5f39803a",
   "specification_version": 1,
   "topics": [
     {

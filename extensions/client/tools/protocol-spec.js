@@ -23,12 +23,19 @@ for (const [name, definition] of Object.entries(schema.definitions)) {
 }
 
 const stable = (value) => JSON.stringify(value, Object.keys(value).sort());
+const requestVariants = schema.roots.request.variants.map(({ name }) => name);
+const replyVariants = new Set(schema.roots.reply.variants.map(({ name }) => name));
+assert(Array.isArray(schema.request_to_reply), 'Rust protocol schema lacks request_to_reply');
+assert.deepEqual(schema.request_to_reply.map(({ request }) => request), requestVariants, 'request_to_reply must cover Request exactly in declaration order');
+const expectedReplies = Object.fromEntries(schema.request_to_reply.map(({ request, reply }) => [request, reply]));
+for (const [call, reply] of Object.entries(expectedReplies)) assert(replyVariants.has(reply), `${call} expects absent reply ${reply}`);
 const runtime = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
 export const PROTOCOL_SPECIFICATION_VERSION = ${schema.specification_version};
 export const PROTOCOL_VERSION = ${schema.protocol_version};
 export const PROTOCOL_BOUNDS = Object.freeze(${JSON.stringify(schema.bounds, null, 2)});
 export const PROTOCOL_CAPABILITIES = Object.freeze(${JSON.stringify(schema.capabilities, null, 2)});
 export const PROTOCOL_TOPICS = Object.freeze(${JSON.stringify(schema.topics, null, 2)});
+export const PROTOCOL_REPLIES = Object.freeze(${JSON.stringify(expectedReplies, null, 2)});
 const definitions = ${JSON.stringify(schema.definitions, null, 2)};
 const roots = ${JSON.stringify(schema.roots, null, 2)};
 
@@ -84,6 +91,13 @@ function validateEnum(schema, value, path) {
 }
 export function validateRequest(value) { validate(roots.request, value, 'request'); return value; }
 export function validateReply(value) { validate(roots.reply, value, 'reply'); return value; }
+export function validateReplyFor(call, value) {
+  validateReply(value);
+  const expected = PROTOCOL_REPLIES[call];
+  if (expected === undefined) fail('call', 'a known operation');
+  if (value.reply !== expected) fail('reply.reply', expected);
+  return value;
+}
 export function validateFailure(value) { validate(roots.failure, value, 'failure'); return value; }
 export function validateSnapshot(value) { validate(roots.snapshot, value, 'snapshot'); return value; }
 export function encodeRequest(call, payload) {
@@ -131,8 +145,10 @@ export type WireRequest = ${type(schema.roots.request)};
 export type WireReply = ${type(schema.roots.reply)};
 export type WireFailure = ${type(schema.roots.failure)};
 export type WireSnapshot = ${type(schema.roots.snapshot)};
+export const PROTOCOL_REPLIES: Readonly<Record<WireRequest['call'], WireReply['reply']>>;
 export function validateRequest(value: unknown): WireRequest;
 export function validateReply(value: unknown): WireReply;
+export function validateReplyFor(call: WireRequest['call'], value: unknown): WireReply;
 export function validateFailure(value: unknown): WireFailure;
 export function validateSnapshot(value: unknown): WireSnapshot;
 export function encodeRequest(call: WireRequest['call'], payload?: unknown): WireRequest;

@@ -2,7 +2,10 @@
 
 import net from 'node:net';
 import { CONTROL, KIND, Reader, encode } from './wire.js';
-import { encodeRequest, PROTOCOL_VERSION } from './generated-protocol.js';
+import {
+  encodeRequest, PROTOCOL_TOPICS, PROTOCOL_VERSION,
+  validateFailure, validateReplyFor, validateSnapshot,
+} from './generated-protocol.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
 export const PROTOCOL = PROTOCOL_VERSION;
@@ -13,6 +16,37 @@ export const SOCKET = 'HUSKLET_EXTENSION_SOCKET';
 /** The protocol's shared call channel. Replies are ordered on this channel. */
 const CALLS = 2;
 const ERROR = 2;
+const SNAPSHOT_TOPICS = new Map(PROTOCOL_TOPICS.map(({ wire, snapshot }) => [snapshot, wire]));
+
+function requiredObject(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+  return value;
+}
+
+/** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
+export function validateUiEvent(value) {
+  const event = requiredObject(value, 'UI event');
+  if (typeof event.pane_provider === 'string' && typeof event.slot === 'string') return value;
+  if (typeof event.interaction === 'string') {
+    if (!['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'].includes(event.interaction)
+      || typeof event.trigger !== 'string' || !Number.isSafeInteger(event.node) || event.node < 0
+      || typeof event.id !== 'string' || event.id.length === 0 || event.id.length > 4096
+      || (event.slot !== undefined && typeof event.slot !== 'string')) throw new TypeError('UI interaction event is malformed');
+    return value;
+  }
+  // Protocol-1 hosts used either a string event tag or an externally-tagged
+  // event object. Keep that compatibility path typed and bounded.
+  if (typeof event.event === 'string') {
+    if (!Number.isSafeInteger(event.node) || event.node < 0 || typeof event.id !== 'string' || event.id.length > 4096) throw new TypeError('legacy UI event is malformed');
+    return value;
+  }
+  if (event.event && typeof event.event === 'object' && !Array.isArray(event.event) && Object.keys(event.event).length === 1) {
+    const body = requiredObject(Object.values(event.event)[0], 'legacy UI event body');
+    if (!Number.isSafeInteger(body.node) || body.node < 0 || typeof body.id !== 'string' || body.id.length > 4096) throw new TypeError('legacy UI event is malformed');
+    return value;
+  }
+  throw new TypeError('event is neither a protocol snapshot nor a known UI event');
+}
 
 /** Refusal returned by the host, with its stable machine-readable category. */
 export class ExtensionError extends Error {
@@ -40,6 +74,8 @@ export class Session {
   #onEventError;
   #onClose;
   #events = new Set();
+  #topics = new Set();
+  #eventTopics = new Map();
   #pending = [];
   #limit;
   #timeout;
@@ -137,7 +173,7 @@ export class Session {
         this.#finish(error);
         this.#socket.destroy();
       }, this.#timeout);
-      this.#pending.push({ resolve, reject, timer });
+      this.#pending.push({ resolve, reject, timer, name, argument });
       try {
         this.#socket.write(encode({ channel: CALLS, kind: KIND.request, payload }));
       } catch (error) {
@@ -181,19 +217,41 @@ export class Session {
       return this.#onRows(frame.payload, frame.channel);
     }
     if (frame.kind === KIND.response && frame.channel === CALLS) {
-      const pending = this.#pending.shift();
+      const pending = this.#pending[0];
       if (!pending) return this.#onReply(frame.payload);
+      const payload = (frame.flags & ERROR) !== 0
+        ? validateFailure(frame.payload)
+        : validateReplyFor(pending.name, frame.payload);
+      this.#pending.shift();
       clearTimeout(pending.timer);
-      if ((frame.flags & ERROR) !== 0) pending.reject(new ExtensionError(frame.payload));
-      else pending.resolve(frame.payload);
-      this.#onReply(frame.payload);
+      if ((frame.flags & ERROR) !== 0) pending.reject(new ExtensionError(payload));
+      else {
+        if (pending.name === 'event_subscribe') this.#topics.add(pending.argument.topic);
+        if (pending.name === 'event_unsubscribe') {
+          this.#topics.delete(pending.argument.topic);
+          for (const [channel, topic] of this.#eventTopics) if (topic === pending.argument.topic) this.#eventTopics.delete(channel);
+        }
+        pending.resolve(payload);
+      }
+      this.#onReply(payload);
       return;
     }
     if (frame.kind === KIND.event) {
+      let payload = frame.payload;
+      if (typeof payload?.snapshot === 'string') {
+        payload = validateSnapshot(payload);
+        const topic = SNAPSHOT_TOPICS.get(payload.snapshot);
+        if (!topic || !this.#topics.has(topic)) throw new TypeError(`snapshot ${payload.snapshot} has no active subscription`);
+        const bound = this.#eventTopics.get(frame.channel);
+        if (bound !== undefined && bound !== topic) throw new TypeError(`event channel ${frame.channel} changed topic`);
+        this.#eventTopics.set(frame.channel, topic);
+      } else {
+        payload = validateUiEvent(payload);
+      }
       try {
         for (const listener of this.#events) {
           try {
-            listener(frame.payload, frame.channel);
+            listener(payload, frame.channel);
           } catch (error) {
             try { this.#onEventError(error); } catch { /* Error reporting cannot strand event credit. */ }
           }
