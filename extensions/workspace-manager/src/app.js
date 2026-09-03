@@ -397,32 +397,41 @@ export function Executions({ api, resource, executionDetails, truncated = false,
   const [inspection, setInspection] = useState({ state: 'idle', count: 0, error: null });
   const [output, setOutput] = useState(null);
   const [busy, setBusy] = useState('');
+  const [inventoryVersion, setInventoryVersion] = useState(0);
+  const lifecycleRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const inspect = async (id) => {
+    const revision = ++lifecycleRevision.current;
     setSelected(id); setInspection({ state: 'loading', count: 0, error: null }); setOutput(null);
     try {
       const detail = await api.containers.execution(id);
+      if (revision !== lifecycleRevision.current) return;
       const count = await detailsSource.replace(detail);
+      if (revision !== lifecycleRevision.current) return;
       setInspection({ state: 'ready', count, error: null });
-    } catch (error) { setInspection({ state: 'error', count: 0, error }); }
+    } catch (error) { if (revision === lifecycleRevision.current) setInspection({ state: 'error', count: 0, error }); }
   };
   useEffect(() => {
     if (requestedExecution && selected !== requestedExecution) void inspect(requestedExecution);
   }, [requestedExecution]);
   const logs = async (id) => {
+    const revision = lifecycleRevision.current;
     setBusy(`logs:${id}`);
     try {
       const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
+      if (revision !== lifecycleRevision.current) return;
       const text = (bytes) => logText(bytes).slice(-LOG_VIEW_CHARACTER_LIMIT);
       setOutput((current) => ({ revision: (current?.revision ?? 0) + 1,
         stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }),
         truncated: value.truncated, stdoutTruncated: value.stdout_truncated, stderrTruncated: value.stderr_truncated,
         eof: value.eof }));
-    } finally { setBusy(''); }
+    } finally { if (revision === lifecycleRevision.current) setBusy(''); }
   };
   const wait = async (id) => {
+    const revision = lifecycleRevision.current;
     setBusy(`wait:${id}`);
-    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); await detailsSource.replace(detail); await resource.reload(); }
-    finally { setBusy(''); }
+    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); if (revision !== lifecycleRevision.current) return; await detailsSource.replace(detail); if (revision === lifecycleRevision.current) await resource.reload(); }
+    finally { if (revision === lifecycleRevision.current) setBusy(''); }
   };
   const terminate = async (id) => {
     await api.containers.signalExecution(id, 'SIGTERM');
@@ -430,6 +439,13 @@ export function Executions({ api, resource, executionDetails, truncated = false,
     await inspect(id);
   };
   const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    lifecycleRevision.current += 1;
+    setSelected(''); setInspection({ state: 'idle', count: 0, error: null }); setOutput(null); setBusy('');
+    setInventoryVersion((version) => version + 1);
+  }, [resource.data]);
   const view = bounded(resource.data);
   const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
@@ -442,7 +458,7 @@ export function Executions({ api, resource, executionDetails, truncated = false,
       error: resource.error?.message ?? String(resource.error ?? ''),
       retryLabel: 'Retry executions',
       onRetry: resource.reload,
-    }, ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+    }, ...view.records.map((item) => h(Card, { key: `${inventoryVersion}:${item.id}`, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
       h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
         selected !== item.id ? null : h(ResourceState, {
