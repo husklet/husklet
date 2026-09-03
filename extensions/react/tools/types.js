@@ -518,6 +518,7 @@ export interface WorkspaceApi {
     focus(slot: string): Promise<void>;
     focusObserved(slot: string, generation: number, revision: number): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;
+    retitleObserved(slot: string, generation: number, revision: number, title: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
     switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;

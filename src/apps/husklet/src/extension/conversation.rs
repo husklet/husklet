@@ -686,6 +686,7 @@ impl Conversation {
             }
             *generation = pane.generation;
         } else if let hl_extension::Request::TerminalWritePane { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalRetitlePaneObserved { slot, generation, revision, .. }
         | hl_extension::Request::TerminalFocusPaneObserved { slot, generation, revision }
         | hl_extension::Request::TerminalResizeGridObserved { slot, generation, revision, .. }
         | hl_extension::Request::TerminalRatioObserved { slot, generation, revision, .. }

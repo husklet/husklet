@@ -59,6 +59,8 @@ async function fakeHost(context, { greet = true } = {}) {
               ? { reply: 'done' }
             : frame.payload.call === 'terminal_focus_pane_observed'
               ? { reply: 'done' }
+            : frame.payload.call === 'terminal_retitle_pane_observed'
+              ? { reply: 'done' }
             : frame.payload.call === 'terminal_close_pane_observed'
               ? { reply: 'done' }
             : frame.payload.call === 'network_connect'
@@ -165,6 +167,9 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   await client.callTool({ name: 'husklet_terminal_focus', arguments: {
     slot: 'pane-observed', generation: 9, revision: 12,
   } });
+  await client.callTool({ name: 'husklet_terminal_retitle', arguments: {
+    slot: 'pane-observed', generation: 9, revision: 12, title: 'Agent',
+  } });
   await client.callTool({ name: 'husklet_terminal_close', arguments: {
     slot: 'pane-observed', generation: 9, revision: 12, confirm: true,
   } });
@@ -182,6 +187,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
     { call: 'terminal_ratio_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, ratio: 0.6 } },
     { call: 'terminal_resize_grid_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, columns: 120, rows: 40 } },
     { call: 'terminal_focus_pane_observed', with: { slot: 'pane-observed', generation: 9, revision: 12 } },
+    { call: 'terminal_retitle_pane_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, title: 'Agent' } },
     { call: 'terminal_close_pane_observed', with: { slot: 'pane-observed', generation: 9, revision: 12 } },
     { call: 'network_connect', with: { reference: network, container: id, aliases } },
   ]);

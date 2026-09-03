@@ -15,7 +15,7 @@ function fake() {
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), splitObserved: record('terminal.splitObserved'), spawn: record('terminal.spawn'), spawnObserved: record('terminal.spawnObserved'), focus: record('terminal.focus'), focusObserved: record('terminal.focusObserved'), retitle: record('terminal.retitle'), resizeGrid: record('terminal.resizeGrid'), resizeGridObserved: record('terminal.resizeGridObserved'), ratio: record('terminal.ratio'), ratioObserved: record('terminal.ratioObserved'), close: record('terminal.close'), closeObserved: record('terminal.closeObserved'), switchOccupant: record('terminal.switchOccupant'), switchOccupantObserved: record('terminal.switchOccupantObserved') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), splitObserved: record('terminal.splitObserved'), spawn: record('terminal.spawn'), spawnObserved: record('terminal.spawnObserved'), focus: record('terminal.focus'), focusObserved: record('terminal.focusObserved'), retitle: record('terminal.retitle'), retitleObserved: record('terminal.retitleObserved'), resizeGrid: record('terminal.resizeGrid'), resizeGridObserved: record('terminal.resizeGridObserved'), ratio: record('terminal.ratio'), ratioObserved: record('terminal.ratioObserved'), close: record('terminal.close'), closeObserved: record('terminal.closeObserved'), switchOccupant: record('terminal.switchOccupant'), switchOccupantObserved: record('terminal.switchOccupantObserved') },
     files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
@@ -459,7 +459,7 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
   await resize.run({ slot: 'pane-1', generation: 2, revision: 3, columns: 120, rows: 40 });
   await ratio.run({ slot: 'pane-1', generation: 2, revision: 3, ratio: 0.6 });
   await focus.run({ slot: 'pane-1', generation: 2, revision: 3 });
-  await retitle.run({ slot: 'pane-1', title: ' Build 🧪 ' });
+  await retitle.run({ slot: 'pane-1', generation: 2, revision: 3, title: ' Build 🧪 ' });
   await close.run({ slot: 'pane-1', generation: 2, revision: 3, confirm: true });
   assert.deepEqual(calls, [
     ['terminal.openTab', 'Terminal'],
@@ -467,7 +467,7 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
     ['terminal.resizeGridObserved', 'pane-1', 2, 3, 120, 40],
     ['terminal.ratioObserved', 'pane-1', 2, 3, 0.6],
     ['terminal.focusObserved', 'pane-1', 2, 3],
-    ['terminal.retitle', 'pane-1', ' Build 🧪 '],
+    ['terminal.retitleObserved', 'pane-1', 2, 3, ' Build 🧪 '],
     ['terminal.closeObserved', 'pane-1', 2, 3],
   ]);
 });

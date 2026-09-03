@@ -285,6 +285,7 @@ pub enum Request {
         slot: String,
         title: String,
     },
+    TerminalRetitlePaneObserved { slot: String, generation: u64, revision: u64, title: String },
     TerminalRatio {
         slot: String,
         ratio: f64,
@@ -436,6 +437,7 @@ impl Request {
             | Self::TerminalFocusPane { .. }
             | Self::TerminalFocusPaneObserved { .. }
             | Self::TerminalRetitlePane { .. }
+            | Self::TerminalRetitlePaneObserved { .. }
             | Self::TerminalRatio { .. }
             | Self::TerminalRatioObserved { .. }
             | Self::TerminalSwitchOccupant { .. }

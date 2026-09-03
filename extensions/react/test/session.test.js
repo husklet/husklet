@@ -581,7 +581,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const resizing = terminal.resizeGridObserved('s1', 4, 7, 120, 40);
   const ratio = terminal.ratioObserved('s1', 4, 7, 0.6);
   const focusing = terminal.focusObserved('s1', 4, 7);
-  const retitling = terminal.retitle('s1', ' Build 🧪 ');
+  const retitling = terminal.retitleObserved('s1', 4, 7, ' Build 🧪 ');
   const closing = terminal.closeObserved('s1', 4, 7);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
   assert.deepEqual((await next()).payload, {
@@ -601,7 +601,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   });
   assert.deepEqual((await next()).payload, { call: 'terminal_focus_pane_observed', with: { slot: 's1', generation: 4, revision: 7 } });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_retitle_pane', with: { slot: 's1', title: ' Build 🧪 ' },
+    call: 'terminal_retitle_pane_observed', with: { slot: 's1', generation: 4, revision: 7, title: ' Build 🧪 ' },
   });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_close_pane_observed', with: { slot: 's1', generation: 4, revision: 7 },
