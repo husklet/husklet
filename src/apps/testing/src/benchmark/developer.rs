@@ -96,6 +96,7 @@ struct Row {
     mode: Mode,
     wall_ns: u128,
     counters: Counters,
+    null_counters: Counters,
     phase_ns: Vec<(String, u128)>,
     stdout_sha256: String,
     semantic_sha256: String,
@@ -236,44 +237,12 @@ printf 'HL_DONE\n' >&2
 }
 
 fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: usize) -> Result<Row, Error> {
-    let mut measured = Vec::<OsString>::new();
-    match mode {
-        Mode::Native => {
-            measured.push("chroot".into());
-            measured.push(root.as_os_str().to_owned());
-            measured.extend(["/bin/sh".into(), "/work/session.sh".into()]);
-        }
-        Mode::Supervised | Mode::Translated => {
-            measured.push(options.engine.as_os_str().to_owned());
-            measured.extend(
-                ["--loader-receipt", "--report-exit", "--diagnostics", "--native-library"]
-                    .into_iter()
-                    .map(OsString::from),
-            );
-            measured.push(options.native_library.as_os_str().to_owned());
-            measured.push("--rootfs".into());
-            measured.push(root.as_os_str().to_owned());
-            match mode {
-                Mode::Supervised => {
-                    measured.push("--native-supervised".into());
-                }
-                Mode::Translated => {
-                    measured.extend(["--native-supervised=off".into(), "--translit".into()]);
-                }
-                Mode::Native => unreachable!(),
-            }
-            measured.extend(["bin/sh".into(), "/work/session.sh".into()]);
-        }
-    }
+    let null_counters = measure_null(options, root, mode, sample, position)?;
+    let measured = measured_argv(options, root, mode, "bin/sh", &["/work/session.sh"]);
     let perf_path = options
         .results
         .join(format!(".perf-{}-{sample}-{position}", std::process::id()));
-    let mut command = Command::new("perf");
-    command
-        .args(["stat", "-x", "\t", "-o"])
-        .arg(&perf_path)
-        .args(["-e", "duration_time,task-clock,instructions,cycles,page-faults", "--"])
-        .args(&measured);
+    let mut command = perf_command(&perf_path, &measured);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let start = Instant::now();
     let mut child = command.spawn()?;
@@ -330,11 +299,72 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         mode,
         wall_ns: elapsed,
         counters,
+        null_counters,
         phase_ns,
         stdout_sha256,
         semantic_sha256: hex(Sha256::digest(semantic)),
         backend_receipt: receipt,
     })
+}
+
+fn measured_argv(options: &Options, root: &Path, mode: Mode, program: &str, arguments: &[&str]) -> Vec<OsString> {
+    let mut measured = Vec::<OsString>::new();
+    match mode {
+        Mode::Native => {
+            measured.push("chroot".into());
+            measured.push(root.as_os_str().to_owned());
+            measured.push(format!("/{program}").into());
+            measured.extend(arguments.iter().map(OsString::from));
+        }
+        Mode::Supervised | Mode::Translated => {
+            measured.push(options.engine.as_os_str().to_owned());
+            measured.extend(
+                ["--loader-receipt", "--report-exit", "--diagnostics", "--native-library"]
+                    .into_iter()
+                    .map(OsString::from),
+            );
+            measured.push(options.native_library.as_os_str().to_owned());
+            measured.push("--rootfs".into());
+            measured.push(root.as_os_str().to_owned());
+            match mode {
+                Mode::Supervised => {
+                    measured.push("--native-supervised".into());
+                }
+                Mode::Translated => {
+                    measured.extend(["--native-supervised=off".into(), "--translit".into()]);
+                }
+                Mode::Native => unreachable!(),
+            }
+            measured.push(program.into());
+            measured.extend(arguments.iter().map(OsString::from));
+        }
+    }
+    measured
+}
+
+fn perf_command(path: &Path, measured: &[OsString]) -> Command {
+    let mut command = Command::new("perf");
+    command
+        .args(["stat", "-x", "\t", "-o"])
+        .arg(path)
+        .args(["-e", "duration_time,task-clock,instructions,cycles,page-faults", "--"])
+        .args(measured);
+    command
+}
+
+fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, position: usize) -> Result<Counters, Error> {
+    let path = options
+        .results
+        .join(format!(".null-perf-{}-{sample}-{position}", std::process::id()));
+    let measured = measured_argv(options, root, mode, "bin/true", &[]);
+    let output = perf_command(&path, &measured).output()?;
+    if !output.status.success() || !output.stdout.is_empty() {
+        return Err(format!("developer null arm failed in {mode:?}: {}", output.status).into());
+    }
+    backend_receipt(mode, &String::from_utf8(output.stderr)?)?;
+    let counters = parse_perf(&fs::read_to_string(&path)?)?;
+    fs::remove_file(path)?;
+    Ok(counters)
 }
 
 fn parse_perf(text: &str) -> Result<Counters, Error> {
@@ -465,12 +495,12 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
 
 fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
     let mut text = String::from(
-        "sample\tposition\tmode\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tphase\tphase_ns\n",
+        "sample\tposition\tmode\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tnull_duration_ns\tnull_task_clock_ms\tnull_instructions\tnull_cycles\tnull_page_faults\tphase\tphase_ns\n",
     );
     for row in rows {
         for (phase, elapsed) in &row.phase_ns {
             text.push_str(&format!(
-                "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.sample,
                 row.position,
                 row.mode,
@@ -480,6 +510,11 @@ fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
                 row.counters.instructions,
                 row.counters.cycles,
                 row.counters.page_faults,
+                row.null_counters.duration_ns,
+                row.null_counters.task_clock_ms,
+                row.null_counters.instructions,
+                row.null_counters.cycles,
+                row.null_counters.page_faults,
                 phase,
                 elapsed
             ));
@@ -555,6 +590,13 @@ mod tests {
             mode,
             wall_ns: 1,
             counters: Counters {
+                duration_ns: 1,
+                task_clock_ms: 1.0,
+                instructions: 1,
+                cycles: 1,
+                page_faults: 1,
+            },
+            null_counters: Counters {
                 duration_ns: 1,
                 task_clock_ms: 1.0,
                 instructions: 1,
