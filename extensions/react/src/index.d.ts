@@ -5518,6 +5518,14 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ContainerVolumeMount { volume: string; target: string; read_only?: boolean }
+export interface ContainerPort { container: number; host?: number | null; protocol: 'tcp' | 'udp' }
+export interface ContainerCreateSpec {
+  image: string; name: string; hostname?: string | null; entrypoint?: string[] | null; command?: string[];
+  environment?: [string, string][]; working_directory?: string | null; user?: string | null;
+  labels?: [string, string][]; mounts?: ContainerVolumeMount[]; network?: string | null;
+  ports?: ContainerPort[]; memory_mb?: number | null; cpus?: number | null; pids_limit?: number | null;
+}
 export interface ProcessList {
   container_id: string; titles: string[]; processes: string[][]; observed_at_ms: number;
   scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
@@ -5673,7 +5681,9 @@ export interface WorkspaceApi {
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
     removeExecution(id: string): Promise<void>;
-    create(image: string, name: string): Promise<string>;
+    create(configuration: ContainerCreateSpec): Promise<string>;
+    /** Backwards-compatible shorthand for an image and optional container name. */
+    create(image: string, name?: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;
     remove(id: string): Promise<void>;
