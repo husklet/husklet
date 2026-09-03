@@ -21,6 +21,11 @@ function immutableIdentity(id, widths, noun) {
   throw new TypeError(`${noun} operation requires the complete immutable ID returned by inspection`);
 }
 
+function exactContainerName(name) {
+  if (typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)) return name;
+  throw new TypeError('container name must contain 1..128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit');
+}
+
 function exactCommand(command) {
   if (!Array.isArray(command) || command.length < 1 || command.length > 64
     || command[0] === '' || command.some((argument) => typeof argument !== 'string'
@@ -177,6 +182,9 @@ export function workspace(session) {
       pause: (id) => done('container_pause', { id }),
       unpause: (id) => done('container_unpause', { id }),
       restart: (id) => done('container_restart', { id }),
+      rename: (id, name) => done('container_rename', {
+        id: immutableIdentity(id, [32, 64], 'container'), name: exactContainerName(name),
+      }),
       kill: (id, signal) => done('container_kill', { id: immutableIdentity(id, [32, 64], 'container'), signal }),
       exec: async (id, { command, user, workingDirectory } = {}) => expect(
         await session.call('container_exec', {
@@ -474,7 +482,7 @@ export const LOG_VIEW_CHARACTER_LIMIT = 4_096;
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'kill', 'exec', 'attachTerminal'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'attachTerminal'],
     images: ['list', 'pull', 'startPull', 'pullStatus', 'cancelPull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],

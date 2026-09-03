@@ -81,6 +81,7 @@ try {
     void attachmentGrant;
     void table;
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
+    void api.containers.rename('a'.repeat(64), 'worker_2.prod');
     void api.subscribe('terminal');
     void api.subscribe('volumes');
     void api.subscribe('extensions');

@@ -250,6 +250,11 @@ impl ContainerControl for Host {
         Ok(())
     }
 
+    fn rename(&self, _id: &str, _name: &str) -> Result<(), HostError> {
+        self.ledger.note("containers.rename");
+        Ok(())
+    }
+
     fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
         self.ledger.note("containers.kill");
         Ok(())
@@ -948,6 +953,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
+            Request::ContainerRename { id: "c".repeat(64), name: "worker-2".into() },
+            Capability::ContainerControl,
+        ),
+        (
             Request::ContainerKill {
                 id: "c".repeat(64),
                 signal: "SIGTERM".into(),
@@ -1411,6 +1420,27 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     session.dispatch(&Request::ContainerKill { id: "a".repeat(64), signal: "SIGTERM".into() }, &services(&host)).unwrap();
     session.dispatch(&Request::ExecutionKill { id: "b".repeat(32), signal: "SIGTERM".into() }, &services(&host)).unwrap();
     assert_eq!(host.ledger.reached(), ["containers.stop", "containers.remove", "containers.kill", "executions.kill"]);
+}
+
+#[test]
+fn container_rename_requires_immutable_identity_and_native_name_grammar() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    for request in [
+        Request::ContainerRename { id: "friendly-name".into(), name: "worker".into() },
+        Request::ContainerRename { id: "a".repeat(12), name: "worker".into() },
+        Request::ContainerRename { id: "a".repeat(64), name: ".worker".into() },
+        Request::ContainerRename { id: "a".repeat(64), name: "worker/name".into() },
+        Request::ContainerRename { id: "a".repeat(64), name: "x".repeat(129) },
+    ] {
+        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+    }
+    assert!(host.ledger.reached().is_empty());
+    session.dispatch(
+        &Request::ContainerRename { id: "a".repeat(64), name: "worker_2.prod".into() },
+        &services(&host),
+    ).unwrap();
+    assert_eq!(host.ledger.reached(), ["containers.rename"]);
 }
 
 #[test]

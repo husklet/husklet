@@ -171,6 +171,7 @@ impl Session {
             | Request::ContainerPause { .. }
             | Request::ContainerUnpause { .. }
             | Request::ContainerRestart { .. }
+            | Request::ContainerRename { .. }
             | Request::ContainerKill { .. }
             | Request::ExecutionKill { .. }
             | Request::ExecutionRemove { .. }
@@ -327,6 +328,11 @@ impl Session {
             Request::ContainerPause { id } => port.pause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerUnpause { id } => port.unpause(id).map(|()| Reply::Done).map_err(Failure::from),
             Request::ContainerRestart { id } => port.restart(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ContainerRename { id, name } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                validate_container_name(name)?;
+                port.rename(id, name).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ContainerKill { id, signal } => {
                 bounded_signal(signal)?;
                 immutable_identity(id, &[32, 64], "container")?;
@@ -917,6 +923,19 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
             detail: "container creation specification is invalid or exceeds its bound".into(),
         })
     }
+}
+
+fn validate_container_name(name: &str) -> Result<(), Failure> {
+    let mut bytes = name.bytes();
+    if bytes.next().is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && name.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "container name must contain 1..=128 ASCII alphanumeric, underscore, period, or hyphen bytes".into(),
+    })
 }
 
 fn acquisition_reference(reference: &str) -> Result<(), Failure> {

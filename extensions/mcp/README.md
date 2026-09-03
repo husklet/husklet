@@ -245,6 +245,13 @@ array, opens an ephemeral Husklet tab, connects stdin/stdout/stderr through one
 TTY, and owns the process with kill-on-disconnect semantics. It requires the
 dedicated `container-attach` grant.
 
+`husklet_container_rename` atomically assigns a new name using the complete
+32- or 64-hex container ID returned by inventory/create. It rejects aliases and
+prefixes; names are 1–128 ASCII bytes, start with an alphanumeric byte, and then
+contain only alphanumerics, `_`, `.`, or `-`. Rename is non-destructive and does
+not take a confirmation flag. Subsequent container inventory snapshots retain
+the immutable ID and carry the new name.
+
 ## Administrative lifecycle workflow
 
 [`examples/agent-admin.mjs`](examples/agent-admin.mjs) creates and starts one

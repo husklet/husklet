@@ -5459,6 +5459,7 @@ export interface WorkspaceApi {
     pause(id: string): Promise<void>;
     unpause(id: string): Promise<void>;
     restart(id: string): Promise<void>;
+    rename(id: string, name: string): Promise<void>;
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
   };

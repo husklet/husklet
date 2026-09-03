@@ -142,6 +142,10 @@ pub enum Request {
     ContainerRestart {
         id: String,
     },
+    ContainerRename {
+        id: String,
+        name: String,
+    },
     ContainerKill {
         id: String,
         signal: String,
@@ -342,6 +346,7 @@ impl Request {
             | Self::ContainerPause { .. }
             | Self::ContainerUnpause { .. }
             | Self::ContainerRestart { .. }
+            | Self::ContainerRename { .. }
             | Self::ContainerKill { .. }
             | Self::ExecutionKill { .. }
             | Self::ExecutionRemove { .. }
@@ -740,5 +745,18 @@ mod tests {
         let accepted: Request =
             serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\"}}").expect("valid");
         assert_eq!(accepted, Request::ContainerStop { id: "c1".into() });
+
+        let rename = Request::ContainerRename { id: "a".repeat(64), name: "worker_2.prod".into() };
+        assert_eq!(
+            serde_json::to_value(&rename).expect("rename wire request"),
+            serde_json::json!({
+                "call": "container_rename",
+                "with": { "id": "a".repeat(64), "name": "worker_2.prod" }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Request>(serde_json::to_value(&rename).unwrap()).unwrap(),
+            rename
+        );
     }
 }

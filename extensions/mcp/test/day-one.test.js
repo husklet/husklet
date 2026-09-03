@@ -61,7 +61,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
         else if (call === 'workspace_inspect') answer(frame, 'workspace_configuration', original);
         else if (call === 'workspace_update') answer(frame, 'workspace_configuration', argument.configuration);
         else if (call === 'container_create') answer(frame, 'identity', containerId);
-        else if (call === 'container_start' || call === 'container_stop' || call === 'container_remove'
+        else if (call === 'container_start' || call === 'container_rename' || call === 'container_stop' || call === 'container_remove'
           || call === 'terminal_write_pane' || call === 'pane_semantic_action'
           || call === 'event_subscribe' || call === 'event_unsubscribe') {
           answer(frame, 'done');
@@ -139,6 +139,9 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   let diagnostics = ''; transport.stderr.on('data', (chunk) => { diagnostics += chunk; });
   const client = new Client({ name: 'day-one-test', version: '1' });
   await client.connect(transport);
+  await client.callTool({ name: 'husklet_container_rename', arguments: {
+    id: containerId, name: 'day-one-renamed',
+  } });
   const extensionChanged = await waitForInstalledExtensionChange(client, 'manager', 1_000);
   assert.equal(extensionChanged.extension.status, 'duty');
   const removedExecution = { id: 'execution-remove', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
@@ -176,7 +179,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'extension_list', 'event_subscribe', 'event_unsubscribe',
+    'workspace_info', 'container_rename', 'extension_list', 'event_subscribe', 'event_unsubscribe',
     'event_subscribe', 'event_unsubscribe', 'event_subscribe', 'event_unsubscribe',
     'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
@@ -193,6 +196,9 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     'the concurrent subscription remains until both waits dispose');
   assert.deepEqual(calls.find(({ call }) => call === 'container_exec').with, {
     id: containerId, command: ['/usr/bin/worker', '--once'], user: null, working_directory: null,
+  });
+  assert.deepEqual(calls.find(({ call }) => call === 'container_rename').with, {
+    id: containerId, name: 'day-one-renamed',
   });
   assert.deepEqual(calls.find(({ call }) => call === 'container_create').with.spec, {
     image: 'alpine:3.21', name: 'day-one', hostname: null, entrypoint: null,

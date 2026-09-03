@@ -731,6 +731,13 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Atomically assigns a new unique name to one immutable container identity.
+    fn rename(&self, _id: &str, _name: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "container rename is unsupported by this host".into(),
+        ))
+    }
+
     /// Delivers a validated Linux signal to a running container.
     fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported(
