@@ -137,6 +137,8 @@ impl TerminalSurface for Host {
     fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError> {
         Ok(PaneText {
             slot: slot.into(),
+            generation: 0,
+            revision: 0,
             lines: vec![format!("at most {lines}")],
             cursor_column: 12,
             cursor_row: 3,

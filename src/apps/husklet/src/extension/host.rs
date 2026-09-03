@@ -936,6 +936,8 @@ mod tests {
         fn read(&self, slot: &str, _lines: usize) -> Result<hl_extension::port::PaneText, HostError> {
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
+                generation: 0,
+                revision: 0,
                 lines: Vec::new(),
                 cursor_column: 0,
                 cursor_row: 0,

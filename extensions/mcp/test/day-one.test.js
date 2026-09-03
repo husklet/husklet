@@ -38,9 +38,9 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
       channel: frame.channel, kind: KIND.response,
       payload: withValue === undefined ? { reply } : { reply, with: withValue },
     }));
-    const changed = (slot, kind, revision) => socket.write(encode({
+    const changed = (slot, kind, generation, revision = generation) => socket.write(encode({
       channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
-        slot, kind, revision, generation: revision, coalesced: 0,
+        slot, kind, revision, generation, coalesced: 0,
       } },
     }));
     socket.on('data', (chunk) => {
@@ -76,13 +76,17 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
               { id: containerId, name: 'day-one', image: 'alpine:3.21', state: 'exited', created: 41 },
             ] } })));
           });
+          if (call === 'event_subscribe' && argument.topic === 'pane-changes') setImmediate(() => {
+            changed('terminal-1', 'terminal', 1, 0);
+            changed('surface-1', 'surface', 7, 7);
+          });
           if (call === 'terminal_write_pane') changed('terminal-1', 'terminal', 2);
-          if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8);
+          if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8, 0);
         } else if (call === 'container_exec') answer(frame, 'identity', 'execution-day-one');
         else if (call === 'container_processes') answer(frame, 'processes', [{ pid: 7, command: 'worker', user: 'app' }]);
         else if (call === 'pane_list') answer(frame, 'panes', { panes: [
-          { slot: 'terminal-1', kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true },
-          { slot: 'surface-1', kind: 'surface', provider: { extension: 'manager', provider: 'main' }, tab: 'tab-1', title: 'Manager', focused: false },
+          { slot: 'terminal-1', generation: 1, revision: 0, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true },
+          { slot: 'surface-1', generation: 7, revision: 7, kind: 'surface', provider: { extension: 'manager', provider: 'main' }, tab: 'tab-1', title: 'Manager', focused: false },
         ], truncated: false });
         else if (call === 'terminal_topology') answer(frame, 'topology', { active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Day one', root: {
           kind: 'split', division: 'beside', ratio_per_mille: 500,
@@ -128,7 +132,11 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.deepEqual(result.container.created, { id: containerId });
   assert.equal(result.container.execution.id, 'execution-day-one');
   assert.equal(result.terminal.changed.changed, true);
+  assert.equal(result.terminal.changed.change.generation, 2);
+  assert.equal(result.terminal.changed.change.revision, 2);
   assert.equal(result.semantic.node, 5);
+  assert.equal(result.semantic.changed.change.generation, 8);
+  assert.equal(result.semantic.changed.change.revision, 0, 'a replacement generation may reset revision');
   await client.close();
   assert.equal(diagnostics, '');
 

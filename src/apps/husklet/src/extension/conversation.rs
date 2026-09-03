@@ -18,7 +18,6 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use hl_extension::port::Occupant;
 use hl_extension::{
     Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
@@ -179,7 +178,7 @@ pub struct Conversation {
     settle: Duration,
     observed: std::collections::BTreeMap<Topic, Snapshot>,
     extension_events: Option<super::management_events::ExtensionEvents>,
-    pane_observed: std::collections::BTreeMap<String, (PaneChangeKind, u64, u64)>,
+    pane_observed: std::collections::BTreeMap<String, (PaneChangeKind, u64, u64, u64)>,
     pane_generation: u64,
     pane_next: Instant,
     pane_cursor: usize,
@@ -438,13 +437,30 @@ impl Conversation {
             return Ok(());
         };
         const PANE_SCAN_LIMIT: usize = 32;
-        const TEXT_LINE_LIMIT: usize = 200;
         let topology = services.terminal.topology().ok().map(|topology| {
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
             hash.finish()
         });
-        let panes: Vec<_> = tabs.into_iter().flat_map(|tab| tab.panes).take(256).collect();
+        let panes: Vec<_> = tabs
+            .into_iter()
+            .flat_map(|tab| tab.panes)
+            .take(256)
+            .map(|pane| hl_extension::InspectablePane {
+                slot: pane.slot,
+                generation: 0,
+                revision: 0,
+                kind: match pane.occupant {
+                    hl_extension::port::Occupant::Terminal => hl_extension::PaneKind::Terminal,
+                    hl_extension::port::Occupant::Surface if pane.provider.is_some() => hl_extension::PaneKind::Surface,
+                    hl_extension::port::Occupant::Surface => hl_extension::PaneKind::Native,
+                },
+                provider: pane.provider,
+                tab: None,
+                title: None,
+                focused: false,
+            })
+            .collect();
         let live: std::collections::BTreeSet<_> = panes.iter().map(|pane| pane.slot.clone()).collect();
         let count = panes.len();
         let start = self.pane_cursor.min(count);
@@ -455,46 +471,75 @@ impl Conversation {
         };
         let mut changed = Vec::new();
         for pane in panes.into_iter().cycle().skip(start).take(PANE_SCAN_LIMIT.min(count)) {
-            let kind = match pane.occupant {
-                Occupant::Terminal => PaneChangeKind::Terminal,
-                Occupant::Surface if pane.provider.is_some() => PaneChangeKind::Surface,
-                Occupant::Surface => PaneChangeKind::Native,
-            };
-            let revision = services.terminal.semantics(&pane.slot).map_or(0, |tree| tree.revision);
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            serde_json::to_vec(&pane).unwrap_or_default().hash(&mut hash);
-            topology.hash(&mut hash);
-            if kind == PaneChangeKind::Terminal {
-                if let Ok(text) = services.terminal.read(&pane.slot, TEXT_LINE_LIMIT) {
-                    serde_json::to_vec(&text).unwrap_or_default().hash(&mut hash);
-                }
+            let (kind, revision, generation, pane_changed) = self.pane_state(services, &pane, topology);
+            if pane_changed {
+                changed.push((pane.slot.clone(), kind, revision, generation));
             }
-            let fingerprint = hash.finish();
-            let state = (kind, revision, fingerprint);
-            if self.pane_observed.get(&pane.slot) != Some(&state) {
-                changed.push((pane.slot.clone(), kind, revision));
-            }
-            self.pane_observed.insert(pane.slot, state);
         }
         // Removed panes also invalidate topology; retain only a bounded stable
         // identity and no former contents.
-        for (slot, (kind, revision, _)) in &self.pane_observed {
+        for (slot, (kind, revision, _, _)) in &self.pane_observed {
             if !live.contains(slot) {
-                changed.push((slot.clone(), *kind, *revision));
+                self.pane_generation = self.pane_generation.saturating_add(1);
+                changed.push((slot.clone(), *kind, *revision, self.pane_generation));
             }
         }
         self.pane_observed.retain(|slot, _| live.contains(slot));
-        for (slot, kind, revision) in changed.into_iter().take(PANE_SCAN_LIMIT) {
-            self.pane_generation = self.pane_generation.saturating_add(1);
+        for (slot, kind, revision, generation) in changed.into_iter().take(PANE_SCAN_LIMIT) {
             self.publish(&Snapshot::PaneChanges(PaneChange {
                 slot,
                 kind,
                 revision,
-                generation: self.pane_generation,
+                generation,
                 coalesced: 0,
             }))?;
         }
         Ok(())
+    }
+
+    fn pane_state(
+        &mut self,
+        services: &Services<'_>,
+        pane: &hl_extension::InspectablePane,
+        topology: Option<u64>,
+    ) -> (PaneChangeKind, u64, u64, bool) {
+        const TEXT_LINE_LIMIT: usize = 200;
+        let kind = match pane.kind {
+            hl_extension::PaneKind::Terminal => PaneChangeKind::Terminal,
+            hl_extension::PaneKind::Surface => PaneChangeKind::Surface,
+            hl_extension::PaneKind::Native => PaneChangeKind::Native,
+        };
+        let revision = services.terminal.semantics(&pane.slot).map_or(0, |tree| tree.revision);
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        pane.slot.hash(&mut hash);
+        pane.kind.hash(&mut hash);
+        pane.provider.hash(&mut hash);
+        topology.hash(&mut hash);
+        if kind == PaneChangeKind::Terminal {
+            if let Ok(mut text) = services.terminal.read(&pane.slot, TEXT_LINE_LIMIT) {
+                text.generation = 0;
+                text.revision = 0;
+                serde_json::to_vec(&text).unwrap_or_default().hash(&mut hash);
+            }
+        }
+        let fingerprint = hash.finish();
+        let changed = self
+            .pane_observed
+            .get(&pane.slot)
+            .is_none_or(|(_, old_revision, old_fingerprint, _)| {
+                *old_revision != revision || *old_fingerprint != fingerprint
+            });
+        if changed {
+            self.pane_generation = self.pane_generation.saturating_add(1);
+        }
+        let generation = if changed {
+            self.pane_generation
+        } else {
+            self.pane_observed.get(&pane.slot).map_or(0, |state| state.3)
+        };
+        self.pane_observed
+            .insert(pane.slot.clone(), (kind, revision, fingerprint, generation));
+        (kind, revision, generation, changed)
     }
 
     /// Queues a listing for an extension that follows its topic.
@@ -604,9 +649,12 @@ impl Conversation {
         let request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
             call: coding.to_string(),
         })?;
-        let answer = self.session.dispatch(&request, services);
+        let mut answer = self.session.dispatch(&request, services);
+        if let Ok(reply) = &mut answer {
+            self.attach_pane_cursors(reply, services);
+        }
         if answer.is_ok() {
-            match request {
+            match &request {
                 hl_extension::Request::EventSubscribe {
                     topic: Topic::WorkspaceLifecycle,
                 } => {
@@ -621,6 +669,37 @@ impl Conversation {
             }
         }
         answer
+    }
+
+    fn attach_pane_cursors(&mut self, reply: &mut Reply, services: &Services<'_>) {
+        if !matches!(reply, Reply::Text(_) | Reply::Panes(_)) {
+            return;
+        }
+        let topology = services.terminal.topology().ok().map(|topology| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+            hash.finish()
+        });
+        let Ok(inventory) = services.terminal.pane_inventory() else {
+            return;
+        };
+        match reply {
+            Reply::Text(text) => {
+                if let Some(pane) = inventory.panes.iter().find(|pane| pane.slot == text.slot) {
+                    let (_, revision, generation, _) = self.pane_state(services, pane, topology);
+                    text.generation = generation;
+                    text.revision = revision;
+                }
+            }
+            Reply::Panes(returned) => {
+                for pane in &mut returned.panes {
+                    let (_, revision, generation, _) = self.pane_state(services, pane, topology);
+                    pane.generation = generation;
+                    pane.revision = revision;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Returns the credit a peer released as it consumed frames. A payload that
@@ -859,6 +938,8 @@ mod tests {
             self.ledger.note("terminal.read");
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
+                generation: 0,
+                revision: 0,
                 lines: vec![format!("at most {lines}")],
                 cursor_column: 12,
                 cursor_row: 3,
@@ -965,7 +1046,11 @@ mod tests {
 
         fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
             self.ledger.note("files.stat");
-            Ok(Entry { path: path.clone(), directory: false, size: 8 })
+            Ok(Entry {
+                path: path.clone(),
+                directory: false,
+                size: 8,
+            })
         }
 
         fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {

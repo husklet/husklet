@@ -110,6 +110,10 @@ observed generation and revision, and the wait ignores the host's unchanged
 initial scan. A replacement generation is newer even when its content revision
 starts again at zero.
 
+Pane inventory entries and the outer `husklet_pane_read` XML element carry that
+authoritative generation/revision cursor. The packaged day-one workflow reads
+the cursor before arming its wait and passes both values back explicitly.
+
 `husklet_container_change_wait` accepts the exact `state` and `created` values
 last observed for its immutable container ID. Supplying that cursor prevents the
 subscription's unchanged initial catalogue from completing the wait; a state

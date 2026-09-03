@@ -332,6 +332,8 @@ impl TerminalSurface for Host {
         Ok(hl_extension::port::PaneInventory {
             panes: vec![hl_extension::port::InspectablePane {
                 slot: "workspace".into(),
+                generation: 0,
+                revision: 0,
                 kind: hl_extension::port::PaneKind::Native,
                 provider: None,
                 tab: None,
@@ -383,6 +385,8 @@ impl TerminalSurface for Host {
         if slot == "oversized" {
             return Ok(PaneText {
                 slot: slot.into(),
+                generation: 0,
+                revision: 0,
                 lines: vec!["old".repeat(hl_extension::port::PANE_TEXT_BYTES / 3), "new".into()],
                 cursor_column: 0,
                 cursor_row: 0,
@@ -391,6 +395,8 @@ impl TerminalSurface for Host {
         }
         Ok(PaneText {
             slot: slot.into(),
+            generation: 0,
+            revision: 0,
             lines: vec![format!("at most {lines}")],
             cursor_column: 12,
             cursor_row: 3,

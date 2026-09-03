@@ -77,7 +77,7 @@ export async function paneXml(terminal, slot, lines = 200) {
     ? inventory.panes.find((pane) => pane?.slot === slot) : undefined;
   if (!descriptor) throw new Error(`pane ${JSON.stringify(slot)} is absent from pane inventory`);
   const occupant = descriptor.kind;
-  const open = `<husklet-pane slot="${escape(slot)}" occupant="${escape(occupant)}">`;
+  const open = `<husklet-pane slot="${escape(slot)}" occupant="${escape(occupant)}" generation="${escape(descriptor.generation ?? 0)}" revision="${escape(descriptor.revision ?? 0)}">`;
   const close = '</husklet-pane>';
   if (occupant === 'surface' || occupant === 'native') {
     const semantic = semanticXml(await terminal.semantics(slot));

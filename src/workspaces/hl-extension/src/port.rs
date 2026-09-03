@@ -251,7 +251,7 @@ pub struct PaneSummary {
     pub provider: Option<PaneProviderIdentity>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PaneProviderIdentity {
     pub extension: String,
     pub provider: String,
@@ -275,6 +275,10 @@ pub enum Occupant {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PaneText {
     pub slot: String,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub revision: u64,
     pub lines: Vec<String>,
     /// Zero-based cursor column in the terminal's visible grid.
     #[serde(default)]
@@ -367,6 +371,10 @@ pub struct PaneInventory {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct InspectablePane {
     pub slot: String,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub revision: u64,
     pub kind: PaneKind,
     pub provider: Option<PaneProviderIdentity>,
     pub tab: Option<String>,
@@ -374,7 +382,7 @@ pub struct InspectablePane {
     pub focused: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PaneKind {
     Terminal,
@@ -1016,8 +1024,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_pane_text, pane_lines, Division, LayoutNode, Occupant, PaneSummary, PaneText, PANE_LINES,
-        PANE_TEXT_BYTES,
+        Division, LayoutNode, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText, bounded_pane_text,
+        pane_lines,
     };
 
     #[test]
@@ -1032,6 +1040,8 @@ mod tests {
     fn terminal_text_retains_only_newest_complete_lines_within_the_wire_budget() {
         let text = PaneText {
             slot: "pane".into(),
+            generation: 0,
+            revision: 0,
             lines: vec![
                 "old".repeat(PANE_TEXT_BYTES / 3),
                 "middle".repeat(PANE_TEXT_BYTES / 6),

@@ -515,7 +515,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
     semantics: async () => { throw new Error('not semantic'); },
   };
   const xml = await paneXml(terminal, 'term-1', 20);
-  assert.match(xml, /^<husklet-pane slot="term-1" occupant="terminal"><terminal /);
+  assert.match(xml, /^<husklet-pane slot="term-1" occupant="terminal" generation="0" revision="0"><terminal /);
   assert.match(xml, /active="true" focused="true" columns="120" rows="40"/);
   assert.match(xml, /title="Shell &amp; work"/);
   assert.match(xml, /<line index="0">one &lt; two<\/line>/);
@@ -539,7 +539,7 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
     },
   };
   const xml = await paneXml(terminal, 'surface-1');
-  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface"><pane /);
+  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface" generation="0" revision="0"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
   await assert.rejects(() => paneXml(terminal, 'missing'), /absent from pane inventory/);
@@ -972,7 +972,7 @@ test('pane XML follows every split leaf and refuses a removed stale slot', async
   for (const [slot, tab, active, focused, columns, rows, truncated] of expected) {
     const answer = await client.callTool({ name: 'husklet_pane_read', arguments: { slot, lines: 10 } });
     const xml = answer.content[0].text;
-    assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal">`));
+    assert.match(xml, new RegExp(`<husklet-pane slot="${slot}" occupant="terminal" generation="0" revision="0">`));
     assert.match(xml, new RegExp(`<terminal tab="${tab}"[^>]*active="${active}"[^>]*focused="${focused}"[^>]*columns="${columns}" rows="${rows}" cursor-column="6" cursor-row="7"[^>]*truncated="${truncated}">`));
     assert.match(xml, new RegExp(`visible &lt;${slot}&gt;`));
   }
