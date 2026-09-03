@@ -69,7 +69,9 @@ impl Settings {
             ),
             "fhint",
         ));
-        main.append(&line(&format!("image  ·  {}", entry.image_digest), "fhint"));
+        let image = line(&format!("image  ·  {}", entry.image_digest), "fhint");
+        image.set_selectable(true);
+        main.append(&image);
         let standing = standing(entry.stage);
         main.append(&standing);
         main.append(&capabilities(entry));

@@ -739,6 +739,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
     assert!(lifecycle_card.width() <= fixture._catalogue.viewport().width(),
         "card remains bounded at compact width: card={} viewport={}",
         lifecycle_card.width(), fixture._catalogue.viewport().width());
+    let image = descendants(lifecycle_card.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .find(|label| label.text().starts_with("image  ·  "))
+        .expect("lifecycle card displays its immutable image digest");
+    assert!(image.is_selectable(), "the exact digest can be selected and copied");
+    assert!(image.wraps(), "long digests wrap instead of widening the compact card");
     assert_eq!(
         installed_heading.accessible_role(),
         gtk::AccessibleRole::Heading,
