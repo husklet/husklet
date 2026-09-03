@@ -9,10 +9,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire,
-        codec,
+        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{Renderer as _, SourceMutation, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -104,6 +103,29 @@ mod unix {
         let mut surface = Surface::new();
         tree.apply(&frame, &mut surface)
             .unwrap_or_else(|error| panic!("{story} failed in GTK: {error:?}"));
+        if story == "DataTable" {
+            loop {
+                let carried = wire.receive().expect("DataTable publishes its logical length");
+                if carried.kind == Kind::Credit {
+                    continue;
+                }
+                let request = codec::read_request(&carried).expect("source length request decodes");
+                let Request::SourceResizeAt { slot, mutation } = request else {
+                    panic!("DataTable sent {request:?} before its source length")
+                };
+                assert_eq!(slot, "storybook-main");
+                let SourceMutation::Length { source, version, rows } = mutation else {
+                    panic!("DataTable first source mutation was not its length")
+                };
+                assert_eq!(rows, 100_000);
+                surface
+                    .resize(source, version, rows)
+                    .expect("GTK accepts logical source length");
+                wire.send(&codec::reply(&Reply::Done).expect("done encodes"))
+                    .expect("length acknowledgement sends");
+                break;
+            }
+        }
         let root = surface.widget().clone().upcast::<gtk::Widget>();
         for width in [300, 1_200] {
             root.measure(gtk::Orientation::Horizontal, -1);
@@ -112,13 +134,57 @@ mod unix {
             assert_eq!(root.width(), width, "{story} did not accept the {width}px allocation");
             assert_contained(&root, story);
         }
+        if story == "DataTable" {
+            settle_toolkit();
+            let requests = surface.requests(1);
+            assert!(!requests.is_empty(), "realized GTK rows request a source window");
+            let request = requests[0].clone();
+            assert!(request.range.count <= 128, "GTK requested an unbounded row window");
+            let channel = ChannelId::new(4);
+            wire.send(&Frame::new(
+                channel,
+                Kind::Request,
+                serde_json::to_vec(&request).expect("row request encodes"),
+            ))
+            .expect("row request reaches Storybook");
+            let answer = loop {
+                let carried = wire.receive().expect("Storybook answers the row request");
+                if carried.kind == Kind::Credit {
+                    continue;
+                }
+                if carried.channel == channel {
+                    break carried;
+                }
+                let follow_up = codec::read_request(&carried).expect("concurrent Storybook call decodes");
+                assert!(
+                    matches!(
+                        follow_up,
+                        Request::InterfaceRenderAt { .. } | Request::SourceResizeAt { .. }
+                    ),
+                    "unexpected call while awaiting row data: {follow_up:?}"
+                );
+                wire.send(&codec::reply(&Reply::Done).expect("follow-up reply encodes"))
+                    .expect("follow-up reply sends");
+            };
+            assert_eq!(answer.channel, channel);
+            assert_eq!(answer.kind, Kind::Response);
+            let window: hl_gui::RowWindow = serde_json::from_slice(&answer.payload).expect("row window decodes");
+            assert!(
+                window.rows.len() <= 128,
+                "Storybook materialized an unbounded row window"
+            );
+            surface.rows(&window).expect("GTK accepts the bounded row window");
+        }
         assert!(readable_heading(&root), "{story} has no readable GTK heading");
         if story == "Bounded streaming log" {
             let buffer = find::<gtk::TextView>(&root, |_| true).buffer();
             assert_eq!(buffer.char_count(), LOG_VIEW_CHARACTER_LIMIT);
             let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
             assert!(!text.starts_with("old history"), "oldest history was not evicted");
-            assert!(text.contains("completed operation"), "newest log batch was not retained");
+            assert!(
+                text.contains("completed operation"),
+                "newest log batch was not retained"
+            );
         }
         if story == "Virtual event timeline" {
             let view = find::<gtk::ColumnView>(&root, |_| true);
@@ -158,7 +224,10 @@ mod unix {
         root.measure(gtk::Orientation::Vertical, 300);
         root.allocate(300, 1_600, -1, None);
         assert_contained(&root, story);
-        assert!(readable_heading(&root), "{story} lost its readable heading after interaction");
+        assert!(
+            readable_heading(&root),
+            "{story} lost its readable heading after interaction"
+        );
         if story == "Bounded streaming log" {
             assert_eq!(
                 find::<gtk::TextView>(&root, |_| true).buffer().char_count(),
@@ -217,9 +286,7 @@ mod unix {
                 entry.set_text("needle");
             }
             "Keyboard and semantic actions" => {
-                let entry = find::<gtk::Entry>(root, |entry| {
-                    entry.placeholder_text().as_deref() == Some("storybook")
-                });
+                let entry = find::<gtk::Entry>(root, |entry| entry.placeholder_text().as_deref() == Some("storybook"));
                 entry.set_text("storybook");
             }
             "Drag and keyboard reorder" => {
@@ -262,8 +329,15 @@ mod unix {
             let hl_gui::Event::Change { node, .. } = event else {
                 panic!("entry did not emit Change")
             };
-            let id = tree.handler(node, hl_gui::Trigger::Focus).expect("entry declares Focus").clone();
-            return hl_gui::Event::Focus { node, id, focused: true };
+            let id = tree
+                .handler(node, hl_gui::Trigger::Focus)
+                .expect("entry declares Focus")
+                .clone();
+            return hl_gui::Event::Focus {
+                node,
+                id,
+                focused: true,
+            };
         }
         event
     }
@@ -306,7 +380,11 @@ mod unix {
             assert!(
                 allocation.x() >= 0 && allocation.x() + allocation.width() <= parent.width(),
                 "{story} overflowed {:?}: child x={} width={}, parent width={}",
-                (parent.css_classes(), current.css_classes(), current.downcast_ref::<gtk::Label>().map(gtk::Label::text)),
+                (
+                    parent.css_classes(),
+                    current.css_classes(),
+                    current.downcast_ref::<gtk::Label>().map(gtk::Label::text)
+                ),
                 allocation.x(),
                 allocation.width(),
                 parent.width()

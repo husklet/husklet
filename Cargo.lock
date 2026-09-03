@@ -1440,6 +1440,7 @@ dependencies = [
  "gtk4",
  "hl-extension",
  "hl-gui",
+ "serde_json",
 ]
 
 [[package]]

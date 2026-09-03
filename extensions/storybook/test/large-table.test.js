@@ -41,7 +41,7 @@ test('sort, filter, resize and all states remain bounded source operations', asy
 
   await source.configure({ descending: true });
   const sorted = source.answer({ ...request, id: 5, version: 2, range: { start: 0, count: 8 } });
-  assert.equal(sorted.rows[0].id, LOGICAL_ROWS - 1);
+  assert.equal(sorted.rows[0].key, LOGICAL_ROWS - 1);
   assert.equal(source.answer(request), null, 'a stale pre-sort request cannot repopulate the table');
 
   await source.configure({ filter: 'needle' });
@@ -55,7 +55,7 @@ test('sort, filter, resize and all states remain bounded source operations', asy
   assert.equal(source.length(), 0);
   await source.configure({ state: 'error' });
   const failed = source.answer({ ...request, version: 6, range: { start: 0, count: 1 } });
-  assert.equal(failed.rows[0].cells[2].Badge.tone, 'danger');
+  assert.equal(failed.rows[0].cells[2].Badge.tone, 'Danger');
   assert(mutations.every(([call]) => call === 'source_resize'));
 });
 
@@ -77,7 +77,12 @@ test('the story controls visibly demonstrate loading, empty, error, filter and s
   assert(tagsSince(before).includes('EmptyState'));
   before = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: 'error' });
+  const failed = stage.since(before);
   assert(tagsSince(before).includes('Banner'));
+  const retry = node(failed, 'Button', 'Retry row source');
+  assert(retry, 'the failed source has an actionable recovery path');
+  stage.surface.dispatch({ trigger: 'Invoke', node: retry, id: `${retry}:Invoke` });
+  assert.equal(source.state, 'loading');
   stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'needle' });
   stage.surface.dispatch({ trigger: 'Invoke', node: button, id: `${button}:Invoke`, value: null });
   assert.equal(source.filter, 'needle');

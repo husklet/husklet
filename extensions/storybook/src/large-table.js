@@ -51,10 +51,10 @@ export class LargeRecordSource {
 
   row(index) {
     if (this.state === 'error') {
-      return { id: 0, cells: [{ Text: 'unavailable' }, { Text: 'The source refused this window' }, { Badge: { label: 'error', tone: 'danger' } }] };
+      return { key: 0, cells: [{ Text: 'unavailable' }, { Text: 'The source refused this window' }, { Badge: { label: 'error', tone: 'Danger' } }] };
     }
     const logical = this.descending ? this.length() - index - 1 : index;
-    return { id: logical, cells: [{ Number: logical }, { Text: `${this.filter || 'record'}-${logical}` }, { Badge: { label: logical % 3 ? 'ready' : 'busy', tone: logical % 3 ? 'positive' : 'warning' } }] };
+    return { key: logical, cells: [{ Number: logical }, { Text: `${this.filter || 'record'}-${logical}` }, { Badge: { label: logical % 3 ? 'ready' : 'busy', tone: logical % 3 ? 'Positive' : 'Warning' } }] };
   }
 }
 
@@ -108,7 +108,13 @@ export function LargeDataTableStory({ source }) {
     ),
     ...(state === 'loading' ? [h(Progress, { key: 'loading', label: 'Waiting for a row window' })]
       : state === 'empty' ? [h(EmptyState, { key: 'empty', label: 'No matching records', detail: 'Change the filter or state control.' })]
-      : state === 'error' ? [h(Banner, { key: 'error', label: 'The source rejected this window', tone: 'danger' })] : []),
+      : state === 'error' ? [
+        h(Banner, { key: 'error', label: 'The source rejected this window', tone: 'danger' }),
+        h(Button, { key: 'retry', label: 'Retry row source', onInvoke: () => {
+          update({ state: 'loading' });
+          record('retrying row source');
+        } }),
+      ] : []),
     h(DataTable, {
       source: SOURCE,
       schema: SCHEMA,
