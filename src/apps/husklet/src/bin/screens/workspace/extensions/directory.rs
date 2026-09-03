@@ -76,6 +76,7 @@ pub struct Catalogue {
     /// What the last inspection found, waiting for an answer.
     candidate: RefCell<Option<Proposal>>,
     consent_focus: Cell<bool>,
+    cancel_focus: Cell<bool>,
     semantics: super::super::semantic::Registry,
 }
 
@@ -133,6 +134,7 @@ impl Catalogue {
             pending: RefCell::new(None),
             candidate: RefCell::new(None),
             consent_focus: Cell::new(false),
+            cancel_focus: Cell::new(false),
             semantics,
         });
         page.assemble();
@@ -278,6 +280,7 @@ impl Catalogue {
         let pending = self.pending.borrow();
         let Some(pending) = pending.as_ref() else { return };
         pending.cancellation.cancel();
+        self.cancel_focus.set(self.cancel.has_focus());
         self.cancel.set_label("Cancelling…");
         self.cancel.set_sensitive(false);
         self.semantics.update(
@@ -366,6 +369,7 @@ impl Catalogue {
     }
 
     fn cancelled(&self) {
+        let restore_focus = self.cancel_focus.replace(false);
         *self.pending.borrow_mut() = None;
         self.progress.set_visible(false);
         self.cancel.set_visible(false);
@@ -375,6 +379,9 @@ impl Catalogue {
         self.say("image acquisition cancelled; nothing was installed");
         self.acquisition_finished();
         self.offer_retry();
+        if restore_focus {
+            self.inspect.grab_focus();
+        }
     }
 
     /// Records the grant for the candidate on screen.

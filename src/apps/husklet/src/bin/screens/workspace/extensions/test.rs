@@ -1831,9 +1831,23 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
         }
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     typed(&page, "team/tool:latest");
     page.inspect();
-    page.cancel();
+    let pending = fixture.view.semantic_snapshot();
+    let pending_cancel = pending.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Cancel download"))
+        .expect("in-flight acquisition exposes cancellation");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: pending.revision, node: pending_cancel.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("cancellation receives keyboard focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: pending.revision, node: pending_cancel.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused cancellation reaches its exact acquisition");
 
     let cancelling = fixture.view.semantic_snapshot();
     let cancel = cancelling
@@ -1870,6 +1884,11 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
         .send(Acquisition::Ready(candidate()))
         .expect("late worker result");
     assert!(page.poll());
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>().and_then(|button| button.label()),
+        Some("Retry".into()),
+        "completed cancellation hands focus from the removed action to Retry");
     assert!(fixture.roster.borrow().entries().is_empty());
     assert!(page.notice().contains("nothing was installed"));
     let cancelled = fixture.view.semantic_snapshot();
@@ -1887,6 +1906,8 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
         inspect_action(&page).is_sensitive(),
         "retry is offered after acknowledgement"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn closing_the_catalogue_cancels_its_exact_acquisition_before_reentry() {
