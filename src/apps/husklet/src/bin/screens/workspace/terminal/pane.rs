@@ -140,6 +140,7 @@ impl PaneChooser {
         choices.set_size_request(200, -1);
 
         let heading = gtk::Label::new(Some("Pane content"));
+        heading.set_accessible_role(gtk::AccessibleRole::Heading);
         heading.add_css_class("heading");
         heading.set_xalign(0.0);
         choices.append(&heading);
@@ -194,6 +195,7 @@ impl PaneChooser {
             for provider in providers {
                 if current_extension.as_deref() != Some(provider.extension.as_str()) {
                     let label = gtk::Label::new(Some(&provider.extension));
+                    label.set_accessible_role(gtk::AccessibleRole::Heading);
                     label.add_css_class("caption");
                     label.add_css_class("dim-label");
                     label.set_xalign(0.0);

@@ -3736,6 +3736,18 @@ mod panes {
             .collect();
         assert!(labels.contains(&"database-tools".to_owned()));
         assert!(labels.contains(&"workspace-tools".to_owned()));
+        for heading in ["Pane content", "database-tools", "workspace-tools"] {
+            let label = widgets
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .find(|label| label.text() == heading)
+                .unwrap_or_else(|| panic!("missing chooser heading {heading:?}"));
+            assert_eq!(
+                label.accessible_role(),
+                gtk::AccessibleRole::Heading,
+                "the visual chooser heading {heading:?} must support assistive navigation"
+            );
+        }
         let search = widgets
             .iter()
             .find_map(|widget| widget.downcast_ref::<gtk::SearchEntry>())
