@@ -12,39 +12,18 @@ use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Page {
-    Overview,
-    Containers,
-    Images,
-    Volumes,
-    Networks,
-    Processes,
-    Extensions,
     Settings,
+    Extensions,
 }
 
 impl Page {
-    pub const ALL: [Self; 8] = [
-        Self::Overview,
-        Self::Containers,
-        Self::Images,
-        Self::Volumes,
-        Self::Networks,
-        Self::Processes,
-        Self::Extensions,
-        Self::Settings,
-    ];
+    pub const ALL: [Self; 2] = [Self::Settings, Self::Extensions];
 
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
-            Self::Overview => "Overview",
-            Self::Containers => "Containers",
-            Self::Images => "Images",
-            Self::Volumes => "Volumes",
-            Self::Networks => "Networks",
-            Self::Processes => "Processes",
-            Self::Extensions => "Extensions",
             Self::Settings => "Settings",
+            Self::Extensions => "Extensions",
         }
     }
 }
@@ -105,44 +84,6 @@ impl View {
             pages,
             items,
             semantics,
-        }
-    }
-
-    /// Adds one page after the shell was built.
-    ///
-    /// The fixed pages are the product's own and are known at compile time; a
-    /// workspace's extensions are neither, and one being installed must show up
-    /// without the window being opened again.
-    pub fn attach(&self, name: &str, content: &impl IsA<gtk::Widget>) {
-        let item = Self::entry(&self.pages, &self.items, &self.semantics, name, content.as_ref());
-        self.sidebar.append(&item);
-    }
-
-    /// Removes a page added by [`View::attach`], with its sidebar entry.
-    ///
-    /// Removing a page that is not there does nothing, because the caller
-    /// wanted it gone and it is.
-    pub fn detach(&self, name: &str) {
-        let was_shown = self.shown().as_deref() == Some(name);
-        if let Some(content) = self.pages.child_by_name(name) {
-            self.pages.remove(&content);
-        }
-        let Some(index) = self.items.borrow().iter().position(|item| Self::names(item, name)) else {
-            return;
-        };
-        let item = self.items.borrow_mut().remove(index);
-        self.sidebar.remove(&item);
-        self.semantics.remove(&Self::semantic_path(name));
-        if was_shown {
-            let next = self
-                .items
-                .borrow()
-                .first()
-                .and_then(|item| item.label())
-                .map(|label| label.to_string());
-            if let Some(next) = next {
-                self.select_name(&next);
-            }
         }
     }
 
@@ -313,25 +254,7 @@ mod semantic_tests {
                 Some("true")
             );
 
-            let extension = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            view.attach("example.extension", &extension);
-            let attached = view.semantic_snapshot();
-            assert!(
-                attached
-                    .root
-                    .children
-                    .iter()
-                    .any(|node| node.label.as_deref() == Some("example.extension"))
-            );
-            view.detach("example.extension");
-            assert!(
-                !view
-                    .semantic_snapshot()
-                    .root
-                    .children
-                    .iter()
-                    .any(|node| node.label.as_deref() == Some("example.extension"))
-            );
+            assert_eq!(view.entries(), ["Extensions", "Settings"]);
         }) {
             eprintln!("skipped: no display connection");
         }

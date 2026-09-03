@@ -1,4 +1,4 @@
-//! Every extension a workspace has, as pages on the workspace shell.
+//! Every extension a workspace has, inside the workspace's Extensions page.
 //!
 //! One extension gets one sidebar page: the interface it draws itself. Husklet
 //! owns lifecycle controls and keeps them together on the central Extensions
@@ -21,6 +21,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
+use gtk::prelude::*;
 use hl::extension::{Acquisition, Cancellation, Entry, Roster};
 use hl_extension::{ExtensionName, Stage};
 use hl_ws::storage::Directory;
@@ -60,16 +61,7 @@ impl PendingInspection {
 
 pub type Inspection = Rc<dyn Fn(&str) -> PendingInspection>;
 
-/// The bundled extension replacing Husklet's legacy operational pages.
-///
-/// This is the canonical identity of the base workspace-management image.
-/// The older `containers` reference extension deliberately does not suppress
-/// pages it cannot replace.
-pub const MANAGEMENT_EXTENSION: &str = "workspace-manager";
-
-/// Reconciles native operational fallback pages. `true` means the management
-/// extension owns them and native duplicates must be absent.
-pub type Reconcile = Rc<dyn Fn(bool)>;
+const CATALOGUE: &str = "catalogue";
 
 /// Restores terminal panes before one extension's interface page is rebuilt or
 /// removed. The shelf names lifecycle intent; the terminal owns pane mechanics.
@@ -87,7 +79,8 @@ pub struct Shelf {
     view: std::rc::Weak<View>,
     roster: Shared,
     surfaces: Surfaces,
-    reconcile: Reconcile,
+    pages: gtk::Stack,
+    catalogue: gtk::Box,
     withdraw: Withdraw,
     cleanup: Cleanup,
     redraw: RefCell<Option<Rc<dyn Fn()>>>,
@@ -102,7 +95,6 @@ impl Shelf {
             roster,
             surfaces,
             Rc::new(|_| {}),
-            Rc::new(|_| {}),
             Rc::new(|_| {
                 let (sent, received) = std::sync::mpsc::channel();
                 let _ = sent.send(Ok(()));
@@ -112,23 +104,11 @@ impl Shelf {
     }
 
     #[must_use]
-    pub fn with_reconciliation(view: &Rc<View>, roster: &Shared, surfaces: Surfaces, reconcile: Reconcile) -> Rc<Self> {
-        Self::with_lifecycle(view, roster, surfaces, reconcile, Rc::new(|_| {}))
-    }
-
-    #[must_use]
-    pub fn with_lifecycle(
-        view: &Rc<View>,
-        roster: &Shared,
-        surfaces: Surfaces,
-        reconcile: Reconcile,
-        withdraw: Withdraw,
-    ) -> Rc<Self> {
+    pub fn with_lifecycle(view: &Rc<View>, roster: &Shared, surfaces: Surfaces, withdraw: Withdraw) -> Rc<Self> {
         Self::with_cleanup(
             view,
             roster,
             surfaces,
-            reconcile,
             withdraw,
             Rc::new(|_| {
                 let (sent, received) = std::sync::mpsc::channel();
@@ -143,15 +123,20 @@ impl Shelf {
         view: &Rc<View>,
         roster: &Shared,
         surfaces: Surfaces,
-        reconcile: Reconcile,
         withdraw: Withdraw,
         cleanup: Cleanup,
     ) -> Rc<Self> {
+        let pages = gtk::Stack::new();
+        pages.set_hexpand(true);
+        pages.set_vexpand(true);
+        let catalogue = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        pages.add_named(&catalogue, Some(CATALOGUE));
         Rc::new(Self {
             view: Rc::downgrade(view),
             roster: Rc::clone(roster),
             surfaces,
-            reconcile,
+            pages,
+            catalogue,
             withdraw,
             cleanup,
             redraw: RefCell::new(None),
@@ -171,9 +156,7 @@ impl Shelf {
             .find(|entry| entry.name == *name)
             .expect("a successfully disabled extension remains installed");
         (self.withdraw)(name);
-        if let Some(view) = self.view() {
-            view.detach(&name.to_string());
-        }
+        self.remove_surface(name);
         Ok(entry)
     }
 
@@ -186,30 +169,36 @@ impl Shelf {
         for entry in self.roster.borrow().entries() {
             self.mount(&entry);
         }
-        self.reconcile_fallback();
+        self.show_catalogue();
     }
 
     /// Puts one extension on the shell, replacing whatever was there under its
     /// name so a change of state rebuilds its host rather than talking to the
     /// one started under the old state.
     pub fn mount(self: &Rc<Self>, entry: &Entry) {
-        let Some(view) = self.view() else {
-            return;
-        };
         self.unmount(&entry.name);
-        view.attach(&entry.name.to_string(), &(self.surfaces)(entry));
-        self.reconcile_fallback();
+        if entry.stage == Stage::Duty {
+            let page = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            let back = gtk::Button::with_label("Back to Extensions");
+            back.set_halign(gtk::Align::Start);
+            let shelf = Rc::downgrade(self);
+            back.connect_clicked(move |_| {
+                if let Some(shelf) = shelf.upgrade() {
+                    shelf.show_catalogue();
+                }
+            });
+            page.append(&back);
+            page.append(&(self.surfaces)(entry));
+            self.pages.add_named(&page, Some(entry.name.as_str()));
+        }
         self.redraw();
     }
 
     /// Takes one extension off the shell, which is what drops its host.
     pub fn unmount(&self, name: &ExtensionName) {
         (self.withdraw)(name);
-        let Some(view) = self.view() else {
-            return;
-        };
-        view.detach(&name.to_string());
-        self.reconcile_fallback();
+        self.remove_surface(name);
+        self.show_catalogue();
         self.redraw();
     }
 
@@ -261,14 +250,37 @@ impl Shelf {
         self.view.upgrade()
     }
 
-    pub fn reconcile_fallback(&self) {
-        let managed = self
-            .roster
-            .borrow()
-            .entries()
-            .iter()
-            .any(|entry| entry.name.as_str() == MANAGEMENT_EXTENSION && entry.stage == Stage::Duty);
-        (self.reconcile)(managed);
+    pub fn content(&self) -> &gtk::Stack {
+        &self.pages
+    }
+
+    pub fn catalogue(&self) -> &gtk::Box {
+        &self.catalogue
+    }
+
+    pub fn open(&self, name: &ExtensionName) -> bool {
+        if self.pages.child_by_name(name.as_str()).is_none() {
+            self.show_catalogue();
+            return false;
+        }
+        if let Some(view) = self.view() {
+            view.select_name(super::Page::Extensions.title());
+        }
+        self.pages.set_visible_child_name(name.as_str());
+        true
+    }
+
+    pub fn show_catalogue(&self) {
+        self.pages.set_visible_child_name(CATALOGUE);
+        if let Some(view) = self.view() {
+            view.select_name(super::Page::Extensions.title());
+        }
+    }
+
+    fn remove_surface(&self, name: &ExtensionName) {
+        if let Some(surface) = self.pages.child_by_name(name.as_str()) {
+            self.pages.remove(&surface);
+        }
     }
 
     pub fn redraw_with(&self, redraw: Rc<dyn Fn()>) {
