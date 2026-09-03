@@ -88,6 +88,9 @@ try {
   });
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/client/package.json')));
   assert.equal(manifest.dependencies, undefined, 'framework-neutral client gained an undeclared runtime dependency');
+  for (const field of ['cpu', 'os', 'libc']) {
+    assert.equal(manifest[field], undefined, `framework-neutral client gained an architecture restriction in ${field}`);
+  }
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
   assert.equal(manifest.exports['./protocol'].types, './src/generated-protocol.d.ts');
 
