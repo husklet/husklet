@@ -163,6 +163,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
   };
   const view = bounded(resource.data);
+  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
     h(Card, { variant: 'outline' },
       h(CardHeader, { label: 'Create a container', detail: 'Uses a local image and starts it after durable creation.' }),
@@ -175,9 +176,16 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         onInvoke: createAndStart,
       })),
       h(ErrorText, { error: creationError }), creationNotice ? h(Text, { label: creationNotice, color: 'positive', wrap: true }) : null),
-    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No containers', detail: 'Create a container through an agent or extension, then refresh this page.' }),
-    ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }),
+    h(ResourceState, {
+      state,
+      loadingLabel: 'Reading containers…',
+      emptyLabel: 'No containers',
+      emptyDetail: 'Create a container through an agent or extension, then refresh this page.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry containers',
+      onRetry: resource.reload,
+    }, ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.name || shortId(item.id), detail: item.image }),
       h(CardContent, { gap: 2 },
         h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' })),
@@ -186,7 +194,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Button, { label: selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
         ...containerActions(item, busy, act)),
       selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onRetry: () => inspect(item), onOpenExecution }) : null)),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted })));
 }
 
 function ContainerRename({ api, container, reload, blocked }) {
