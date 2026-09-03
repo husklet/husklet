@@ -19,7 +19,8 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v2";
+const SCHEMA: &str = "husklet-developer-benchmark-v3";
+const UNIT_COUNT: u32 = 128;
 const PHASES: [&str; 11] = [
     "prompt",
     "git",
@@ -105,6 +106,13 @@ enum GuestIsa {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HostIsa {
+    Aarch64,
+    X86_64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum ExecutionBackend {
     HostNative,
@@ -139,6 +147,7 @@ struct Identity {
     rootfs: String,
     engine: String,
     native_library: String,
+    host_isa: HostIsa,
     baseline_guest_isa: GuestIsa,
     translated_rootfs: String,
     translated_engine: String,
@@ -153,6 +162,7 @@ struct Row {
     sample: u32,
     position: usize,
     mode: Mode,
+    host_isa: HostIsa,
     guest_isa: GuestIsa,
     backend: ExecutionBackend,
     wall_ns: u128,
@@ -183,11 +193,12 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         rootfs: identity::artifact_identity(&options.rootfs)?,
         engine: identity::artifact_identity(&options.engine)?,
         native_library: identity::artifact_identity(&options.native_library)?,
+        host_isa: host_isa(),
         baseline_guest_isa: options.guest_isa,
         translated_rootfs: identity::artifact_identity(translated.rootfs)?,
         translated_engine: identity::artifact_identity(translated.engine)?,
         translated_guest_isa: translated.guest_isa,
-        translated_backend: execution_backend(Mode::Translated, translated.guest_isa),
+        translated_backend: execution_backend(host_isa(), Mode::Translated, translated.guest_isa),
         workload_recipe: workload_recipe_identity(),
         samples: options.samples,
     };
@@ -264,13 +275,21 @@ fn arm_artifacts(options: &Options, mode: Mode) -> ArmArtifacts<'_> {
     }
 }
 
-const fn execution_backend(mode: Mode, guest_isa: GuestIsa) -> ExecutionBackend {
+const fn host_isa() -> HostIsa {
+    if cfg!(target_arch = "aarch64") {
+        HostIsa::Aarch64
+    } else {
+        HostIsa::X86_64
+    }
+}
+
+const fn execution_backend(host_isa: HostIsa, mode: Mode, guest_isa: GuestIsa) -> ExecutionBackend {
     match mode {
         Mode::Native => ExecutionBackend::HostNative,
         Mode::Supervised => ExecutionBackend::NativeSupervised,
         Mode::Translated => match guest_isa {
             GuestIsa::X86_64 => ExecutionBackend::X86Transliterator,
-            GuestIsa::Aarch64 if cfg!(target_arch = "aarch64") => ExecutionBackend::Aarch64Transliterator,
+            GuestIsa::Aarch64 if matches!(host_isa, HostIsa::Aarch64) => ExecutionBackend::Aarch64Transliterator,
             GuestIsa::Aarch64 => ExecutionBackend::Aarch64Interpreter,
         },
     }
@@ -301,15 +320,7 @@ fn clone_root(source: &Path, destination: &Path) -> Result<(), Error> {
 
 fn stage_fixture(root: &Path, script: &str) -> Result<(), Error> {
     let work = root.join("work");
-    fs::create_dir_all(work.join("src"))?;
-    for number in 1..=128 {
-        fs::write(
-            work.join(format!("src/unit_{number:03}.c")),
-            format!("int unit_{number:03}(int x){{return x+{number};}}\n"),
-        )?;
-    }
-    fs::write(work.join("Makefile"), makefile())?;
-    fs::write(work.join("session.sh"), script)?;
+    write_workload_tree(&work, script)?;
     let status = Command::new("chroot").arg(root).args(["/bin/sh", "-c", "cd /work && git init -q && git config user.email bench@example.invalid && git config user.name Bench && git add . && git commit -qm seed && git clone -q --bare . /fixture.git"]).status()?;
     if status.success() {
         Ok(())
@@ -318,8 +329,37 @@ fn stage_fixture(root: &Path, script: &str) -> Result<(), Error> {
     }
 }
 
+fn write_workload_tree(work: &Path, script: &str) -> Result<(), Error> {
+    fs::create_dir_all(work.join("src"))?;
+    fs::create_dir_all(work.join("app"))?;
+    for number in 1..=UNIT_COUNT {
+        fs::write(work.join(format!("src/unit_{number:03}.c")), unit_source(number))?;
+    }
+    fs::write(work.join("app/main.c"), main_source())?;
+    fs::write(work.join("Makefile"), makefile())?;
+    fs::write(work.join("session.sh"), script)?;
+    Ok(())
+}
+
 fn makefile() -> &'static str {
-    "CC ?= gcc\nSRC := $(wildcard src/*.c)\nOBJ := $(SRC:src/%.c=build/%.o)\nall: build/devlib.a\nbuild/%.o: src/%.c\n\t@mkdir -p build\n\t$(CC) -O2 -g -c $< -o $@\nbuild/devlib.a: $(OBJ)\n\tar rcs $@ $^\ntest: all\n\ttest \"$$(ar t build/devlib.a | wc -l)\" -eq 128\n"
+    "CC ?= gcc\nSRC := $(wildcard src/*.c)\nOBJ := $(SRC:src/%.c=build/%.o)\nall: build/devlib.a build/devcheck\nbuild/%.o: src/%.c\n\t@mkdir -p build\n\t$(CC) -O2 -g -c $< -o $@\nbuild/devlib.a: $(OBJ)\n\tar rcs $@ $^\nbuild/devcheck: app/main.c build/devlib.a\n\t$(CC) -O2 -g $< build/devlib.a -o $@\ntest: all\n\ttest \"$$(ar t build/devlib.a | wc -l)\" -eq 128\n\ttest \"$$(./build/devcheck)\" = \"devcheck:16512\"\n\t./build/devcheck\n"
+}
+
+fn unit_source(number: u32) -> String {
+    format!("int unit_{number:03}(int x){{return x+{number};}}\n")
+}
+
+fn main_source() -> String {
+    let mut source = String::from("#include <stdio.h>\n");
+    for number in 1..=UNIT_COUNT {
+        source.push_str(&format!("int unit_{number:03}(int);\n"));
+    }
+    source.push_str("int main(void){long total=0;\n");
+    for number in 1..=UNIT_COUNT {
+        source.push_str(&format!("total += unit_{number:03}({number});\n"));
+    }
+    source.push_str("printf(\"devcheck:%ld\\n\", total); return total == 16512 ? 0 : 1;}\n");
+    source
 }
 
 fn fixture_source() -> &'static str {
@@ -345,17 +385,56 @@ printf 'HL_DONE\n' >&2
 }
 
 fn workload_recipe_identity() -> String {
+    let main = main_source();
+    workload_recipe_identity_with(
+        UNIT_COUNT,
+        unit_source,
+        &main,
+        makefile(),
+        fixture_source(),
+        &PHASES,
+        &ORDER,
+    )
+}
+
+fn workload_recipe_identity_with(
+    unit_count: u32,
+    source: impl Fn(u32) -> String,
+    main: &str,
+    makefile: &str,
+    fixture: &str,
+    phases: &[&str],
+    order: &[Mode],
+) -> String {
     let mut digest = Sha256::new();
-    for bytes in [makefile().as_bytes(), fixture_source().as_bytes()] {
+    let mut bind = |bytes: &[u8]| {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
+    };
+    bind(&unit_count.to_le_bytes());
+    for number in 1..=unit_count {
+        bind(source(number).as_bytes());
+    }
+    bind(main.as_bytes());
+    bind(makefile.as_bytes());
+    bind(fixture.as_bytes());
+    for phase in phases {
+        bind(phase.as_bytes());
+    }
+    for mode in order {
+        bind(&[match mode {
+            Mode::Native => 0,
+            Mode::Supervised => 1,
+            Mode::Translated => 2,
+        }]);
     }
     hex(digest.finalize())
 }
 
 fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: usize) -> Result<Row, Error> {
     let guest_isa = arm_artifacts(options, mode).guest_isa;
-    let backend = execution_backend(mode, guest_isa);
+    let host_isa = host_isa();
+    let backend = execution_backend(host_isa, mode, guest_isa);
     let null_counters = measure_null(options, root, mode, sample, position)?;
     let measured = measured_argv(options, root, mode, "bin/sh", &["/work/session.sh"]);
     let perf_path = options
@@ -411,6 +490,7 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         sample,
         position,
         mode,
+        host_isa,
         guest_isa,
         backend,
         wall_ns: elapsed,
@@ -483,7 +563,7 @@ fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, positio
     }
     let guest_isa = arm_artifacts(options, mode).guest_isa;
     backend_receipt(
-        execution_backend(mode, guest_isa),
+        execution_backend(host_isa(), mode, guest_isa),
         guest_isa,
         &String::from_utf8(output.stderr)?,
     )?;
@@ -555,24 +635,13 @@ fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str)
         ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator => {
             let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
                 .ok_or("translated arm emitted no backend-shape receipt")?;
-            if shape.get("translation_codegen_available") != Some(&1)
-                || !shape.get("translated_entries").is_some_and(|value| *value > 0)
-            {
-                return Err("translated arm did not prove available codegen and nonzero translated entries".into());
-            }
+            validate_backend_shape(backend, &shape)?;
             backend_shape_receipt(stderr).expect("typed parser established one backend-shape record")
         }
         ExecutionBackend::Aarch64Interpreter => {
             let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
                 .ok_or("interpreter arm emitted no backend-shape receipt")?;
-            if shape.get("translation_codegen_available") != Some(&0)
-                || !shape.get("interpreted_entries").is_some_and(|value| *value > 0)
-                || shape.get("translated_entries") != Some(&0)
-            {
-                return Err(
-                    "AArch64 interpreter did not prove unavailable codegen and exclusive interpreted execution".into(),
-                );
-            }
+            validate_backend_shape(backend, &shape)?;
             backend_shape_receipt(stderr).expect("typed parser established one backend-shape record")
         }
     };
@@ -580,6 +649,36 @@ fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str)
         "guest_isa={} backend={backend:?} {evidence}",
         guest_isa.as_str()
     ))
+}
+
+fn validate_backend_shape(
+    backend: ExecutionBackend,
+    shape: &std::collections::BTreeMap<&str, u64>,
+) -> Result<(), Error> {
+    match backend {
+        ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator
+            if shape.get("translation_codegen_available") == Some(&1)
+                && shape.get("translated_entries").is_some_and(|value| *value > 0) =>
+        {
+            Ok(())
+        }
+        ExecutionBackend::Aarch64Interpreter
+            if shape.get("translation_codegen_available") == Some(&0)
+                && shape.get("interpreted_entries").is_some_and(|value| *value > 0)
+                && shape.get("translated_entries") == Some(&0) =>
+        {
+            Ok(())
+        }
+        ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator => {
+            Err("translated arm did not prove available codegen and nonzero translated entries".into())
+        }
+        ExecutionBackend::Aarch64Interpreter => {
+            Err("AArch64 interpreter did not prove unavailable codegen and exclusive interpreted execution".into())
+        }
+        ExecutionBackend::HostNative | ExecutionBackend::NativeSupervised => {
+            Err("native backends do not consume a translated backend-shape receipt".into())
+        }
+    }
 }
 
 fn backend_shape_receipt(stderr: &str) -> Option<String> {
@@ -652,15 +751,16 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
 
 fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
     let mut text = String::from(
-        "sample\tposition\tmode\tguest_isa\tbackend\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tnull_duration_ns\tnull_task_clock_ms\tnull_instructions\tnull_cycles\tnull_page_faults\tphase\tphase_ns\n",
+        "sample\tposition\tmode\thost_isa\tguest_isa\tbackend\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tnull_duration_ns\tnull_task_clock_ms\tnull_instructions\tnull_cycles\tnull_page_faults\tphase\tphase_ns\n",
     );
     for row in rows {
         for (phase, elapsed) in &row.phase_ns {
             text.push_str(&format!(
-                "{}\t{}\t{:?}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{:?}\t{:?}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.sample,
                 row.position,
                 row.mode,
+                row.host_isa,
                 row.guest_isa.as_str(),
                 row.backend,
                 row.wall_ns,
@@ -810,38 +910,30 @@ mod tests {
             .unwrap(),
             "guest_isa=x86_64 backend=NativeSupervised [hl-native-supervised] selected=1 reason=eligible"
         );
-        assert!(
-            backend_receipt(
-                ExecutionBackend::NativeSupervised,
-                GuestIsa::X86_64,
-                "[hl-native-supervised] selected=0"
-            )
-            .is_err()
-        );
-        assert!(
-            backend_receipt(
-                ExecutionBackend::X86Transliterator,
-                GuestIsa::X86_64,
-                "[prof] translit: blocks=9 entries=4"
-            )
-            .is_err()
-        );
-        assert!(
-            backend_receipt(
-                ExecutionBackend::Aarch64Interpreter,
-                GuestIsa::Aarch64,
-                "[diag] backend-tree crossings=19 translated_entries=0 interpreted_entries=19"
-            )
-            .is_err()
-        );
-        assert!(
-            backend_receipt(
-                ExecutionBackend::Aarch64Interpreter,
-                GuestIsa::Aarch64,
-                "[prof] translit: blocks=9 entries=4"
-            )
-            .is_err()
-        );
+        assert!(backend_receipt(
+            ExecutionBackend::NativeSupervised,
+            GuestIsa::X86_64,
+            "[hl-native-supervised] selected=0"
+        )
+        .is_err());
+        assert!(backend_receipt(
+            ExecutionBackend::X86Transliterator,
+            GuestIsa::X86_64,
+            "[prof] translit: blocks=9 entries=4"
+        )
+        .is_err());
+        assert!(backend_receipt(
+            ExecutionBackend::Aarch64Interpreter,
+            GuestIsa::Aarch64,
+            "[diag] backend-tree crossings=19 translated_entries=0 interpreted_entries=19"
+        )
+        .is_err());
+        assert!(backend_receipt(
+            ExecutionBackend::Aarch64Interpreter,
+            GuestIsa::Aarch64,
+            "[prof] translit: blocks=9 entries=4"
+        )
+        .is_err());
     }
 
     #[test]
@@ -921,14 +1013,101 @@ mod tests {
     }
 
     #[test]
-    fn workload_recipe_binds_both_the_makefile_and_session() {
+    fn workload_recipe_binds_generated_sources_and_protocol() {
         let original = workload_recipe_identity();
-        let mut makefile_changed = Sha256::new();
-        for bytes in [b"changed".as_slice(), fixture_source().as_bytes()] {
-            makefile_changed.update((bytes.len() as u64).to_le_bytes());
-            makefile_changed.update(bytes);
-        }
-        assert_ne!(original, hex(makefile_changed.finalize()));
+        let main = main_source();
+        let changed_unit = workload_recipe_identity_with(
+            UNIT_COUNT,
+            |number| {
+                if number == 64 {
+                    format!("{}/* changed */\n", unit_source(number))
+                } else {
+                    unit_source(number)
+                }
+            },
+            &main,
+            makefile(),
+            fixture_source(),
+            &PHASES,
+            &ORDER,
+        );
+        assert_ne!(original, changed_unit);
+        let mut changed_order = ORDER;
+        changed_order.swap(0, 1);
+        assert_ne!(
+            original,
+            workload_recipe_identity_with(
+                UNIT_COUNT,
+                unit_source,
+                &main,
+                makefile(),
+                fixture_source(),
+                &PHASES,
+                &changed_order,
+            )
+        );
+        assert!(main.contains("total += unit_001(1);"));
+        assert!(main.contains("total += unit_128(128);"));
+        assert_eq!(main.matches("total += unit_").count(), UNIT_COUNT as usize);
+        assert!(makefile().contains("test \"$$(./build/devcheck)\" = \"devcheck:16512\""));
+    }
+
+    #[test]
+    fn generated_workload_links_and_executes_every_unit() {
+        let directory = tempfile::tempdir().unwrap();
+        write_workload_tree(directory.path(), fixture_source()).unwrap();
+        let output = Command::new("make")
+            .args(["-s", "test"])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.stdout, b"devcheck:16512\n");
+    }
+
+    #[test]
+    fn every_host_guest_backend_is_named_explicitly() {
+        assert_eq!(
+            execution_backend(HostIsa::X86_64, Mode::Translated, GuestIsa::X86_64),
+            ExecutionBackend::X86Transliterator
+        );
+        assert_eq!(
+            execution_backend(HostIsa::Aarch64, Mode::Translated, GuestIsa::X86_64),
+            ExecutionBackend::X86Transliterator
+        );
+        assert_eq!(
+            execution_backend(HostIsa::X86_64, Mode::Translated, GuestIsa::Aarch64),
+            ExecutionBackend::Aarch64Interpreter
+        );
+        assert_eq!(
+            execution_backend(HostIsa::Aarch64, Mode::Translated, GuestIsa::Aarch64),
+            ExecutionBackend::Aarch64Transliterator
+        );
+        assert_eq!(
+            execution_backend(HostIsa::Aarch64, Mode::Native, GuestIsa::Aarch64),
+            ExecutionBackend::HostNative
+        );
+        assert_eq!(
+            execution_backend(HostIsa::X86_64, Mode::Supervised, GuestIsa::X86_64),
+            ExecutionBackend::NativeSupervised
+        );
+    }
+
+    #[test]
+    fn valid_translated_and_interpreted_shapes_are_accepted() {
+        let translated = std::collections::BTreeMap::from([
+            ("translation_codegen_available", 1),
+            ("translated_entries", 7),
+            ("interpreted_entries", 0),
+        ]);
+        assert!(validate_backend_shape(ExecutionBackend::X86Transliterator, &translated).is_ok());
+        assert!(validate_backend_shape(ExecutionBackend::Aarch64Transliterator, &translated).is_ok());
+        let interpreted = std::collections::BTreeMap::from([
+            ("translation_codegen_available", 0),
+            ("translated_entries", 0),
+            ("interpreted_entries", 7),
+        ]);
+        assert!(validate_backend_shape(ExecutionBackend::Aarch64Interpreter, &interpreted).is_ok());
     }
 
     #[test]
@@ -937,8 +1116,9 @@ mod tests {
             sample: 0,
             position: 0,
             mode,
+            host_isa: HostIsa::X86_64,
             guest_isa,
-            backend: execution_backend(mode, guest_isa),
+            backend: execution_backend(HostIsa::X86_64, mode, guest_isa),
             wall_ns: 1,
             counters: Counters {
                 duration_ns: 1,
@@ -960,18 +1140,16 @@ mod tests {
             portable_semantic_sha256: portable.into(),
             backend_receipt: String::new(),
         };
-        assert!(
-            validate_outputs(&[
-                row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
-                row(
-                    Mode::Translated,
-                    GuestIsa::Aarch64,
-                    "different-architecture",
-                    "portable"
-                ),
-            ])
-            .is_ok()
-        );
+        assert!(validate_outputs(&[
+            row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
+            row(
+                Mode::Translated,
+                GuestIsa::Aarch64,
+                "different-architecture",
+                "portable"
+            ),
+        ])
+        .is_ok());
         let error = validate_outputs(&[
             row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
             row(Mode::Supervised, GuestIsa::X86_64, "different", "portable"),
@@ -980,13 +1158,11 @@ mod tests {
         .to_string();
         assert!(error.contains("baseline=Native/0/0 stdout=same semantic=same"));
         assert!(error.contains("divergent=Supervised/0/0 stdout=different semantic=different"));
-        assert!(
-            validate_outputs(&[
-                row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
-                row(Mode::Translated, GuestIsa::Aarch64, "different", "wrong-portable"),
-            ])
-            .is_err()
-        );
+        assert!(validate_outputs(&[
+            row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
+            row(Mode::Translated, GuestIsa::Aarch64, "different", "wrong-portable"),
+        ])
+        .is_err());
     }
 
     #[test]
@@ -1010,6 +1186,7 @@ mod tests {
             sample: 0,
             position: 0,
             mode: Mode::Native,
+            host_isa: HostIsa::X86_64,
             guest_isa: GuestIsa::X86_64,
             backend: ExecutionBackend::HostNative,
             wall_ns: 1,
@@ -1035,24 +1212,20 @@ mod tests {
         };
         let ledger = directory.path().join("ledger.jsonl");
         append(&ledger, &row).unwrap();
-        assert!(
-            read_ledger(&ledger, 3)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("cannot reopen")
-        );
+        assert!(read_ledger(&ledger, 3)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("cannot reopen"));
 
         atomic_bytes(&output_path(directory.path(), 0, 0, Mode::Native), output).unwrap();
         assert_eq!(read_ledger(&ledger, 3).unwrap().len(), 1);
         fs::write(output_path(directory.path(), 0, 0, Mode::Native), b"tampered\n").unwrap();
-        assert!(
-            read_ledger(&ledger, 3)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("does not match")
-        );
+        assert!(read_ledger(&ledger, 3)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("does not match"));
     }
 
     #[test]
