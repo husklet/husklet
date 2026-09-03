@@ -238,6 +238,8 @@ pub enum Request {
     },
     TerminalWritePane {
         slot: String,
+        generation: u64,
+        revision: u64,
         contents: Vec<u8>,
     },
     TerminalResizeGrid {

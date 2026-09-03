@@ -565,7 +565,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const terminal = workspace(stage.session).terminal;
   const topology = terminal.topology();
   const spawning = terminal.spawn('s1', ['printf', '%s\n', 'ready']);
-  const writing = terminal.writeInput('s1', 'echo hello\n');
+  const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
   const retitling = terminal.retitle('s1', ' Build 🧪 ');
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
@@ -573,7 +573,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
     call: 'terminal_spawn', with: { slot: 's1', command: ['printf', '%s\n', 'ready'] },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_write_pane', with: { slot: 's1', contents: [...new TextEncoder().encode('echo hello\n')] },
+    call: 'terminal_write_pane', with: { slot: 's1', generation: 4, revision: 7, contents: [...new TextEncoder().encode('echo hello\n')] },
   });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_resize_grid', with: { slot: 's1', columns: 120, rows: 40 },
@@ -592,7 +592,8 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
-  assert.throws(() => terminal.writeInput('s1', new Uint8Array(65_537)), /65536 byte limit/);
+  assert.throws(() => terminal.writeInput('s1', 4, 7, new Uint8Array(65_537)), /65536 byte limit/);
+  assert.throws(() => terminal.writeInput('s1', -1, 7, 'x'), /generation and revision/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
   for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
     assert.throws(() => terminal.retitle('s1', title), /pane title must/);

@@ -478,26 +478,27 @@ test('terminal byte input decodes canonical base64 exactly and refuses ambiguity
   const write = tools(api).find(({ name }) => name === 'husklet_terminal_write_bytes');
   const exact = Uint8Array.from([0x00, 0x03, 0x1b, 0x7f, 0x80, 0xff]);
   const encoded = Buffer.from(exact).toString('base64');
-  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: encoded }).success, true);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', generation: 3, revision: 4, input_base64: encoded }).success, true);
   for (const invalid of ['AA', 'AA==\n', 'AA', 'AA-_', 'AB==']) {
-    assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: invalid }).success, false, invalid);
+    assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', generation: 3, revision: 4, input_base64: invalid }).success, false, invalid);
   }
   const oversized = Buffer.alloc(65_537).toString('base64');
-  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input_base64: oversized }).success, false);
-  await assert.rejects(write.run({ slot: 'pane-1', input_base64: oversized }), /exceeds 65536 bytes/);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', generation: 3, revision: 4, input_base64: oversized }).success, false);
+  await assert.rejects(write.run({ slot: 'pane-1', generation: 3, revision: 4, input_base64: oversized }), /exceeds 65536 bytes/);
   assert.deepEqual(calls, []);
-  await write.run({ slot: 'pane-1', input_base64: encoded });
-  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', exact]]);
+  await write.run({ slot: 'pane-1', generation: 3, revision: 4, input_base64: encoded });
+  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', 3, 4, exact]]);
 });
 
 test('terminal text input exposes the complete host byte allowance', async () => {
   const { api, calls } = fake();
   const write = tools(api).find(({ name }) => name === 'husklet_terminal_write');
   const exact = 'é'.repeat(32_768);
-  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input: exact }).success, true);
-  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input: '😀'.repeat(16_385) }).success, false);
-  await write.run({ slot: 'pane-1', input: exact });
-  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', exact]]);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', generation: 3, revision: 4, input: exact }).success, true);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', generation: 3, revision: 4, input: '😀'.repeat(16_385) }).success, false);
+  assert.equal(write.inputSchema.safeParse({ slot: 'pane-1', input: exact }).success, false);
+  await write.run({ slot: 'pane-1', generation: 3, revision: 4, input: exact });
+  assert.deepEqual(calls, [['terminal.writeInput', 'pane-1', 3, 4, exact]]);
 });
 
 test('image tools use typed reads and require confirmation for destructive controls', async () => {
@@ -1029,7 +1030,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     slot: 'pane-live', command: ['printf', '%s\n', 'ready'],
   } });
   await client.callTool({ name: 'husklet_terminal_write_bytes', arguments: {
-    slot: 'pane-live', input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
+    slot: 'pane-live', generation: 13, revision: 11, input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
   } });
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
   assert.match(snapshot.content[0].text, /^<pane slot="pane-live" generation="13" revision="11"/);
@@ -1054,7 +1055,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['volume_list', undefined],
     ['network_list', undefined],
     ['terminal_spawn', { slot: 'pane-live', command: ['printf', '%s\n', 'ready'] }],
-    ['terminal_write_pane', { slot: 'pane-live', contents: [0, 3, 128, 255] }],
+    ['terminal_write_pane', { slot: 'pane-live', generation: 13, revision: 11, contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_action', { slot: 'pane-live', action: { generation: 13, revision: 11, node: 0, action: 'invoke' } }],

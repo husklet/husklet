@@ -233,7 +233,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     memory_mb: 512, cpus: 1, pids_limit: 128,
   });
   assert.deepEqual(calls.find(({ call }) => call === 'terminal_write_pane').with, {
-    slot: 'terminal-1', contents: [...new TextEncoder().encode('status\n')],
+    slot: 'terminal-1', generation: 2, revision: 1, contents: [...new TextEncoder().encode('status\n')],
   });
   assert.deepEqual(calls.find(({ call }) => call === 'pane_semantic_action').with, {
     slot: 'surface-1', action: { generation: 7, revision: 7, node: 5, action: 'invoke' },

@@ -62,6 +62,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         stale_provider_generations_cannot_authorize_replacements();
         failed_enable_has_no_socket_or_provider_until_durable_retry();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::stale_pane_identity_cannot_authorize_terminal_input();
         panes::pointer_hit_testing_captures_the_exact_pane_slot();
         panes::retitling_a_live_pane_preserves_its_slot_process_and_layout();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
@@ -3144,6 +3145,16 @@ mod panes {
         );
     }
 
+    pub(super) fn stale_pane_identity_cannot_authorize_terminal_input() {
+        let bench = Bench::new();
+        let (_, slot) = bench.shell();
+        let refused = Console::write(&bench.window, &slot, 1, 0, b"must not reach a replacement");
+        assert!(
+            matches!(refused, Err(HostError::Conflict(ref detail)) if detail.contains("stale pane identity")),
+            "a stale observed generation must fail before bytes reach the pane: {refused:?}"
+        );
+    }
+
     pub(super) fn retitling_a_live_pane_preserves_its_slot_process_and_layout() {
         fn stable_layout(node: &LayoutNode) -> LayoutNode {
             match node {
@@ -3349,7 +3360,7 @@ mod panes {
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
         let stale = slot.clone();
-        std::thread::spawn(move || sent.send(request.write(&stale, b"stale")).unwrap());
+        std::thread::spawn(move || sent.send(request.write(&stale, 0, 0, b"stale")).unwrap());
         loop {
             console.drain();
             if let Ok(answer) = received.try_recv() {

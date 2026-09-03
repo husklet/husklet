@@ -570,13 +570,13 @@ impl Session {
                 validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::TerminalWritePane { slot, contents } => {
+            Request::TerminalWritePane { slot, generation, revision, contents } => {
                 if contents.len() > PANE_INPUT_BYTES {
                     return Err(Failure::Conflict {
                         detail: format!("terminal input exceeds the {PANE_INPUT_BYTES} byte limit"),
                     });
                 }
-                port.write(slot, contents).map(|()| Reply::Done).map_err(Failure::from)
+                port.write(slot, *generation, *revision, contents).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::TerminalResizeGrid { slot, columns, rows } => {
                 if *columns == 0 || *rows == 0 || *columns > PANE_GRID_EDGE || *rows > PANE_GRID_EDGE {

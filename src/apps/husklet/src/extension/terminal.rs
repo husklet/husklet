@@ -85,6 +85,8 @@ pub enum Request {
     /// Raw bytes written to the named pane.
     Write {
         slot: String,
+        generation: u64,
+        revision: u64,
         contents: Vec<u8>,
     },
     /// Exact PTY grid requested for the named pane.
@@ -347,9 +349,11 @@ impl TerminalSurface for Relay {
         }
     }
 
-    fn write(&self, slot: &str, contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, slot: &str, generation: u64, revision: u64, contents: &[u8]) -> Result<(), HostError> {
         self.done(Request::Write {
             slot: slot.to_owned(),
+            generation,
+            revision,
             contents: contents.to_vec(),
         })
     }
@@ -475,6 +479,8 @@ mod tests {
                 input.request(),
                 &Request::Write {
                     slot: "shell-1".into(),
+                    generation: 3,
+                    revision: 5,
                     contents: b"printf x".to_vec()
                 }
             );
@@ -499,7 +505,7 @@ mod tests {
             retitle.answer(Ok(Answer::Done));
         });
 
-        relay.write("shell-1", b"printf x").expect("input");
+        relay.write("shell-1", 3, 5, b"printf x").expect("input");
         relay
             .resize_grid("shell-1", GridSize { columns: 120, rows: 40 })
             .expect("grid");

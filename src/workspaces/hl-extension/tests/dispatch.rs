@@ -451,7 +451,7 @@ impl TerminalSurface for Host {
         }
     }
 
-    fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, _slot: &str, _generation: u64, _revision: u64, _contents: &[u8]) -> Result<(), HostError> {
         self.ledger.note("terminal.write");
         Ok(())
     }
@@ -1069,6 +1069,8 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalWritePane {
                 slot: "s1".into(),
+                generation: 1,
+                revision: 2,
                 contents: b"pwd\n".to_vec(),
             },
             Capability::TerminalControl,
@@ -1277,6 +1279,8 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
     let mut session = session(&[Capability::TerminalControl], &[]);
     let oversized = Request::TerminalWritePane {
         slot: "s1".into(),
+        generation: 1,
+        revision: 2,
         contents: vec![0; hl_extension::port::PANE_INPUT_BYTES + 1],
     };
     assert!(matches!(

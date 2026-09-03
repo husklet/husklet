@@ -120,7 +120,9 @@ export async function runAgentDayOne(client, {
       after_revision: xmlNumber(terminalBefore, 'revision'),
       timeout_ms: waitMs,
     });
-    await call(client, 'husklet_terminal_write', { slot: terminal.slot, input: terminalInput });
+    await call(client, 'husklet_terminal_write', {
+      slot: terminal.slot, generation: terminal.generation, revision: terminal.revision, input: terminalInput,
+    });
     const terminalChanged = await terminalWaiting;
 
     const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });

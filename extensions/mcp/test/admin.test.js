@@ -54,6 +54,9 @@ test('admin workflow confines files to socket workspace and cleans success and f
         }
         else if (call === 'container_create') answer(frame, 'identity', 'c'.repeat(64));
         else if (call === 'network_create') answer(frame, 'identity', 'n'.repeat(32));
+        else if (call === 'pane_list') answer(frame, 'panes', { panes: [
+          { slot: 'admin-terminal', generation: 3, revision: 1, kind: 'terminal', provider: null, tab: 'tab', title: 'Admin', focused: true },
+        ], truncated: false });
         else if (call === 'workspace_start' && failLifecycleMutation) {
           failLifecycleMutation = false;
           socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 3, payload: {
@@ -356,7 +359,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const exactInput = 'é'.repeat(32_768);
   const inputStart = calls.length;
   const written = await client.callTool({
-    name: 'husklet_terminal_write', arguments: { slot: 'admin-terminal', input: exactInput },
+    name: 'husklet_terminal_write', arguments: { slot: 'admin-terminal', generation: 3, revision: 1, input: exactInput },
   });
   assert.notEqual(written.isError, true);
   assert.equal(calls.length, inputStart + 1);
@@ -370,7 +373,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const inputOversizedStart = calls.length;
   const inputOversized = await client.callTool({
     name: 'husklet_terminal_write',
-    arguments: { slot: 'admin-terminal', input: '😀'.repeat(16_385) },
+    arguments: { slot: 'admin-terminal', generation: 3, revision: 1, input: '😀'.repeat(16_385) },
   });
   assert.equal(inputOversized.isError, true);
   assert.equal(calls.length, inputOversizedStart);
@@ -414,7 +417,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.deepEqual(calls.slice(0, workflowEnd).map(({ call }) => call), [
     'workspace_info', 'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
     'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir',
-    'filesystem_write', 'filesystem_read', 'event_subscribe', 'terminal_write_pane', 'event_unsubscribe',
+    'filesystem_write', 'filesystem_read', 'pane_list', 'event_subscribe', 'terminal_write_pane', 'event_unsubscribe',
     'filesystem_remove', 'filesystem_remove', 'event_subscribe', 'workspace_stop', 'event_unsubscribe',
     'event_subscribe', 'workspace_delete', 'event_unsubscribe',
   ]);

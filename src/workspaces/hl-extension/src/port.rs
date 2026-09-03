@@ -944,7 +944,7 @@ pub trait TerminalSurface {
     }
 
     /// Writes raw bytes into a terminal pane, without appending a newline.
-    fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, _slot: &str, _generation: u64, _revision: u64, _contents: &[u8]) -> Result<(), HostError> {
         Err(HostError::Unsupported("terminal input is unavailable".into()))
     }
 

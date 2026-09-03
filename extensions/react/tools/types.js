@@ -472,7 +472,7 @@ export interface WorkspaceApi {
     read(slot: string, lines?: number): Promise<PaneText>;
     semantics(slot: string): Promise<PaneSemanticTree>;
     act(slot: string, action: PaneSemanticAction): Promise<void>;
-    writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
+    writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
     focus(slot: string): Promise<void>;

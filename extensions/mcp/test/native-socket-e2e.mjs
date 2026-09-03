@@ -113,7 +113,7 @@ if (!outerIdentity || Number(outerIdentity[1]) < 1 || !Number.isSafeInteger(Numb
 }
 const written = await client.callTool({
   name: 'husklet_terminal_write',
-  arguments: { slot: terminalSlot, input: 'agent-status\n' },
+  arguments: { slot: terminalSlot, generation: terminal.generation, revision: terminal.revision, input: 'agent-status\n' },
 });
 if (written.isError) throw new Error(`terminal input failed: ${written.content?.[0]?.text}`);
 

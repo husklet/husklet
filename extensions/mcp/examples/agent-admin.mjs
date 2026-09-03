@@ -52,8 +52,13 @@ export async function runAgentAdmin(client, {
     fileCreated = true;
     const read = await json(client, 'husklet_file_read', { path: file });
 
+    const inventory = await json(client, 'husklet_pane_list');
+    const pane = inventory.panes?.find(({ slot, kind }) => slot === eventSlot && kind === 'terminal');
+    if (!pane) throw new Error(`terminal pane ${JSON.stringify(eventSlot)} is absent`);
     const waiting = json(client, 'husklet_pane_wait', { slot: eventSlot, timeout_ms: waitMs });
-    await call(client, 'husklet_terminal_write', { slot: eventSlot, input: eventInput });
+    await call(client, 'husklet_terminal_write', {
+      slot: eventSlot, generation: pane.generation, revision: pane.revision, input: eventInput,
+    });
     const event = await waiting;
     return { hosting, created, read, event, lifecycle };
   } finally {

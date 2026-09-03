@@ -49,10 +49,10 @@ try {
     for (const name of ['husklet_file_stat', 'husklet_file_mkdir', 'husklet_file_rename', 'husklet_file_remove']) if (!names.has(name)) process.exit(1);
     if (!names.has('husklet_terminal_write_bytes')) process.exit(1);
     let written;
-    const byteTool = tools({ terminal: { writeInput: async (slot, input) => { written = [slot, [...input]]; } } })
+    const byteTool = tools({ terminal: { writeInput: async (slot, generation, revision, input) => { written = [slot, generation, revision, [...input]]; } } })
       .find(({ name }) => name === 'husklet_terminal_write_bytes');
-    await byteTool.run({ slot: 'packed', input_base64: 'AAP//g==' });
-    if (JSON.stringify(written) !== JSON.stringify(['packed', [0, 3, 255, 254]])) process.exit(1);
+    await byteTool.run({ slot: 'packed', generation: 2, revision: 3, input_base64: 'AAP//g==' });
+    if (JSON.stringify(written) !== JSON.stringify(['packed', 2, 3, [0, 3, 255, 254]])) process.exit(1);
     const terminationCalls = [];
     const termination = tools({ containers: {
       stop: async (id) => terminationCalls.push(['stop', id]),

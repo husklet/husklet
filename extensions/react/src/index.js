@@ -284,10 +284,13 @@ export function workspace(session) {
         }
         return done('pane_semantic_action', { slot, action });
       },
-      writeInput: (slot, input) => {
+      writeInput: (slot, generation, revision, input) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+          throw new TypeError('terminal input requires nonnegative safe integer generation and revision');
+        }
         const contents = typeof input === 'string' ? new TextEncoder().encode(input) : Uint8Array.from(input);
         if (contents.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
-        return done('terminal_write_pane', { slot, contents: [...contents] });
+        return done('terminal_write_pane', { slot, generation, revision, contents: [...contents] });
       },
       resizeGrid: (slot, columns, rows) => {
         if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) {

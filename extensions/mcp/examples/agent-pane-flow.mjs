@@ -58,7 +58,7 @@ export async function runPaneAgentTurn(client, {
   const node = nodeForLabel(semanticBefore, actionLabel);
 
   await call(client, 'husklet_terminal_write_bytes', {
-    slot: terminal.slot,
+    slot: terminal.slot, generation: terminal.generation, revision: terminal.revision,
     input_base64: Buffer.from(terminalBytes).toString('base64'),
   });
   // Arm the one-shot subscription first; request ordering prevents a fast UI

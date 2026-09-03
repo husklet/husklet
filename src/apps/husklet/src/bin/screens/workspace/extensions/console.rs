@@ -90,7 +90,9 @@ impl Console {
             Request::SemanticAction { slot, action } => {
                 Self::semantic_action(window, slot, action).map(|()| Answer::Done)
             }
-            Request::Write { slot, contents } => Self::write(window, slot, contents).map(|()| Answer::Done),
+            Request::Write { slot, generation, revision, contents } => {
+                Self::write(window, slot, *generation, *revision, contents).map(|()| Answer::Done)
+            }
             Request::ResizeGrid { slot, grid } => Self::resize_grid(window, slot, *grid).map(|()| Answer::Done),
             Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
             Request::Focus { slot } => Self::focus(window, slot).map(|()| Answer::Done),
@@ -311,7 +313,21 @@ impl Console {
             .native_requirement(node)
     }
 
-    fn write(window: &Rc<TermWin>, slot: &str, contents: &[u8]) -> Result<(), HostError> {
+    pub(super) fn write(
+        window: &Rc<TermWin>,
+        slot: &str,
+        generation: u64,
+        revision: u64,
+        contents: &[u8],
+    ) -> Result<(), HostError> {
+        let observed = Self::pane_inventory(window)?
+            .panes
+            .into_iter()
+            .find(|pane| pane.slot == slot)
+            .ok_or_else(|| absent(slot))?;
+        if observed.kind != PaneKind::Terminal || observed.generation != generation || observed.revision != revision {
+            return Err(HostError::Conflict(format!("stale pane identity for {slot}")));
+        }
         let terminal = Window::pane(window, slot).ok_or_else(|| absent(slot))?;
         terminal.feed_child(contents);
         Ok(())
