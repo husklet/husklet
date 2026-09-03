@@ -749,7 +749,7 @@ impl Conversation {
     }
 
     fn attach_pane_cursors(&mut self, reply: &mut Reply, services: &Services<'_>) {
-        if !matches!(reply, Reply::Text(_) | Reply::Panes(_)) {
+        if !matches!(reply, Reply::Text(_) | Reply::Panes(_) | Reply::Semantics(_)) {
             return;
         }
         let topology = services.terminal.topology().ok().map(|topology| {
@@ -766,6 +766,13 @@ impl Conversation {
                     let (_, revision, generation, _) = self.pane_state(services, pane, topology);
                     text.generation = generation;
                     text.revision = revision;
+                }
+            }
+            Reply::Semantics(tree) => {
+                if let Some(pane) = inventory.panes.iter().find(|pane| pane.slot == tree.slot) {
+                    let (_, revision, generation, _) = self.pane_state(services, pane, topology);
+                    tree.generation = generation;
+                    tree.revision = revision;
                 }
             }
             Reply::Panes(returned) => {
@@ -1009,6 +1016,27 @@ mod tests {
                     provider: None,
                 }],
             }])
+        }
+
+        fn pane_inventory(&self) -> Result<hl_extension::PaneInventory, HostError> {
+            let semantic = self.ledger.semantic_revision.load(Ordering::Acquire) != 0;
+            Ok(hl_extension::PaneInventory {
+                panes: vec![hl_extension::InspectablePane {
+                    slot: "s1".to_owned(),
+                    generation: 0,
+                    revision: 0,
+                    kind: if semantic {
+                        hl_extension::PaneKind::Native
+                    } else {
+                        hl_extension::PaneKind::Terminal
+                    },
+                    provider: None,
+                    tab: Some("t1".to_owned()),
+                    title: Some("shell".to_owned()),
+                    focused: true,
+                }],
+                truncated: false,
+            })
         }
 
         fn open_tab(&self, title: &str) -> Result<String, HostError> {
@@ -1907,6 +1935,13 @@ mod tests {
                     && change.revision == 1
                     && change.generation == 1
         ));
+        let mut semantics = Reply::Semantics(host.semantics("s1").expect("host-local semantic tree"));
+        conversation.attach_pane_cursors(&mut semantics, &services(&host));
+        let Reply::Semantics(tree) = semantics else {
+            panic!("semantic reply retained its kind");
+        };
+        assert_eq!(tree.slot, "s1");
+        assert_eq!((tree.generation, tree.revision), (1, 1));
         assert!(
             initial.payload.len() <= Frame::PAYLOAD_LIMIT,
             "metadata remains protocol bounded"
