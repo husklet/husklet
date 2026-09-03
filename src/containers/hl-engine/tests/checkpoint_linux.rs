@@ -5671,7 +5671,11 @@ fn a_post_descriptor_dump_refusal_never_advertises_a_resumed_tree_on_both_isas()
                     &executable,
                     &release,
                     &final_release,
-                    &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_REFUSE_AFTER_DUMP"],
+                    &[
+                        "HL_CHECKPOINT",
+                        "HL_CKPT_TEST_COORDINATOR_REFUSE_AFTER_PEERS",
+                        "HL_CKPT_TEST_IGNORE_LOCAL_DESTRUCTIVE",
+                    ],
                 ),
                 StandardStreams::default().with_terminal(Terminal::new(port.clone(), 24, 80).unwrap()),
                 store.clone(),
@@ -5681,9 +5685,14 @@ fn a_post_descriptor_dump_refusal_never_advertises_a_resumed_tree_on_both_isas()
         );
         capture.start().unwrap();
         port.wait_output(b"REFUSAL-MEMBER-ZOMBIE");
-        capture
+        let refusal = capture
             .capture_checkpoint_until(checkpoint_deadline())
             .expect_err("a post-destructive member refusal was reported as a successful checkpoint");
+        assert_ne!(
+            refusal,
+            EngineError::CaptureRefused,
+            "{isa:?} broker advertised a clean refusal after a peer drained shared state"
+        );
         port.input(b"\n");
         let result = wait_result_bounded(&capture, "post-destructive refusal terminalization");
         assert!(
@@ -5696,8 +5705,13 @@ fn a_post_descriptor_dump_refusal_never_advertises_a_resumed_tree_on_both_isas()
             "{isa:?} emitted clean-resume markers after irreversible peer work: {}",
             port.output()
         );
+        let stored = store.0.lock().unwrap();
         assert!(
-            !store.0.lock().unwrap().contains_key("MANIFEST"),
+            stored.keys().any(|name| name.starts_with("pipe.")),
+            "{isa:?} fixture never exercised a real pipe winner"
+        );
+        assert!(
+            !stored.contains_key("MANIFEST"),
             "{isa:?} published a partial checkpoint after irreversible peer refusal"
         );
     }

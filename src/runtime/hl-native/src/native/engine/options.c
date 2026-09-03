@@ -64,8 +64,11 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_REFUSE_AFTER_JOIN",
                         "test-only capture peer that refuses after proving membership and before self-dump",
                         HL_OPTION_FLAG),
-    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_REFUSE_AFTER_DUMP",
-                        "test-only capture peer that refuses after destructively capturing its descriptors",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_COORDINATOR_REFUSE_AFTER_PEERS",
+                        "test-only coordinator refusal after peers have destructively captured their descriptors",
+                        HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_IGNORE_LOCAL_DESTRUCTIVE",
+                        "test-only disable the member-local terminal guard to isolate the broker's tree-wide guard",
                         HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
                         "test-only capture peer that works for far longer than the rendezvous stall window "

@@ -816,7 +816,8 @@ static void ckpt_poll(struct cpu *c) {
     fprintf(stderr, "[ckpt] %s %s (%s)\n", pd, rc == 0 ? "OK" : "FAILED",
             released == HL_CKPT_RELEASE_EXIT ? "released: image published" : "released: capture abandoned");
     if (rc == 0 && released == HL_CKPT_RELEASE_EXIT) _exit(0);
-    if (released == HL_CKPT_RELEASE_EXIT || g_ckpt_capture_destructive) {
+    if (released == HL_CKPT_RELEASE_EXIT ||
+        (g_ckpt_capture_destructive && hl_option_get("HL_CKPT_TEST_IGNORE_LOCAL_DESTRUCTIVE") == NULL)) {
         // Either the image owns this process and its own dump failed, or the capture was abandoned after
         // this process had already consumed a shared pipe or socket queue. Neither leaves a guest that can
         // be resumed honestly; see the abort contract on g_ckpt_capture_destructive.

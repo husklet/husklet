@@ -388,6 +388,19 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     }
     ckpt_phase_finish(&phases, "peer_quiescence", phase, 0);
 
+    /* Test-only: every peer has committed its group, including destructive descriptor consumption, while
+       this coordinator has not yet dumped itself. A refusal here can resume only if the broker incorrectly
+       treats irreversibility as coordinator-local instead of generation-wide. */
+    if (hl_option_get("HL_CKPT_TEST_COORDINATOR_REFUSE_AFTER_PEERS") != NULL) {
+        const char *reason = "pass the post-peer-dump refusal boundary (test hook)";
+        if (ckpt_settle_resumable_refusal(&phases, CKPT_REFUSAL_SELF_DUMP, reason) == 0) {
+            free(foll);
+            free(completed);
+            return;
+        }
+        ckpt_phase_exit(&phases, 70);
+    }
+
     // Dump ourselves (the init) last. The statuses the freeze consumed go into THIS group: waitpid(-1)
     // reaps only this process's own children, and an orphan reparents to this process, so the coordinator is
     // the parent of every corpse it collected -- by construction, on both ISAs.

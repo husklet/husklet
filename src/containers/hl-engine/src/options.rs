@@ -233,8 +233,13 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
-        "HL_CKPT_TEST_PEER_REFUSE_AFTER_DUMP",
-        "test-only capture peer that refuses after destructively capturing its descriptors",
+        "HL_CKPT_TEST_COORDINATOR_REFUSE_AFTER_PEERS",
+        "test-only coordinator refusal after peers have destructively captured their descriptors",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_IGNORE_LOCAL_DESTRUCTIVE",
+        "test-only disable the member-local terminal guard to isolate the broker's tree-wide guard",
         Flag
     ),
     internal!(

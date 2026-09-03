@@ -44,6 +44,7 @@ int main(void) {
         if (pipe(shared_pipe) != 0) _exit(80);
         const char payload = 'x';
         if (write(shared_pipe[1], &payload, 1) != 1) _exit(81);
+        if (close(shared_pipe[1]) != 0) _exit(82);
 
         pid_t child = fork();
         if (child < 0) _exit(72);
