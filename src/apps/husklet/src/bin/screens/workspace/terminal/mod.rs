@@ -579,8 +579,14 @@ impl Window {
         // Restore the saved session (tabs + splits + per-pane history) if this workspace has one; else open a
         // single fresh shell. The debug hooks below still layer on top.
         match Session::open(&tw.ws.storage_dir(&Home::current().root())) {
-            Ok(saved) if !saved.tabs.is_empty() => WindowSession::new(&tw).restore(&saved),
-            Ok(_) => drop(Tabs::new(&tw).terminal()),
+            Ok(saved) if !saved.tabs.is_empty() => {
+                WindowGeometry::restore(window.upcast_ref(), saved.window_size);
+                WindowSession::new(&tw).restore(&saved);
+            }
+            Ok(saved) => {
+                WindowGeometry::restore(window.upcast_ref(), saved.window_size);
+                drop(Tabs::new(&tw).terminal());
+            }
             Err(error) => {
                 hl_log::hl_error!(
                     hl_log::tag::RUNTIME,

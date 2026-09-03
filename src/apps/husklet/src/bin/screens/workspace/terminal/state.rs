@@ -194,6 +194,53 @@ mod tests {
 // Session / multiplexer — persist the tab+split layout + per-pane history; restore on reopen.
 // -------------------------------------------------------------------------------------------------
 
+pub(crate) struct WindowGeometry;
+
+impl WindowGeometry {
+    const MIN_WIDTH: i32 = 320;
+    const MIN_HEIGHT: i32 = 240;
+
+    fn capture(window: &Rc<TermWin>) -> Option<WindowSize> {
+        let root = window.stack.root()?.downcast::<gtk::Window>().ok()?;
+        let (width, height) = (root.width(), root.height());
+        (width > 0 && height > 0).then_some(WindowSize {
+            width: width as u32,
+            height: height as u32,
+        })
+    }
+
+    /// Restores the requested size without creating an off-screen window when the saved monitor is
+    /// larger than the display available now (for example, a laptop after undocking).
+    pub(crate) fn restore(window: &gtk::Window, saved: Option<WindowSize>) {
+        let Some(saved) = saved else { return };
+        let display = gtk::prelude::WidgetExt::display(window);
+        let bounds = display
+            .monitors()
+            .item(0)
+            .and_then(|monitor| monitor.downcast::<gtk::gdk::Monitor>().ok())
+            .map(|monitor| {
+                let geometry = monitor.geometry();
+                (geometry.width(), geometry.height())
+            });
+        let (width, height) = Self::fit(saved, bounds);
+        window.set_default_size(width, height);
+    }
+
+    pub(super) fn fit(saved: WindowSize, bounds: Option<(i32, i32)>) -> (i32, i32) {
+        let requested_width = saved.width.min(i32::MAX as u32) as i32;
+        let requested_height = saved.height.min(i32::MAX as u32) as i32;
+        let Some((bound_width, bound_height)) = bounds else {
+            return (requested_width, requested_height);
+        };
+        let bound_width = bound_width.max(1);
+        let bound_height = bound_height.max(1);
+        (
+            requested_width.clamp(Self::MIN_WIDTH.min(bound_width), bound_width),
+            requested_height.clamp(Self::MIN_HEIGHT.min(bound_height), bound_height),
+        )
+    }
+}
+
 /// Snapshot the window's tabs (skipping the overview) + each pane's scrollback into a [`Session`] and
 /// write it (layout + history files) under the workspace storage dir.
 pub(crate) struct WindowSession<'a> {
@@ -247,6 +294,7 @@ impl<'a> WindowSession<'a> {
             tabs,
             selected_tab,
             focused_pane,
+            window_size: WindowGeometry::capture(tw),
         };
         if session.tabs.is_empty() {
             Session::clear(&storage)

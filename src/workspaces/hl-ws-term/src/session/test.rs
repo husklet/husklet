@@ -36,6 +36,10 @@ fn sample_session() -> Session {
         ],
         selected_tab: Some(1),
         focused_pane: Some("2".to_owned()),
+        window_size: Some(WindowSize {
+            width: 913,
+            height: 617,
+        }),
     }
 }
 
@@ -46,6 +50,7 @@ fn layout_roundtrips() {
     let back = Session::parse(&text).unwrap();
     assert_eq!(back.selected_tab, Some(1));
     assert_eq!(back.focused_pane.as_deref(), Some("2"));
+    assert_eq!(back.window_size, Some(WindowSize { width: 913, height: 617 }));
     assert_eq!(back.tabs.len(), 2);
     assert_eq!(back.tabs[0].title, "shell 1");
     // ratio is formatted to 4 decimals; compare the structure with tolerance.
@@ -70,6 +75,7 @@ fn escaping_survives_spaces_and_specials() {
         }],
         selected_tab: Some(0),
         focused_pane: None,
+        window_size: None,
     };
     let back = Session::parse(&s.serialize()).unwrap();
     assert_eq!(back.tabs[0].title, "a b%c");
@@ -144,6 +150,7 @@ fn successful_layout_commit_prunes_only_unreferenced_histories() {
         }],
         selected_tab: Some(0),
         focused_pane: None,
+        window_size: None,
     };
 
     session.save(temporary.path()).unwrap();
@@ -251,6 +258,7 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
         }],
         selected_tab: Some(0),
         focused_pane: Some("1".to_owned()),
+        window_size: None,
     };
 
     let parsed = Session::parse(&session.serialize()).expect("a layout with a surface pane");
@@ -272,7 +280,28 @@ fn version_one_layouts_open_without_inventing_view_state() {
 
     assert_eq!(session.selected_tab, None);
     assert_eq!(session.focused_pane, None);
+    assert_eq!(session.window_size, None);
     assert_eq!(session.tabs[0].root.leaves()[0].slot.as_deref(), Some("7"));
+}
+
+#[test]
+fn version_two_layouts_open_without_inventing_window_geometry() {
+    let session = Session::parse("version 2\nview 0 7\ntab shell leaf /root - 7\n").unwrap();
+
+    assert_eq!(session.selected_tab, Some(0));
+    assert_eq!(session.focused_pane.as_deref(), Some("7"));
+    assert_eq!(session.window_size, None);
+}
+
+#[test]
+fn partial_or_zero_window_geometry_is_rejected() {
+    for invalid in [
+        "version 3\nview 0 7\nwindow - 617\ntab shell leaf /root - 7\n",
+        "version 3\nview 0 7\nwindow 913 -\ntab shell leaf /root - 7\n",
+        "version 3\nview 0 7\nwindow 0 617\ntab shell leaf /root - 7\n",
+    ] {
+        assert!(Session::parse(invalid).is_err(), "accepted {invalid:?}");
+    }
 }
 
 #[test]

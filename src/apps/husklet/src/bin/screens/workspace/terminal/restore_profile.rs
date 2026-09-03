@@ -18,6 +18,9 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
             );
             workspace.storage = Some(temporary.path().join("workspace"));
             let tw = Window::bench(&workspace);
+            let root = tw.stack.root().unwrap().downcast::<gtk::Window>().unwrap();
+            root.set_default_size(913, 617);
+            await_window_size(&root, (913, 617));
             Tabs::new(&tw).overview();
             let launcher = OfflineLauncher {
                 events: RefCell::new(Vec::new()),
@@ -56,6 +59,7 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
                 ],
                 selected_tab: Some(1),
                 focused_pane: Some("build-shell".into()),
+                window_size: None,
             };
 
             WindowSession::new(&tw).restore_with(&session, &launcher);
@@ -66,6 +70,7 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
             let reopened = Session::open(&workspace.storage_dir(&Home::current().root())).unwrap();
             assert_eq!(reopened.selected_tab, Some(1));
             assert_eq!(reopened.focused_pane.as_deref(), Some("build-shell"));
+            assert_eq!(reopened.window_size, Some(WindowSize { width: 913, height: 617 }));
             assert_eq!(
                 reopened.tabs.iter().map(|tab| tab.title.as_str()).collect::<Vec<_>>(),
                 ["source", "build", "tests"]
@@ -77,6 +82,27 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
                     ..
                 }
             ));
+
+            let restored_window = gtk::Window::builder()
+                .title("restored geometry")
+                .default_width(1040)
+                .default_height(680)
+                .build();
+            WindowGeometry::restore(&restored_window, reopened.window_size);
+            restored_window.present();
+            await_window_size(&restored_window, (913, 617));
+            restored_window.close();
+            assert_eq!(
+                WindowGeometry::fit(
+                    WindowSize {
+                        width: 5_000,
+                        height: 4_000,
+                    },
+                    Some((1_600, 1_000)),
+                ),
+                (1_600, 1_000),
+                "a size from a larger monitor must fit the display available now"
+            );
 
             let overview = tw.entries.borrow().first().unwrap().name.clone();
             Page::new(&tw, &overview).select();
@@ -199,6 +225,7 @@ fn characterize(panes: usize) {
         }],
         selected_tab: Some(0),
         focused_pane: None,
+        window_size: None,
     };
     WindowSession::new(&tw).restore_with(&session, &launcher);
     let frame_ran_before_restore_returned = first_frame.get();
@@ -350,6 +377,22 @@ fn await_view(window: &Rc<TermWin>, selected: usize, focused: &str) {
         assert!(
             std::time::Instant::now() < deadline,
             "selected/focused view state timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn await_window_size(window: &gtk::Window, expected: (i32, i32)) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        while glib::MainContext::default().iteration(false) {}
+        if (window.width(), window.height()) == expected {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "window geometry timed out: expected {expected:?}, got {:?}",
+            (window.width(), window.height())
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

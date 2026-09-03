@@ -143,6 +143,13 @@ pub struct SessionTab {
     pub root: PaneNode,
 }
 
+/// Last allocated terminal-window size in host pixels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WindowSize {
+    pub width: u32,
+    pub height: u32,
+}
+
 /// A workspace's whole terminal session (its ordered tabs). Persisted to `session/layout.conf`.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Session {
@@ -151,6 +158,8 @@ pub struct Session {
     pub selected_tab: Option<usize>,
     /// Stable slot of the terminal pane that owned keyboard focus when the workspace was closed.
     pub focused_pane: Option<String>,
+    /// Last allocated terminal-window size. Layout versions before 3 leave this unset.
+    pub window_size: Option<WindowSize>,
 }
 
 impl Session {
@@ -166,13 +175,19 @@ impl Session {
     /// Serialize to the prefix-notation text format.
     #[must_use]
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# hl session layout\nversion 2\nview ");
+        let mut out = String::from("# hl session layout\nversion 3\nview ");
         let selected = self
             .selected_tab
             .map_or_else(|| "-".to_owned(), |index| index.to_string());
         out.push_str(&selected);
         out.push(' ');
         out.push_str(&Layout::escape(self.focused_pane.as_deref().unwrap_or("-")));
+        out.push('\n');
+        out.push_str("window ");
+        match self.window_size {
+            Some(size) => out.push_str(&format!("{} {}", size.width, size.height)),
+            None => out.push_str("- -"),
+        }
         out.push('\n');
         for tab in &self.tabs {
             out.push_str("tab ");
@@ -203,11 +218,11 @@ impl Session {
         let version = layout
             .next()
             .ok_or_else(|| Layout::invalid("missing supported layout version"))?;
-        let (selected_tab, focused_pane) = match version {
-            "1" => (None, None),
-            "2" => {
+        let (selected_tab, focused_pane, window_size) = match version {
+            "1" => (None, None, None),
+            "2" | "3" => {
                 if layout.next() != Some("view") {
-                    return Err(Layout::invalid("version 2 layout is missing its view state"));
+                    return Err(Layout::invalid("layout is missing its view state"));
                 }
                 let selected = layout
                     .next()
@@ -226,7 +241,38 @@ impl Session {
                         .next()
                         .ok_or_else(|| Layout::invalid("view state is missing its focused pane"))?,
                 );
-                (selected_tab, focused_pane)
+                let window_size = if version == "3" {
+                    if layout.next() != Some("window") {
+                        return Err(Layout::invalid("version 3 layout is missing its window size"));
+                    }
+                    let width = layout
+                        .next()
+                        .ok_or_else(|| Layout::invalid("window size is missing its width"))?;
+                    let height = layout
+                        .next()
+                        .ok_or_else(|| Layout::invalid("window size is missing its height"))?;
+                    match (width, height) {
+                        ("-", "-") => None,
+                        ("-", _) | (_, "-") => {
+                            return Err(Layout::invalid("window size has only one dimension"));
+                        }
+                        _ => {
+                            let width = width
+                                .parse::<u32>()
+                                .map_err(|_| Layout::invalid("window width is not a pixel count"))?;
+                            let height = height
+                                .parse::<u32>()
+                                .map_err(|_| Layout::invalid("window height is not a pixel count"))?;
+                            if width == 0 || height == 0 {
+                                return Err(Layout::invalid("window size contains a zero dimension"));
+                            }
+                            Some(WindowSize { width, height })
+                        }
+                    }
+                } else {
+                    None
+                };
+                (selected_tab, focused_pane, window_size)
             }
             _ => return Err(Layout::invalid("missing supported layout version")),
         };
@@ -257,6 +303,7 @@ impl Session {
             tabs,
             selected_tab,
             focused_pane,
+            window_size,
         })
     }
 
