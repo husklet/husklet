@@ -167,7 +167,54 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
                 "rows": selected.rows.iter().map(|row| serde_json::json!({ "index": row.index, "id": row.id.to_string() })).collect::<Vec<_>>(),
             })) }),
         ),
+        Event::Scroll { node, id, dx, dy } => ("scroll", node, id, serde_json::json!({ "dx": dx, "dy": dy })),
+        Event::Close { node, id } => ("close", node, id, serde_json::Value::Null),
+        Event::Context { node, id, x, y } => ("context", node, id, serde_json::json!({ "x": x, "y": y })),
+        Event::Key {
+            node,
+            id,
+            key,
+            keycode,
+            modifiers,
+            pressed,
+        } => (
+            "key",
+            node,
+            id,
+            serde_json::json!({
+                "key": key,
+                "keycode": keycode,
+                "modifiers": modifiers,
+                "pressed": pressed,
+            }),
+        ),
         Event::Focus { node, id, focused } => ("focus", node, id, serde_json::json!({ "focused": focused })),
+        Event::Pointer {
+            node,
+            id,
+            phase,
+            x,
+            y,
+            button,
+            modifiers,
+        } => (
+            "pointer",
+            node,
+            id,
+            serde_json::json!({
+                "phase": match phase {
+                    hl_gui::PointerPhase::Enter => "enter",
+                    hl_gui::PointerPhase::Motion => "motion",
+                    hl_gui::PointerPhase::Leave => "leave",
+                    hl_gui::PointerPhase::Press => "press",
+                    hl_gui::PointerPhase::Release => "release",
+                },
+                "x": x,
+                "y": y,
+                "button": button,
+                "modifiers": modifiers,
+            }),
+        ),
         _ => return None,
     };
     let mut trigger = name.to_owned();
@@ -299,6 +346,75 @@ mod tests {
                 "source": 7, "version": 3, "rows": [{ "index": 42, "id": "90042" }]
             })
         );
+    }
+
+    #[test]
+    fn every_interactive_toolkit_event_crosses_the_socket_with_its_detail() {
+        let node = NodeId::new(9);
+        let id = || EventId::new("9:event");
+        let cases = [
+            (
+                Event::Scroll {
+                    node,
+                    id: id(),
+                    dx: 1.25,
+                    dy: -2.5,
+                },
+                "scroll",
+                serde_json::json!({ "dx": 1.25, "dy": -2.5 }),
+            ),
+            (Event::Close { node, id: id() }, "close", serde_json::json!({})),
+            (
+                Event::Context {
+                    node,
+                    id: id(),
+                    x: 12.0,
+                    y: 34.0,
+                },
+                "context",
+                serde_json::json!({ "x": 12.0, "y": 34.0 }),
+            ),
+            (
+                Event::Key {
+                    node,
+                    id: id(),
+                    key: "Return".into(),
+                    keycode: 36,
+                    modifiers: 5,
+                    pressed: true,
+                },
+                "key",
+                serde_json::json!({ "key": "Return", "keycode": 36, "modifiers": 5, "pressed": true }),
+            ),
+            (
+                Event::Pointer {
+                    node,
+                    id: id(),
+                    phase: hl_gui::PointerPhase::Release,
+                    x: Some(4.0),
+                    y: None,
+                    button: 1,
+                    modifiers: 2,
+                },
+                "pointer",
+                serde_json::json!({ "phase": "release", "x": 4.0, "y": null, "button": 1, "modifiers": 2 }),
+            ),
+        ];
+        for (event, name, detail) in cases {
+            let payload = interaction(&event, Some("surface-1")).expect("event is socket-visible");
+            let value: serde_json::Value = serde_json::from_slice(&payload).expect("event JSON");
+            assert_eq!(value["interaction"], name);
+            assert_eq!(
+                value["trigger"],
+                format!("{}{}", name[..1].to_ascii_uppercase(), &name[1..])
+            );
+            assert_eq!(value["node"], 9);
+            assert_eq!(value["id"], "9:event");
+            assert_eq!(value["slot"], "surface-1");
+            for (field, expected) in detail.as_object().unwrap() {
+                assert_eq!(&value[field], expected, "{name}.{field}");
+            }
+        }
     }
 
     #[test]
