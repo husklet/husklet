@@ -10,8 +10,12 @@ impl CheckpointJourney {
         let Some(path) = AppConfig::get().checkpoint_journey.clone() else {
             return;
         };
+        if Self::contains(&path, "manager_reopen_clicked_cycle2") {
+            Self::reopened(&path, app, parent, window, 2);
+            return;
+        }
         if Self::contains(&path, "manager_reopen_clicked") {
-            Self::reopened(&path, window);
+            Self::reopened(&path, app, parent, window, 1);
             return;
         }
         if std::path::Path::new(&path).exists() {
@@ -27,7 +31,7 @@ impl CheckpointJourney {
                 return glib::ControlFlow::Continue;
             };
             terminal.feed_child(
-                b"if test -e /tmp/husklet-gui-guard; then echo fresh > /tmp/husklet-gui-fresh; else touch /tmp/husklet-gui-guard; printf '%s\\n' \"$$\" > /tmp/husklet-gui-shell-before; (while :; do printf x >> /tmp/husklet-gui-progress; sleep .05; done) & printf '%s\\n' \"$!\" > /tmp/husklet-gui-child; fi\n",
+                b"HUSKLET_GUI_CONTINUITY=$(cat /proc/sys/kernel/random/uuid); export HUSKLET_GUI_CONTINUITY; printf '%s\\n' \"$HUSKLET_GUI_CONTINUITY\" > /tmp/husklet-gui-continuity-before; (while :; do printf x >> /tmp/husklet-gui-progress; sleep .05; done) & printf '%s\\n' \"$!\" > /tmp/husklet-gui-child\n",
             );
             Self::record(&path_for_prompt, "initial_command_typed");
             let path = path_for_prompt.clone();
@@ -37,7 +41,7 @@ impl CheckpointJourney {
             glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
                 Self::record(&path, "close_requested");
                 parent.close();
-                Self::choose_continue(&path, &app, &parent, &terminal_window.ws);
+                Self::choose_continue(&path, &app, &parent, &terminal_window.ws, 1);
             });
             glib::ControlFlow::Break
         });
@@ -48,6 +52,7 @@ impl CheckpointJourney {
         app: &gtk::Application,
         parent: &gtk::ApplicationWindow,
         workspace: &WorkspaceConfig,
+        cycle: usize,
     ) {
         let path = path.to_owned();
         let app = app.clone();
@@ -68,14 +73,14 @@ impl CheckpointJourney {
             let Some(button) = button else {
                 return glib::ControlFlow::Continue;
             };
-            Self::record(&path, "dialog_continue_clicked");
+            Self::record(&path, &Self::event("dialog_continue_clicked", cycle));
             button.emit_clicked();
-            Self::await_offline(&path, &app, &workspace);
+            Self::await_offline(&path, &app, &workspace, cycle);
             glib::ControlFlow::Break
         });
     }
 
-    fn await_offline(path: &str, app: &gtk::Application, workspace: &WorkspaceConfig) {
+    fn await_offline(path: &str, app: &gtk::Application, workspace: &WorkspaceConfig, cycle: usize) {
         let path = path.to_owned();
         let app = app.clone();
         let workspace = workspace.clone();
@@ -83,7 +88,7 @@ impl CheckpointJourney {
             if std::os::unix::net::UnixStream::connect(hl::runtime::domain::Domain::new(&workspace).socket()).is_ok() {
                 return glib::ControlFlow::Continue;
             }
-            Self::record(&path, "domain_offline");
+            Self::record(&path, &Self::event("domain_offline", cycle));
             let launch = app
                 .windows()
                 .into_iter()
@@ -94,30 +99,63 @@ impl CheckpointJourney {
                 Self::record(&path, "failed_manager_launch_button_absent");
                 return glib::ControlFlow::Break;
             };
-            Self::record(&path, "manager_reopen_clicked");
+            Self::record(&path, &Self::event("manager_reopen_clicked", cycle));
             launch.emit_clicked();
             glib::ControlFlow::Break
         });
     }
 
-    fn reopened(path: &str, window: &Rc<TermWin>) {
+    fn reopened(
+        path: &str,
+        app: &gtk::Application,
+        parent: &gtk::ApplicationWindow,
+        window: &Rc<TermWin>,
+        cycle: usize,
+    ) {
         if Self::contains(path, "journey_complete") {
             return;
         }
         let path = path.to_owned();
+        let app = app.clone();
+        let parent = parent.clone();
         let window = window.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
             let Some(terminal) = Self::active_terminal(&window) else {
                 return glib::ControlFlow::Continue;
             };
-            terminal.feed_child(b"printf '%s\\n' \"$$\" > /tmp/husklet-gui-shell-after\n");
-            Self::record(&path, "reopen_command_typed");
-            let complete = path.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
-                Self::record(&complete, "journey_complete");
+            terminal.feed_child(
+                format!("printf '%s\\n' \"$HUSKLET_GUI_CONTINUITY\" > /tmp/husklet-gui-continuity-after-{cycle}\\n")
+                    .as_bytes(),
+            );
+            Self::record(&path, &Self::event("reopen_command_typed", cycle));
+            if cycle == 2 {
+                Self::record(&path, "journey_complete");
+                return glib::ControlFlow::Break;
+            }
+            let ready = format!("{path}.cycle1-ready");
+            let path_for_close = path.clone();
+            let app = app.clone();
+            let parent = parent.clone();
+            let terminal_window = window.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+                if !std::path::Path::new(&ready).exists() {
+                    return glib::ControlFlow::Continue;
+                }
+                Self::record(&path_for_close, "close_requested_cycle2");
+                parent.close();
+                Self::choose_continue(&path_for_close, &app, &parent, &terminal_window.ws, 2);
+                glib::ControlFlow::Break
             });
             glib::ControlFlow::Break
         });
+    }
+
+    fn event(base: &str, cycle: usize) -> String {
+        if cycle == 1 {
+            base.to_owned()
+        } else {
+            format!("{base}_cycle{cycle}")
+        }
     }
 
     fn contains(path: &str, event: &str) -> bool {

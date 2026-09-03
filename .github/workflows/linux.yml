@@ -321,6 +321,24 @@ jobs:
           xvfb-run -a -s '-screen 0 1600x1000x24'
           cargo test -p husklet --bins --features gui --locked --offline
 
+      - name: Test two GUI checkpoint cycles through the production application
+        run: >-
+          .github/scripts/cargo-test-named.sh "GUI checkpoint journey"
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          xvfb-run -a -s '-screen 0 1600x1000x24'
+          env HL_PRODUCT_CHECKPOINT_REQUIRED=1
+          HL_GUI_CHECKPOINT_EVIDENCE="$RUNNER_TEMP/gui-checkpoint-evidence"
+          cargo test -p husklet --test gui_checkpoint_journey
+          --features gui,gui-checkpoint-e2e --locked --offline --no-fail-fast
+
+      - name: Upload GUI checkpoint evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gui-checkpoint-evidence
+          path: ${{ runner.temp }}/gui-checkpoint-evidence
+          if-no-files-found: warn
+
       - name: Configure Node for the MCP socket integration proof
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

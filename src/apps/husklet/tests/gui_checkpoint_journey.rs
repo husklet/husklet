@@ -40,9 +40,17 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     let seeded = hl::runtime::domain::test_workspace::seed(&home, &storage, &rootfs, hl_ws::Arch::Amd64, PRIMARY)
         .await
         .unwrap();
-    let receipt = temporary.path().join("journey.receipt");
-    let output = std::fs::File::create(temporary.path().join("husklet.out")).unwrap();
-    let errors = std::fs::File::create(temporary.path().join("husklet.err")).unwrap();
+    let evidence = std::env::var_os("HL_GUI_CHECKPOINT_EVIDENCE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| temporary.path().to_owned());
+    std::fs::create_dir_all(&evidence).unwrap();
+    let receipt = evidence.join("journey.receipt");
+    let cycle_ready = std::path::PathBuf::from(format!("{}.cycle1-ready", receipt.display()));
+    for stale in [&receipt, &cycle_ready, &evidence.join("result.receipt")] {
+        remove_if_exists(stale);
+    }
+    let output = std::fs::File::create(evidence.join("husklet.out")).unwrap();
+    let errors = std::fs::File::create(evidence.join("husklet.err")).unwrap();
     let application = Command::new(env!("CARGO_BIN_EXE_husklet"))
         .env("HOME", &home)
         .env("XDG_CACHE_HOME", &cache)
@@ -64,21 +72,38 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     wait_receipt(
         &mut journey.application,
         &receipt,
-        "journey_complete",
+        "reopen_command_typed",
         Duration::from_secs(60),
     );
-    let before = wait_text(&rootfs.join("tmp/husklet-gui-shell-before"), Duration::from_secs(10));
-    let after = wait_text(&rootfs.join("tmp/husklet-gui-shell-after"), Duration::from_secs(10));
-    assert_eq!(before, after, "reopen launched a different terminal shell");
-    assert!(
-        !rootfs.join("tmp/husklet-gui-fresh").exists(),
-        "reopen ran the shell setup a second time"
+    let before = wait_text(
+        &rootfs.join("tmp/husklet-gui-continuity-before"),
+        Duration::from_secs(10),
     );
+    let after = wait_text(
+        &rootfs.join("tmp/husklet-gui-continuity-after-1"),
+        Duration::from_secs(10),
+    );
+    assert_eq!(before, after, "reopen lost shell-local continuity state");
     let progress = rootfs.join("tmp/husklet-gui-progress");
     let first = std::fs::metadata(&progress).unwrap().len();
-    std::thread::sleep(Duration::from_millis(250));
-    let second = std::fs::metadata(&progress).unwrap().len();
-    assert!(second > first, "restored child process did not resume progress");
+    wait_for_growth(&progress, first, Duration::from_secs(5));
+    let events = std::fs::read_to_string(&receipt).unwrap();
+    let restored_ready_ms = unix_millis() - event_time(&events, "manager_reopen_clicked");
+    std::fs::write(&cycle_ready, b"ready\n").unwrap();
+
+    wait_receipt(
+        &mut journey.application,
+        &receipt,
+        "reopen_command_typed_cycle2",
+        Duration::from_secs(60),
+    );
+    let after_second = wait_text(
+        &rootfs.join("tmp/husklet-gui-continuity-after-2"),
+        Duration::from_secs(10),
+    );
+    assert_eq!(before, after_second, "second reopen lost shell-local continuity state");
+    let second_start = std::fs::metadata(&progress).unwrap().len();
+    wait_for_growth(&progress, second_start, Duration::from_secs(5));
 
     let events = std::fs::read_to_string(&receipt).unwrap();
     for required in [
@@ -87,6 +112,11 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "domain_offline",
         "manager_reopen_clicked",
         "reopen_command_typed",
+        "close_requested_cycle2",
+        "dialog_continue_clicked_cycle2",
+        "domain_offline_cycle2",
+        "manager_reopen_clicked_cycle2",
+        "reopen_command_typed_cycle2",
         "journey_complete",
     ] {
         assert!(
@@ -95,8 +125,35 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         );
     }
     let close_ms = event_time(&events, "domain_offline") - event_time(&events, "dialog_continue_clicked");
-    let reopen_ms = event_time(&events, "journey_complete") - event_time(&events, "manager_reopen_clicked");
-    eprintln!("gui-checkpoint close_ms={close_ms} reopen_ms={reopen_ms} shell_pid={after}");
+    let close_second_ms =
+        event_time(&events, "domain_offline_cycle2") - event_time(&events, "dialog_continue_clicked_cycle2");
+    let restored_second_ready_ms = unix_millis() - event_time(&events, "manager_reopen_clicked_cycle2");
+    assert!(
+        close_ms <= 5_000,
+        "checkpoint close exceeded 5s acceptance bound: {close_ms}ms"
+    );
+    assert!(
+        restored_ready_ms <= 5_000,
+        "restored terminal exceeded 5s acceptance bound: {restored_ready_ms}ms"
+    );
+    assert!(
+        close_second_ms <= 5_000,
+        "second checkpoint close exceeded 5s acceptance bound: {close_second_ms}ms"
+    );
+    assert!(
+        restored_second_ready_ms <= 5_000,
+        "second restored terminal exceeded 5s acceptance bound: {restored_second_ready_ms}ms"
+    );
+    std::fs::write(
+        evidence.join("result.receipt"),
+        format!(
+            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second}\nbackground=progressing\ncycles=2\n"
+        ),
+    )
+    .unwrap();
+    eprintln!(
+        "gui-checkpoint close_ms={close_ms} restored_ready_ms={restored_ready_ms} close_second_ms={close_second_ms} restored_second_ready_ms={restored_second_ready_ms} continuity={after_second}"
+    );
 }
 
 fn unpack(archive: &Path, destination: &Path) {
@@ -105,6 +162,14 @@ fn unpack(archive: &Path, destination: &Path) {
     tar::Archive::new(flate2::read::GzDecoder::new(source))
         .unpack(destination)
         .unwrap();
+}
+
+fn remove_if_exists(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("remove stale GUI journey evidence {}: {error}", path.display()),
+    }
 }
 
 fn wait_receipt(child: &mut std::process::Child, path: &Path, event: &str, timeout: Duration) {
@@ -143,6 +208,27 @@ fn wait_text(path: &Path, timeout: Duration) -> String {
         assert!(Instant::now() < deadline, "timed out waiting for {}", path.display());
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn wait_for_growth(path: &Path, initial: u64, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > initial) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "restored child process did not resume progress"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn unix_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
 }
 
 fn event_time(receipt: &str, event: &str) -> u128 {
