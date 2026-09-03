@@ -4194,7 +4194,10 @@ mod panes {
         let fixture = Fixture::new(&[("postgres", true)]);
         let bench = Bench::new();
         let (first, first_slot) = bench.shell();
-        let (_second, second_slot) = bench.beside(&first);
+        let (second, second_slot) = bench.beside(&first);
+        let host = bench.page.root().and_downcast::<gtk::Window>().expect("terminal window");
+        host.set_default_size(400, 600);
+        host.present();
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -4223,6 +4226,7 @@ mod panes {
             Panes::focus(&bench.window, &second_slot),
             "a different split leaf is selected"
         );
+        assert!(until(|| second.has_focus()), "the unrelated terminal owns keyboard focus");
 
         let window = Rc::downgrade(&bench.window);
         let withdrawn = gallery.clone();
@@ -4256,6 +4260,10 @@ mod panes {
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
         assert!(
+            until(|| second.has_focus()),
+            "lifecycle withdrawal must not steal focus from an unrelated pane"
+        );
+        assert!(
             Slots::new(&bench.window).surface(&restored.content).is_none(),
             "withdrawal retires provider identity before layout persistence"
         );
@@ -4286,6 +4294,7 @@ mod panes {
             gallery.ready("postgres", generation);
             gallery.withdraw("postgres");
         }
+        host.close();
     }
 
     pub(super) fn disabling_an_extension_restores_its_surface_pane_terminal() {
