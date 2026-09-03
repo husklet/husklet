@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import test from 'node:test';
 
-import { ExtensionError, Session, protocolCoverage, requestCapability, workspace } from '../src/index.js';
+import { ExtensionError, Session, protocolCoverage, protocolSurface, requestCapability, workspace } from '../src/index.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -236,7 +236,7 @@ test('workspace lifecycle methods use the typed control calls', async () => {
 
 test('coverage names delivered snapshots and leaves unsupported topics unavailable', () => {
   assert.deepEqual(protocolCoverage.available.workspace, [
-    'info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart',
+    'info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart',
   ]);
   assert.ok(protocolCoverage.available.containers.includes('create'));
   assert.ok(protocolCoverage.available.containers.includes('remove'));
@@ -271,6 +271,34 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.equal(typeof api.terminal.switchOccupant, 'function');
   assert.deepEqual(Object.keys(api.files), protocolCoverage.available.files,
     'coverage must enumerate observed filesystem authorities as well as compatibility calls');
+});
+
+test('the schema-derived public surface covers every Rust request and topic', () => {
+  const schema = JSON.parse(fs.readFileSync(new URL('../../../src/workspaces/hl-extension/protocol/v1.json', import.meta.url)));
+  const requests = schema.roots.request.variants.map(({ name }) => name);
+  const topics = schema.topics.map(({ wire }) => wire);
+  assert.deepEqual(Object.keys(protocolSurface.requests), requests);
+  assert.deepEqual(Object.keys(protocolSurface.topics), topics);
+  assert.deepEqual(
+    Object.entries(protocolSurface.requests).filter(([, route]) => route.kind === 'internal').map(([call]) => call),
+    ['interface_open_tab', 'interface_split', 'interface_withdraw', 'interface_render', 'interface_render_at', 'source_resize', 'source_resize_at'],
+    'only renderer-owned lifecycle, commit, and virtual-source transport may lack facade methods',
+  );
+
+  const api = workspace({ granted: [], call() { throw new Error('not called'); }, onEvent() { return () => {}; } });
+  for (const [call, route] of Object.entries(protocolSurface.requests)) {
+    if (route.kind === 'internal') {
+      assert.match(route.rationale, /renderer/, `${call} lacks a concrete internal rationale`);
+      continue;
+    }
+    let value = api;
+    for (const part of route.api.split('.')) value = value?.[part];
+    assert.equal(typeof value, 'function', `${call} has no public ${route.api} method`);
+  }
+  for (const [topic, routes] of Object.entries(protocolSurface.topics)) {
+    assert.equal(typeof api[routes.subscribe], 'function', `${topic} has no typed subscription route`);
+    assert.equal(typeof api[routes.unsubscribe], 'function', `${topic} has no typed unsubscription route`);
+  }
 });
 
 test('every fixed public facade request is classified with its Rust host capability', () => {

@@ -6,6 +6,7 @@ export {
 } from './generated-protocol.js';
 export { semanticXml } from './semantic.js';
 import { Session } from './session.js';
+import { PROTOCOL_REPLIES, PROTOCOL_TOPICS } from './generated-protocol.js';
 
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
@@ -512,10 +513,68 @@ export function requestCapability(call) {
   throw new RangeError(`unclassified extension request ${call}`);
 }
 
+const camel = (value) => value.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+const facadeOverrides = Object.freeze({
+  extension_acquisition_start: 'extensions.startAcquisition',
+  extension_acquisition_status: 'extensions.acquisition',
+  extension_acquisition_cancel: 'extensions.cancelAcquisition',
+  execution_inspect: 'containers.execution',
+  execution_list: 'containers.executions',
+  execution_logs: 'containers.executionLogs',
+  execution_wait: 'containers.waitExecution',
+  execution_kill: 'containers.signalExecution',
+  execution_remove: 'containers.removeExecution',
+  container_attach_terminal: 'containers.attachTerminal',
+  image_pull_start: 'images.startPull',
+  image_pull_status: 'images.pullStatus',
+  image_pull_cancel: 'images.cancelPull',
+  pane_list: 'terminal.panes',
+  pane_semantic_read: 'terminal.semantics',
+  pane_semantic_action: 'terminal.act',
+  terminal_read_pane: 'terminal.read',
+  terminal_write_pane: 'terminal.writeInput',
+  terminal_close_pane: 'terminal.close',
+  terminal_close_pane_observed: 'terminal.closeObserved',
+  terminal_focus_pane: 'terminal.focus',
+  terminal_focus_pane_observed: 'terminal.focusObserved',
+  terminal_retitle_pane: 'terminal.retitle',
+  terminal_retitle_pane_observed: 'terminal.retitleObserved',
+});
+const internalRequests = Object.freeze({
+  interface_open_tab: 'owned by the React/native renderer root lifecycle',
+  interface_split: 'owned by the React/native renderer root lifecycle',
+  interface_withdraw: 'owned by the React/native renderer root lifecycle',
+  interface_render: 'owned by the React/native renderer commit transport',
+  interface_render_at: 'owned by the React/native renderer commit transport',
+  source_resize: 'owned by the React/native renderer virtual source transport',
+  source_resize_at: 'owned by the React/native renderer virtual source transport',
+});
+function facadePath(call) {
+  if (facadeOverrides[call]) return facadeOverrides[call];
+  for (const [prefix, group] of [
+    ['workspace_', ''], ['extension_', 'extensions.'], ['container_', 'containers.'],
+    ['image_', 'images.'], ['volume_', 'volumes.'], ['network_', 'networks.'],
+    ['terminal_', 'terminal.'], ['filesystem_', 'files.'],
+  ]) if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
+  return null;
+}
+
+/** Schema-derived inventory connecting every Rust request/topic to its supported public route. */
+export const protocolSurface = Object.freeze({
+  requests: Object.freeze(Object.fromEntries(Object.keys(PROTOCOL_REPLIES).map((call) => {
+    if (internalRequests[call]) return [call, Object.freeze({ kind: 'internal', rationale: internalRequests[call] })];
+    if (call === 'event_subscribe') return [call, Object.freeze({ kind: 'subscription', api: 'subscribe' })];
+    if (call === 'event_unsubscribe') return [call, Object.freeze({ kind: 'subscription', api: 'unsubscribe' })];
+    return [call, Object.freeze({ kind: 'facade', api: facadePath(call) })];
+  }))),
+  topics: Object.freeze(Object.fromEntries(PROTOCOL_TOPICS.map(({ wire }) => [wire,
+    Object.freeze({ subscribe: 'subscribe', unsubscribe: 'unsubscribe' })]))),
+});
+
 /** Honest inventory of the current host contract; gaps are not callable APIs. */
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
-    workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
+    workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'attachTerminal'],
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],

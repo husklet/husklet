@@ -109,10 +109,11 @@ try {
   await runPackedStarter(starter, path.join(starter, 'node_modules/@husklet/client'));
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
-    import { PROTOCOL_VERSION, Session, semanticXml, workspace } from '@husklet/client';
+    import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
     import { PROTOCOL_VERSION as subpathVersion, validateRequest } from '@husklet/client/protocol';
     if (PROTOCOL_VERSION !== subpathVersion || typeof Session !== 'function'
       || typeof workspace !== 'function' || typeof semanticXml !== 'function'
+      || protocolSurface.requests.workspace_info.api !== 'info'
       || typeof validateRequest !== 'function') process.exit(1);
   `], { cwd: consumer, stdio: 'pipe' });
 

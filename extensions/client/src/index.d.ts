@@ -300,6 +300,12 @@ export interface WorkspaceApi {
 export function requestCapability(call: string): string;
 
 export function workspace(session: Session): WorkspaceApi;
+export const protocolSurface: Readonly<{
+  requests: Readonly<Record<string,
+    | Readonly<{ kind: 'facade' | 'subscription'; api: string }>
+    | Readonly<{ kind: 'internal'; rationale: string }>>>;
+  topics: Readonly<Record<Topic, Readonly<{ subscribe: 'subscribe'; unsubscribe: 'unsubscribe' }>>>;
+}>;
 export const protocolCoverage: Readonly<{
   available: Readonly<Record<string, readonly string[]>>;
   unavailable: Readonly<Record<string, readonly string[]>>;
