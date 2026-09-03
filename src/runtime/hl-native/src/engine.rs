@@ -589,13 +589,26 @@ mod tests {
         let hook = crate::loader::tests()
             .expect("native test bridge")
             .x86_64_translit_displaced;
-        for scenario in [200, 202, 203, 204] {
+        for scenario in [200, 202, 203, 204, 224, 225] {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "indirect IBTC scenario {scenario}");
         }
         // Scenario 201 is the unresolved-indirect marker-5 hit arm. Keep it
         // explicit so an independently-added selector cannot hide it again.
         assert_eq!(unsafe { hook(201) }, 0, "indirect IBTC scenario 201");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn memory_indirect_call_fault_stages_preserve_source_and_dynamic_target_provenance() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 148 owns no external state; 226 owns its bounded executable arena and
+        // restores global test state.
+        assert_eq!(unsafe { hook(148) }, 0);
+        assert_eq!(unsafe { hook(226) }, 0);
     }
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
@@ -659,6 +672,7 @@ mod tests {
         }
         for selector in [
             190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216,
+            224, 225, 226,
         ] {
             assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }

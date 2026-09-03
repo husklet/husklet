@@ -676,7 +676,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario);
 static int translit_indirect_ibtc_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
 static int translit_ret_signal_stage_test(void);
-static int translit_jmp_mem_signal_stage_test(void);
+static int translit_control_mem_signal_stage_test(int call);
 static int translit_pcache_census_signal_stage_test(void);
 static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code);
 #endif
@@ -1339,6 +1339,7 @@ enum {
     TL_JMP_REG,  // jmp *%reg
     TL_JMP_MEM,  // jmp *memory, with a precise faultable target load
     TL_CALL_REG, // call *%reg
+    TL_CALL_MEM, // call *memory, with target-load-before-stack fault ordering
     TL_JMP_RIP,  // jmp *disp32(%rip)
     TL_CALL_RIP, // call *disp32(%rip)
     TL_SYSCALL
@@ -1422,6 +1423,9 @@ static int translit_classify(const struct insn *insn) {
     if (insn->op == 0xFF && insn->has_modrm && insn->reg == 4 && insn->is_mem && !insn->rip_rel &&
         !insn->addr32 && !insn->p66 && !insn->lock && !insn->rep && !insn->repne)
         return TL_JMP_MEM;
+    if (insn->op == 0xFF && insn->has_modrm && insn->reg == 2 && insn->is_mem && !insn->rip_rel &&
+        !insn->addr32 && !insn->p66 && !insn->lock && !insn->rep && !insn->repne)
+        return TL_CALL_MEM;
     if (insn->two) return translit_classify_two(insn);
     uint8_t op = insn->op;
     if (op < 0x40 && (op & 7) <= 5) return TL_COPY; // the eight ALU groups
@@ -1600,7 +1604,9 @@ static int translit_displaced_safe_for(const struct insn *insn, int kind, int di
             (void)__atomic_fetch_add(&translit_displaced_sse2_memory_declined, 1, __ATOMIC_RELAXED);
         return insn->rip_rel;
     }
-    if (kind == TL_CALL || kind == TL_CALL_REG || kind == TL_RET || kind == TL_JMP_MEM) return 0;
+    if (kind == TL_CALL || kind == TL_CALL_REG || kind == TL_CALL_MEM || kind == TL_RET ||
+        kind == TL_JMP_MEM)
+        return 0;
     if (kind != TL_COPY) return 1; // direct control, register jmp, and syscall touch no guest memory here
     if (insn->is_mem) return insn->rip_rel;
     if (insn->two) return 1;
@@ -3460,6 +3466,16 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    if (scenario == 224 || scenario == 225) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_indirect_ibtc_fixture_test(scenario == 224 ? 197 : 198));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
+    if (scenario == 226) return translit_control_mem_signal_stage_test(1) ? 0 : 226;
     if (scenario == 223) return translit_movsd_far_fixture_test();
     if (scenario == 219) return translit_movsd_memory_fixture_test();
     if (scenario == 217) return translit_jitdump_lifecycle_test();
@@ -3493,13 +3509,13 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         jump.m_hasbase = 1;
         jump.m_hasindex = 1;
         jump.reg = 2;
-        if (translit_classify(&jump) != TL_NO) return 151;
+        if (translit_classify(&jump) != TL_CALL_MEM) return 151;
         jump.reg = 4;
         jump.is_mem = 0;
         jump.mod = 3;
         return translit_classify(&jump) == TL_JMP_REG ? 0 : 157;
     }
-    if (scenario == 149) return translit_jmp_mem_signal_stage_test() ? 0 : 149;
+    if (scenario == 149) return translit_control_mem_signal_stage_test(0) ? 0 : 149;
     if (scenario == 206) return translit_pcache_census_signal_stage_test() ? 0 : 206;
     if (scenario == 207) {
         uint8_t jump[7] = {0xe9}, lea[7] = {0x48, 0x8d, 0x05}, corrupt[7] = {0x48, 0x8d, 0x0d};
@@ -5023,7 +5039,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #if defined(HL_NATIVE_TEST_HOOKS)
     direct_data_authority = direct_data_authority || hl_option_flag_value("HL_TRANSLIT_FS_AUTHORITY_TEST", 0);
 #endif
-    if ((fs_run || first_kind == TL_JMP_MEM) && direct_data_authority) {
+    if ((fs_run || first_kind == TL_JMP_MEM || first_kind == TL_CALL_MEM) && direct_data_authority) {
 #if defined(HL_NATIVE_TEST_HOOKS)
         block->profile_fallback_kind = HL_BACKEND_SHAPE_I_AUTHORITY;
 #endif
@@ -5170,7 +5186,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             fall_stop = HL_BACKEND_FALL_TL_NO;
             break;
         }
-        if (kind == TL_JMP_MEM && direct_data_authority) {
+        if ((kind == TL_JMP_MEM || kind == TL_CALL_MEM) && direct_data_authority) {
             fall_stop = HL_BACKEND_FALL_TL_NO;
             break;
         }
@@ -5674,6 +5690,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         }
         case TL_CALL:
         case TL_CALL_REG:
+        case TL_CALL_MEM:
         case TL_CALL_RIP: {
             // The pushed return address is guest-visible (unwinders and dladdr read it), so it is exactly
             // interp_call_return_pc's value -- which is `next` here, since a biased image never gets this
@@ -5683,6 +5700,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             uint64_t pushed = interp_call_return_pc(next);
             // Read the target from the LIVE host register, not from cpu->r[] -- nothing is spilled yet.
             if (kind == TL_CALL_REG) hl_x64_store_gs(a, insn.rm_reg, OFF_RIP);
+            if (kind == TL_CALL_MEM) {
+                hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+                jmp_mem_borrow_start = a->cursor;
+                translit_emit_jmp_mem_target_load(a, &insn);
+                hl_x64_store_gs(a, HL_X64_R11, TL_MM_ENTRY);
+                hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+            }
             if (kind == TL_CALL_RIP) {
                 uint64_t guest_target = next + (uint64_t)insn.disp;
                 uint64_t storage_target = translit_riprel_target(insn.op, insn.two, guest_target, g_nonpie_lo,
@@ -5703,27 +5727,37 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             hl_x64_store_rsp_imm32(a, -8, (uint32_t)pushed);
             hl_x64_store_rsp_imm32(a, -4, (uint32_t)(pushed >> 32));
             hl_x64_lea_rsp(a, -8);
+            if (kind == TL_CALL_MEM) {
+                hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
+                hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
+                jmp_mem_rip_end = a->cursor;
+                hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
+                jmp_mem_r11_end = a->cursor;
+            }
             if (kind == TL_CALL_RIP) {
                 hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
                 hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
                 hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
             translit_mixed_profile_terminal(a, mixed_sse_transition_count, 0,
-                                             kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
-                                             : kind == TL_CALL_RIP ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
-                                                                   : HL_BACKEND_SHAPE_T_INDIRECT_CALL);
+                                             kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                             : kind == TL_CALL_RIP || kind == TL_CALL_MEM
+                                                 ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
+                                                 : HL_BACKEND_SHAPE_T_INDIRECT_CALL);
 #if defined(HL_NATIVE_TEST_HOOKS)
             uint8_t *call_marker = translit_shape_exit(a,
-                                    kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
-                                    : kind == TL_CALL_RIP ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
-                                                          : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+                                    kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                    : kind == TL_CALL_RIP || kind == TL_CALL_MEM
+                                        ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
+                                        : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
                                     (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
             if (kind == TL_CALL) would_link_marker = call_marker;
 #else
             translit_shape_exit(a,
-                                kind == TL_CALL       ? HL_BACKEND_SHAPE_T_DIRECT_CALL
-                                : kind == TL_CALL_RIP ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
-                                                      : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+                                kind == TL_CALL ? HL_BACKEND_SHAPE_T_DIRECT_CALL
+                                : kind == TL_CALL_RIP || kind == TL_CALL_MEM
+                                    ? HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY
+                                    : HL_BACKEND_SHAPE_T_INDIRECT_CALL,
                                 (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
 #endif
             if (kind == TL_CALL && translit_jcc_ibtc_stub_entry != NULL) {
@@ -7943,6 +7977,16 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     } else if (scenario == 194) {
         guest_bytes[0] = 0xff;
         guest_bytes[1] = 0xd0; // call *%rax
+    } else if (scenario == 197) {
+        guest_bytes[0] = 0xff;
+        guest_bytes[1] = 0x10; // call *(%rax)
+        memcpy(guest_bytes + 16, &target, sizeof target);
+    } else if (scenario == 198) {
+        guest_bytes[0] = 0xff;
+        guest_bytes[1] = 0x54;
+        guest_bytes[2] = 0x88;
+        guest_bytes[3] = 0x08; // call *8(%rax,%rcx,4)
+        memcpy(guest_bytes + 16, &target, sizeof target);
     } else {
         guest_bytes[0] = 0xff;
         guest_bytes[1] = 0x20; // jmp *(%rax)
@@ -7971,24 +8015,27 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     uint64_t *stack = (uint64_t *)(arena + arena_size - 64);
     struct cpu cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc};
     for (unsigned reg = 0; reg < 16; ++reg) cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
-    uint64_t rax = scenario == 195 ? source + 16
+    uint64_t rax = scenario == 198 ? source
+                   : scenario == 195 || scenario == 197 ? source + 16
                    : scenario == 193 || scenario == 196 ? UINT64_C(0x8877665544332211)
                                                         : target;
     cpu.r[HL_X64_RAX] = rax;
+    if (scenario == 198) cpu.r[HL_X64_RCX] = 2;
     cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
     translit_flags_out(&cpu, UINT64_C(0xad7));
     uint64_t flags = translit_flags_in(&cpu);
     run_block(context, &cpu, source_block);
-    int call = scenario == 194 || scenario == 196;
+    int call = scenario == 194 || scenario == 196 || scenario == 197 || scenario == 198;
     uint64_t expected_rsp = (uint64_t)(uintptr_t)stack - (call ? 8 : 0);
     if (cpu.rip != target || cpu.jcc_ibtc_miss != TL_INDIRECT_IBTC_MISS ||
         cpu.r[HL_X64_RSP] != expected_rsp || translit_flags_in(&cpu) != flags)
         return 197;
-    if (call && stack[-1] != source + (scenario == 194 ? 2 : 6)) return 200;
+    if (call && stack[-1] != source + (scenario == 196 ? 6 : scenario == 198 ? 4 : 2)) return 200;
     translit_jcc_ibtc_fill(&cpu, NULL, 0);
     if (cpu.jcc_ibtc_miss != 0 || ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) return 201;
     cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
     cpu.r[HL_X64_RAX] = rax;
+    if (scenario == 198) cpu.r[HL_X64_RCX] = 2;
     cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
     translit_flags_out(&cpu, UINT64_C(0xad7));
     run_block(context, &cpu, source_block);
@@ -8000,6 +8047,7 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
     for (unsigned reg = 0; reg < 16; ++reg) cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
     cpu.r[HL_X64_RAX] = rax;
+    if (scenario == 198) cpu.r[HL_X64_RCX] = 2;
     cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
     translit_flags_out(&cpu, UINT64_C(0xad7));
     run_block(context, &cpu, source_block);
@@ -8008,11 +8056,12 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
         cpu.jcc_ibtc_miss != 0 ||
         translit_flags_in(&cpu) != flags)
         return 199;
-    if (call && stack[-1] != source + (scenario == 194 ? 2 : 6)) return 203;
+    if (call && stack[-1] != source + (scenario == 196 ? 6 : scenario == 198 ? 4 : 2)) return 203;
     smc_inplace_drop();
     if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) return 204;
     cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc, .irq = 1};
     cpu.r[HL_X64_RAX] = rax;
+    if (scenario == 198) cpu.r[HL_X64_RCX] = 2;
     cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
     translit_flags_out(&cpu, UINT64_C(0xad7));
     run_block(context, &cpu, source_block);
@@ -9840,7 +9889,7 @@ static int translit_ret_signal_stage_test(void) {
     return exact ? 0 : (int)failed_stage;
 }
 
-static int translit_jmp_mem_signal_stage_test(void) {
+static int translit_control_mem_signal_stage_test(int call) {
     const size_t arena_size = 65536;
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -9848,7 +9897,7 @@ static int translit_jmp_mem_signal_stage_test(void) {
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     guest_bytes[0] = 0xff;
-    guest_bytes[1] = 0x20; /* jmp *(%rax) */
+    guest_bytes[1] = call ? 0x10 : 0x20; /* call/jmp *(%rax) */
     const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
     g_cache = arena;
     g_cp = arena;
