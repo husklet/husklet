@@ -22,7 +22,7 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
       if (name === 'terminal_topology') return { reply: 'topology', with: {
         active_tab: 't', tabs: [{ id: 't', title: 'Shell', root: pane }],
       } };
-      if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: 'term-1', lines: ['ready'], truncated: false } };
+      if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: 'term-1', generation: 1, revision: 3, lines: ['ready'], truncated: false } };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
         slot: 'native-1', generation: 2, revision: 41, truncated: false,
         root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [

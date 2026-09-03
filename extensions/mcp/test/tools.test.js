@@ -611,7 +611,7 @@ test('unified pane XML packs terminal metadata and escaped bounded screen lines'
 
 test('unified pane XML selects surface semantics and gives a clear topology absence error', async () => {
   const terminal = {
-    panes: async () => ({ panes: [{ slot: 'surface-1', kind: 'surface' }], truncated: false }),
+    panes: async () => ({ panes: [{ slot: 'surface-1', generation: 0, revision: 2, kind: 'surface' }], truncated: false }),
     topology: async () => ({ active_tab: null, tabs: [{ id: 't', title: 'UI', root: {
       kind: 'pane', focused: false, grid: null,
       pane: { slot: 'surface-1', occupant: 'surface', working_directory: null, command: null, provider: { extension: 'demo', provider: 'main' } },
@@ -624,7 +624,7 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
     },
   };
   const xml = await paneXml(terminal, 'surface-1');
-  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface" generation="0" revision="0"><pane /);
+  assert.match(xml, /^<husklet-pane slot="surface-1" occupant="surface" generation="0" revision="2"><pane /);
   assert(!xml.includes('never leak'));
   assert.match(xml, /\[redacted\]/);
   await assert.rejects(() => paneXml(terminal, 'missing'), /absent from pane inventory/);
@@ -632,7 +632,7 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
 
 test('unified pane XML projects arbitrary native slots and explicitly rejects unknown kinds', async () => {
   const terminal = {
-    panes: async () => ({ panes: [{ slot: 'settings-native', kind: 'native' }], truncated: false }),
+    panes: async () => ({ panes: [{ slot: 'settings-native', generation: 0, revision: 4, kind: 'native' }], truncated: false }),
     semantics: async (slot) => ({ slot, generation: 0, revision: 4, truncated: false, root: {
       id: 1, role: 'status', label: 'Settings', value: 'Ready', disabled: false, actions: [], children: [],
     } }),
@@ -935,7 +935,7 @@ test('semantic and terminal XML identify every field-local clipping boundary', a
   assert.match(xml, /<value truncated="true">/); assert(!xml.includes('\uFFFD'));
   const terminal = { panes: async () => ({ panes: [{ slot: 't', kind: 'terminal', generation: 1, revision: 1 }] }),
     topology: async () => ({ active_tab: 'tab', tabs: [{ id: 'tab', title: 'T', root: { kind: 'pane', pane: { slot: 't' }, grid: null, focused: false } }] }),
-    read: async () => ({ lines: ['🧪'.repeat(4097)], truncated: false }) };
+    read: async () => ({ generation: 1, revision: 1, lines: ['🧪'.repeat(4097)], truncated: false }) };
   const pane = await paneXml(terminal, 't');
   assert.match(pane, /<line index="0" truncated="true">/); assert(!pane.includes('\uFFFD'));
 });
@@ -1072,14 +1072,14 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
   const session = { call: async (name, argument) => {
     calls.push([name, argument]);
     if (name === 'pane_list') return { reply: 'panes', with: { panes: [
-      { slot: 'term', kind: 'terminal', provider: null, tab: 'tab', title: 'Packed', focused: true },
-      { slot: 'surface', kind: 'surface', provider: null, tab: 'tab', title: 'Packed', focused: false },
+      { slot: 'term', generation: 4, revision: 7, kind: 'terminal', provider: null, tab: 'tab', title: 'Packed', focused: true },
+      { slot: 'surface', generation: 5, revision: 9, kind: 'surface', provider: null, tab: 'tab', title: 'Packed', focused: false },
     ], truncated: false } };
     if (name === 'terminal_topology') return { reply: 'topology', with: { active_tab: 'tab', tabs: [{ id: 'tab', title: 'Packed', root: {
       kind: 'split', division: 'beside', ratio_per_mille: 500, first: pane('term', 'terminal'), second: pane('surface', 'surface'),
     } }] } };
-    if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: argument.slot, lines: ['hello & goodbye'], truncated: false } };
-    if (name === 'pane_semantic_read') return { reply: 'semantics', with: { slot: argument.slot, generation: 0, revision: 9, truncated: false,
+    if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: argument.slot, generation: 4, revision: 7, lines: ['hello & goodbye'], truncated: false } };
+    if (name === 'pane_semantic_read') return { reply: 'semantics', with: { slot: argument.slot, generation: 5, revision: 9, truncated: false,
       root: { id: 1, role: 'button', label: 'Deploy <now>', value: null, disabled: false, actions: ['invoke'], children: [] } } };
     throw new Error(`unexpected call ${name}`);
   } };
@@ -1098,6 +1098,24 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
   ]);
   await client.close();
   await server.close();
+});
+
+test('pane XML refuses text and semantics from a replaced occupant', async () => {
+  const descriptor = (kind) => ({ slot: 'pane', generation: 8, revision: 13, kind, provider: null });
+  const terminal = {
+    panes: async () => ({ panes: [descriptor('terminal')], truncated: false }),
+    topology: async () => ({ active_tab: 'tab', tabs: [{ id: 'tab', title: 'Tab', root: {
+      kind: 'pane', focused: true, grid: { columns: 80, rows: 24 },
+      pane: { slot: 'pane', occupant: 'terminal', working_directory: null, command: null, provider: null },
+    } }] }),
+    read: async () => ({ slot: 'pane', generation: 9, revision: 13, lines: ['wrong occupant'], truncated: false }),
+  };
+  await assert.rejects(paneXml(terminal, 'pane'), /changed while it was being read/);
+
+  terminal.panes = async () => ({ panes: [descriptor('surface')], truncated: false });
+  terminal.semantics = async () => ({ slot: 'pane', generation: 8, revision: 14, truncated: false,
+    root: { id: 1, role: 'label', label: 'stale', value: null, disabled: false, actions: [], children: [] } });
+  await assert.rejects(paneXml(terminal, 'pane'), /changed while it was being read/);
 });
 
 test('pane XML follows every split leaf and refuses a removed stale slot', async () => {

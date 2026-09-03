@@ -127,7 +127,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
           first: { kind: 'pane', focused: true, grid: { columns: 80, rows: 24 }, pane: { slot: 'terminal-1', occupant: 'terminal', working_directory: '/work', command: 'sh', provider: null } },
           second: { kind: 'pane', focused: false, grid: null, pane: { slot: 'surface-1', occupant: 'surface', working_directory: null, command: null, provider: { extension: 'manager', provider: 'main' } } },
         } }] });
-        else if (call === 'terminal_read_pane') answer(frame, 'text', { slot: argument.slot, lines: ['ready'], truncated: false });
+        else if (call === 'terminal_read_pane') answer(frame, 'text', { slot: argument.slot, generation: paneGeneration, revision: paneRevision, lines: ['ready'], truncated: false });
         else if (call === 'pane_semantic_read') answer(frame, 'semantics', { slot: argument.slot, generation: 7, revision: 7, truncated: false, root: {
           id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [{
             id: 5, role: 'button', label: 'Refresh', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [],

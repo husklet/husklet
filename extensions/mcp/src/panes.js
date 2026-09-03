@@ -93,7 +93,11 @@ export async function paneXml(terminal, slot, lines = 200) {
   const open = `<husklet-pane slot="${escape(slot)}" occupant="${escape(occupant)}" generation="${escape(descriptor.generation ?? 0)}" revision="${escape(descriptor.revision ?? 0)}">`;
   const close = '</husklet-pane>';
   if (occupant === 'surface' || occupant === 'native') {
-    const semantic = semanticXml(await terminal.semantics(slot));
+    const snapshot = await terminal.semantics(slot);
+    if (snapshot?.generation !== descriptor.generation || snapshot?.revision !== descriptor.revision) {
+      throw new Error(`pane ${JSON.stringify(slot)} changed while it was being read`);
+    }
+    const semantic = semanticXml(snapshot);
     if (bytes(open) + bytes(semantic) + bytes(close) <= XML_LIMIT) return `${open}${semantic}${close}`;
     return `${open}<truncated/></husklet-pane>`;
   }
@@ -102,6 +106,9 @@ export async function paneXml(terminal, slot, lines = 200) {
   const leaf = leaves(topology).find(({ pane }) => pane.slot === slot);
   if (!leaf) throw new Error(`terminal pane ${JSON.stringify(slot)} is inventoried but absent from terminal topology`);
   const screen = await terminal.read(slot, lines);
+  if (screen?.generation !== descriptor.generation || screen?.revision !== descriptor.revision) {
+    throw new Error(`pane ${JSON.stringify(slot)} changed while it was being read`);
+  }
   let output = open;
   let used = bytes(open);
   let cut = false;
