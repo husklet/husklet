@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, Row, Scroll, Separator, Spinner, Text,
+  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, ResourceState, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
@@ -183,9 +183,9 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' })),
         h(ContainerRename, { api, container: item, reload: resource.reload, blocked: busy !== '' })),
       h(CardActions, { gap: 1 },
-        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
+        h(Button, { label: selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
         ...containerActions(item, busy, act)),
-      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onOpenExecution }) : null)),
+      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onRetry: () => inspect(item), onOpenExecution }) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
@@ -251,7 +251,7 @@ function containerActions(item, busy, act) {
   ];
 }
 
-function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
+function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecution }) {
   const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
   const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
   const [attachment, setAttachment] = useState({ state: 'idle', slot: '', error: null });
@@ -293,15 +293,15 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
     } catch (error) { setAttachment({ state: 'error', slot: '', error }); }
   };
   return h(CardContent, { gap: 2 },
-    inspection.state === 'loading'
-      ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading container details…' }))
-      : inspection.state === 'error'
-        ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
-        : inspection.state === 'ready' && inspection.count === 0
-          ? h(EmptyState, { label: 'No container details', detail: 'The host returned no inspectable fields.' })
-          : inspection.state === 'ready'
-            ? h(StructuredDetail, { value: inspection.detail })
-            : null,
+    h(ResourceState, {
+      state: inspection.state === 'idle' ? 'loading' : inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state,
+      loadingLabel: 'Reading container details…',
+      emptyLabel: 'No container details',
+      emptyDetail: 'The host returned no inspectable fields.',
+      error: inspection.error?.message ?? String(inspection.error ?? ''),
+      retryLabel: 'Retry details',
+      onRetry,
+    }, h(StructuredDetail, { value: inspection.detail })),
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
       authorityKey: `container:${container.id}:kill:SIGKILL`,
