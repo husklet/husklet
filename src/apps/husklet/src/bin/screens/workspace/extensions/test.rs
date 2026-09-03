@@ -425,6 +425,7 @@ fn the_sidebar_is_fixed_independent_of_what_the_workspace_recorded() {
 
 fn selecting_an_extension_shows_the_surface_it_draws() {
     let fixture = Fixture::new(&[("alpha", true)]);
+    fixture.view.select_name(Page::Extensions.title());
 
     assert!(fixture.shelf.open(&named("alpha")));
 
@@ -729,6 +730,22 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
                 .filter(|label| label.has_css_class("dhead") && label.text() == "alpha")
         })
         .expect("installed extension card heading");
+    let lifecycle_card = installed_heading
+        .ancestor(gtk::Box::static_type())
+        .and_downcast::<gtk::Box>()
+        .expect("heading belongs to its lifecycle card");
+    assert!(lifecycle_card.has_css_class("settings-card"),
+        "installed lifecycle information uses the shared settings-card hierarchy");
+    assert!(lifecycle_card.width() <= fixture._catalogue.viewport().width(),
+        "card remains bounded at compact width: card={} viewport={}",
+        lifecycle_card.width(), fixture._catalogue.viewport().width());
+    let image = descendants(lifecycle_card.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .find(|label| label.text().starts_with("image  ·  "))
+        .expect("lifecycle card displays its immutable image digest");
+    assert!(image.is_selectable(), "the exact digest can be selected and copied");
+    assert!(image.wraps(), "long digests wrap instead of widening the compact card");
     assert_eq!(
         installed_heading.accessible_role(),
         gtk::AccessibleRole::Heading,
@@ -789,9 +806,28 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             .and_then(|button| button.label()),
         Some("Enable".into())
     );
+    let replacement = manifest("alpha");
+    let prepared = fixture.roster.borrow().prepare_update(&replacement, "sha256:lifecycle-replacement")
+        .expect("replacement update");
+    fixture.roster.borrow_mut().commit_update(
+        prepared, &Grant::new([Capability::Interface]), 2,
+    ).expect("replacement wins before stale lifecycle action");
     gtk::prelude::RootExt::focus(&window)
         .and_downcast::<gtk::Button>()
         .expect("focused Enable button")
+        .emit_clicked();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window).and_downcast::<gtk::Button>().and_then(|button| button.label()),
+        Some("Enable".into()),
+        "a stale lifecycle action refreshes and focuses its truthful replacement"
+    );
+    assert!(fixture.extension_tagged("alpha", settings::REFUSAL)
+        .and_downcast::<gtk::Label>().is_some_and(|label| label.text().contains("changed")),
+        "the refreshed card retains the refusal message");
+    gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>()
+        .expect("refreshed Enable button")
         .emit_clicked();
     while gtk::glib::MainContext::default().iteration(false) {}
     assert_eq!(
@@ -870,16 +906,31 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         remove.disabled,
         "the hidden first-step action cannot bypass confirmation state"
     );
-    let cancel = asking
-        .root
-        .children
-        .iter()
+    let replacement = manifest("alpha");
+    let prepared = fixture.roster.borrow().prepare_update(&replacement, "sha256:replacement")
+        .expect("replacement update");
+    fixture.roster.borrow_mut().commit_update(
+        prepared, &Grant::new([Capability::Interface]), 2,
+    ).expect("replacement wins before stale confirmation");
+    fixture.view.semantic_action(&Action {
+        revision: asking.revision, node: confirm.id,
+        action: ActionKind::Invoke, value: None,
+    }).expect("stale confirmation is handled as a refusal");
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Cancel".into()),
+        "stale confirmation transfers focus to the enabled cancellation action"
+    );
+    let refused = fixture.view.semantic_snapshot();
+    let cancel = refused.root.children.iter()
         .find(|node| node.label.as_deref() == Some("Cancel removal"))
         .unwrap();
     fixture
         .view
         .semantic_action(&Action {
-            revision: asking.revision,
+            revision: refused.revision,
             node: cancel.id,
             action: ActionKind::Invoke,
             value: None,
@@ -932,15 +983,28 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
 
 fn removing_an_extension_takes_its_pages_with_it() {
     let fixture = Fixture::new(&[("alpha", true)]);
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(&fixture.view.widget).build();
+    window.present();
 
     fixture.act("alpha", settings::REMOVE);
+    while gtk::glib::MainContext::default().iteration(false) {}
     assert_eq!(
         fixture.stage("alpha"),
         Stage::Duty,
         "asking for confirmation changes nothing"
     );
-    fixture.act("alpha", settings::CONFIRM_REMOVE);
+    let confirm = fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE)
+        .and_downcast::<gtk::Button>().expect("confirmation button");
+    assert!(confirm.grab_focus());
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert!(confirm.has_focus(), "confirmation owns keyboard focus before activation");
+    confirm.emit_clicked();
     assert!(until_gui(|| fixture.stage("alpha") == Stage::Vacancy));
+    while gtk::glib::MainContext::default().iteration(false) {}
+    let focus = gtk::prelude::RootExt::focus(&window).expect("removal leaves a focused control");
+    assert!(std::iter::successors(Some(focus), gtk::Widget::parent)
+        .any(|widget| widget.has_css_class(directory::REFERENCE)),
+        "successful keyboard removal returns focus to extension acquisition");
 
     assert_eq!(fixture.stage("alpha"), Stage::Vacancy, "the record is forgotten");
     assert!(
@@ -955,6 +1019,7 @@ fn removing_an_extension_takes_its_pages_with_it() {
         !fixture.view.entries().contains(&"alpha".to_owned()),
         "and its sidebar entry is gone"
     );
+    window.close();
 }
 
 fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
@@ -1766,9 +1831,23 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
         }
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     typed(&page, "team/tool:latest");
     page.inspect();
-    page.cancel();
+    let pending = fixture.view.semantic_snapshot();
+    let pending_cancel = pending.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Cancel download"))
+        .expect("in-flight acquisition exposes cancellation");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: pending.revision, node: pending_cancel.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("cancellation receives keyboard focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: pending.revision, node: pending_cancel.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused cancellation reaches its exact acquisition");
 
     let cancelling = fixture.view.semantic_snapshot();
     let cancel = cancelling
@@ -1805,6 +1884,11 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
         .send(Acquisition::Ready(candidate()))
         .expect("late worker result");
     assert!(page.poll());
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>().and_then(|button| button.label()),
+        Some("Retry".into()),
+        "completed cancellation hands focus from the removed action to Retry");
     assert!(fixture.roster.borrow().entries().is_empty());
     assert!(page.notice().contains("nothing was installed"));
     let cancelled = fixture.view.semantic_snapshot();
@@ -1822,6 +1906,8 @@ fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
         inspect_action(&page).is_sensitive(),
         "retry is offered after acknowledgement"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn closing_the_catalogue_cancels_its_exact_acquisition_before_reentry() {
@@ -1882,10 +1968,14 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
         PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     typed(&page, "team/tool:latest");
 
-    page.inspect();
     let action = inspect_action(&page);
+    assert!(action.grab_focus());
+    while gtk::glib::MainContext::default().iteration(false) {}
+    action.emit_clicked();
     assert!(
         !action.is_sensitive(),
         "a second pull cannot be started while one is pending"
@@ -1894,6 +1984,10 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     assert!(page.poll());
     assert!(action.is_sensitive());
     assert_eq!(action.label().as_deref(), Some("Retry"));
+    assert_eq!(gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>().and_then(|button| button.label()),
+        Some("Retry".into()),
+        "a failed keyboard-started acquisition hands focus to Retry");
     assert!(page.notice().contains("temporarily unavailable"));
     let notice = descendants(page.widget().upcast_ref())
         .into_iter()
@@ -1920,6 +2014,8 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
         ["docker.io/team/tool:latest", "docker.io/team/tool:latest"],
         "only the two explicit attempts reached the registry"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -4252,6 +4348,7 @@ mod panes {
         readable(&gallery, "postgres");
         gallery.ready("postgres", old_generation);
         PaneChooser::populate(&bench.window, &chooser);
+        let stale_popover = chooser.popover().expect("old provider popover");
         let stale = chooser
             .popover()
             .into_iter()
@@ -4278,8 +4375,9 @@ mod panes {
         stale.emit_clicked();
         assert_eq!(selected.get(), 0, "an old popover cannot command the replacement");
         assert_eq!(Panes::at(&bench.window, &slot).unwrap().occupant, Occupant::Terminal);
-
-        PaneChooser::populate(&bench.window, &chooser);
+        let recovered = chooser.popover().expect("stale selection rebuilds the chooser");
+        assert_ne!(recovered, stale_popover, "the obsolete popover is retired");
+        assert!(until(|| recovered.is_visible()), "the live replacement choices remain open");
         let current = chooser
             .popover()
             .into_iter()

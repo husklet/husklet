@@ -188,7 +188,7 @@ jobs:
 
   react-extension-base:
     name: Publish React extension base / multi-architecture
-    needs: [smoke, native-linux-reproducibility]
+    needs: [smoke, native-linux-reproducibility, react-package]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

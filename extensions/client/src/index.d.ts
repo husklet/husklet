@@ -268,6 +268,13 @@ export interface WorkspaceApi {
       stdout?: boolean; stderr?: boolean;
     }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
+    /** Arm and verify the exact execution cursor before signaling, then await its requested transition. */
+    signalExecutionAndWait(id: string, signal: string,
+      after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>,
+      options?: { state?: 'changed' | 'exited'; timeoutMs?: number }): Promise<
+        | { changed: true; execution: ExecutionSummary }
+        | { changed: false; id: string; state: 'changed' | 'exited'; after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'> }
+      >;
     removeExecution(id: string): Promise<void>;
     create(configuration: ContainerCreateSpec): Promise<string>;
     /** Backwards-compatible shorthand for an image and optional container name. */
@@ -320,10 +327,27 @@ export interface WorkspaceApi {
     tabs(): Promise<TabSummary[]>;
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
+    /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. */
+    openTabAndWait(title: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; tab: string; pane: InspectablePane }
+      | { changed: false; tab: string; title: string }
+    >;
     split(slot: string, division: Division): Promise<string>;
     splitObserved(slot: string, generation: number, revision: number, division: Division): Promise<string>;
+    /** Arm pane changes before a CAS split, then verify the returned child slot in bounded inventory. */
+    splitAndWait(slot: string, generation: number, revision: number, division: Division,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; slot: string; after: { generation: number; revision: number } }
+      >;
     spawn(slot: string, command: string[]): Promise<void>;
     spawnObserved(slot: string, generation: number, revision: number, command: string[]): Promise<void>;
+    /** Arm and read before CAS spawn, then return a later bounded terminal screen revision. */
+    spawnAndWait(slot: string, generation: number, revision: number, command: string[],
+      options?: { lines?: number; timeoutMs?: number }): Promise<
+        | { changed: true; command: string[]; before: PaneText; after: PaneText }
+        | { changed: false; command: string[]; before: PaneText }
+      >;
     read(slot: string, lines?: number): Promise<PaneText>;
     semantics(slot: string): Promise<PaneSemanticTree>;
     /** Discover the pane kind and return terminal screen text or bounded semantic XML. */
@@ -339,15 +363,45 @@ export interface WorkspaceApi {
       | { changed: true; readable: ReadablePane }
       | { changed: false; after: { generation: number; revision: number } }
     >;
+    /** Inspect and validate an enabled advertised action, then invoke it with that exact semantic cursor. */
+    inspectAndAct(slot: string, proposal: { node: number; action: SemanticActionKind; value?: string | null },
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; before: { snapshot: PaneSemanticTree; text: string }; after: { snapshot: PaneSemanticTree; text: string } }
+        | { changed: false; before: { snapshot: PaneSemanticTree; text: string } }
+      >;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
+    /** Arm and read before CAS input, then return a later bounded terminal screen revision. */
+    writeAndWait(slot: string, generation: number, revision: number, input: string | Iterable<number>,
+      options?: { lines?: number; timeoutMs?: number }): Promise<
+        | { changed: true; before: PaneText; after: PaneText }
+        | { changed: false; before: PaneText }
+      >;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
     closeObserved(slot: string, generation: number, revision: number): Promise<void>;
+    /** Arm pane changes before CAS close and prove absence only from a complete inventory. */
+    closeAndWait(slot: string, generation: number, revision: number,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; slot: string }
+        | { changed: false; slot: string; after: { generation: number; revision: number } }
+      >;
     focus(slot: string): Promise<void>;
     focusObserved(slot: string, generation: number, revision: number): Promise<void>;
+    /** Arm pane changes before CAS focus and verify the same pane is focused at an advanced revision. */
+    focusAndWait(slot: string, generation: number, revision: number,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; slot: string; after: { generation: number; revision: number } }
+      >;
     retitle(slot: string, title: string): Promise<void>;
     retitleObserved(slot: string, generation: number, revision: number, title: string): Promise<void>;
+    /** Arm pane changes before CAS retitle and verify the exact title and advanced revision. */
+    retitleAndWait(slot: string, generation: number, revision: number, title: string,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; title: string; after: { generation: number; revision: number } }
+      >;
     ratio(slot: string, ratio: number): Promise<void>;
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
     switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;

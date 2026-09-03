@@ -1,0 +1,7 @@
+node_modules/*
+!node_modules/@husklet/
+node_modules/@husklet/*
+!node_modules/@husklet/client/
+npm-debug.log*
+.git
+.gitignore

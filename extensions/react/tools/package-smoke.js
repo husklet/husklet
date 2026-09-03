@@ -9,8 +9,19 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
-async function runPackedStarter(consumer, starter, signal) {
-  const socket = path.join(consumer, `starter-${signal}.sock`);
+function hostWelcome(extension, granted) {
+  return {
+    protocol: 1,
+    host: 'husklet-package-smoke',
+    workspace: 'packed-react-starter',
+    extension,
+    granted,
+    limits: { payload_limit: 1 << 20, channel_limit: 64, credit: 32 },
+  };
+}
+
+async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false, oversizedRender = false, partialRender = false) {
+  const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}${oversizedRender ? '-oversized' : ''}${partialRender ? '-partial' : ''}.sock`);
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
   let peer;
@@ -21,19 +32,37 @@ async function runPackedStarter(consumer, starter, signal) {
       for (const frame of reader.take(chunk)) {
         if (frame.channel === 0 || frame.kind !== wire.KIND.request) continue;
         calls.push(frame.payload);
-        stream.write(wire.encode({
-          channel: frame.channel,
-          kind: wire.KIND.response,
-          payload: frame.payload.call === 'interface_open_tab'
-            ? { reply: 'identity', with: 'packed-starter' }
-            : { reply: 'done' },
-        }));
+        let response;
+        if (oversizedRender && frame.payload.call === 'interface_render_at') {
+          response = Buffer.alloc(wire.HEADER);
+          response.writeUInt32LE(wire.PAYLOAD_LIMIT + 1, 0);
+          response.writeUInt32LE(frame.channel, 4);
+          response.writeUInt8(wire.KIND.response, 8);
+          response.writeUInt8(wire.FLAG_END, 9);
+        } else {
+          response = wire.encode({
+            channel: frame.channel,
+            kind: wire.KIND.response,
+            payload: malformedRender && frame.payload.call === 'interface_render_at'
+              ? Buffer.from('{', 'utf8')
+              : frame.payload.call === 'interface_open_tab'
+              ? { reply: 'identity', with: 'packed-starter' }
+              : { reply: 'done' },
+          });
+        }
+        if (partialRender && frame.payload.call === 'interface_render_at') {
+          stream.end(response.subarray(0, response.length - 1));
+        } else {
+          stream.write(response, () => {
+            if (hostEof && frame.payload.call === 'interface_render_at') stream.destroy();
+          });
+        }
       }
     });
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'react-starter', granted: ['interface'] },
+      payload: hostWelcome('react-starter', ['interface']),
     }));
   });
   await new Promise((resolve, reject) => {
@@ -60,16 +89,78 @@ async function runPackedStarter(consumer, starter, signal) {
     assert.equal(rendered.with.slot, 'packed-starter');
     assert.equal(rendered.with.frame.sequence, 1);
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
-    assert.equal(stderr, '');
+    if (hostEof || malformedRender || oversizedRender || partialRender) {
+      exit = child.exitCode !== null ? { code: child.exitCode, signal: child.signalCode } : await Promise.race([
+        new Promise((resolve) => child.once('exit', (code, receivedSignal) => resolve({ code, signal: receivedSignal }))),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`packed React starter did not stop after host failure; stderr=${stderr}`)), 2_000)),
+      ]);
+    } else {
+      assert.equal(stderr, '');
+    }
   } finally {
     if (child.exitCode === null) child.kill(signal);
-    exit = child.exitCode === null
+    exit ??= child.exitCode === null
       ? await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
       : { code: child.exitCode, signal: child.signalCode };
     peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
   }
-  assert.deepEqual(exit, { code: 0, signal: null }, `packed React starter did not stop cleanly; stderr=${stderr}`);
+  assert.deepEqual(exit, hostEof || malformedRender || oversizedRender || partialRender ? { code: 1, signal: null } : { code: 0, signal: null },
+    `packed React starter did not stop cleanly; stderr=${stderr}`);
+  if (partialRender) {
+    assert.match(stderr, /^react-starter: host connection ended: extension host closed with an unfinished frame \([1-9][0-9]* bytes buffered\)\n$/);
+  } else if (oversizedRender) {
+    assert.equal(stderr, `react-starter: host connection ended: frame declares ${wire.PAYLOAD_LIMIT + 1} bytes, above the ${wire.PAYLOAD_LIMIT} limit\n`);
+  } else if (malformedRender) {
+    assert.match(stderr, /^react-starter: host connection ended: frame payload is not valid UTF-8 JSON: .{1,256}\n$/);
+  } else {
+    assert.equal(stderr, hostEof
+      ? 'react-starter: host connection ended: extension host connection closed\n'
+      : '');
+  }
+}
+
+async function runPackedStarterDenied(consumer, starter) {
+  const socket = path.join(consumer, 'starter-interface-denied.sock');
+  const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+  const requests = [];
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    const reader = new wire.Reader();
+    stream.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind === wire.KIND.request) requests.push(frame.payload);
+      }
+    });
+    stream.write(wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: hostWelcome('react-starter', []),
+    }));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed React starter did not report denied interface authority')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.deepEqual(requests, [], 'denied starter must not send an unauthorized interface request');
+    assert.equal(stderr, 'react-starter: startup failed: extension lacks negotiated capability interface\n');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 function packageStageFiles(dockerfile, destination) {
@@ -88,13 +179,16 @@ function packageStageFiles(dockerfile, destination) {
 }
 
 try {
+  const greetingFields = Object.keys(hostWelcome('react-starter', [])).sort();
+  assert.deepEqual(greetingFields, ['extension', 'granted', 'host', 'limits', 'protocol', 'workspace']);
+  assert(!greetingFields.includes('architecture'), 'architecture is workspace data, not part of authoritative Welcome');
   const dryRun = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root, encoding: 'utf8',
   }));
   const names = new Set(dryRun[0].files.map(({ path: name }) => name));
   for (const required of [
     'package.json', 'README.md', 'LICENSE', 'catalogue.json', 'src/index.js', 'src/index.d.ts',
-    'examples/starter/Dockerfile', 'examples/starter/extension.toml', 'examples/starter/main.js',
+    'examples/starter/.dockerignore', 'examples/starter/Dockerfile', 'examples/starter/extension.toml', 'examples/starter/main.js',
     'examples/starter/package.json',
   ]) {
     assert(names.has(required), `npm package omits ${required}`);
@@ -138,11 +232,15 @@ try {
 
   const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
   const starterPackage = JSON.parse(fs.readFileSync(path.join(installedStarter, 'package.json'), 'utf8'));
+  const starterDockerignore = fs.readFileSync(path.join(installedStarter, '.dockerignore'), 'utf8');
   const starterDockerfile = fs.readFileSync(path.join(installedStarter, 'Dockerfile'), 'utf8');
   const starterManifest = fs.readFileSync(path.join(installedStarter, 'extension.toml'), 'utf8');
   execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], { stdio: 'pipe' });
   assert.equal(starterPackage.private, true);
   assert.equal(starterPackage.type, 'module');
+  assert.equal(starterPackage.engines.node, manifest.engines.node, 'starter Node requirement drifted from the installed React SDK');
+  assert.equal(starterDockerignore, 'node_modules\nnpm-debug.log*\n.git\n.gitignore\n',
+    'starter must not upload host dependencies or repository metadata in its image context');
   assert.equal(starterPackage.scripts.start, 'node main.js');
   assert.equal(starterPackage.scripts.test, 'node --check main.js && node --input-type=module --eval "await Promise.all([import(\'@husklet/client\'), import(\'@husklet/react\'), import(\'react\')])"');
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
@@ -169,6 +267,11 @@ try {
   assert.match(starterLock.packages['node_modules/@husklet/react'].resolved, /^file:/);
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM');
   await runPackedStarter(consumer, standaloneStarter, 'SIGINT');
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', true);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, true);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, false, true);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, false, false, true);
+  await runPackedStarterDenied(consumer, standaloneStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);

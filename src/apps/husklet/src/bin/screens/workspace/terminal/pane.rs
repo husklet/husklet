@@ -228,6 +228,12 @@ impl PaneChooser {
                     if Self::provider_generation_in(&window, target.as_deref(), &extension, generation, &id) {
                         Self::populate(&window, &chooser);
                         Self::dismiss(&window, &chooser);
+                    } else {
+                        // The gallery changed after this popover was drawn.
+                        // Replace the obsolete choices with the current live
+                        // providers and keep recovery in front of the user.
+                        Self::populate(&window, &chooser);
+                        chooser.popup();
                     }
                 });
                 choices.append(&choice);

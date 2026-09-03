@@ -8,6 +8,19 @@ const session = await connect();
 console.log(await workspace(session).info());
 ```
 
+The packaged `examples/agent-control.mjs` is an executable end-to-end consumer:
+it discovers an exact terminal and UI pane, reads terminal text and semantic XML,
+writes exact byte values, and invokes an advertised revision-bound UI action.
+It accepts one JSON argument containing `path`, `terminalSlot`, `uiSlot`, `node`,
+and an `input` byte array; it uses no renderer or private transport imports.
+
+`examples/agent-container-control.mjs` is the corresponding bounded container
+workflow. It inspects the workspace and an immutable container ID, starts only
+when initially stopped, executes exact argv, waits and reads bounded output,
+removes the completed execution record, and restores the container's initial
+stopped state. A failed wait/log operation remains recoverable through
+`ExecutionOperationError.executionId`; the example does not auto-remove it.
+
 Every discovered pane has one framework-neutral text projection. Terminal panes
 return their interpreted visible screen and cursor snapshot; native and extension
 UI panes return bounded semantic XML:
@@ -29,6 +42,19 @@ const acted = await host.terminal.actAndWait(pane.slot, {
 });
 if (acted.changed) console.log(acted.readable.text);
 ```
+
+When starting from a node ID rather than an already-inspected action cursor,
+validate the node against the live bounded tree before invoking it:
+
+```js
+const result = await host.terminal.inspectAndAct(pane.slot, { node: 7, action: 'invoke' });
+console.log(result.before.text);
+if (result.changed) console.log(result.after.text);
+```
+
+This refuses missing, truncated-away, disabled, or non-advertised actions before
+authority. The action is bound to the generation and revision read after the
+subscription was armed.
 
 Extension acquisition also has a non-polling cursor. Read status once, then arm
 the exact job before waiting for its next coalesced revision:
@@ -78,6 +104,17 @@ All options are validated before creation. A wait or log failure throws
 `ExecutionOperationError` with the retained `executionId` and failing `phase`;
 the client never removes that execution automatically.
 
+Signals can be coupled to an exact observed execution transition. The default
+waits for exit; use `state: 'changed'` when a non-terminating signal has a
+catalogue-visible transition:
+
+```js
+const execution = await host.containers.execution(executionId);
+const stopped = await host.containers.signalExecutionAndWait(
+  execution.id, 'TERM', execution, { state: 'exited', timeoutMs: 10_000 },
+);
+```
+
 Pane occupant changes can likewise be armed and verified without racing a raw
 subscription against the mutation:
 
@@ -87,6 +124,79 @@ const switched = await host.terminal.switchOccupantAndWait(
   { kind: 'surface', extension: 'workspace-manager', provider: 'main' },
 );
 if (switched.changed) console.log(switched.pane.provider);
+```
+
+Layout creation has the same arm-before-authority form. The source cursor comes
+from pane inventory, and the successful result is the newly created pane:
+
+```js
+const split = await host.terminal.splitAndWait(
+  pane.slot, pane.generation, pane.revision, 'beside', { timeoutMs: 10_000 },
+);
+if (split.changed) console.log(split.pane.slot);
+```
+
+Destructive close uses complete pane inventory as its absence authority. A
+truncated inventory never settles the operation, and replacement of the slot is
+reported instead of being mistaken for successful absence:
+
+```js
+const closed = await host.terminal.closeAndWait(
+  pane.slot, pane.generation, pane.revision, { timeoutMs: 10_000 },
+);
+if (!closed.changed) console.log('close was accepted but absence was not observed');
+```
+
+Retitling can likewise verify the exact requested title rather than treating the
+mutation acknowledgement as proof that an observer has caught up:
+
+```js
+const retitled = await host.terminal.retitleAndWait(
+  pane.slot, pane.generation, pane.revision, 'Build logs', { timeoutMs: 10_000 },
+);
+if (retitled.changed) console.log(retitled.pane.title);
+```
+
+Focus also has an observable form that verifies the same pane generation is
+reported focused at a newer revision:
+
+```js
+const focused = await host.terminal.focusAndWait(
+  pane.slot, pane.generation, pane.revision, { timeoutMs: 10_000 },
+);
+if (focused.changed) console.log(focused.pane.focused); // true
+```
+
+Terminal input can be coupled to a screen transition without claiming that the
+bytes produce any particular text. The helper subscribes and verifies the
+supplied screen cursor before writing, then returns the later bounded screen:
+
+```js
+const written = await host.terminal.writeAndWait(
+  pane.slot, screen.generation, screen.revision, new Uint8Array([0x03]),
+  { lines: 200, timeoutMs: 10_000 },
+);
+if (written.changed) console.log(written.after.lines.join('\n'));
+```
+
+Spawning exact argv has the same observable form. Success means the bounded
+terminal projection advanced; it does not claim that a silent command emitted
+particular text or reached application-specific readiness:
+
+```js
+const spawned = await host.terminal.spawnAndWait(
+  pane.slot, screen.generation, screen.revision, ['htop'],
+  { lines: 200, timeoutMs: 10_000 },
+);
+if (spawned.changed) console.log(spawned.after.lines.join('\n'));
+```
+
+Opening the extension session's tab can be observed without matching its mutable
+title. The host-returned tab identity is verified against bounded pane inventory:
+
+```js
+const opened = await host.terminal.openTabAndWait('Agent tools', { timeoutMs: 10_000 });
+if (opened.changed) console.log(opened.tab, opened.pane.slot);
 ```
 
 For a framework-neutral extension, copy the complete starter from the installed

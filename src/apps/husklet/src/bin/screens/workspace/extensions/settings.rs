@@ -11,7 +11,7 @@ use std::sync::mpsc::TryRecvError;
 
 use gtk::prelude::*;
 use hl::extension::{Entry, Refusal};
-use hl_extension::{ExtensionName, Stage, Summary};
+use hl_extension::{ExtensionName, Objection, Stage, Summary};
 
 use super::Shelf;
 
@@ -52,6 +52,10 @@ impl Settings {
     ) -> gtk::Box {
         let main = gtk::Box::new(gtk::Orientation::Vertical, 12);
         main.add_css_class("dmain");
+        // Lifecycle controls are product settings, so use the same bounded
+        // card surface as workspace settings instead of reading as loose
+        // extension-owned content.
+        main.add_css_class("settings-card");
         main.add_css_class(CARD);
         main.append(&heading(&entry.name));
         main.append(&line(
@@ -65,7 +69,9 @@ impl Settings {
             ),
             "fhint",
         ));
-        main.append(&line(&format!("image  ·  {}", entry.image_digest), "fhint"));
+        let image = line(&format!("image  ·  {}", entry.image_digest), "fhint");
+        image.set_selectable(true);
+        main.append(&image);
         let standing = standing(entry.stage);
         main.append(&standing);
         main.append(&capabilities(entry));
@@ -282,15 +288,19 @@ fn action(
     let name = entry.name.clone();
     let image_digest = entry.image_digest.clone();
     let refusal = refusal.clone();
+    let native_semantics = semantics.clone();
     button.connect_clicked(move |button| {
         let restore_focus = button.has_focus();
-        if commit(&shelf, &name, &image_digest, deed, &refusal) && restore_focus {
-            focus_replacement(&shelf, deed);
+        match commit(&shelf, &name, &image_digest, deed, &refusal, &native_semantics) {
+            Commit::Done if restore_focus => focus_replacement(&shelf, deed),
+            Commit::Refreshed if restore_focus => focus_current(&shelf, &name),
+            _ => {}
         }
     });
     let name = entry.name.clone();
     let image_digest = entry.image_digest.clone();
     let semantic_button = button.clone();
+    let semantic_semantics = semantics.clone();
     semantics.register(
         &format!("extensions/installed/{}/{label}", entry.name),
         "button",
@@ -303,8 +313,10 @@ fn action(
         Rc::new(move |action, _| match action {
             super::super::semantic::ActionKind::Invoke => {
                 let restore_focus = semantic_button.has_focus();
-                if commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal) && restore_focus {
-                    focus_replacement(&semantic_shelf, deed);
+                match commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal, &semantic_semantics) {
+                    Commit::Done if restore_focus => focus_replacement(&semantic_shelf, deed),
+                    Commit::Refreshed if restore_focus => focus_current(&semantic_shelf, &name),
+                    _ => {}
                 }
             }
             super::super::semantic::ActionKind::Focus => {
@@ -320,15 +332,62 @@ fn action(
 ///
 /// A refusal is shown on the page rather than logged, because the person is
 /// standing in front of the thing they just asked for.
-fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label) -> bool {
+enum Commit { Done, Refused, Refreshed }
+
+fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label, semantics: &super::super::semantic::Registry) -> Commit {
     let done = apply(shelf, name, image_digest, deed);
     if let Err(fault) = done {
-        refusal.set_text(&fault.to_string());
+        let message = fault.to_string();
+        if matches!(fault, Refusal::Policy(Objection::Changed(_))) {
+            shelf.refresh(name);
+            let path = format!("extensions/installed/{name}/notice");
+            semantics.update(&path, super::super::semantic::Value::Public(&message), false);
+            if let Some(label) = find_extension_class(shelf, name, REFUSAL).and_downcast::<gtk::Label>() {
+                label.set_text(&message);
+                label.set_visible(true);
+            }
+            return Commit::Refreshed;
+        }
+        refusal.set_text(&message);
         refusal.set_visible(true);
-        return false;
+        return Commit::Refused;
     }
     shelf.refresh(name);
-    true
+    Commit::Done
+}
+
+fn focus_current(shelf: &Shelf, name: &ExtensionName) {
+    let class = shelf.roster().borrow().entries().into_iter()
+        .find(|entry| entry.name == *name)
+        .map(|entry| match entry.stage { Stage::Duty => DISABLE, Stage::Fault { .. } => RETRY, _ => ENABLE });
+    if let Some(class) = class { focus_class(shelf, class); }
+}
+
+fn find_extension_class(shelf: &Shelf, name: &ExtensionName, class: &str) -> Option<gtk::Widget> {
+    let page = shelf.view()?.page(super::super::Page::Extensions.title())?;
+    let mut pending = vec![page];
+    while let Some(widget) = pending.pop() {
+        if widget.has_css_class(CARD) {
+            let children = descendants(&widget);
+            let named = children.iter().any(|child| child.downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.has_css_class("dhead") && label.text() == name.as_str()));
+            if named { return children.into_iter().find(|child| child.has_css_class(class)); }
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child { child = current.next_sibling(); pending.push(current); }
+    }
+    None
+}
+
+fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut found = vec![widget.clone()];
+    let mut index = 0;
+    while index < found.len() {
+        let mut child = found[index].first_child();
+        while let Some(current) = child { child = current.next_sibling(); found.push(current); }
+        index += 1;
+    }
+    found
 }
 
 fn focus_replacement(shelf: &Shelf, deed: Deed) {
@@ -336,6 +395,10 @@ fn focus_replacement(shelf: &Shelf, deed: Deed) {
         Deed::Enable | Deed::Retry => DISABLE,
         Deed::Disable => ENABLE,
     };
+    focus_class(shelf, class);
+}
+
+fn focus_class(shelf: &Shelf, class: &str) {
     let Some(page) = shelf.view().and_then(|view| view.page(super::super::Page::Extensions.title())) else {
         return;
     };
@@ -491,6 +554,7 @@ fn removal(
         let status_path = status_path.clone();
         let notice_path = notice_path.clone();
         confirm.clone().connect_clicked(move |_| {
+            let restore_focus = confirm.has_focus();
             semantics.set_disabled(&confirm_path, true);
             semantics.set_disabled(&cancel_path, true);
             let unchanged = shelf
@@ -503,6 +567,9 @@ fn removal(
                 refusal.set_text("The extension changed; inspect and confirm removal again.");
                 refusal.set_visible(true);
                 semantics.set_disabled(&cancel_path, false);
+                if restore_focus {
+                    cancel.grab_focus();
+                }
                 return;
             }
             let entry = match shelf.quiesce(&name) {
@@ -581,6 +648,12 @@ fn removal(
                         );
                     } else {
                         shelf.refresh(&name);
+                        if restore_focus {
+                            let shelf = Rc::clone(&shelf);
+                            gtk::glib::idle_add_local_once(move || {
+                                focus_class(&shelf, super::directory::REFERENCE);
+                            });
+                        }
                     }
                     gtk::glib::ControlFlow::Break
                 }

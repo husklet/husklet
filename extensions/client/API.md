@@ -64,6 +64,7 @@ wrong caller.
 - `host.containers.signalExecution(...)` — `execution_kill`, requires `container-control`.
 - `host.containers.removeExecution(...)` — `execution_remove`, requires `container-control`.
 - `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID in `ExecutionOperationError` and never auto-remove the record.
+- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `container-read` and `container-control`.
 
 ## Terminal and panes
 
@@ -93,6 +94,13 @@ wrong caller.
 - `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `pane-observe` and the corresponding read grant.
 - `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `pane-observe`, `pane-semantic-control`, and the corresponding read grant.
 - `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `pane-observe` and `terminal-control`.
+- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `pane-observe` and `terminal-control`.
+- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `pane-observe` and `terminal-control`.
+- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `pane-observe` and `terminal-control`.
+- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `pane-observe` and `terminal-control`.
+- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.
+- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.
+- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; requires `pane-observe` and `terminal-control`.
 
 ## Files
 
@@ -163,6 +171,7 @@ wrong caller.
 
 - `host.terminal.semantics(...)` — `pane_semantic_read`, requires `pane-semantic-read`.
 - `host.terminal.act(...)` — `pane_semantic_action`, requires `pane-semantic-control`.
+- `host.terminal.inspectAndAct(slot, proposal, options)` — arms observation, reads the bounded semantic tree, verifies an enabled advertised node action, invokes it at that exact revision, and returns bounded XML before/after; requires `pane-observe`, `pane-semantic-read`, and `pane-semantic-control`.
 
 ## Observe before mutating
 

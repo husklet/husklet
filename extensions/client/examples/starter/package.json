@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node main.js",
     "test": "node --check main.js && node --input-type=module --eval \"await Promise.all([import('@husklet/client'), import('@husklet/client/protocol')])\""

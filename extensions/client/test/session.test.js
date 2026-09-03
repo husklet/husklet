@@ -706,6 +706,410 @@ test('real Unix restart wait requires the same container at a newer running gene
   }
 });
 
+test('real Unix splitAndWait arms before CAS, verifies the returned slot, and disposes on timeout', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-split-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const pane = { slot: 'pane-new', generation: 1, revision: 1, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: false };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_split_observed') {
+        assert.deepEqual(frame.payload.with, { slot: 'pane-source', generation: 4, revision: 9, division: frame.payload.with.division });
+        if (frame.payload.with.division === 'beside') socket.write(encode({ channel: 61, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot: 'pane-source', kind: 'terminal', generation: 4, revision: 10, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: frame.payload.with.division === 'beside' ? 'pane-new' : 'pane-timeout' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'split-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.splitAndWait('pane-source', 4, 9, 'beside', { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or mutate');
+    assert.deepEqual(await terminal.splitAndWait('pane-source', 4, 9, 'beside'), { changed: true, pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_split_observed', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.splitAndWait('pane-source', 4, 9, 'below', { timeoutMs: 5 }), {
+      changed: false, slot: 'pane-timeout', after: { generation: 4, revision: 9 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_split_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix closeAndWait requires complete absence and disposes success and timeout', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-close-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-close'; let inventoryReads = 0; let closeRequests = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_close_pane_observed') {
+        closeRequests += 1;
+        assert.deepEqual(frame.payload.with, { slot, generation: 6, revision: 10 });
+        if (closeRequests === 1) {
+          socket.write(encode({ channel: 70, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+            slot, kind: 'terminal', generation: 6, revision: 11, coalesced: 0,
+          } } }));
+        }
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        inventoryReads += 1;
+        const incomplete = inventoryReads === 1;
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+          panes: [], truncated: incomplete,
+        } } }));
+        if (incomplete) setTimeout(() => socket.write(encode({ channel: 71, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 6, revision: 12, coalesced: 0 },
+        } })), 1);
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'close-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.closeAndWait(slot, 6, 10, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or close');
+    assert.deepEqual(await terminal.closeAndWait(slot, 6, 10), { changed: true, slot });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_close_pane_observed', 'pane_list', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.closeAndWait(slot, 6, 10, { timeoutMs: 5 }), {
+      changed: false, slot, after: { generation: 6, revision: 10 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_close_pane_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix retitleAndWait arms before CAS and verifies exact title and revision', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-retitle-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-title'; let retitles = 0;
+  const pane = { slot, generation: 8, revision: 15, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Build logs', focused: true };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_retitle_pane_observed') {
+        retitles += 1;
+        assert.deepEqual(frame.payload.with, { slot, generation: 8, revision: 14, title: 'Build logs' });
+        if (retitles === 1) socket.write(encode({ channel: 80, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 8, revision: 15, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'retitle-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.retitleAndWait(slot, 8, 14, 'Build logs', { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or retitle');
+    assert.deepEqual(await terminal.retitleAndWait(slot, 8, 14, 'Build logs'), { changed: true, pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_retitle_pane_observed', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.retitleAndWait(slot, 8, 14, 'Build logs', { timeoutMs: 5 }), {
+      changed: false, title: 'Build logs', after: { generation: 8, revision: 14 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_retitle_pane_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix focusAndWait arms before CAS and verifies exact focused pane identity', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-focus-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-focus'; let focuses = 0;
+  const pane = { slot, generation: 3, revision: 6, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_focus_pane_observed') {
+        focuses += 1; assert.deepEqual(frame.payload.with, { slot, generation: 3, revision: 5 });
+        if (focuses === 1) socket.write(encode({ channel: 90, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 3, revision: 6, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'focus-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.focusAndWait(slot, 3, 5, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or focus');
+    assert.deepEqual(await terminal.focusAndWait(slot, 3, 5), { changed: true, pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_focus_pane_observed', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.focusAndWait(slot, 3, 5, { timeoutMs: 5 }), {
+      changed: false, slot, after: { generation: 3, revision: 5 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_focus_pane_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix writeAndWait subscribes and reads before bytes, then returns advanced screen', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-write-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-input'; let writes = 0; let reads = 0;
+  const screen = (revision, lines) => ({ slot, generation: 4, revision, columns: 80, rows: 24, lines, cursor_column: 0, cursor_row: 1, truncated: false });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_read_pane') {
+        reads += 1; assert.deepEqual(frame.payload.with, { slot, lines: 20 });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen(reads === 1 ? 7 : 8, reads === 1 ? ['$ '] : ['$ ^C']) } }));
+      } else if (frame.payload.call === 'terminal_write_pane') {
+        writes += 1; assert.deepEqual(frame.payload.with, { slot, generation: 4, revision: 7, contents: writes === 1 ? [0, 3, 255] : [3] });
+        if (writes === 1) socket.write(encode({ channel: 100, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 4, revision: 8, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'write-wait', granted: ['pane-observe', 'terminal-output', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.writeAndWait(slot, 4, 7, [256], { lines: 20 }), /0 through 255/);
+    await assert.rejects(terminal.writeAndWait(slot, 4, 7, [3], { lines: 20, timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid input must not subscribe, read, or write');
+    const result = await terminal.writeAndWait(slot, 4, 7, [0, 3, 255], { lines: 20 });
+    assert.equal(result.changed, true); assert.equal(result.before.revision, 7); assert.equal(result.after.revision, 8);
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_write_pane', 'terminal_read_pane', 'event_unsubscribe']);
+    calls.length = 0; reads = 0;
+    assert.deepEqual(await terminal.writeAndWait(slot, 4, 7, [3], { lines: 20, timeoutMs: 5 }), {
+      changed: false, before: screen(7, ['$ ']),
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_write_pane', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix signalExecutionAndWait ignores initial state and awaits exact immutable transition', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-signal-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const id = 'e'.repeat(32); let signals = 0;
+  const summary = (running, exitCode, pid = 42) => ({ id, container_id: 'c'.repeat(64), running, exit_code: exitCode, pid, command: ['sleep', '30'], user: 'root' });
+  const initial = summary(true, 0); const exited = summary(false, 143);
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        socket.write(encode({ channel: 110, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [initial], truncated: false } } }));
+      } else if (frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'execution_inspect') {
+        assert.deepEqual(frame.payload.with, { id });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'execution', with: initial } }));
+      } else if (frame.payload.call === 'execution_kill') {
+        signals += 1; assert.deepEqual(frame.payload.with, { id, signal: 'SIGTERM' });
+        if (signals === 1) socket.write(encode({ channel: 111, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [exited], truncated: false } } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'signal-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const containers = workspace(session).containers;
+    const cursor = { running: true, exit_code: 0, pid: 42 };
+    await assert.rejects(containers.signalExecutionAndWait(id, 'SIG TERM', cursor), /signal/);
+    await assert.rejects(containers.signalExecutionAndWait(id, 'SIGTERM', cursor, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid signal or timeout must not subscribe or signal');
+    assert.deepEqual(await containers.signalExecutionAndWait(id, 'SIGTERM', cursor), { changed: true, execution: exited });
+    assert.deepEqual(calls, ['event_subscribe', 'execution_inspect', 'execution_kill', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await containers.signalExecutionAndWait(id, 'SIGTERM', cursor, { timeoutMs: 5 }), {
+      changed: false, id, state: 'exited', after: cursor,
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'execution_inspect', 'execution_kill', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix spawnAndWait subscribes and reads before CAS argv, then returns advanced screen', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-spawn-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-spawn'; let spawns = 0; let reads = 0;
+  const screen = (revision, lines) => ({ slot, generation: 5, revision, columns: 80, rows: 24, lines, cursor_column: 0, cursor_row: 1, truncated: false });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_read_pane') {
+        reads += 1; assert.deepEqual(frame.payload.with, { slot, lines: 40 });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen(reads === 1 ? 9 : 10, reads === 1 ? ['$ '] : ['monitor']) } }));
+      } else if (frame.payload.call === 'terminal_spawn_observed') {
+        spawns += 1; assert.deepEqual(frame.payload.with, { slot, generation: 5, revision: 9, command: ['monitor', '--once'] });
+        if (spawns === 1) socket.write(encode({ channel: 120, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 5, revision: 10, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'spawn-wait', granted: ['pane-observe', 'terminal-output', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.spawnAndWait(slot, 5, 9, [], { lines: 40 }), /command/);
+    await assert.rejects(terminal.spawnAndWait(slot, 5, 9, ['monitor'], { lines: 40, timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid argv or timeout must not subscribe, read, or spawn');
+    const result = await terminal.spawnAndWait(slot, 5, 9, ['monitor', '--once'], { lines: 40 });
+    assert.equal(result.changed, true); assert.equal(result.before.revision, 9); assert.equal(result.after.revision, 10);
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_spawn_observed', 'terminal_read_pane', 'event_unsubscribe']);
+    calls.length = 0; reads = 0;
+    assert.deepEqual(await terminal.spawnAndWait(slot, 5, 9, ['monitor', '--once'], { lines: 40, timeoutMs: 5 }), {
+      changed: false, command: ['monitor', '--once'], before: screen(9, ['$ ']),
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_spawn_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix openTabAndWait arms before creation and verifies returned tab identity', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-open-tab-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let opens = 0;
+  const pane = { slot: 'surface-1', generation: 1, revision: 1, kind: 'surface', provider: { extension: 'demo', provider: 'main' }, tab: 'tab-owned', title: 'Agent tools', focused: false };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_open_tab') {
+        opens += 1; assert.deepEqual(frame.payload.with, { title: 'Agent tools' });
+        if (opens === 1) socket.write(encode({ channel: 130, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot: 'surface-1', kind: 'surface', generation: 1, revision: 1, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'tab-owned' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.openTabAndWait('\n', { timeoutMs: 10 }), /title/);
+    await assert.rejects(terminal.openTabAndWait('Agent tools', { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid title or timeout must not subscribe or open');
+    assert.deepEqual(await terminal.openTabAndWait('Agent tools'), { changed: true, tab: 'tab-owned', pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.openTabAndWait('Agent tools', { timeoutMs: 5 }), {
+      changed: false, tab: 'tab-owned', title: 'Agent tools',
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix inspectAndAct validates live semantic authority before revision-bound action', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-inspect-act-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let reads = 0;
+  const slot = 'settings';
+  const tree = (revision, value) => ({ slot, generation: 2, revision, truncated: false, root: {
+    id: 0, role: 'page', label: 'Settings', value: null, disabled: false, destructive: false, actions: [], children: [{
+      id: 7, role: 'button', label: 'Toggle', value, disabled: false, destructive: false, actions: ['invoke'], children: [],
+    }],
+  } });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_semantic_read') {
+        reads += 1; assert.deepEqual(frame.payload.with, { slot });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'semantics', with: tree(reads === 1 ? 4 : 5, reads === 1 ? 'off' : 'on') } }));
+      } else if (frame.payload.call === 'pane_semantic_action') {
+        assert.deepEqual(frame.payload.with, { slot, action: { generation: 2, revision: 4, node: 7, action: 'invoke', value: null } });
+        socket.write(encode({ channel: 140, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+          slot, kind: 'native', generation: 2, revision: 5, coalesced: 0,
+        } } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'inspect-act', granted: ['pane-observe', 'pane-semantic-read', 'pane-semantic-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.inspectAndAct(slot, { node: -1, action: 'invoke' }), /node/);
+    await assert.rejects(terminal.inspectAndAct(slot, { node: 7, action: 'invoke' }, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid proposal or timeout must not subscribe or inspect');
+    const result = await terminal.inspectAndAct(slot, { node: 7, action: 'invoke' });
+    assert.equal(result.changed, true); assert.equal(result.before.snapshot.revision, 4); assert.equal(result.after.snapshot.revision, 5);
+    assert.match(result.before.text, /<value>off<\/value>/); assert.match(result.after.text, /<value>on<\/value>/);
+    assert.deepEqual(calls, ['event_subscribe', 'pane_semantic_read', 'pane_semantic_action', 'pane_semantic_read', 'event_unsubscribe']);
+    calls.length = 0;
+    await assert.rejects(terminal.inspectAndAct(slot, { node: 7, action: 'toggle' }), /does not advertise/);
+    assert.deepEqual(calls, ['event_subscribe', 'pane_semantic_read', 'event_unsubscribe'], 'non-advertised action must not reach authority');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

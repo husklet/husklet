@@ -88,6 +88,20 @@ function exactCommand(command) {
   return command;
 }
 
+function exactPaneInput(input) {
+  if (typeof input === 'string') {
+    const bytes = new TextEncoder().encode(input);
+    if (bytes.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+    return bytes;
+  }
+  const values = Array.from(input ?? []);
+  if (values.length > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+  if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+    throw new TypeError('terminal input bytes must be integers from 0 through 255');
+  }
+  return Uint8Array.from(values);
+}
+
 function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
     throw new RangeError('execution wait timeout must be an integer from 1 through 30000 milliseconds');
@@ -354,8 +368,7 @@ export function workspace(session, { signal } = {}) {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
           throw new TypeError('terminal input requires nonnegative safe integer generation and revision');
         }
-        const contents = typeof input === 'string' ? new TextEncoder().encode(input) : Uint8Array.from(input);
-        if (contents.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+        const contents = exactPaneInput(input);
         return done('terminal_write_pane', { slot, generation, revision, contents: [...contents] });
       },
       resizeGrid: (slot, columns, rows) => {
@@ -633,6 +646,111 @@ export function workspace(session, { signal } = {}) {
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
   };
+  api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal input wait requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal input wait requires nonnegative safe integer generation and revision');
+    }
+    const contents = exactPaneInput(input);
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
+      throw new TypeError('terminal input wait lines must be a nonnegative safe integer');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal input wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      const before = await api.terminal.read(slot, lines);
+      if (before.generation !== generation || before.revision !== revision) {
+        throw new Error('terminal screen cursor changed before input authority');
+      }
+      await api.terminal.writeInput(slot, generation, revision, contents);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, before };
+      const after = await api.terminal.read(slot, lines);
+      if (after.generation === generation && after.revision === revision) {
+        throw new Error('pane change did not advance the terminal screen cursor');
+      }
+      return { changed: true, before, after };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.spawnAndWait = async (slot, generation, revision, command, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal spawn wait requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal spawn wait requires nonnegative safe integer generation and revision');
+    }
+    const argv = [...exactCommand(command)];
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
+      throw new TypeError('terminal spawn wait lines must be a nonnegative safe integer');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal spawn wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      const before = await api.terminal.read(slot, lines);
+      if (before.generation !== generation || before.revision !== revision) {
+        throw new Error('terminal screen cursor changed before spawn authority');
+      }
+      await api.terminal.spawnObserved(slot, generation, revision, argv);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, command: argv, before };
+      const after = await api.terminal.read(slot, lines);
+      if (after.generation === generation && after.revision === revision) {
+        throw new Error('pane change did not advance the terminal screen cursor after spawn');
+      }
+      return { changed: true, command: argv, before, after };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.openTabAndWait = async (title, { timeoutMs = 30_000 } = {}) => {
+    const wanted = exactPaneTitle(title);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal tab wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => changed(change));
+    let timer;
+    try {
+      const tab = await api.terminal.openTab(wanted);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, tab, title: wanted };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.tab === tab);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'opened tab cannot be verified from a truncated pane inventory'
+        : 'opened tab has no observable pane');
+      return { changed: true, tab, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane semantic action requires a nonempty slot');
     exactSemanticAction(action);
@@ -658,6 +776,205 @@ export function workspace(session, { signal } = {}) {
         throw new Error('pane change did not advance the readable snapshot cursor');
       }
       return { changed: true, readable };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.inspectAndAct = async (slot, proposal, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('inspected semantic action requires a nonempty slot');
+    const actions = ['invoke', 'change', 'submit', 'toggle', 'expand', 'focus'];
+    if (!Number.isSafeInteger(proposal?.node) || proposal.node < 0 || !actions.includes(proposal?.action)) {
+      throw new TypeError('inspected semantic action requires a nonnegative node and known action');
+    }
+    if (proposal.value != null && (typeof proposal.value !== 'string'
+      || new TextEncoder().encode(proposal.value).byteLength > 4096)) {
+      throw new RangeError('inspected semantic action value exceeds 4096 bytes');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('inspected semantic action timeout must be between 1 and 30000ms');
+    }
+    let changed; let cursor;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (cursor && change.slot === slot
+        && (change.generation !== cursor.generation || change.revision !== cursor.revision)) changed(change);
+    });
+    let timer;
+    try {
+      const snapshot = await api.terminal.semantics(slot);
+      cursor = { generation: snapshot.generation, revision: snapshot.revision };
+      const pending = [snapshot.root]; let node;
+      while (pending.length > 0) {
+        const candidate = pending.pop();
+        if (candidate.id === proposal.node) { node = candidate; break; }
+        pending.push(...candidate.children);
+      }
+      if (!node) throw new Error(snapshot.truncated
+        ? 'semantic node cannot be resolved from a truncated tree'
+        : 'semantic node does not exist');
+      if (node.disabled) throw new Error('semantic node is disabled');
+      if (!node.actions.includes(proposal.action)) throw new Error('semantic node does not advertise the requested action');
+      const before = { snapshot, text: semanticXml(snapshot) };
+      await api.terminal.act(slot, { ...cursor, node: proposal.node, action: proposal.action, value: proposal.value ?? null });
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, before };
+      const afterSnapshot = await api.terminal.semantics(slot);
+      if (afterSnapshot.generation === cursor.generation && afterSnapshot.revision === cursor.revision) {
+        throw new Error('pane change did not advance the semantic tree cursor');
+      }
+      return { changed: true, before, after: { snapshot: afterSnapshot, text: semanticXml(afterSnapshot) } };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.splitAndWait = async (slot, generation, revision, division, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal split requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal split requires nonnegative safe integer generation and revision');
+    }
+    if (division !== 'beside' && division !== 'below') throw new TypeError('terminal split division must be beside or below');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal split wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    let createdSlot;
+    const stop = await api.watchPaneChanges((change) => {
+      if ((change.slot === slot && (change.generation !== generation || change.revision !== revision))
+        || (createdSlot !== undefined && change.slot === createdSlot)) changed(change);
+    });
+    let timer;
+    try {
+      createdSlot = await api.terminal.splitObserved(slot, generation, revision, division);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, slot: createdSlot, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === createdSlot);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'created split cannot be verified from a truncated inventory'
+        : 'created split is absent from pane inventory');
+      return { changed: true, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.closeAndWait = async (slot, generation, revision, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal close requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal close requires nonnegative safe integer generation and revision');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal close wait timeout must be between 1 and 30000ms');
+    }
+    let pending = false; let wake;
+    const next = () => pending ? Promise.resolve() : new Promise((resolve) => { wake = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot !== slot
+        || (change.generation === generation && change.revision === revision)) return;
+      pending = true; wake?.(); wake = undefined;
+    });
+    const deadline = Date.now() + timeoutMs;
+    try {
+      await api.terminal.closeObserved(slot, generation, revision);
+      while (true) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return { changed: false, slot, after: { generation, revision } };
+        let timer;
+        const event = await Promise.race([
+          next().then(() => true),
+          new Promise((resolve) => { timer = setTimeout(() => resolve(false), remaining); }),
+        ]);
+        clearTimeout(timer);
+        if (!event) return { changed: false, slot, after: { generation, revision } };
+        pending = false;
+        const inventory = await api.terminal.panes();
+        const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+        if (!pane && !inventory.truncated) return { changed: true, slot };
+        if (pane && pane.generation !== generation) {
+          throw new Error('closed pane slot was replaced before complete absence was observed');
+        }
+      }
+    } finally {
+      await stop();
+    }
+  };
+  api.terminal.retitleAndWait = async (slot, generation, revision, title, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal retitle requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal retitle requires nonnegative safe integer generation and revision');
+    }
+    const wanted = exactPaneTitle(title);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal retitle wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot
+        && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.retitleObserved(slot, generation, revision, wanted);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, title: wanted, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'retitled pane cannot be verified from a truncated inventory'
+        : 'retitled pane disappeared');
+      if (pane.generation !== generation) throw new Error('retitled pane slot was replaced before verification');
+      if (pane.revision === revision || pane.title !== wanted) {
+        throw new Error('pane changed without applying the requested title');
+      }
+      return { changed: true, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.focusAndWait = async (slot, generation, revision, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal focus requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal focus requires nonnegative safe integer generation and revision');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal focus wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot
+        && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.focusObserved(slot, generation, revision);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, slot, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'focused pane cannot be verified from a truncated inventory'
+        : 'focused pane disappeared');
+      if (pane.generation !== generation) throw new Error('focused pane slot was replaced before verification');
+      if (pane.revision === revision || !pane.focused) throw new Error('pane changed without receiving focus');
+      return { changed: true, pane };
     } finally {
       clearTimeout(timer);
       await stop();
@@ -738,6 +1055,49 @@ export function workspace(session, { signal } = {}) {
     });
   };
   api.watchExecutions = (listener) => watch('executions', 'executions', listener, 'execution');
+  api.containers.signalExecutionAndWait = async (id, signal, after, { state = 'exited', timeoutMs = 30_000 } = {}) => {
+    const executionId = immutableIdentity(id, [32], 'execution');
+    if (typeof signal !== 'string' || signal.length < 1 || signal.length > 32 || !/^[A-Za-z0-9+-]+$/.test(signal)) {
+      throw new TypeError('execution signal must be a 1..32 byte ASCII signal name or number');
+    }
+    if (after == null || typeof after.running !== 'boolean'
+      || !Number.isSafeInteger(after.exit_code) || !Number.isSafeInteger(after.pid)) {
+      throw new TypeError('execution signal wait requires the exact running, exit_code, and pid cursor');
+    }
+    if (state !== 'changed' && state !== 'exited') throw new TypeError('execution signal wait state must be changed or exited');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('execution signal wait timeout must be between 1 and 30000ms');
+    }
+    const differs = (execution) => execution.running !== after.running
+      || execution.exit_code !== after.exit_code || execution.pid !== after.pid;
+    let observed;
+    const transition = new Promise((resolve, reject) => {
+      observed = (catalogue) => {
+        const execution = catalogue.executions.find((candidate) => candidate.id === executionId);
+        if (!execution) {
+          if (!catalogue.truncated) reject(new Error('execution disappeared while waiting for its signal transition'));
+          return;
+        }
+        if (!differs(execution) || (state === 'exited' && execution.running)) return;
+        resolve(execution);
+      };
+    });
+    const stop = await api.watchExecutions(observed);
+    let timer;
+    try {
+      const current = await api.containers.execution(executionId);
+      if (differs(current)) throw new Error('execution cursor changed before signal authority');
+      await api.containers.signalExecution(executionId, signal);
+      const execution = await Promise.race([
+        transition,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return execution === null ? { changed: false, id: executionId, state, after } : { changed: true, execution };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchImagePulls = (listener) => watch('image-pulls', 'image_pulls', listener, 'image pull');
   api.watchExtensions = (listener) => watch('extensions', 'extensions', listener, 'extension');
   api.extensions.enableAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
