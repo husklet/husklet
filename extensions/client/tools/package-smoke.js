@@ -159,6 +159,46 @@ async function runPackedTruncatedGreeting(starter, installedClient) {
   }
 }
 
+async function runPackedOversizedGreeting(starter, installedClient) {
+  const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
+  const socket = path.join(starter, 'host-oversized-greeting.sock');
+  let spoke = false;
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    stream.on('data', () => { spoke = true; });
+    const header = Buffer.alloc(wire.HEADER);
+    header.writeUInt32LE(wire.PAYLOAD_LIMIT + 1, 0);
+    header.writeUInt32LE(0, 4);
+    header.writeUInt8(wire.KIND.open, 8);
+    header.writeUInt8(wire.FLAG_END, 9);
+    stream.end(header);
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not reject an oversized greeting')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.equal(spoke, false, 'oversized greeting must be rejected before the starter sends a request');
+    assert.equal(stdout, '');
+    assert.equal(stderr, `client-starter: startup failed: frame declares ${wire.PAYLOAD_LIMIT + 1} bytes, above the ${wire.PAYLOAD_LIMIT} limit\n`);
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 try {
   const packed = JSON.parse(execFileSync('npm', [
     'pack', '--json', '--ignore-scripts', '--pack-destination', scratch,
@@ -230,6 +270,7 @@ try {
   await runPackedStarter(starter, starterClient, 'x86_64', 'SIGTERM', true);
   await runPackedProtocolRefusal(starter, starterClient);
   await runPackedTruncatedGreeting(starter, starterClient);
+  await runPackedOversizedGreeting(starter, starterClient);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
