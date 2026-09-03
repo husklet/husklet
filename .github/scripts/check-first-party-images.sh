@@ -15,6 +15,10 @@ expect_literal() {
 }
 
 expect_literal extensions/react/Dockerfile 'ARG HUSKLET_REACT_VERSION'
+expect_literal extensions/.dockerignore 'node_modules'
+expect_literal extensions/.dockerignore '**/node_modules'
+expect_literal extensions/.dockerignore 'npm-debug.log*'
+expect_literal extensions/.dockerignore '**/npm-debug.log*'
 expect_literal extensions/react/Dockerfile 'ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32'
 expect_literal extensions/react/Dockerfile 'ARG NODE_VERSION=22.23.2'
 expect_literal extensions/react/Dockerfile 'ARG NPM_VERSION=10.9.8'
