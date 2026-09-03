@@ -113,8 +113,10 @@ try {
   execFileSync('npm', ['test'], { cwd: starter, stdio: 'pipe' });
   const dockerfile = fs.readFileSync(path.join(starter, 'Dockerfile'), 'utf8');
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine@sha256:[0-9a-f]{64}$/m);
-  assert.match(dockerfile, /COPY --chown=node:node package\*\.json/);
-  assert.match(dockerfile, /npm ci --ignore-scripts --omit=dev/);
+  assert.match(dockerfile, /COPY --chown=node:node package\.json/);
+  assert.match(dockerfile, /COPY --chown=node:node node_modules\/@husklet\/client \.\/node_modules\/@husklet\/client/);
+  assert.match(dockerfile, /require\('@husklet\/client\/package\.json'\)\.version/);
+  assert.doesNotMatch(dockerfile, /^RUN npm (?:ci|install)/m, 'image build must not resolve the npm registry');
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
   await runPackedStarter(starter, path.join(starter, 'node_modules/@husklet/client'));

@@ -20,10 +20,12 @@ npm start
 ```
 
 `npm start` reads `HUSKLET_EXTENSION_SOCKET`, reports startup or unexpected host
-closure on stderr, and closes cleanly on `SIGINT` or `SIGTERM`. Its Dockerfile
-uses a digest-pinned Node image, installs the committed lock as root, then runs
-the extension as the non-root `node` user. The image label points at the included
-manifest; the host validates that manifest when installing the image.
+closure on stderr, and closes cleanly on `SIGINT` or `SIGTERM`. `npm install` is
+also the image-preparation step: the Dockerfile copies that exact installed,
+dependency-free client instead of resolving npm again during the build. It uses
+a digest-pinned Node image and runs the extension as the non-root `node` user.
+The image label points at the included manifest; the host validates that
+manifest when installing the image.
 
 The transport is a persistent, full-duplex, length-prefixed Unix stream. Calls are correlated while bounded host events can arrive independently with explicit subscription credit. This is WebSocket-like interaction, but it is **not a WebSocket**. The handshake returns workspace identity and negotiated capability grants. All methods remain constrained to that authority.
 
