@@ -62,12 +62,14 @@ import { EXTENSION_LIFECYCLE_STORY, ExtensionLifecycleStory } from './extension-
 import { WORKSPACE_FILE_EDIT_STORY, WorkspaceFileEditStory } from './workspace-file-edit.js';
 import { IMAGE_PULL_STORY, ImagePullStory } from './image-pull.js';
 import { RESOURCE_STATE_STORY, ResourceStateStory } from './resource-state.js';
+import { DRAG_REORDER_STORY, DragReorderStory } from './drag-reorder.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
 const INTERACTION_HISTORY = 5;
 export const SEARCH_RESULT_LIMIT = 24;
 export const FLOW_STORIES = Object.freeze([
+  DRAG_REORDER_STORY,
   RESOURCE_STATE_STORY, IMAGE_PULL_STORY, WORKSPACE_FILE_EDIT_STORY, EXTENSION_LIFECYCLE_STORY, WORKSPACE_LAYOUT_STORY, CONTAINER_OPERATIONS_STORY, CONFIRMATION_STORY, COMMAND_PALETTE_STORY, JSON_TREE_STORY, TERMINAL_TRANSCRIPT_STORY,
   QUERY_PLAN_STORY, DEPENDENCY_GRAPH_STORY, NETWORK_WATERFALL_STORY, COVERAGE_STORY,
   TEST_REPORT_STORY, TIMELINE_VIEW_STORY, DISASSEMBLY_STORY, MEMORY_STORY, PROFILE_STORY,
@@ -196,6 +198,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
       { key: 'stage', pad: 4, grow: true },
       name === RESOURCE_STATE_STORY
         ? h(ResourceStateStory)
+        : name === DRAG_REORDER_STORY
+        ? h(DragReorderStory)
         : name === QUERY_PLAN_STORY
         ? h(QueryPlanStory)
         : name === IMAGE_PULL_STORY

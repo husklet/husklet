@@ -19,6 +19,7 @@ mod unix {
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
+        "Drag and keyboard reorder",
         "DataTable",
         "Navigation and transient UI",
         "Bounded streaming log",
@@ -219,6 +220,9 @@ mod unix {
                     entry.placeholder_text().as_deref() == Some("storybook")
                 });
                 entry.set_text("storybook");
+            }
+            "Drag and keyboard reorder" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("↓ Build")).emit_clicked();
             }
             "Extension acquisition" => {
                 find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download")).emit_clicked();
