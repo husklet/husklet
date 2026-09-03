@@ -22,12 +22,115 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::TimelineView => memory_map().upcast(),
         Tag::TestReportView => memory_map().upcast(),
         Tag::CoverageView => memory_map().upcast(),
+        Tag::NetworkWaterfall => network_waterfall().upcast(),
+        Tag::NetworkRequest => network_request().upcast(),
+        Tag::NetworkPhase => network_phase().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
         Tag::StackFrame => stack_frame().upcast(),
         _ => chart().upcast(),
     }
+}
+
+fn network_waterfall() -> gtk::Box {
+    let root = super::axis::column(4);
+    root.add_css_class("network-waterfall");
+    root.set_hexpand(true);
+    let title = super::slot::caption_label();
+    title.set_selectable(true);
+    let detail = super::slot::detail_label();
+    detail.set_selectable(true);
+    root.append(&title);
+    root.append(&detail);
+    root
+}
+fn network_request() -> gtk::Box {
+    let root = super::axis::column(2);
+    root.add_css_class("network-request");
+    let title = super::slot::caption_label();
+    title.set_selectable(true);
+    title.add_css_class("monospace");
+    let value = super::axis::label();
+    value.set_selectable(true);
+    value.add_css_class("monospace");
+    value.add_css_class("dim-label");
+    super::slot::field(&value);
+    root.append(&title);
+    root.append(&value);
+    root
+}
+fn network_phase() -> gtk::Box {
+    let root = super::axis::row(8);
+    root.add_css_class("network-phase");
+    let title = super::slot::caption_label();
+    title.set_selectable(true);
+    title.set_width_chars(10);
+    let value = super::axis::label();
+    value.set_selectable(true);
+    value.add_css_class("monospace");
+    value.set_hexpand(true);
+    super::slot::field(&value);
+    let bar = gtk::LevelBar::new();
+    bar.set_min_value(0.0);
+    bar.set_max_value(1.0);
+    bar.set_size_request(120, 8);
+    bar.add_css_class("network-phase-bar");
+    root.append(&title);
+    root.append(&value);
+    root.append(&bar);
+    root
+}
+
+pub(crate) fn network_value(widget: &gtk::Widget, tag: Tag, value: &str) -> bool {
+    let Some(field) = super::slot::editable(widget).and_then(|w| w.downcast::<gtk::Label>().ok()) else {
+        return false;
+    };
+    field.set_text(value);
+    if tag == Tag::NetworkRequest {
+        for class in ["network-success", "network-failure", "network-pending"] {
+            widget.remove_css_class(class);
+        }
+        let status = value.split_whitespace().find_map(|part| part.strip_prefix("status="));
+        let class = status
+            .and_then(|s| s.parse::<u16>().ok())
+            .map_or("network-pending", |s| {
+                if s < 400 { "network-success" } else { "network-failure" }
+            });
+        widget.add_css_class(class);
+    } else if let Some(bar) = super::slot::offspring(widget)
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
+    {
+        let number = |name: &str| {
+            value
+                .split_whitespace()
+                .find_map(|p| p.strip_prefix(name)?.parse::<f64>().ok())
+        };
+        if let (Some(duration), Some(total)) = (number("duration_us="), number("total_us=")) {
+            bar.set_value((duration / total).clamp(0.0, 1.0));
+        }
+    }
+    true
+}
+
+pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if !(super::belongs(parent, Tag::NetworkWaterfall) || super::belongs(parent, Tag::NetworkRequest)) {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|container| {
+        container.append(child);
+        true
+    })
+}
+pub(crate) fn detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if !(super::belongs(parent, Tag::NetworkWaterfall) || super::belongs(parent, Tag::NetworkRequest)) {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|container| {
+        container.remove(child);
+        true
+    })
 }
 
 fn json_view() -> gtk::ScrolledWindow {
@@ -486,7 +589,9 @@ pub(crate) fn coverage(widget: &gtk::Widget, value: &str) -> bool {
         rows.remove(&child);
     }
     for (index, line) in value.lines().take(hl_gui::COVERAGE_VIEW_LINE_LIMIT + 1).enumerate() {
-        if index == hl_gui::COVERAGE_VIEW_LINE_LIMIT && !line.starts_with("…\t\t… showing ") { break; }
+        if index == hl_gui::COVERAGE_VIEW_LINE_LIMIT && !line.starts_with("…\t\t… showing ") {
+            break;
+        }
         let columns = line.splitn(3, '\t').collect::<Vec<_>>();
         if columns.len() != 3 {
             continue;

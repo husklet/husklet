@@ -25,6 +25,7 @@ import { DisassemblyInspectionStory, boundedInstructions, INSTRUCTION_LIMIT } fr
 import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/timeline-inspection.js';
 import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src/test-report.js';
 import { CoverageInspectionStory, boundedCoverage, COVERAGE_LIMIT, SOURCE_LIMIT } from '../src/coverage-inspection.js';
+import { NetworkWaterfallStory, boundedRequests, REQUEST_LIMIT, PHASE_LIMIT } from '../src/network-waterfall.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -76,6 +77,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['timeline view', h(TimelineInspectionStory)],
     ['test report', h(TestReportStory)],
     ['coverage inspection', h(CoverageInspectionStory)],
+    ['network waterfall', h(NetworkWaterfallStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -85,6 +87,22 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('network waterfall validates, caps, sanitizes, and exposes typed hierarchy', () => {
+  const phases = Array.from({length: PHASE_LIMIT}, (_, i) => ({kind:'wait',offsetUs:i*2,durationUs:2}));
+  const requests = Array.from({length: REQUEST_LIMIT + 3}, (_, i) => ({method:'GET',url:`https://example.test/${i}\nunsafe`,startUs:0,durationUs:20,status:200,bytes:1,detail:'ok\t',phases}));
+  requests.push({...requests[0], method:'TRACE'}); requests.push({...requests[0], phases:[{kind:'wait',offsetUs:4,durationUs:4},{kind:'dns',offsetUs:2,durationUs:3}]});
+  const bounded = boundedRequests(requests, 90); assert.equal(bounded.requests.length, REQUEST_LIMIT); assert.equal(bounded.total, 90);
+  const frame = host().render(h(NetworkWaterfallStory));
+  assert.equal(frame.patches.filter((p) => p.Create?.tag === 'NetworkRequest').length, 3);
+  assert(frame.patches.some((p) => p.Create?.tag === 'NetworkPhase'));
+  assert(!frame.patches.some((p) => p.SetProp?.value?.Text?.includes('\nunsafe')));
+  const stage = host(); const initial = stage.render(h(NetworkWaterfallStory));
+  const filter = node(initial.patches, 'Button', 'Show failures only'); assert(filter);
+  const before = stage.frames.length; assert(stage.surface.dispatch({ trigger:'Invoke', node:filter, id:`${filter}:Invoke` }));
+  const changed = stage.since(before); assert(changed.some((p) => p.SetProp?.prop === 'Label' && p.SetProp.value.Text === 'Show all requests'));
+  assert(changed.some((p) => p.Remove), 'filtering must remove successful requests');
 });
 
 test('coverage inspection bounds rows and source independently with visible truncation', () => {

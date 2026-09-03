@@ -842,6 +842,8 @@ test('semantic XML escapes every XML metacharacter and remains structurally boun
   assert.match(bounded, /<truncated\/>/);
   assert.match(bounded, /^<pane .*<\/pane>$/);
   assert.equal((bounded.match(/<node /g) ?? []).length, (bounded.match(/<\/node>/g) ?? []).length);
+  const waterfall = semanticXml({ slot: 'net', revision: 5, truncated: false, root: { id: 0, role: 'NetworkWaterfall', label: 'requests', value: 'showing all 1 requests', disabled: false, destructive: false, actions: [], children: [{ id: 1, role: 'NetworkRequest', label: 'GET https://example.test?a=&b=<', value: 'status=200 detail="ok"', disabled: false, destructive: false, actions: [], children: [{ id: 2, role: 'NetworkPhase', label: 'wait', value: 'offset_us=2 duration_us=3 total_us=10', disabled: false, destructive: false, actions: [], children: [] }] }] } });
+  assert.match(waterfall, /role="NetworkWaterfall"/); assert.match(waterfall, /a=&amp;b=&lt;/); assert.match(waterfall, /detail=&quot;ok&quot;/); assert.equal((waterfall.match(/<node /g) ?? []).length, 3);
 });
 
 test('a real MCP client lists strict tools and calls through the React session contract', async () => {

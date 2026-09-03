@@ -208,6 +208,146 @@ pub enum CoverageSource<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoverageView(String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HttpMethod {
+    Delete,
+    Get,
+    Head,
+    Options,
+    Patch,
+    Post,
+    Put,
+}
+impl HttpMethod {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Delete => "DELETE",
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Options => "OPTIONS",
+            Self::Patch => "PATCH",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkPhaseKind {
+    Dns,
+    Connect,
+    Tls,
+    Request,
+    Wait,
+    Download,
+}
+impl NetworkPhaseKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dns => "dns",
+            Self::Connect => "connect",
+            Self::Tls => "tls",
+            Self::Request => "request",
+            Self::Wait => "wait",
+            Self::Download => "download",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkPhase {
+    kind: NetworkPhaseKind,
+    offset_us: u64,
+    duration_us: u64,
+}
+impl NetworkPhase {
+    #[must_use]
+    pub fn new(kind: NetworkPhaseKind, offset_us: u64, duration_us: u64) -> Option<Self> {
+        (duration_us > 0
+            && duration_us <= crate::NETWORK_WATERFALL_PHASE_TIME_LIMIT_US
+            && offset_us
+                .checked_add(duration_us)
+                .is_some_and(|end| end <= crate::NETWORK_WATERFALL_TIME_LIMIT_US))
+        .then_some(Self {
+            kind,
+            offset_us,
+            duration_us,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRequest {
+    method: HttpMethod,
+    url: String,
+    start_us: u64,
+    duration_us: u64,
+    status: Option<u16>,
+    bytes: u64,
+    detail: String,
+    phases: Vec<NetworkPhase>,
+}
+impl NetworkRequest {
+    #[must_use]
+    pub fn new(
+        method: HttpMethod,
+        url: impl Into<String>,
+        start_us: u64,
+        duration_us: u64,
+        status: Option<u16>,
+        bytes: u64,
+        detail: impl Into<String>,
+        phases: impl IntoIterator<Item = NetworkPhase>,
+    ) -> Option<Self> {
+        fn clean(value: String) -> String {
+            value
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .take(crate::NETWORK_WATERFALL_TEXT_LIMIT)
+                .collect()
+        }
+        let url = clean(url.into());
+        let detail = clean(detail.into());
+        let phases: Vec<_> = phases
+            .into_iter()
+            .take(crate::NETWORK_WATERFALL_PHASE_LIMIT + 1)
+            .collect();
+        let timing = duration_us > 0
+            && start_us
+                .checked_add(duration_us)
+                .is_some_and(|end| end <= crate::NETWORK_WATERFALL_TIME_LIMIT_US);
+        let phase_shape = phases.len() <= crate::NETWORK_WATERFALL_PHASE_LIMIT
+            && phases.iter().all(|p| p.offset_us + p.duration_us <= duration_us)
+            && phases
+                .windows(2)
+                .all(|p| p[0].offset_us + p[0].duration_us <= p[1].offset_us);
+        (!url.trim().is_empty()
+            && timing
+            && status.is_none_or(|s| (100..=599).contains(&s))
+            && bytes <= crate::NETWORK_WATERFALL_BYTE_LIMIT
+            && phase_shape)
+            .then_some(Self {
+                method,
+                url,
+                start_us,
+                duration_us,
+                status,
+                bytes,
+                detail,
+                phases,
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum NetworkSource<'a> {
+    Exact(&'a [NetworkRequest]),
+    Bounded {
+        prefix: &'a [NetworkRequest],
+        total_requests: usize,
+    },
+}
 impl CoverageView {
     #[must_use]
     pub fn new(source: CoverageSource<'_>) -> Self {
@@ -577,6 +717,39 @@ impl Element {
         Self::new(Tag::CoverageView).value(CoverageView::new(source).0)
     }
 
+    #[must_use]
+    pub fn network_waterfall(source: NetworkSource<'_>) -> Self {
+        let (requests, total) = match source {
+            NetworkSource::Exact(v) => (v, v.len()),
+            NetworkSource::Bounded { prefix, total_requests } => (prefix, total_requests.max(prefix.len())),
+        };
+        let shown = requests.len().min(crate::NETWORK_WATERFALL_REQUEST_LIMIT);
+        let detail = if total > shown {
+            format!("truncated: showing {shown} of {total} requests")
+        } else {
+            format!("showing all {shown} requests")
+        };
+        Self::new(Tag::NetworkWaterfall)
+            .label(format!("{shown} requests"))
+            .detail(detail)
+            .children(requests[..shown].iter().enumerate().map(|(index, request)| {
+                let status = request.status.map_or_else(|| "pending".to_owned(), |v| v.to_string());
+                Self::new(Tag::NetworkRequest)
+                    .key(index.to_string())
+                    .label(format!("{} {}", request.method.as_str(), request.url))
+                    .value(format!(
+                        "start_us={} duration_us={} status={} bytes={} detail={}",
+                        request.start_us, request.duration_us, status, request.bytes, request.detail
+                    ))
+                    .children(request.phases.iter().map(|phase| {
+                        Self::new(Tag::NetworkPhase).label(phase.kind.as_str()).value(format!(
+                            "offset_us={} duration_us={} total_us={}",
+                            phase.offset_us, phase.duration_us, request.duration_us
+                        ))
+                    }))
+            }))
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -587,8 +760,9 @@ impl Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion,
-        TestCase, TestStatus, TimelineEvent,
+        CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, HttpMethod, Instruction,
+        MemoryRegion, NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus,
+        TimelineEvent,
     };
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
@@ -823,6 +997,77 @@ mod tests {
                 .chars()
                 .count(),
             512
+        );
+    }
+
+    #[test]
+    fn network_waterfall_rejects_invalid_timing_and_bounds_exact_semantics() {
+        assert!(NetworkPhase::new(NetworkPhaseKind::Dns, 0, 0).is_none());
+        let overlapping = [
+            NetworkPhase::new(NetworkPhaseKind::Dns, 0, 5).unwrap(),
+            NetworkPhase::new(NetworkPhaseKind::Connect, 4, 2).unwrap(),
+        ];
+        assert!(NetworkRequest::new(HttpMethod::Get, "https://bad", 0, 10, Some(200), 1, "", overlapping).is_none());
+        let phase = NetworkPhase::new(NetworkPhaseKind::Wait, 2, 3).unwrap();
+        let requests = (0..40)
+            .filter_map(|index| {
+                NetworkRequest::new(
+                    HttpMethod::Get,
+                    format!("https://example.test/{index}\n{}", "x".repeat(200)),
+                    0,
+                    10,
+                    Some(200),
+                    42,
+                    "detail\tclean",
+                    [phase.clone()],
+                )
+            })
+            .collect::<Vec<_>>();
+        let element = Element::network_waterfall(NetworkSource::Bounded {
+            prefix: &requests,
+            total_requests: 99,
+        });
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        assert_eq!(
+            frame
+                .patches
+                .iter()
+                .filter(|p| matches!(
+                    p,
+                    crate::Patch::Create {
+                        tag: crate::Tag::NetworkRequest,
+                        ..
+                    }
+                ))
+                .count(),
+            crate::NETWORK_WATERFALL_REQUEST_LIMIT
+        );
+        assert_eq!(
+            frame
+                .patches
+                .iter()
+                .filter(|p| matches!(
+                    p,
+                    crate::Patch::Create {
+                        tag: crate::Tag::NetworkPhase,
+                        ..
+                    }
+                ))
+                .count(),
+            crate::NETWORK_WATERFALL_REQUEST_LIMIT
+        );
+        assert!(frame.patches.iter().any(|p| matches!(p, crate::Patch::SetProp { prop: crate::Prop::Detail, value, .. } if value.as_text() == Some("truncated: showing 32 of 99 requests"))));
+        assert!(
+            !frame
+                .patches
+                .iter()
+                .filter_map(|p| if let crate::Patch::SetProp { value, .. } = p {
+                    value.as_text()
+                } else {
+                    None
+                })
+                .any(|v| v.contains('\n') || v.contains('\t'))
         );
     }
 }

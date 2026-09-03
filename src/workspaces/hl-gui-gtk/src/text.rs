@@ -119,6 +119,9 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::CoverageView {
         return content::coverage(widget, content);
     }
+    if matches!(tag, Tag::NetworkRequest | Tag::NetworkPhase) {
+        return content::network_value(widget, tag, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }

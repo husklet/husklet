@@ -101,11 +101,52 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     timeline_is_bounded_selectable_and_columnar();
     test_report_is_bounded_selectable_and_columnar();
     coverage_is_bounded_selectable_and_marks_misses();
+    network_waterfall_is_selectable_hierarchical_and_status_styled();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn network_waterfall_is_selectable_hierarchical_and_status_styled() {
+    let mut session = Session::new();
+    let waterfall = session.producer.create(Tag::NetworkWaterfall);
+    let request = session.producer.create(Tag::NetworkRequest);
+    let phase = session.producer.create(Tag::NetworkPhase);
+    session.producer.append(NodeId::ROOT, waterfall);
+    session.producer.append(waterfall, request);
+    session.producer.append(request, phase);
+    session
+        .producer
+        .set(request, Prop::Label, PropValue::text("GET https://example.test"));
+    session.producer.set(
+        request,
+        Prop::Value,
+        PropValue::text("start_us=0 duration_us=10 status=503 bytes=0 detail=failed"),
+    );
+    session.producer.set(phase, Prop::Label, PropValue::text("wait"));
+    session.producer.set(
+        phase,
+        Prop::Value,
+        PropValue::text("offset_us=2 duration_us=3 total_us=10"),
+    );
+    session.flush().expect("waterfall renders");
+    let request = session.tagged(Tag::NetworkRequest).unwrap();
+    let phase = session.tagged(Tag::NetworkPhase).unwrap();
+    assert!(request.has_css_class("network-failure"));
+    assert!(phase.has_css_class("network-phase"));
+    assert!(
+        subtree(&request)
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .all(|l| l.is_selectable())
+    );
+    let bar = subtree(&phase)
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
+        .unwrap();
+    assert!((bar.value() - 0.3).abs() < 0.001);
 }
 
 fn coverage_is_bounded_selectable_and_marks_misses() {
@@ -1011,6 +1052,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::TimelineView => Aspect::Value,
         Tag::TestReportView => Aspect::Value,
         Tag::CoverageView => Aspect::Value,
+        Tag::NetworkRequest | Tag::NetworkPhase => Aspect::Value,
         _ => structural(tag),
     }
 }

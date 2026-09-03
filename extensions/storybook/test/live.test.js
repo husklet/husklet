@@ -87,7 +87,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.ok(rendered.with.frame.patches.length > 250, 'the live frame does not contain the full component browser');
   assert.equal(
     rendered.with.frame.patches.filter((patch) => patch.Create?.tag === 'ListItemButton').length,
-    tags.length + 20,
+    tags.length + 21,
     'the live playground did not render the complete component catalogue and end-user flows',
   );
   assert.ok(

@@ -141,12 +141,45 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         timeline_projects_exact_events_into_semantics();
         test_report_projects_exact_cases_into_semantics();
         coverage_projects_exact_bounded_source_into_semantics();
+        network_waterfall_projects_exact_structured_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn network_waterfall_projects_exact_structured_semantics() {
+    let mut fixture = Fixture::new();
+    let phase = hl_gui::NetworkPhase::new(hl_gui::NetworkPhaseKind::Wait, 2, 3).unwrap();
+    let request = hl_gui::NetworkRequest::new(
+        hl_gui::HttpMethod::Get,
+        "https://example.test?a=&b=<",
+        10,
+        10,
+        Some(200),
+        42,
+        "json",
+        [phase],
+    )
+    .unwrap();
+    fixture.describe(&Element::network_waterfall(hl_gui::NetworkSource::Bounded {
+        prefix: &[request],
+        total_requests: 9,
+    }));
+    fixture.page.tick();
+    let tree = fixture.page.semantics("pane-1").unwrap();
+    let waterfall = &tree.root.children[0];
+    assert_eq!(waterfall.role, "NetworkWaterfall");
+    assert_eq!(waterfall.value.as_deref(), Some("truncated: showing 1 of 9 requests"));
+    assert_eq!(waterfall.children[0].role, "NetworkRequest");
+    assert_eq!(waterfall.children[0].children[0].role, "NetworkPhase");
+    assert_eq!(
+        waterfall.children[0].children[0].value.as_deref(),
+        Some("offset_us=2 duration_us=3 total_us=10")
+    );
+    assert!(!tree.truncated);
 }
 
 fn coverage_projects_exact_bounded_source_into_semantics() {

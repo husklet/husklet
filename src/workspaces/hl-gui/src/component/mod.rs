@@ -10,8 +10,8 @@
 mod content;
 
 pub use content::{
-    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase,
-    TestStatus, TimelineEvent,
+    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
+    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus, TimelineEvent,
 };
 mod control;
 mod structure;
