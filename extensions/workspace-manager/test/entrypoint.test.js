@@ -18,6 +18,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let executed = false;
   const containerId = 'a'.repeat(32);
   const executionId = 'c'.repeat(32);
+  const createdContainerId = 'd'.repeat(32);
   const networkId = 'b'.repeat(32);
   const server = net.createServer((socket) => {
     peer = socket;
@@ -43,7 +44,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           : name === 'container_inspect'
             ? { reply: 'container', with: { id: containerId, name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
           : name === 'container_create'
-            ? { reply: 'identity', with: 'created-over-socket' }
+            ? { reply: 'identity', with: createdContainerId }
           : name === 'container_exec'
             ? (executed = true, { reply: 'identity', with: executionId })
           : name === 'container_attach_terminal'
@@ -132,7 +133,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       image: 'alpine:3.20', name: 'worker', entrypoint: null, command: [], environment: [], working_directory: null,
       hostname: null, user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null, pids_limit: null,
     });
-    assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: 'created-over-socket' });
+    assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: createdContainerId });
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }));
     await until(() => calls.includes('container_inspect') && requests.some((request) =>
       request.call === 'source_resize_at' && request.with.mutation.Length?.source === 202));
