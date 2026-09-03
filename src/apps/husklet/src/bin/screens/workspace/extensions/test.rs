@@ -560,20 +560,24 @@ fn a_fault_withdraws_ready_provider_until_a_fresh_retry_frame() {
 }
 
 fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
-    let fixture = Fixture::new(&[("alpha", true)]);
-    fixture.shelf.fault(&named("alpha"), 5);
-    fixture.act("alpha", settings::REMOVE);
-    let root = fixture._catalogue.widget().clone().upcast::<gtk::Widget>();
-    let actions = descendants(&root)
-        .into_iter()
-        .find(|widget| widget.has_css_class(settings::ACTIONS))
-        .and_downcast::<gtk::FlowBox>()
-        .expect("faulted lifecycle card has a wrapping action region");
-
-    for width in [300, 1_200] {
-        root.measure(gtk::Orientation::Horizontal, -1);
-        root.measure(gtk::Orientation::Vertical, width);
-        root.allocate(width, 1_000, -1, None);
+    for width in [300, 480, 1_200] {
+        let fixture = Fixture::new(&[("alpha", true)]);
+        fixture.shelf.fault(&named("alpha"), 5);
+        fixture.act("alpha", settings::REMOVE);
+        fixture.view.select_name(Page::Extensions.title());
+        let window = gtk::Window::builder()
+            .default_width(width)
+            .default_height(700)
+            .child(&fixture.view.widget)
+            .build();
+        window.present();
+        while gtk::glib::MainContext::default().iteration(false) {}
+        let root = fixture._catalogue.widget().clone().upcast::<gtk::Widget>();
+        let actions = descendants(&root)
+            .into_iter()
+            .find(|widget| widget.has_css_class(settings::ACTIONS))
+            .and_downcast::<gtk::FlowBox>()
+            .expect("faulted lifecycle card has a wrapping action region");
         let children = descendants(actions.upcast_ref())
             .into_iter()
             .filter(|widget| widget.parent().as_ref() == Some(actions.upcast_ref()))
@@ -590,11 +594,42 @@ fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
             }),
             "lifecycle actions overflowed at {width}px"
         );
+        let removal = descendants(&root)
+            .into_iter()
+            .find(|widget| widget.has_css_class(settings::REMOVAL_ACTIONS))
+            .and_downcast::<gtk::FlowBox>()
+            .expect("removal controls have their own responsive group");
         if width == 300 {
-            let first_y = children[0].allocation().y();
-            assert!(
-                children.iter().any(|child| child.allocation().y() > first_y),
-                "the worst-case fault confirmation did not wrap at 300px"
+            removal.measure(gtk::Orientation::Horizontal, -1);
+            removal.measure(gtk::Orientation::Vertical, 180);
+            removal.allocate(180, 120, -1, None);
+        }
+        let seats = descendants(removal.upcast_ref())
+            .into_iter()
+            .filter(|widget| {
+                widget.parent().as_ref() == Some(removal.upcast_ref())
+                    && descendants(widget).into_iter().any(|child| {
+                        child.is_visible() && child.downcast_ref::<gtk::Button>().is_some()
+                    })
+            })
+            .collect::<Vec<_>>();
+        let destructive = descendants(removal.upcast_ref())
+            .into_iter()
+            .filter(|widget| widget.is_visible() && widget.downcast_ref::<gtk::Button>().is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(destructive.len(), 2, "confirmation and cancellation remain reachable");
+        assert!(destructive.iter().all(|child| {
+            let allocation = child.allocation();
+            allocation.x() >= 0 && allocation.x() + allocation.width() <= removal.width()
+        }), "destructive controls overflowed at {width}px");
+        assert_eq!(seats.len(), 2);
+        if width == 300 {
+            assert_ne!(seats[0].allocation().y(), seats[1].allocation().y(), "compact confirmation must reflow");
+        } else {
+            assert_eq!(
+                seats[0].allocation().y(),
+                seats[1].allocation().y(),
+                "confirmation should remain inline when {width}px has room"
             );
         }
     }

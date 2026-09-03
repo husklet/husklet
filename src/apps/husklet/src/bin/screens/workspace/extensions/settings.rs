@@ -35,6 +35,8 @@ pub const REFUSAL: &str = "hl-extension-refusal";
 pub const CARD: &str = "hl-extension-card";
 /// Wrapping action region inside a lifecycle card.
 pub const ACTIONS: &str = "hl-extension-actions";
+/// Wrapping, visually separate destructive controls inside the action region.
+pub const REMOVAL_ACTIONS: &str = "hl-extension-removal-actions";
 
 /// One extension's lifecycle card.
 pub struct Settings;
@@ -328,8 +330,17 @@ fn removal(
     refusal: &gtk::Label,
     standing: &gtk::Label,
     semantics: &super::super::semantic::Registry,
-) -> gtk::Box {
-    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+) -> gtk::FlowBox {
+    let controls = gtk::FlowBox::new();
+    controls.add_css_class(REMOVAL_ACTIONS);
+    controls.set_selection_mode(gtk::SelectionMode::None);
+    controls.set_min_children_per_line(1);
+    // The hidden trigger keeps its FlowBox seat while confirmation is open;
+    // admitting all three seats keeps the two visible answers inline whenever
+    // they fit, while the layout still wraps them independently when compact.
+    controls.set_max_children_per_line(3);
+    controls.set_column_spacing(8);
+    controls.set_row_spacing(8);
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class(REMOVE);
     let confirm = gtk::Button::with_label("Confirm removal");
@@ -338,9 +349,9 @@ fn removal(
     let cancel = gtk::Button::with_label("Cancel");
     cancel.add_css_class(CANCEL_REMOVE);
     cancel.set_visible(false);
-    controls.append(&remove);
-    controls.append(&confirm);
-    controls.append(&cancel);
+    controls.insert(&remove, -1);
+    controls.insert(&confirm, -1);
+    controls.insert(&cancel, -1);
     for (label, button) in [
         ("Remove", &remove),
         ("Confirm removal", &confirm),
