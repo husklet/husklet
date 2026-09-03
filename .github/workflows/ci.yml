@@ -183,6 +183,16 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Fetch locked extension-contract dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
+
+      - name: Verify generated extension contracts on ARM64
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          bash .github/scripts/check-extension-contracts.sh
+
       # THIS STEP IS A FAST FAILURE TODAY, and what it is failing at is not what it
       # will fail at next. The verification derivation stops at `hl-design-lint`
       # (38 findings at this tip), so everything after that line in `flake.nix` has

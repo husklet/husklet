@@ -2,6 +2,15 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
+specification="$root/src/workspaces/hl-extension/protocol/v1.json"
+
+# `cargo check` runs hl-extension's no-write source/artifact fingerprint gate.
+# Comparing the native generator's stdout as well means this same script, run
+# on AMD64 Linux and ARM64 macOS, proves both compilation paths produce the one
+# checked-in byte stream consumed by the client generator below.
+cargo check --locked --offline -q -p hl-extension
+cargo run --locked --offline -q -p hl-extension --bin hl-extension-spec -- \
+  | cmp - "$specification"
 node "$root/extensions/client/tools/protocol-spec.js"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/husklet-extension-contracts.XXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
