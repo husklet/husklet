@@ -1053,6 +1053,7 @@ mod tests {
             self.ledger.note("containers.list");
             Ok(vec![ContainerSummary {
                 id: "c1".to_owned(),
+                generation: 0,
                 name: "api".to_owned(),
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
@@ -1532,6 +1533,7 @@ mod tests {
             codec::read_reply(&answer).expect("a reply"),
             Reply::Containers(vec![ContainerSummary {
                 id: "c1".to_owned(),
+                generation: 0,
                 name: "api".to_owned(),
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
@@ -1718,6 +1720,7 @@ mod tests {
         let snapshot = |created| {
             Snapshot::Containers(vec![ContainerSummary {
                 id: "c1".into(),
+                generation: 0,
                 name: "api".into(),
                 image: "image".into(),
                 state: "running".into(),
@@ -1774,6 +1777,7 @@ mod tests {
         let topic = hl_extension::Topic::Containers;
         let snapshot = Snapshot::Containers(vec![ContainerSummary {
             id: "c1".into(),
+            generation: 0,
             name: "api".into(),
             image: "image".into(),
             state: "running".into(),

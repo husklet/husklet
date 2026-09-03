@@ -178,6 +178,7 @@ fn containers(count: usize) -> Snapshot {
     let listing = (0..count)
         .map(|index| ContainerSummary {
             id: format!("c{index}"),
+            generation: 0,
             name: format!("service-{index}"),
             image: "husklet/api:1".into(),
             state: "running".into(),

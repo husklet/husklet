@@ -118,6 +118,7 @@ fn containers() -> Vec<ContainerSummary> {
         .enumerate()
         .map(|(index, (name, state))| ContainerSummary {
             id: format!("c{index}"),
+            generation: 0,
             name: name.into(),
             image: "alpine:3.20".into(),
             state: state.into(),
