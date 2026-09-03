@@ -32,6 +32,7 @@ ARG HUSKLET_REACT_VERSION
 WORKDIR /app
 COPY --from=package /out /opt/husklet-sdk
 RUN npm init -y \
+    && npm pkg set type=module \
     && npm install --no-audit --no-fund --save-exact react@18.3.1 react-reconciler@0.29.2 /opt/husklet-sdk/*.tgz \
     && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && npm cache clean --force

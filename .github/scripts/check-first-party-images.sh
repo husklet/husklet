@@ -15,6 +15,7 @@ expect_literal() {
 }
 
 expect_literal extensions/react/Dockerfile 'ARG HUSKLET_REACT_VERSION'
+expect_literal extensions/react/Dockerfile '    && npm pkg set type=module \'
 # shellcheck disable=SC2016 # These are literal Dockerfile variable references.
 expect_literal extensions/react/Dockerfile 'LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"'
 

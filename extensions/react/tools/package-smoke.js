@@ -241,6 +241,7 @@ try {
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
+  assert.match(dockerfile, /npm init -y \\\n+    && npm pkg set type=module \\/, 'base /app must classify copied extension .js entrypoints as ESM');
   assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
