@@ -198,6 +198,11 @@ export interface WorkspaceApi {
       | { changed: false; name: string; image_digest: string }
     >;
     disable(name: string, imageDigest: string): Promise<void>;
+    /** Arm inventory observation, disable this exact digest, then verify its durable standby state. */
+    disableAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string }
+    >;
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;

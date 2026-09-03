@@ -632,6 +632,36 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.extensions.disableAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension disable wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (!current) reject(new Error(`extension ${name} disappeared while disabling`));
+        else if (current.image_digest !== digest) reject(new Error(`extension ${name} was replaced while disabling`));
+        else if (!current.enabled) resolve(current);
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.disable(name, digest);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (typeof job !== 'string' || job.length === 0 || new TextEncoder().encode(job).byteLength > 128) {

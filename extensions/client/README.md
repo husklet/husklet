@@ -45,6 +45,9 @@ the inventory subscription:
 ```js
 const enabled = await host.extensions.enableAndWait(extension.name, extension.image_digest);
 if (enabled.changed) console.log(enabled.extension.status);
+
+const disabled = await host.extensions.disableAndWait(extension.name, extension.image_digest);
+if (disabled.changed) console.log(disabled.extension.status); // durable standby; provider withdrawal is observed separately
 ```
 
 Pane occupant changes can likewise be armed and verified without racing a raw
