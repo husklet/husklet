@@ -348,6 +348,137 @@ pub enum NetworkSource<'a> {
         total_requests: usize,
     },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyState {
+    Resolved,
+    Missing,
+    Conflict,
+}
+impl DependencyState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Resolved => "resolved",
+            Self::Missing => "missing",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRelation {
+    Runtime,
+    Development,
+    Optional,
+    Peer,
+    Build,
+}
+impl DependencyRelation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Development => "development",
+            Self::Optional => "optional",
+            Self::Peer => "peer",
+            Self::Build => "build",
+        }
+    }
+}
+fn dep_clean(value: impl Into<String>, limit: usize) -> String {
+    value
+        .into()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(limit)
+        .collect()
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyNode {
+    id: String,
+    label: String,
+    version: String,
+    state: DependencyState,
+    detail: String,
+}
+impl DependencyNode {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        version: impl Into<String>,
+        state: DependencyState,
+        detail: impl Into<String>,
+    ) -> Option<Self> {
+        let id = dep_clean(id, 40);
+        let label = dep_clean(label, 120);
+        let version = dep_clean(version, 64);
+        let detail = dep_clean(detail, 160);
+        (!id.trim().is_empty() && !label.trim().is_empty()).then_some(Self {
+            id,
+            label,
+            version,
+            state,
+            detail,
+        })
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyEdge {
+    source: String,
+    target: String,
+    relation: DependencyRelation,
+    requirement: String,
+}
+impl DependencyEdge {
+    #[must_use]
+    pub fn new(
+        source: impl Into<String>,
+        target: impl Into<String>,
+        relation: DependencyRelation,
+        requirement: impl Into<String>,
+    ) -> Option<Self> {
+        let source = dep_clean(source, 40);
+        let target = dep_clean(target, 40);
+        let requirement = dep_clean(requirement, 96);
+        (!source.trim().is_empty() && !target.trim().is_empty()).then_some(Self {
+            source,
+            target,
+            relation,
+            requirement,
+        })
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyCycle {
+    members: Vec<String>,
+}
+impl DependencyCycle {
+    #[must_use]
+    pub fn new(members: impl IntoIterator<Item = impl Into<String>>) -> Option<Self> {
+        let members: Vec<_> = members.into_iter().map(|v| dep_clean(v, 40)).collect();
+        let unique: std::collections::BTreeSet<_> = members.iter().collect();
+        (!members.is_empty()
+            && members.len() <= crate::DEPENDENCY_GRAPH_CYCLE_MEMBER_LIMIT
+            && unique.len() == members.len()
+            && members.iter().all(|v| !v.trim().is_empty()))
+        .then_some(Self { members })
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum DependencySource<'a> {
+    Exact {
+        nodes: &'a [DependencyNode],
+        edges: &'a [DependencyEdge],
+        cycles: &'a [DependencyCycle],
+    },
+    Bounded {
+        nodes: &'a [DependencyNode],
+        total_nodes: usize,
+        edges: &'a [DependencyEdge],
+        total_edges: usize,
+        cycles: &'a [DependencyCycle],
+        total_cycles: usize,
+    },
+}
 impl CoverageView {
     #[must_use]
     pub fn new(source: CoverageSource<'_>) -> Self {
@@ -749,6 +880,99 @@ impl Element {
                     }))
             }))
     }
+    #[must_use]
+    pub fn dependency_graph(source: DependencySource<'_>) -> Option<Self> {
+        let (nodes, tn, edges, te, cycles, tc, bounded) = match source {
+            DependencySource::Exact { nodes, edges, cycles } => {
+                (nodes, nodes.len(), edges, edges.len(), cycles, cycles.len(), false)
+            }
+            DependencySource::Bounded {
+                nodes,
+                total_nodes,
+                edges,
+                total_edges,
+                cycles,
+                total_cycles,
+            } => (nodes, total_nodes, edges, total_edges, cycles, total_cycles, true),
+        };
+        if nodes.len() > crate::DEPENDENCY_GRAPH_NODE_LIMIT
+            || edges.len() > crate::DEPENDENCY_GRAPH_EDGE_LIMIT
+            || cycles.len() > crate::DEPENDENCY_GRAPH_CYCLE_LIMIT
+            || tn < nodes.len()
+            || te < edges.len()
+            || tc < cycles.len()
+        {
+            return None;
+        }
+        let ids: std::collections::BTreeSet<_> = nodes.iter().map(|n| n.id.as_str()).collect();
+        if ids.len() != nodes.len()
+            || edges
+                .iter()
+                .any(|e| !ids.contains(e.source.as_str()) || !ids.contains(e.target.as_str()))
+        {
+            return None;
+        }
+        let edge_ids: std::collections::BTreeSet<_> = edges
+            .iter()
+            .map(|e| (e.source.as_str(), e.target.as_str(), e.relation.as_str()))
+            .collect();
+        if edge_ids.len() != edges.len() {
+            return None;
+        }
+        for c in cycles {
+            if c.members.iter().any(|m| !ids.contains(m.as_str())) {
+                return None;
+            }
+            for i in 0..c.members.len() {
+                let a = &c.members[i];
+                let b = &c.members[(i + 1) % c.members.len()];
+                if !edges.iter().any(|e| e.source == *a && e.target == *b) {
+                    return None;
+                }
+            }
+        }
+        let detail = if bounded {
+            format!(
+                "bounded source: nodes {}/{tn}, edges {}/{te}, cycles {}/{tc}",
+                nodes.len(),
+                edges.len(),
+                cycles.len()
+            )
+        } else {
+            "complete dependency graph".into()
+        };
+        let mut children = nodes
+            .iter()
+            .map(|n| {
+                Self::new(Tag::DependencyNode)
+                    .key(&n.id)
+                    .label(format!("{}@{}", n.label, n.version))
+                    .value(format!("id={} state={} detail={}", n.id, n.state.as_str(), n.detail))
+                    .children(edges.iter().filter(|e| e.source == n.id).map(|e| {
+                        Self::new(Tag::DependencyEdge)
+                            .label(format!("{} → {}", e.relation.as_str(), e.target))
+                            .value(format!("requirement={}", e.requirement))
+                    }))
+            })
+            .collect::<Vec<_>>();
+        children.extend(cycles.iter().enumerate().map(|(i, c)| {
+            Self::new(Tag::DependencyCycle)
+                .label(format!("cycle {}", i + 1))
+                .detail(format!("{} members", c.members.len()))
+                .children(c.members.iter().enumerate().map(|(j, m)| {
+                    Self::new(Tag::DependencyCycleMember)
+                        .key(j.to_string())
+                        .label(m)
+                        .value(format!("position={j}"))
+                }))
+        }));
+        Some(
+            Self::new(Tag::DependencyGraph)
+                .label(format!("{} dependencies", nodes.len()))
+                .detail(detail)
+                .children(children),
+        )
+    }
 
     /// A playable file.
     #[must_use]
@@ -760,7 +984,8 @@ impl Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, HttpMethod, Instruction,
+        CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode,
+        DependencyRelation, DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction,
         MemoryRegion, NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus,
         TimelineEvent,
     };
@@ -1069,5 +1294,80 @@ mod tests {
                 })
                 .any(|v| v.contains('\n') || v.contains('\t'))
         );
+    }
+
+    #[test]
+    fn dependency_graph_is_referential_bounded_and_cycle_exact() {
+        let nodes = (0..32)
+            .map(|i| {
+                DependencyNode::new(
+                    format!("n{i}"),
+                    format!("node{i}"),
+                    "1.0",
+                    if i == 1 {
+                        DependencyState::Conflict
+                    } else {
+                        DependencyState::Resolved
+                    },
+                    "detail\n",
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut edges = (0..31)
+            .map(|i| {
+                DependencyEdge::new(
+                    format!("n{i}"),
+                    format!("n{}", i + 1),
+                    DependencyRelation::Runtime,
+                    "^1",
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        edges.push(DependencyEdge::new("n31", "n0", DependencyRelation::Runtime, "^1").unwrap());
+        let cycle = DependencyCycle::new(["n0", "n1", "n2"]).unwrap();
+        assert!(
+            Element::dependency_graph(DependencySource::Exact {
+                nodes: &nodes,
+                edges: &edges,
+                cycles: &[cycle]
+            })
+            .is_none(),
+            "cycle closure must be an actual edge"
+        );
+        assert!(
+            Element::dependency_graph(DependencySource::Exact {
+                nodes: &nodes,
+                edges: &[DependencyEdge::new("n0", "absent", DependencyRelation::Build, "*").unwrap()],
+                cycles: &[]
+            })
+            .is_none()
+        );
+        let graph = Element::dependency_graph(DependencySource::Bounded {
+            nodes: &nodes,
+            total_nodes: 90,
+            edges: &edges,
+            total_edges: 500,
+            cycles: &[],
+            total_cycles: 0,
+        })
+        .unwrap();
+        let mut r = crate::Reconciliation::new();
+        let f = r.reconcile(&graph);
+        assert_eq!(
+            f.patches
+                .iter()
+                .filter(|p| matches!(
+                    p,
+                    crate::Patch::Create {
+                        tag: crate::Tag::DependencyNode,
+                        ..
+                    }
+                ))
+                .count(),
+            32
+        );
+        assert!(f.patches.iter().any(|p|matches!(p,crate::Patch::SetProp{prop:crate::Prop::Detail,value,..} if value.as_text()==Some("bounded source: nodes 32/90, edges 32/500, cycles 0/0"))));
     }
 }

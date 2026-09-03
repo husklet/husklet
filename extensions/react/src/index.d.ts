@@ -4805,6 +4805,166 @@ export interface NetworkPhaseProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface DependencyGraphProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyNodeProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyEdgeProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyCycleProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyCycleMemberProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 export interface DiffViewerProps extends NodeProps {
   children?: ReactNode;
   /** marks an action as irreversible so automation requires confirmation */
@@ -5080,6 +5240,11 @@ export const CoverageView: ComponentType<CoverageViewProps>;
 export const NetworkWaterfall: ComponentType<NetworkWaterfallProps>;
 export const NetworkRequest: ComponentType<NetworkRequestProps>;
 export const NetworkPhase: ComponentType<NetworkPhaseProps>;
+export const DependencyGraph: ComponentType<DependencyGraphProps>;
+export const DependencyNode: ComponentType<DependencyNodeProps>;
+export const DependencyEdge: ComponentType<DependencyEdgeProps>;
+export const DependencyCycle: ComponentType<DependencyCycleProps>;
+export const DependencyCycleMember: ComponentType<DependencyCycleMemberProps>;
 export const DiffViewer: ComponentType<DiffViewerProps>;
 export const DiffLine: ComponentType<DiffLineProps>;
 export const StackTrace: ComponentType<StackTraceProps>;
@@ -5144,14 +5309,6 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
-export interface ContainerCreateConfiguration {
-  image: string; name: string; hostname?: string | null;
-  entrypoint?: string[] | null; command?: string[]; environment?: [string, string][];
-  working_directory?: string | null; user?: string | null; labels?: [string, string][];
-  mounts?: { volume: string; target: string; read_only?: boolean }[]; network?: string | null;
-  ports?: { container: number; host?: number | null; protocol: 'tcp' | 'udp' }[];
-  memory_mb?: number | null; cpus?: number | null; pids_limit?: number | null;
-}
 export interface ProcessList {
   titles: string[]; processes: string[][]; observed_at_ms: number;
   scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
@@ -5295,7 +5452,6 @@ export interface WorkspaceApi {
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
-    create(configuration: ContainerCreateConfiguration): Promise<string>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;

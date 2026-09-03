@@ -102,11 +102,39 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     test_report_is_bounded_selectable_and_columnar();
     coverage_is_bounded_selectable_and_marks_misses();
     network_waterfall_is_selectable_hierarchical_and_status_styled();
+    dependency_graph_is_selectable_nested_and_conflict_styled();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+fn dependency_graph_is_selectable_nested_and_conflict_styled() {
+    let mut s = Session::new();
+    let g = s.producer.create(Tag::DependencyGraph);
+    let n = s.producer.create(Tag::DependencyNode);
+    let e = s.producer.create(Tag::DependencyEdge);
+    s.producer.append(NodeId::ROOT, g);
+    s.producer.append(g, n);
+    s.producer.append(n, e);
+    s.producer.set(n, Prop::Label, PropValue::text("react@18"));
+    s.producer.set(
+        n,
+        Prop::Value,
+        PropValue::text("id=react state=conflict detail=two versions"),
+    );
+    s.producer.set(e, Prop::Label, PropValue::text("runtime → scheduler"));
+    s.producer.set(e, Prop::Value, PropValue::text("requirement=^1"));
+    s.flush().unwrap();
+    let node = s.tagged(Tag::DependencyNode).unwrap();
+    assert!(node.has_css_class("dependency-conflict"));
+    assert!(
+        subtree(&node)
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .all(|l| l.is_selectable())
+    );
+    assert!(s.tagged(Tag::DependencyEdge).is_some())
 }
 
 fn network_waterfall_is_selectable_hierarchical_and_status_styled() {
@@ -1053,6 +1081,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::TestReportView => Aspect::Value,
         Tag::CoverageView => Aspect::Value,
         Tag::NetworkRequest | Tag::NetworkPhase => Aspect::Value,
+        Tag::DependencyNode | Tag::DependencyEdge | Tag::DependencyCycleMember => Aspect::Value,
         _ => structural(tag),
     }
 }

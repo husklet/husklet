@@ -416,6 +416,11 @@ fn family(tag: Tag) -> &'static str {
         | Tag::NetworkWaterfall
         | Tag::NetworkRequest
         | Tag::NetworkPhase
+        | Tag::DependencyGraph
+        | Tag::DependencyNode
+        | Tag::DependencyEdge
+        | Tag::DependencyCycle
+        | Tag::DependencyCycleMember
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",

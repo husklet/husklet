@@ -122,6 +122,12 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if matches!(tag, Tag::NetworkRequest | Tag::NetworkPhase) {
         return content::network_value(widget, tag, content);
     }
+    if matches!(
+        tag,
+        Tag::DependencyNode | Tag::DependencyEdge | Tag::DependencyCycleMember
+    ) {
+        return content::dependency_value(widget, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }

@@ -26,6 +26,7 @@ import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/t
 import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src/test-report.js';
 import { CoverageInspectionStory, boundedCoverage, COVERAGE_LIMIT, SOURCE_LIMIT } from '../src/coverage-inspection.js';
 import { NetworkWaterfallStory, boundedRequests, REQUEST_LIMIT, PHASE_LIMIT } from '../src/network-waterfall.js';
+import { DependencyGraphStory, boundedGraph, NODE_LIMIT } from '../src/dependency-graph.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -78,6 +79,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['test report', h(TestReportStory)],
     ['coverage inspection', h(CoverageInspectionStory)],
     ['network waterfall', h(NetworkWaterfallStory)],
+    ['dependency graph', h(DependencyGraphStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -88,6 +90,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
 });
+test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
 
 test('network waterfall validates, caps, sanitizes, and exposes typed hierarchy', () => {
   const phases = Array.from({length: PHASE_LIMIT}, (_, i) => ({kind:'wait',offsetUs:i*2,durationUs:2}));

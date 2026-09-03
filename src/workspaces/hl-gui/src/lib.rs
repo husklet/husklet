@@ -33,7 +33,8 @@ mod style;
 
 pub use builder::Surface;
 pub use component::{
-    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
+    CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode, DependencyRelation,
+    DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
     NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus, TimelineEvent,
 };
 pub use data::{
@@ -85,3 +86,7 @@ pub const NETWORK_WATERFALL_TEXT_LIMIT: usize = 160;
 pub const NETWORK_WATERFALL_TIME_LIMIT_US: u64 = 86_400_000_000;
 pub const NETWORK_WATERFALL_PHASE_TIME_LIMIT_US: u64 = 3_600_000_000;
 pub const NETWORK_WATERFALL_BYTE_LIMIT: u64 = 1 << 40;
+pub const DEPENDENCY_GRAPH_NODE_LIMIT: usize = 32;
+pub const DEPENDENCY_GRAPH_EDGE_LIMIT: usize = 128;
+pub const DEPENDENCY_GRAPH_CYCLE_LIMIT: usize = 8;
+pub const DEPENDENCY_GRAPH_CYCLE_MEMBER_LIMIT: usize = 6;

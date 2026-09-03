@@ -25,12 +25,84 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::NetworkWaterfall => network_waterfall().upcast(),
         Tag::NetworkRequest => network_request().upcast(),
         Tag::NetworkPhase => network_phase().upcast(),
+        Tag::DependencyGraph | Tag::DependencyNode | Tag::DependencyCycle => dependency_container(tag).upcast(),
+        Tag::DependencyEdge | Tag::DependencyCycleMember => dependency_leaf().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
         Tag::StackFrame => stack_frame().upcast(),
         _ => chart().upcast(),
     }
+}
+
+fn dependency_container(tag: Tag) -> gtk::Box {
+    let root = super::axis::column(2);
+    root.add_css_class("dependency-container");
+    let label = super::slot::caption_label();
+    label.set_selectable(true);
+    label.add_css_class("monospace");
+    root.append(&label);
+    if tag == Tag::DependencyGraph || tag == Tag::DependencyCycle {
+        let detail = super::slot::detail_label();
+        detail.set_selectable(true);
+        root.append(&detail)
+    } else {
+        let value = super::axis::label();
+        value.set_selectable(true);
+        value.add_css_class("monospace");
+        super::slot::field(&value);
+        root.append(&value)
+    }
+    root
+}
+fn dependency_leaf() -> gtk::Box {
+    let root = super::axis::column(0);
+    let label = super::slot::caption_label();
+    label.set_selectable(true);
+    let value = super::axis::label();
+    value.set_selectable(true);
+    value.add_css_class("monospace");
+    super::slot::field(&value);
+    root.append(&label);
+    root.append(&value);
+    root
+}
+pub(crate) fn dependency_value(widget: &gtk::Widget, value: &str) -> bool {
+    let Some(field) = super::slot::editable(widget).and_then(|w| w.downcast::<gtk::Label>().ok()) else {
+        return false;
+    };
+    field.set_text(value);
+    for c in ["dependency-resolved", "dependency-missing", "dependency-conflict"] {
+        widget.remove_css_class(c)
+    }
+    if let Some(state) = value.split_whitespace().find_map(|p| p.strip_prefix("state=")) {
+        widget.add_css_class(&format!("dependency-{state}"))
+    }
+    true
+}
+pub(crate) fn dependency_attach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if ![Tag::DependencyGraph, Tag::DependencyNode, Tag::DependencyCycle]
+        .into_iter()
+        .any(|t| super::belongs(parent, t))
+    {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|p| {
+        p.append(child);
+        true
+    })
+}
+pub(crate) fn dependency_detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if ![Tag::DependencyGraph, Tag::DependencyNode, Tag::DependencyCycle]
+        .into_iter()
+        .any(|t| super::belongs(parent, t))
+    {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|p| {
+        p.remove(child);
+        true
+    })
 }
 
 fn network_waterfall() -> gtk::Box {

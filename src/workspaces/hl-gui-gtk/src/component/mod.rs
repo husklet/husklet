@@ -208,6 +208,7 @@ fn part(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) -> bo
 /// Placement a parent decides from the container protocol it implements.
 fn surface(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) -> bool {
     feedback::attach(parent, child, tag)
+        || content::dependency_attach(parent, child)
         || content::attach(parent, child)
         || card::attach(parent, child)
         || navigation::attach(parent, child, index)
@@ -218,7 +219,8 @@ fn surface(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) ->
 
 /// Removes a child from whichever component family holds it.
 pub(crate) fn detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
-    content::detach(parent, child)
+    content::dependency_detach(parent, child)
+        || content::detach(parent, child)
         || card::detach(parent, child)
         || navigation::detach(parent, child)
         || text::detach(parent, child)
