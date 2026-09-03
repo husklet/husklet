@@ -770,6 +770,77 @@ jobs:
             exit 1
           fi
 
+      # The integration target above unifies hl-native's test-hook feature through its dev dependency.
+      # Build the worker separately so this arm proves the shipped C surface, then copy only after Cargo
+      # has returned. Explicit ON is fail-closed; OFF is the same-ISA non-native control. The native
+      # receipt is emitted only after the listener handshake and reap, while the loader receipt binds the
+      # exact DSO opened by each copied worker run.
+      - name: Run the production ARM64 worker natively and translated
+        run: |
+          set -euo pipefail
+          production_target="$RUNNER_TEMP/arm-production-target"
+          CARGO_TARGET_DIR="$production_target" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo build -p engine --bin hl-aarch64 --locked --offline
+          cp "$production_target/debug/hl-aarch64" "$RUNNER_TEMP/hl-aarch64"
+          mapfile -t production_libraries < <(
+            find "$production_target/debug/build" -path '*/out/libhl_native_engine.so' -type f -print
+          )
+          if [ "${#production_libraries[@]}" -ne 1 ]; then
+            printf 'expected exactly one production native library, found %s\n' \
+              "${#production_libraries[@]}" >&2
+            exit 1
+          fi
+          cp "${production_libraries[0]}" "$RUNNER_TEMP/libhl_native_engine.so"
+          sha256sum "$RUNNER_TEMP/hl-aarch64" | tee "$RUNNER_TEMP/arm-worker.sha256"
+          dso_sha256="$(sha256sum "$RUNNER_TEMP/libhl_native_engine.so" | cut -d ' ' -f 1)"
+          printf '%s  %s\n' "$dso_sha256" "$RUNNER_TEMP/libhl_native_engine.so" \
+            | tee "$RUNNER_TEMP/arm-native-library.sha256"
+          cc -static-pie -O2 -o "$RUNNER_TEMP/native-supervised-fixture" \
+            src/containers/hl-engine/tests/fixtures/native_supervised.c
+          fixture="${RUNNER_TEMP#/}/native-supervised-fixture"
+
+          # This is the spelling the product rejects before selecting either backend. Keep the
+          # negative control beside the corrected guest-relative spelling so this step cannot drift
+          # back to exercising only argument validation while still looking like a backend test.
+          set +e
+          "$RUNNER_TEMP/hl-aarch64" --diagnostics \
+            --native-library "$RUNNER_TEMP/libhl_native_engine.so" \
+            --native-supervised=on --rootfs / \
+            "$RUNNER_TEMP/native-supervised-fixture" output \
+            >"$RUNNER_TEMP/arm-absolute.stdout" 2>"$RUNNER_TEMP/arm-absolute.stderr"
+          absolute_status=$?
+          set -e
+          test "$absolute_status" -ne 23
+          grep -q 'must be a plain path relative to the rootfs' "$RUNNER_TEMP/arm-absolute.stderr"
+          ! grep -q '^\[hl-native-supervised\].*reaped=1' "$RUNNER_TEMP/arm-absolute.stderr"
+
+          run_arm() {
+            local mode="$1" prefix="$RUNNER_TEMP/arm-$1"
+            set +e
+            "$RUNNER_TEMP/hl-aarch64" --diagnostics --loader-receipt \
+              --native-library "$RUNNER_TEMP/libhl_native_engine.so" \
+              "--native-supervised=$mode" --rootfs / \
+              "$fixture" output \
+              >"$prefix.stdout" 2>"$prefix.stderr"
+            local status=$?
+            set -e
+            test "$status" -eq 23
+            test "$(cat "$prefix.stdout")" = native-supervised
+          }
+          run_arm on
+          run_arm off
+          grep -q '^\[hl-native-supervised\].*reaped=1 isa=aarch64 .*status=23 signal=0$' \
+            "$RUNNER_TEMP/arm-on.stderr"
+          ! grep -q '^\[hl-native-supervised\].*reaped=1' "$RUNNER_TEMP/arm-off.stderr"
+          on_loader="$(grep '^\[hl-loader\]' "$RUNNER_TEMP/arm-on.stderr")"
+          off_loader="$(grep '^\[hl-loader\]' "$RUNNER_TEMP/arm-off.stderr")"
+          test "$on_loader" = "$off_loader"
+          printf '%s\n' "$on_loader" | grep -Fq "\"library_sha256\":\"$dso_sha256\""
+          printf '%s\n' "$on_loader" \
+            | grep -Fq "\"library_path\":\"$RUNNER_TEMP/libhl_native_engine.so\""
+          printf '%s\n' "$on_loader" | tee "$RUNNER_TEMP/arm-native-loader-receipt.json"
+
       # The hook suite above validates checkpoint record machinery, but it never launches a guest
       # through hl-engine's capture/restore lifecycle. Run the Linux end-to-end suite on this real
       # AArch64 host as the other half of the translated matrix: checkpoint-capable launches still refuse

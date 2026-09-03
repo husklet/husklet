@@ -459,17 +459,21 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const fn native_supervised_worker(guest: Guest) -> bool {
-    matches!(guest, Guest::X86_64)
+    native_supervised_worker_for(true, Guest::X86_64, guest)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const fn native_supervised_worker(guest: Guest) -> bool {
-    matches!(guest, Guest::Aarch64)
+    native_supervised_worker_for(true, Guest::Aarch64, guest)
 }
 
 #[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 const fn native_supervised_worker(_: Guest) -> bool {
     false
+}
+
+const fn native_supervised_worker_for(linux: bool, host: Guest, guest: Guest) -> bool {
+    linux && matches!((host, guest), (Guest::X86_64, Guest::X86_64) | (Guest::Aarch64, Guest::Aarch64))
 }
 
 /// Builds the launch plan for a rootfs-backed run.
@@ -782,13 +786,27 @@ fn hash_path(path: &std::path::Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, Guest, LaunchArguments, backend_receipt, execute, rootfs_plan};
+    use super::{Failure, Guest, LaunchArguments, backend_receipt, execute, native_supervised_worker_for, rootfs_plan};
     #[cfg(unix)]
     use super::receipt_paths;
     use clap::Parser;
 
     fn launch(arguments: &[&str]) -> LaunchArguments {
         LaunchArguments::try_parse_from(std::iter::once("hl-x86_64").chain(arguments.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn native_supervision_worker_policy_is_same_isa_linux_only() {
+        for host in [Guest::X86_64, Guest::Aarch64] {
+            for guest in [Guest::X86_64, Guest::Aarch64] {
+                assert_eq!(
+                    native_supervised_worker_for(true, host, guest),
+                    host == guest,
+                    "host={host:?} guest={guest:?}",
+                );
+                assert!(!native_supervised_worker_for(false, host, guest));
+            }
+        }
     }
 
     fn reason(failure: &Failure) -> String {
