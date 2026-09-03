@@ -37,6 +37,26 @@ test('overview never presents stale inventory counts as current during loading o
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
 });
 
+test('late inventory reloads cannot replace a newer authoritative snapshot', async () => {
+  const pending = []; let publish;
+  const controlled = { ...api, containers: { ...api.containers, list: () => new Promise((resolve) => pending.push(resolve)) } };
+  const selections = { subscribe(listener) { publish = listener; return () => {}; } };
+  const stage = host();
+  stage.render(h(WorkspaceManager, { api: controlled, selections, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
+  await settled();
+  publish({ snapshot: 'containers' }); publish({ snapshot: 'containers' });
+  await settled();
+  pending[1]([{ id: 'new-a', state: 'running' }, { id: 'new-b', state: 'running' }]);
+  await settled(); await settled();
+  assert.ok(labelled(stage, '2'));
+  assert.ok(labelled(stage, '2 running'));
+  pending[0]([{ id: 'stale', state: 'stopped' }]);
+  await settled(); await settled();
+  assert.ok(labelled(stage, '2'));
+  assert.ok(labelled(stage, '2 running'));
+  assert.equal(labelled(stage, '1'), undefined, 'superseded inventory authority never reaches the overview');
+});
+
 test('every empty operational page explains what is absent and how to proceed', async () => {
   const stage = host();
   stage.render(h(WorkspaceManager, { api, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));

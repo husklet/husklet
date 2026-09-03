@@ -1064,11 +1064,24 @@ function useResource(loader, initial) {
   const [data, setData] = useState(initial);
   const [loading, setLoading] = useState(initial === undefined);
   const [error, setError] = useState(null);
+  const revision = useRef(0);
   const reload = useCallback(async () => {
+    const requested = ++revision.current;
     setLoading(true);
-    try { setData(await loader()); setError(null); } catch (cause) { setError(cause); } finally { setLoading(false); }
+    try {
+      const value = await loader();
+      if (requested !== revision.current) return;
+      setData(value); setError(null);
+    } catch (cause) {
+      if (requested === revision.current) setError(cause);
+    } finally {
+      if (requested === revision.current) setLoading(false);
+    }
   }, [loader]);
-  const replace = useCallback((value) => { setData(value); setError(null); setLoading(false); }, []);
-  useEffect(() => { if (initial === undefined) void reload(); }, [initial, reload]);
+  const replace = useCallback((value) => { revision.current += 1; setData(value); setError(null); setLoading(false); }, []);
+  useEffect(() => {
+    if (initial === undefined) void reload();
+    return () => { revision.current += 1; };
+  }, [initial, reload]);
   return { data, loading, error, reload, replace };
 }
