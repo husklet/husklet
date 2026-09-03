@@ -47,6 +47,18 @@ function exactPaneTitle(title) {
   throw new TypeError('pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
 }
 
+function exactSemanticAction(action) {
+  if (!Number.isSafeInteger(action?.generation) || action.generation < 0
+    || !Number.isSafeInteger(action?.revision) || action.revision < 0
+    || !Number.isSafeInteger(action?.node) || action.node < 0) {
+    throw new TypeError('pane semantic action requires nonnegative safe integer generation, revision, and node');
+  }
+  if (action?.value != null && new TextEncoder().encode(action.value).byteLength > 4096) {
+    throw new RangeError('pane semantic action value exceeds 4096 bytes');
+  }
+  return action;
+}
+
 function exactCommand(command) {
   if (!Array.isArray(command) || command.length < 1 || command.length > 64
     || command[0] === '' || command.some((argument) => typeof argument !== 'string'
@@ -291,15 +303,7 @@ export function workspace(session, { signal } = {}) {
         return { kind: 'ui', text: semanticXml(snapshot), snapshot };
       },
       act: (slot, action) => {
-        if (!Number.isSafeInteger(action?.generation) || action.generation < 0
-          || !Number.isSafeInteger(action?.revision) || action.revision < 0
-          || !Number.isSafeInteger(action?.node) || action.node < 0) {
-          throw new TypeError('pane semantic action requires nonnegative safe integer generation, revision, and node');
-        }
-        if (action?.value != null && new TextEncoder().encode(action.value).byteLength > 4096) {
-          throw new RangeError('pane semantic action value exceeds 4096 bytes');
-        }
-        return done('pane_semantic_action', { slot, action });
+        return done('pane_semantic_action', { slot, action: exactSemanticAction(action) });
       },
       writeInput: (slot, generation, revision, input) => {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
@@ -488,6 +492,36 @@ export function workspace(session, { signal } = {}) {
       }, (error) => finish(undefined, error));
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
+  };
+  api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane semantic action requires a nonempty slot');
+    exactSemanticAction(action);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('pane semantic action wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot
+        && (change.generation !== action.generation || change.revision !== action.revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.act(slot, action);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, after: { generation: action.generation, revision: action.revision } };
+      const readable = await api.terminal.toText(slot, { lines });
+      if (readable.snapshot.generation === action.generation && readable.snapshot.revision === action.revision) {
+        throw new Error('pane change did not advance the readable snapshot cursor');
+      }
+      return { changed: true, readable };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
   };
   api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
     const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);

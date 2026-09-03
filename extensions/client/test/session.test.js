@@ -56,7 +56,7 @@ test('real Unix stream drives a typed inventory watcher and returns event credit
   }
 });
 
-test('real Unix pane text wait subscribes before reading and disposes after a changed cursor', async () => {
+test('real Unix semantic action wait arms before authority and disposes after changed text', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
   const server = net.createServer((socket) => {
@@ -68,21 +68,22 @@ test('real Unix pane text wait subscribes before reading and disposes after a ch
         calls.push(frame.payload.call);
         if (frame.payload.call === 'event_subscribe') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'pane_semantic_action') {
           socket.write(encode({ channel: 11, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
-            slot: 'shell', kind: 'terminal', generation: 2, revision: 3, coalesced: 0,
+            slot: 'settings', kind: 'native', generation: 2, revision: 4, coalesced: 0,
           } } }));
-          socket.write(encode({ channel: 11, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
-            slot: 'shell', kind: 'terminal', generation: 2, revision: 4, coalesced: 0,
-          } } }));
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
         } else if (frame.payload.call === 'pane_list') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [{
-            slot: 'shell', generation: 2, revision: 4, kind: 'terminal', provider: null,
-            tab: 'tab', title: 'Shell', focused: true,
+            slot: 'settings', generation: 2, revision: 4, kind: 'native', provider: null,
+            tab: null, title: 'Settings', focused: true,
           }], truncated: false } } }));
-        } else if (frame.payload.call === 'terminal_read_pane') {
-          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: {
-            slot: 'shell', generation: 2, revision: 4, columns: 80, rows: 24, lines: ['done'],
-            cursor_column: 4, cursor_row: 0, truncated: false,
+        } else if (frame.payload.call === 'pane_semantic_read') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'semantics', with: {
+            slot: 'settings', generation: 2, revision: 4, truncated: false, root: {
+              id: 0, role: 'page', label: 'Done', value: null, disabled: false, destructive: false,
+              actions: [], children: [],
+            },
           } } }));
         } else if (frame.payload.call === 'event_unsubscribe') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
@@ -90,15 +91,17 @@ test('real Unix pane text wait subscribes before reading and disposes after a ch
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'text-wait', granted: ['pane-observe', 'terminal-output'],
+      protocol: 1, peer: 'action-wait', granted: ['pane-observe', 'pane-semantic-read', 'pane-semantic-control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).terminal.waitForText('shell', { generation: 2, revision: 3 });
-    assert.equal(result.changed, true); assert.equal(result.readable.text, 'done');
-    assert.deepEqual(calls, ['event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe']);
+    const result = await workspace(session).terminal.actAndWait('settings', {
+      generation: 2, revision: 3, node: 7, action: 'invoke',
+    });
+    assert.equal(result.changed, true); assert.match(result.readable.text, /<label>Done<\/label>/);
+    assert.deepEqual(calls, ['event_subscribe', 'pane_semantic_action', 'pane_list', 'pane_semantic_read', 'event_unsubscribe']);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

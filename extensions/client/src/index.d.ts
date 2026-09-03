@@ -269,6 +269,11 @@ export interface WorkspaceApi {
       timeoutMs?: number;
     }): Promise<{ changed: true; readable: ReadablePane } | { changed: false; after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'> }>;
     act(slot: string, action: PaneSemanticAction): Promise<void>;
+    /** Arm pane observation, perform one revision-bound semantic action, then read its changed projection. */
+    actAndWait(slot: string, action: PaneSemanticAction, options?: { lines?: number; timeoutMs?: number }): Promise<
+      | { changed: true; readable: ReadablePane }
+      | { changed: false; after: { generation: number; revision: number } }
+    >;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;

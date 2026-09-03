@@ -1056,3 +1056,45 @@ test('pane text wait timeout returns its cursor and releases subscription credit
   assert.deepEqual(await pending, { changed: false, after });
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
+
+test('semantic action wait subscribes before authority and captures an event preceding the action reply', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const action = { generation: 2, revision: 5, node: 7, action: 'invoke' };
+  const pending = api.terminal.actAndWait('settings', action, { timeoutMs: 1_000 });
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'pane_semantic_action', with: { slot: 'settings', action } });
+  stage.host.write(encode({ channel: 19, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+    slot: 'settings', kind: 'native', generation: 2, revision: 6, coalesced: 0,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+    panes: [{ slot: 'settings', generation: 2, revision: 6, kind: 'native', provider: null, tab: null, title: 'Settings', focused: true }], truncated: false,
+  } } }));
+  assert.deepEqual((await next()).payload, { call: 'pane_semantic_read', with: { slot: 'settings' } });
+  const snapshot = { slot: 'settings', generation: 2, revision: 6, truncated: false,
+    root: { id: 0, role: 'page', label: 'Updated', value: null, disabled: false, destructive: false, actions: [], children: [] } };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'semantics', with: snapshot } }));
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const result = await pending;
+  assert.equal(result.changed, true); assert.deepEqual(result.readable.snapshot, snapshot);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('semantic action refusal still releases its armed pane subscription', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const pending = api.terminal.actAndWait('settings', { generation: 2, revision: 5, node: 7, action: 'invoke' });
+  assert.equal((await next()).payload.call, 'event_subscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await next()).payload.call, 'pane_semantic_action');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: {
+    error: 'conflict', detail: 'pane changed',
+  } }));
+  assert.equal((await next()).payload.call, 'event_unsubscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await assert.rejects(pending, /pane changed/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});

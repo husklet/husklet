@@ -19,6 +19,15 @@ const readable = await host.terminal.toText(pane.slot, { lines: 200 });
 console.log(readable.kind, readable.text);
 const next = await host.terminal.waitForText(pane.slot, readable.snapshot, { timeoutMs: 10_000 });
 if (next.changed) console.log(next.readable.text);
+
+// Arm observation before a revision-bound UI action so its update cannot be missed.
+const acted = await host.terminal.actAndWait(pane.slot, {
+  generation: readable.snapshot.generation,
+  revision: readable.snapshot.revision,
+  node: 7,
+  action: 'invoke',
+});
+if (acted.changed) console.log(acted.readable.text);
 ```
 
 For a framework-neutral extension, copy the complete starter from the installed
