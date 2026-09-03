@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@husklet/client": "0.1.0",
+    "@types/react": "18.3.31",
     "react-reconciler": "0.29.2"
   },
   "engines": {
