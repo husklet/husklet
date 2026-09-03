@@ -110,6 +110,9 @@ export interface ColumnSpec {
   sortable?: boolean;
   editable?: boolean;
 }
+export const TABLE_COLUMN_LIMIT: 64;
+export const COLUMN_KEY_BYTE_LIMIT: 128;
+export const COLUMN_TITLE_BYTE_LIMIT: 256;
 
 /** One interaction, as the host reports it. */
 export interface Report {

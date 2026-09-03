@@ -1,5 +1,6 @@
 use super::{Node, Patch, Tree, TreeError};
 use crate::identity::NodeId;
+use crate::{validate_columns, PropValue};
 
 impl Tree {
     /// Rejects a patch that would leave the tree inconsistent. Runs before the
@@ -9,6 +10,14 @@ impl Tree {
             Patch::Create { id, .. } => self.validate_create(*id),
             Patch::Insert { parent, child, before } => self.validate_insert(*parent, *child, *before),
             Patch::Move { parent, child, before } => self.validate_move(*parent, *child, *before),
+            Patch::SetProp {
+                id,
+                value: PropValue::Schema(columns),
+                ..
+            } => {
+                self.require(*id)?;
+                validate_columns(columns).map_err(TreeError::InvalidSchema)
+            }
             Patch::SetProp { id, .. }
             | Patch::ClearProp { id, .. }
             | Patch::SetHandler { id, .. }

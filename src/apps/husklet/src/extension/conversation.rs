@@ -86,6 +86,12 @@ impl Queue {
         }) {
             return Err(Fault::Malformed("a row window exceeded the text payload limit".into()));
         }
+        if mutations.iter().any(|mutation| {
+            matches!(&mutation.mutation, hl_gui::SourceMutation::Open { columns, .. }
+                if hl_gui::validate_columns(columns).is_err())
+        }) {
+            return Err(Fault::Malformed("an invalid table schema was refused".into()));
+        }
         let cost = |frames: &[SurfaceFrame], mutations: &[SurfaceMutation]| {
             frames
                 .iter()
@@ -2347,6 +2353,22 @@ mod tests {
         let overflow = queue.deposit(Vec::new(), vec![mutation]);
         assert!(matches!(overflow, Err(Fault::Malformed(ref detail)) if detail.contains("window catch up")));
         assert!(queue.is_empty(), "the oversized source answer is rejected atomically");
+    }
+
+    #[test]
+    fn an_invalid_source_schema_never_reaches_the_window_queue() {
+        let queue = Queue::new();
+        let duplicate = hl_gui::Column::new("same", "Name");
+        let mutation = hl_extension::SurfaceMutation {
+            slot: "table-pane".into(),
+            mutation: hl_gui::SourceMutation::Open {
+                source: hl_gui::SourceId::new(1),
+                columns: vec![duplicate.clone(), duplicate],
+            },
+        };
+        let refusal = queue.deposit(Vec::new(), vec![mutation]);
+        assert!(matches!(refusal, Err(Fault::Malformed(ref detail)) if detail.contains("invalid table schema")));
+        assert!(queue.is_empty(), "invalid schema allocates no GUI work");
     }
 
     #[test]

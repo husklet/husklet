@@ -3,7 +3,9 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 
 import { Surface, reconciler } from '../src/reconciler.js';
-import { value } from '../src/protocol.js';
+import {
+  COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT, value,
+} from '../src/protocol.js';
 import { Button, Column, Text } from '../src/components.js';
 
 /** A surface that keeps its frames instead of writing them to a socket. */
@@ -39,6 +41,18 @@ test('a button in a column is exactly six patches', () => {
       { Insert: { parent: 0, child: 2, before: null } },
     ],
   });
+});
+
+test('table schemas enforce host allocation and UTF-8 identity bounds before rendering', () => {
+  const schema = Array.from({ length: TABLE_COLUMN_LIMIT }, (_, index) => ({
+    key: `key-${index}`,
+    title: index === 0 ? 'é'.repeat(COLUMN_TITLE_BYTE_LIMIT / 2) : `Column ${index}`,
+  }));
+  assert.equal(value('Schema', schema).Schema.length, TABLE_COLUMN_LIMIT);
+  assert.throws(() => value('Schema', [...schema, { key: 'overflow', title: 'Overflow' }]), /columns; limit/);
+  assert.throws(() => value('Schema', [{ key: 'same', title: 'One' }, { key: 'same', title: 'Two' }]), /duplicate/);
+  assert.throws(() => value('Schema', [{ key: 'é'.repeat(COLUMN_KEY_BYTE_LIMIT / 2 + 1), title: 'Name' }]), /column key/);
+  assert.throws(() => value('Schema', [{ key: 'name', title: 'é'.repeat(COLUMN_TITLE_BYTE_LIMIT / 2 + 1) }]), /column title/);
 });
 
 test('destructive is an explicit typed semantic property', () => {

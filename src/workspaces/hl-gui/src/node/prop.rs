@@ -120,7 +120,7 @@ pub enum PropValue {
     Align(Align),
     Orientation(Orientation),
     Choices(Vec<Choice>),
-    Schema(Vec<Column>),
+    Schema(#[cfg_attr(feature = "wire", serde(deserialize_with = "crate::data::deserialize_columns"))] Vec<Column>),
     Source(SourceId),
     Nothing,
 }

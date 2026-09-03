@@ -93,6 +93,7 @@ pub enum TreeError {
     RemoveRoot,
     StaleSequence { expected: u64, received: u64 },
     NodeLimit { limit: usize, received: usize },
+    InvalidSchema(&'static str),
 }
 
 impl std::fmt::Display for TreeError {
@@ -130,6 +131,7 @@ impl std::fmt::Display for TreeError {
                     "interface tree has {received} nodes, above the limit of {limit}"
                 )
             }
+            Self::InvalidSchema(reason) => write!(formatter, "invalid table schema: {reason}"),
         }
     }
 }

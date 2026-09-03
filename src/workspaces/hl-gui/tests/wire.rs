@@ -289,6 +289,29 @@ fn a_theme_survives_the_wire() {
     assert_eq!(decoded.density, Density::Normal);
 }
 
+#[cfg(feature = "wire")]
+#[test]
+fn table_schema_wire_refuses_duplicate_and_overlong_utf8_identity() {
+    let column = serde_json::json!({
+        "key": "same", "title": "Name", "width": "Content", "align": "Start",
+        "sortable": false, "editable": false
+    });
+    let duplicate = serde_json::json!({"Schema": [column.clone(), column]});
+    assert!(serde_json::from_value::<PropValue>(duplicate)
+        .unwrap_err()
+        .to_string()
+        .contains("unique"));
+
+    let overlong = serde_json::json!({"Schema": [{
+        "key": "é".repeat(65), "title": "Name", "width": "Content", "align": "Start",
+        "sortable": false, "editable": false
+    }]});
+    assert!(serde_json::from_value::<PropValue>(overlong)
+        .unwrap_err()
+        .to_string()
+        .contains("column key"));
+}
+
 /// A renderer that records nothing, for tests that only care about the tree.
 #[cfg(feature = "wire")]
 struct Ignore;

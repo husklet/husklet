@@ -6,6 +6,10 @@
 
 /** The implicit container every top-level node is inserted into. */
 export const ROOT = 0;
+export const TABLE_COLUMN_LIMIT = 64;
+export const COLUMN_KEY_BYTE_LIMIT = 128;
+export const COLUMN_TITLE_BYTE_LIMIT = 256;
+const utf8 = new TextEncoder();
 
 /**
  * How a property's value is spelled on the wire.
@@ -177,7 +181,7 @@ export function value(prop, given) {
     case 'choices':
       return { Choices: given.map((choice) => ({ value: String(choice.value), label: String(choice.label) })) };
     case 'schema':
-      return { Schema: given.map(column) };
+      return { Schema: schema(given) };
     case 'infer':
       return infer(given);
     default:
@@ -222,6 +226,28 @@ function column(given) {
     sortable: Boolean(given.sortable),
     editable: Boolean(given.editable),
   };
+}
+
+function schema(given) {
+  if (!Array.isArray(given)) throw new TypeError('schema must be an array');
+  if (given.length > TABLE_COLUMN_LIMIT) {
+    throw new RangeError(`schema has ${given.length} columns; limit is ${TABLE_COLUMN_LIMIT}`);
+  }
+  const columns = given.map(column);
+  const keys = new Set();
+  for (const item of columns) {
+    const keyBytes = utf8.encode(item.key).byteLength;
+    const titleBytes = utf8.encode(item.title).byteLength;
+    if (keyBytes === 0 || keyBytes > COLUMN_KEY_BYTE_LIMIT) {
+      throw new RangeError(`column key must be 1..=${COLUMN_KEY_BYTE_LIMIT} UTF-8 bytes`);
+    }
+    if (titleBytes === 0 || titleBytes > COLUMN_TITLE_BYTE_LIMIT) {
+      throw new RangeError(`column title must be 1..=${COLUMN_TITLE_BYTE_LIMIT} UTF-8 bytes`);
+    }
+    if (keys.has(item.key)) throw new Error(`duplicate table column key ${JSON.stringify(item.key)}`);
+    keys.add(item.key);
+  }
+  return columns;
 }
 
 /**

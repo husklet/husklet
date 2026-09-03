@@ -3,6 +3,7 @@
 import { Session } from '@husklet/client';
 import { Surface, reconciler } from './reconciler.js';
 import { PROPS, TRIGGERS } from './protocol.js';
+export { TABLE_COLUMN_LIMIT, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT } from './protocol.js';
 
 export { ExtensionError, Session, SOCKET, PROTOCOL, workspace, requestCapability, protocolCoverage } from '@husklet/client';
 export * from './components.js';
