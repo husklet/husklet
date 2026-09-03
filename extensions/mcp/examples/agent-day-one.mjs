@@ -124,6 +124,7 @@ export async function runAgentDayOne(client, {
     const terminalChanged = await terminalWaiting;
 
     const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });
+    const generation = xmlNumber(semanticBefore, 'generation');
     const revision = xmlNumber(semanticBefore, 'revision');
     const node = nodeForLabel(semanticBefore, actionLabel);
     const semanticWaiting = json(client, 'husklet_pane_wait', {
@@ -132,7 +133,7 @@ export async function runAgentDayOne(client, {
       after_revision: semantic.revision,
       timeout_ms: waitMs,
     });
-    await call(client, 'husklet_pane_action', { slot: semantic.slot, revision, node, action: 'invoke' });
+    await call(client, 'husklet_pane_action', { slot: semantic.slot, generation, revision, node, action: 'invoke' });
     const semanticChanged = await semanticWaiting;
     const semanticAfter = semanticChanged.changed
       ? await call(client, 'husklet_pane_snapshot', { slot: semantic.slot }) : null;
@@ -140,7 +141,7 @@ export async function runAgentDayOne(client, {
       workspace: { before: original, applied: updatedConfiguration },
       container: { imagePull, created: container, execution, executionBefore, executionChanged, processes },
       terminal: { slot: terminal.slot, before: terminalBefore, changed: terminalChanged },
-      semantic: { slot: semantic.slot, revision, node, before: semanticBefore, changed: semanticChanged, after: semanticAfter },
+      semantic: { slot: semantic.slot, generation, revision, node, before: semanticBefore, changed: semanticChanged, after: semanticAfter },
     };
   } finally {
     if (container?.id) {

@@ -80,6 +80,7 @@ impl Gallery {
         let snapshot = registry.snapshot();
         Ok(hl_extension::PaneSemanticTree {
             slot: snapshot.slot,
+            generation: 0,
             revision: snapshot.revision,
             root: native_node(snapshot.root),
             truncated: snapshot.truncated,
@@ -87,6 +88,12 @@ impl Gallery {
     }
 
     pub fn native_action(&self, action: &hl_extension::PaneSemanticAction) -> Result<(), hl_extension::HostError> {
+        if action.generation != 0 {
+            return Err(hl_extension::HostError::Conflict(format!(
+                "stale pane generation {}; current is 0",
+                action.generation
+            )));
+        }
         let registry = self
             .1
             .borrow()
@@ -202,15 +209,24 @@ impl Gallery {
         slot: &str,
     ) -> Result<hl_extension::PaneSemanticTree, hl_extension::HostError> {
         let held = self.0.borrow();
+        let generation = held.get(extension).map(|entry| entry.generation);
         let endpoint = held.get(extension).and_then(|entry| entry.semantics.clone());
         drop(held);
+        let generation = generation.ok_or_else(|| hl_extension::HostError::Absent(extension.to_owned()))?;
         let Some(endpoint) = endpoint else {
-            return Ok(unavailable(slot, &format!("{extension} has no semantic projection")));
+            let mut tree = unavailable(slot, &format!("{extension} has no semantic projection"));
+            tree.generation = generation;
+            return Ok(tree);
         };
         match endpoint(slot) {
-            Ok(tree) => Ok(tree),
+            Ok(mut tree) => {
+                tree.generation = generation;
+                Ok(tree)
+            }
             Err(hl_extension::HostError::Absent(detail) | hl_extension::HostError::Unsupported(detail)) => {
-                Ok(unavailable(slot, &detail))
+                let mut tree = unavailable(slot, &detail);
+                tree.generation = generation;
+                Ok(tree)
             }
             Err(error) => Err(error),
         }
@@ -223,12 +239,25 @@ impl Gallery {
         action: &hl_extension::PaneSemanticAction,
     ) -> Result<(), hl_extension::HostError> {
         let held = self.0.borrow();
-        let endpoint = held
+        let exhibit = held
             .get(extension)
-            .and_then(|entry| entry.action.clone())
+            .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
+        if action.generation != exhibit.generation {
+            return Err(hl_extension::HostError::Conflict(format!(
+                "stale pane generation {}; current is {}",
+                action.generation, exhibit.generation
+            )));
+        }
+        let endpoint = exhibit
+            .action
+            .clone()
             .ok_or_else(|| hl_extension::HostError::Absent(format!("{extension} has no semantic surface")))?;
         drop(held);
         endpoint(slot, action)
+    }
+
+    pub fn generation(&self, extension: &str) -> Option<u64> {
+        self.0.borrow().get(extension).map(|entry| entry.generation)
     }
 
     /// Stops advertising an extension whose lifecycle page is being removed.
@@ -379,6 +408,7 @@ impl Gallery {
 fn unavailable(slot: &str, detail: &str) -> hl_extension::PaneSemanticTree {
     hl_extension::PaneSemanticTree {
         slot: slot.to_owned(),
+        generation: 0,
         revision: 0,
         root: hl_extension::SemanticNode {
             id: 0,

@@ -270,6 +270,11 @@ export function workspace(session) {
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
       semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
       act: (slot, action) => {
+        if (!Number.isSafeInteger(action?.generation) || action.generation < 0
+          || !Number.isSafeInteger(action?.revision) || action.revision < 0
+          || !Number.isSafeInteger(action?.node) || action.node < 0) {
+          throw new TypeError('pane semantic action requires nonnegative safe integer generation, revision, and node');
+        }
         if (action?.value != null && new TextEncoder().encode(action.value).byteLength > 4096) {
           throw new RangeError('pane semantic action value exceeds 4096 bytes');
         }

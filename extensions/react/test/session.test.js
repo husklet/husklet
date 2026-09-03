@@ -635,13 +635,17 @@ test('pane semantics and actions preserve revision and node identity', async () 
   const read = (await next()).payload;
   assert.deepEqual(read, { call: 'pane_semantic_read', with: { slot: 'pane-7' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
-    reply: 'semantics', with: { slot: 'pane-7', revision: 9, truncated: false,
+    reply: 'semantics', with: { slot: 'pane-7', generation: 3, revision: 9, truncated: false,
       root: { id: 0, role: 'Column', label: null, value: null, disabled: false, actions: [], children: [] } },
   } }));
-  assert.equal((await tree).revision, 9);
-  const acted = api.terminal.act('pane-7', { revision: 9, node: 4, action: 'invoke' });
+  assert.deepEqual({ generation: (await tree).generation, revision: (await tree).revision }, { generation: 3, revision: 9 });
+  assert.throws(
+    () => api.terminal.act('pane-7', { revision: 9, node: 4, action: 'invoke' }),
+    /requires nonnegative safe integer generation/,
+  );
+  const acted = api.terminal.act('pane-7', { generation: 3, revision: 9, node: 4, action: 'invoke' });
   assert.deepEqual((await next()).payload, { call: 'pane_semantic_action', with: {
-    slot: 'pane-7', action: { revision: 9, node: 4, action: 'invoke' },
+    slot: 'pane-7', action: { generation: 3, revision: 9, node: 4, action: 'invoke' },
   } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await acted;

@@ -5518,8 +5518,8 @@ export interface InspectablePane { slot: string; generation: number; revision: n
 export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
 export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
 export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
-export interface PaneSemanticTree { slot: string; revision: number; root: SemanticNode; truncated: boolean }
-export interface PaneSemanticAction { revision: number; node: number; action: SemanticActionKind; value?: string | null }
+export interface PaneSemanticTree { slot: string; generation: number; revision: number; root: SemanticNode; truncated: boolean }
+export interface PaneSemanticAction { generation: number; revision: number; node: number; action: SemanticActionKind; value?: string | null }
 export interface GridSize { columns: number; rows: number }
 export type LayoutNode =
   | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }

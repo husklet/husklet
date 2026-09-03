@@ -300,6 +300,8 @@ pub const SEMANTIC_ACTION_VALUE_LIMIT: usize = 4096;
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PaneSemanticTree {
     pub slot: String,
+    /// Identity of the pane occupant whose semantic tree was observed.
+    pub generation: u64,
     pub revision: u64,
     pub root: SemanticNode,
     pub truncated: bool,
@@ -331,6 +333,8 @@ pub enum SemanticActionKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PaneSemanticAction {
+    /// Identity of the pane occupant whose semantic tree was observed.
+    pub generation: u64,
     pub revision: u64,
     pub node: u64,
     pub action: SemanticActionKind,

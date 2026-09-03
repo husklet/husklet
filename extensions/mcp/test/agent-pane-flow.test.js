@@ -24,7 +24,7 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
       } };
       if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: 'term-1', lines: ['ready'], truncated: false } };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
-        slot: 'native-1', revision: 41, truncated: false,
+        slot: 'native-1', generation: 2, revision: 41, truncated: false,
         root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [
           { id: 7, role: 'button', label: 'Refresh', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [] },
         ] },
@@ -62,7 +62,7 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
   assert(calls.some(([name, argument]) => name === 'terminal_write_pane'
     && argument.slot === 'term-1' && Buffer.from(argument.contents).equals(Buffer.from([0, 3, 255]))));
   assert(calls.some(([name, argument]) => name === 'pane_semantic_action'
-    && argument.action.revision === 41 && argument.action.node === 7));
+    && argument.action.generation === 2 && argument.action.revision === 41 && argument.action.node === 7));
   assert.equal(calls.filter(([name]) => name === 'pane_semantic_read').length, 3);
   assert.equal(calls.filter(([name]) => name === 'event_subscribe').length, 1);
   assert.equal(calls.filter(([name]) => name === 'event_unsubscribe').length, 1);

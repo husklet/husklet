@@ -955,6 +955,7 @@ mod tests {
             }
             Ok(hl_extension::PaneSemanticTree {
                 slot: slot.to_owned(),
+                generation: 0,
                 revision,
                 root: hl_extension::SemanticNode {
                     id: 1,

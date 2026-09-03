@@ -44,12 +44,14 @@ if (!xml.includes('<value>container-read, interface</value>') && !xml.includes('
 }
 const extensions = xml.match(/<node id="(\d+)"[^>]*><label>Extensions<\/label>/);
 if (!extensions) throw new Error(`Extensions semantic node absent from ${xml}`);
+const generation = Number(xml.match(/generation="(\d+)"/)?.[1]);
 const revision = Number(xml.match(/revision="(\d+)"/)?.[1]);
+if (!Number.isSafeInteger(generation)) throw new Error(`pane generation absent from ${xml}`);
 if (!Number.isSafeInteger(revision)) throw new Error(`semantic revision absent from ${xml}`);
 
 const acted = await client.callTool({
   name: 'husklet_pane_action',
-  arguments: { slot: 'workspace', revision, node: Number(extensions[1]), action: 'invoke' },
+  arguments: { slot: 'workspace', generation, revision, node: Number(extensions[1]), action: 'invoke' },
 });
 if (acted.isError) throw new Error(`semantic action failed: ${acted.content?.[0]?.text}`);
 

@@ -599,7 +599,7 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
     } }] }),
     semantics: async (slot) => {
       if (slot === 'missing') throw new Error('no semantic pane');
-      return { slot, revision: 2, truncated: false, root: {
+      return { slot, generation: 0, revision: 2, truncated: false, root: {
         id: 1, role: 'password_entry', label: 'API token', value: 'never leak', disabled: false, actions: [], children: [],
       } };
     },
@@ -614,7 +614,7 @@ test('unified pane XML selects surface semantics and gives a clear topology abse
 test('unified pane XML projects arbitrary native slots and explicitly rejects unknown kinds', async () => {
   const terminal = {
     panes: async () => ({ panes: [{ slot: 'settings-native', kind: 'native' }], truncated: false }),
-    semantics: async (slot) => ({ slot, revision: 4, truncated: false, root: {
+    semantics: async (slot) => ({ slot, generation: 0, revision: 4, truncated: false, root: {
       id: 1, role: 'status', label: 'Settings', value: 'Ready', disabled: false, actions: [], children: [],
     } }),
   };
@@ -639,7 +639,7 @@ test('pane tools are capability-shaped and only appear for the real typed method
   const { api, calls } = fake();
   assert(!tools(api).some(({ name }) => name.startsWith('husklet_pane_')));
   api.terminal.semantics = async (slot) => { calls.push(['terminal.semantics', slot]); return {
-    slot, revision: 7, truncated: false,
+    slot, generation: 6, revision: 7, truncated: false,
     root: { id: 0, role: 'column', label: 'A & <B>', value: null, disabled: false, destructive: false, actions: [], children: [
       { id: 3, role: 'button', label: 'Run', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [] },
     ] },
@@ -649,19 +649,19 @@ test('pane tools are capability-shaped and only appear for the real typed method
   const snapshot = listed.find(({ name }) => name === 'husklet_pane_snapshot');
   const action = listed.find(({ name }) => name === 'husklet_pane_action');
   const shown = await snapshot.run({ slot: 'pane-1' });
-  assert.equal(shown.content[0].text, '<pane slot="pane-1" revision="7" truncated="false"><node id="0" role="column" disabled="false" destructive="false" actions=""><label>A &amp; &lt;B&gt;</label><node id="3" role="button" disabled="false" destructive="false" actions="invoke"><label>Run</label></node></node></pane>');
-  await action.run({ slot: 'pane-1', revision: 7, node: 3, action: 'invoke' });
+  assert.equal(shown.content[0].text, '<pane slot="pane-1" generation="6" revision="7" truncated="false"><node id="0" role="column" disabled="false" destructive="false" actions=""><label>A &amp; &lt;B&gt;</label><node id="3" role="button" disabled="false" destructive="false" actions="invoke"><label>Run</label></node></node></pane>');
+  await action.run({ slot: 'pane-1', generation: 6, revision: 7, node: 3, action: 'invoke' });
   assert.deepEqual(calls, [
     ['terminal.semantics', 'pane-1'],
     ['terminal.semantics', 'pane-1'],
-    ['terminal.act', 'pane-1', { revision: 7, node: 3, action: 'invoke' }],
+    ['terminal.act', 'pane-1', { generation: 6, revision: 7, node: 3, action: 'invoke' }],
   ]);
   assert.equal(action.inputSchema.safeParse({ slot: 'pane-1', revision: 7, node: 3, action: 'run' }).success, false);
 });
 
 test('pane actions reject stale, absent, disabled and unadvertised controls before dispatch', async () => {
   const { api, calls } = fake();
-  api.terminal.semantics = async () => ({ slot: 'pane-1', revision: 12, truncated: false, root: {
+  api.terminal.semantics = async () => ({ slot: 'pane-1', generation: 4, revision: 12, truncated: false, root: {
     id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [
       { id: 4, role: 'button', label: 'Pending', value: null, disabled: true, destructive: false, actions: [], children: [] },
       { id: 5, role: 'entry', label: 'Name', value: '', disabled: false, destructive: false, actions: ['change'], children: [] },
@@ -669,16 +669,17 @@ test('pane actions reject stale, absent, disabled and unadvertised controls befo
   }});
   api.terminal.act = async (...args) => calls.push(['terminal.act', ...args]);
   const action = tools(api).find(({ name }) => name === 'husklet_pane_action');
-  await assert.rejects(action.run({ slot: 'pane-1', revision: 11, node: 5, action: 'change' }), /stale semantic revision/);
-  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 99, action: 'invoke' }), /is absent/);
-  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 4, action: 'invoke' }), /is disabled/);
-  await assert.rejects(action.run({ slot: 'pane-1', revision: 12, node: 5, action: 'invoke' }), /does not advertise invoke/);
+  await assert.rejects(action.run({ slot: 'pane-1', generation: 3, revision: 12, node: 5, action: 'change' }), /stale pane generation/);
+  await assert.rejects(action.run({ slot: 'pane-1', generation: 4, revision: 11, node: 5, action: 'change' }), /stale semantic revision/);
+  await assert.rejects(action.run({ slot: 'pane-1', generation: 4, revision: 12, node: 99, action: 'invoke' }), /is absent/);
+  await assert.rejects(action.run({ slot: 'pane-1', generation: 4, revision: 12, node: 4, action: 'invoke' }), /is disabled/);
+  await assert.rejects(action.run({ slot: 'pane-1', generation: 4, revision: 12, node: 5, action: 'invoke' }), /does not advertise invoke/);
   assert(!calls.some(([name]) => name === 'terminal.act'));
 });
 
 test('destructive semantic actions require an explicit MCP confirmation', async () => {
   const { api, calls } = fake();
-  api.terminal.semantics = async () => ({ slot: 'workspace', revision: 9, truncated: false, root: {
+  api.terminal.semantics = async () => ({ slot: 'workspace', generation: 0, revision: 9, truncated: false, root: {
     id: 0, role: 'navigation', label: null, value: null, disabled: false, destructive: false, actions: [], children: [
       { id: 4, role: 'button', label: 'Confirm removal', value: null, disabled: false, destructive: true, actions: ['invoke'], children: [] },
     ],
@@ -686,12 +687,12 @@ test('destructive semantic actions require an explicit MCP confirmation', async 
   api.terminal.act = async (...args) => calls.push(['terminal.act', ...args]);
   const action = tools(api).find(({ name }) => name === 'husklet_pane_action');
   await assert.rejects(
-    action.run({ slot: 'workspace', revision: 9, node: 4, action: 'invoke' }),
+    action.run({ slot: 'workspace', generation: 0, revision: 9, node: 4, action: 'invoke' }),
     /requires confirm: true/,
   );
   assert(!calls.some(([name]) => name === 'terminal.act'));
-  await action.run({ slot: 'workspace', revision: 9, node: 4, action: 'invoke', confirm: true });
-  assert.deepEqual(calls.at(-1), ['terminal.act', 'workspace', { revision: 9, node: 4, action: 'invoke' }]);
+  await action.run({ slot: 'workspace', generation: 0, revision: 9, node: 4, action: 'invoke', confirm: true });
+  assert.deepEqual(calls.at(-1), ['terminal.act', 'workspace', { generation: 0, revision: 9, node: 4, action: 'invoke' }]);
 });
 
 test('pane wait returns only bounded invalidation metadata and releases its subscription', async () => {
@@ -869,17 +870,18 @@ test('container change wait treats a changed creation identity as replacement an
 });
 
 test('semantic XML escapes every XML metacharacter and remains structurally bounded', () => {
+  assert.throws(() => semanticXml({ slot: 'legacy', revision: 1 }), /requires nonnegative safe integer generation/);
   const hostile = `&<>"'`;
-  assert.equal(semanticXml({ slot: hostile, revision: 3, truncated: false, root: {
+  assert.equal(semanticXml({ slot: hostile, generation: 2, revision: 3, truncated: false, root: {
     id: hostile, role: hostile, label: hostile, value: '[redacted]', disabled: true, destructive: false,
     actions: [hostile], children: [],
-  }}), '<pane slot="&amp;&lt;&gt;&quot;&apos;" revision="3" truncated="false"><node id="&amp;&lt;&gt;&quot;&apos;" role="&amp;&lt;&gt;&quot;&apos;" disabled="true" destructive="false" actions="&amp;&lt;&gt;&quot;&apos;"><label>&amp;&lt;&gt;&quot;&apos;</label><value>[redacted]</value></node></pane>');
-  const secret = semanticXml({ slot: 's', revision: 1, truncated: false, root: {
+  }}), '<pane slot="&amp;&lt;&gt;&quot;&apos;" generation="2" revision="3" truncated="false"><node id="&amp;&lt;&gt;&quot;&apos;" role="&amp;&lt;&gt;&quot;&apos;" disabled="true" destructive="false" actions="&amp;&lt;&gt;&quot;&apos;"><label>&amp;&lt;&gt;&quot;&apos;</label><value>[redacted]</value></node></pane>');
+  const secret = semanticXml({ slot: 's', generation: 1, revision: 1, truncated: false, root: {
     id: 1, role: 'password_entry', label: 'Password', value: 'must-not-leak', disabled: false, actions: [], children: [],
   }});
   assert(!secret.includes('must-not-leak'));
   assert.match(secret, /<value>\[redacted\]<\/value>/);
-  const controls = semanticXml({ slot: '\u0000\uD800', revision: 1, truncated: false, root: {
+  const controls = semanticXml({ slot: '\u0000\uD800', generation: 1, revision: 1, truncated: false, root: {
     id: 1, role: 'text', label: '\u0001', value: null, disabled: false, actions: [], children: [],
   }});
   assert(!/[\u0000-\u0008\uD800-\uDFFF]/.test(controls));
@@ -888,16 +890,16 @@ test('semantic XML escapes every XML metacharacter and remains structurally boun
   const children = Array.from({ length: 400 }, (_, id) => ({
     id, role: 'text', label: 'x'.repeat(1000), value: null, disabled: false, actions: [], children: [],
   }));
-  const bounded = semanticXml({ slot: 'large', revision: 4, truncated: true, root: {
+  const bounded = semanticXml({ slot: 'large', generation: 1, revision: 4, truncated: true, root: {
     id: 0, role: 'column', label: null, value: null, disabled: false, actions: [], children,
   }});
   assert(new TextEncoder().encode(bounded).byteLength <= 64 * 1024);
   assert.match(bounded, /<truncated\/>/);
   assert.match(bounded, /^<pane .*<\/pane>$/);
   assert.equal((bounded.match(/<node /g) ?? []).length, (bounded.match(/<\/node>/g) ?? []).length);
-  const plan=semanticXml({slot:'plan',revision:1,truncated:false,root:{id:0,role:'QueryPlan',label:'plan & <x>',value:'bounded source',disabled:false,destructive:false,actions:[],children:[{id:1,role:'QueryPlanNode',label:'hash_join',value:'state=hot detail="slow&wide"',disabled:false,destructive:false,actions:[],children:[{id:2,role:'QueryPlanMetric',label:'duration_us',value:'42',disabled:false,destructive:false,actions:[],children:[]}]}]}});assert.match(plan,/role="QueryPlan"/);assert.match(plan,/plan &amp; &lt;x&gt;/);assert.match(plan,/detail=&quot;slow&amp;wide&quot;/);assert.equal((plan.match(/<node /g)??[]).length,3);assert(!plan.includes('<truncated/>'));
-  const dependency = semanticXml({slot:'deps',revision:1,truncated:false,root:{id:0,role:'DependencyGraph',label:'deps & <graph>',value:'bounded source',disabled:false,destructive:false,actions:[],children:[{id:1,role:'DependencyNode',label:'react',value:'state=conflict detail="18&19"',disabled:false,destructive:false,actions:[],children:[{id:2,role:'DependencyEdge',label:'runtime → scheduler',value:'requirement=<19',disabled:false,destructive:false,actions:[],children:[]}]}]}}); assert.match(dependency,/role="DependencyGraph"/);assert.match(dependency,/&amp;/);assert.match(dependency,/&lt;19/);assert.equal((dependency.match(/<node /g)??[]).length,3);
-  const waterfall = semanticXml({ slot: 'net', revision: 5, truncated: false, root: { id: 0, role: 'NetworkWaterfall', label: 'requests', value: 'showing all 1 requests', disabled: false, destructive: false, actions: [], children: [{ id: 1, role: 'NetworkRequest', label: 'GET https://example.test?a=&b=<', value: 'status=200 detail="ok"', disabled: false, destructive: false, actions: [], children: [{ id: 2, role: 'NetworkPhase', label: 'wait', value: 'offset_us=2 duration_us=3 total_us=10', disabled: false, destructive: false, actions: [], children: [] }] }] } });
+  const plan=semanticXml({slot:'plan',generation:1,revision:1,truncated:false,root:{id:0,role:'QueryPlan',label:'plan & <x>',value:'bounded source',disabled:false,destructive:false,actions:[],children:[{id:1,role:'QueryPlanNode',label:'hash_join',value:'state=hot detail="slow&wide"',disabled:false,destructive:false,actions:[],children:[{id:2,role:'QueryPlanMetric',label:'duration_us',value:'42',disabled:false,destructive:false,actions:[],children:[]}]}]}});assert.match(plan,/role="QueryPlan"/);assert.match(plan,/plan &amp; &lt;x&gt;/);assert.match(plan,/detail=&quot;slow&amp;wide&quot;/);assert.equal((plan.match(/<node /g)??[]).length,3);assert(!plan.includes('<truncated/>'));
+  const dependency = semanticXml({slot:'deps',generation:1,revision:1,truncated:false,root:{id:0,role:'DependencyGraph',label:'deps & <graph>',value:'bounded source',disabled:false,destructive:false,actions:[],children:[{id:1,role:'DependencyNode',label:'react',value:'state=conflict detail="18&19"',disabled:false,destructive:false,actions:[],children:[{id:2,role:'DependencyEdge',label:'runtime → scheduler',value:'requirement=<19',disabled:false,destructive:false,actions:[],children:[]}]}]}}); assert.match(dependency,/role="DependencyGraph"/);assert.match(dependency,/&amp;/);assert.match(dependency,/&lt;19/);assert.equal((dependency.match(/<node /g)??[]).length,3);
+  const waterfall = semanticXml({ slot: 'net', generation: 1, revision: 5, truncated: false, root: { id: 0, role: 'NetworkWaterfall', label: 'requests', value: 'showing all 1 requests', disabled: false, destructive: false, actions: [], children: [{ id: 1, role: 'NetworkRequest', label: 'GET https://example.test?a=&b=<', value: 'status=200 detail="ok"', disabled: false, destructive: false, actions: [], children: [{ id: 2, role: 'NetworkPhase', label: 'wait', value: 'offset_us=2 duration_us=3 total_us=10', disabled: false, destructive: false, actions: [], children: [] }] }] } });
   assert.match(waterfall, /role="NetworkWaterfall"/); assert.match(waterfall, /a=&amp;b=&lt;/); assert.match(waterfall, /detail=&quot;ok&quot;/); assert.equal((waterfall.match(/<node /g) ?? []).length, 3);
 });
 
@@ -923,7 +925,7 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'volume_list') return { reply: 'volumes', with: [{ name: 'cache', driver: 'local' }] };
       if (name === 'network_list') return { reply: 'networks', with: [{ id: 'n1', name: 'private', driver: 'bridge' }] };
       if (name === 'pane_semantic_read') return { reply: 'semantics', with: {
-        slot: argument.slot, revision: 11, truncated: false,
+        slot: argument.slot, generation: 13, revision: 11, truncated: false,
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: ['invoke'], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
@@ -993,8 +995,8 @@ test('a real MCP client lists strict tools and calls through the React session c
     slot: 'pane-live', input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
   } });
   const snapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: 'pane-live' } });
-  assert.match(snapshot.content[0].text, /^<pane slot="pane-live" revision="11"/);
-  await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', revision: 11, node: 0, action: 'invoke' } });
+  assert.match(snapshot.content[0].text, /^<pane slot="pane-live" generation="13" revision="11"/);
+  await client.callTool({ name: 'husklet_pane_action', arguments: { slot: 'pane-live', generation: 13, revision: 11, node: 0, action: 'invoke' } });
   const waited = await client.callTool({ name: 'husklet_pane_wait', arguments: { slot: 'pane-live', timeout_ms: 1000 } });
   assert.deepEqual(JSON.parse(waited.content[0].text).change, {
     slot: 'pane-live', kind: 'surface', revision: 12, generation: 13, coalesced: 2,
@@ -1018,7 +1020,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['terminal_write_pane', { slot: 'pane-live', contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],
-    ['pane_semantic_action', { slot: 'pane-live', action: { revision: 11, node: 0, action: 'invoke' } }],
+    ['pane_semantic_action', { slot: 'pane-live', action: { generation: 13, revision: 11, node: 0, action: 'invoke' } }],
     ['event_subscribe', { topic: 'pane-changes' }],
     ['event_unsubscribe', { topic: 'pane-changes' }],
   ]);
@@ -1040,7 +1042,7 @@ test('real MCP transport returns packed XML for terminal and surface occupants',
       kind: 'split', division: 'beside', ratio_per_mille: 500, first: pane('term', 'terminal'), second: pane('surface', 'surface'),
     } }] } };
     if (name === 'terminal_read_pane') return { reply: 'text', with: { slot: argument.slot, lines: ['hello & goodbye'], truncated: false } };
-    if (name === 'pane_semantic_read') return { reply: 'semantics', with: { slot: argument.slot, revision: 9, truncated: false,
+    if (name === 'pane_semantic_read') return { reply: 'semantics', with: { slot: argument.slot, generation: 0, revision: 9, truncated: false,
       root: { id: 1, role: 'button', label: 'Deploy <now>', value: null, disabled: false, actions: ['invoke'], children: [] } } };
     throw new Error(`unexpected call ${name}`);
   } };

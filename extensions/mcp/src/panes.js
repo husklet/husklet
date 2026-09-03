@@ -15,6 +15,10 @@ const escape = (value) => String(value)
 
 /** Deterministic, bounded XML-like text from the host's typed semantic tree. */
 export function semanticXml(tree) {
+  if (!Number.isSafeInteger(tree?.generation) || tree.generation < 0
+    || !Number.isSafeInteger(tree?.revision) || tree.revision < 0) {
+    throw new TypeError('semantic tree requires nonnegative safe integer generation and revision');
+  }
   let output = '';
   let used = 0;
   let nodes = 0;
@@ -45,7 +49,7 @@ const text = (value) => escape(String(value).slice(0, TEXT_LIMIT));
     append(close);
   };
   const paneClose = '</pane>';
-  append(`<pane slot="${attr(tree?.slot ?? '')}" revision="${attr(tree?.revision ?? 0)}" truncated="${tree?.truncated === true}">`, bytes(paneClose) + 14);
+  append(`<pane slot="${attr(tree?.slot ?? '')}" generation="${attr(tree.generation)}" revision="${attr(tree.revision)}" truncated="${tree?.truncated === true}">`, bytes(paneClose) + 14);
   node(tree?.root, 0, bytes(paneClose));
   if (cut) append('<truncated/>', bytes(paneClose));
   append(paneClose);
@@ -114,6 +118,7 @@ const xmlResult = (tree) => ({ content: [{ type: 'text', text: semanticXml(tree)
 
 export const semanticAction = z.object({
   slot: z.string().min(1).max(256),
+  generation: z.number().int().nonnegative(),
   revision: z.number().int().nonnegative(),
   node: z.number().int().nonnegative(),
   action: z.enum(['invoke', 'change', 'submit', 'toggle', 'expand', 'focus']),
@@ -138,11 +143,14 @@ export function paneTools(terminal) {
       async ({ slot, lines }) => ({ content: [{ type: 'text', text: await paneXml(terminal, slot, lines) }] }), true],
     ['husklet_pane_snapshot', 'Read the bounded semantic tree exposed by a pane.', z.object({ slot: z.string().min(1).max(256) }).strict(),
       async ({ slot }) => xmlResult(await terminal.semantics(slot)), true],
-    ['husklet_pane_action', 'Act on a semantic node from a matching tree revision.', semanticAction,
+    ['husklet_pane_action', 'Act on a semantic node from a matching pane generation and tree revision.', semanticAction,
       async ({ slot, confirm, ...action }) => {
         const tree = await terminal.semantics(slot);
         const node = findNode(tree.root, action.node);
         if (!node) throw new Error(`semantic node ${action.node} is absent from revision ${tree.revision}`);
+        if (tree.generation !== action.generation) {
+          throw new Error(`stale pane generation ${action.generation}; current is ${tree.generation}`);
+        }
         if (tree.revision !== action.revision) {
           throw new Error(`stale semantic revision ${action.revision}; current is ${tree.revision}`);
         }

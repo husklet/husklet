@@ -128,7 +128,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
           second: { kind: 'pane', focused: false, grid: null, pane: { slot: 'surface-1', occupant: 'surface', working_directory: null, command: null, provider: { extension: 'manager', provider: 'main' } } },
         } }] });
         else if (call === 'terminal_read_pane') answer(frame, 'text', { slot: argument.slot, lines: ['ready'], truncated: false });
-        else if (call === 'pane_semantic_read') answer(frame, 'semantics', { slot: argument.slot, revision: 7, truncated: false, root: {
+        else if (call === 'pane_semantic_read') answer(frame, 'semantics', { slot: argument.slot, generation: 7, revision: 7, truncated: false, root: {
           id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [{
             id: 5, role: 'button', label: 'Refresh', value: null, disabled: false, destructive: false, actions: ['invoke'], children: [],
           }],
@@ -236,7 +236,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     slot: 'terminal-1', contents: [...new TextEncoder().encode('status\n')],
   });
   assert.deepEqual(calls.find(({ call }) => call === 'pane_semantic_action').with, {
-    slot: 'surface-1', action: { revision: 7, node: 5, action: 'invoke' },
+    slot: 'surface-1', action: { generation: 7, revision: 7, node: 5, action: 'invoke' },
   });
   assert.deepEqual(calls.filter(({ call }) => call === 'workspace_update').map(({ with: value }) => value), [
     { name: 'target', generation: original.generation, configuration: updated },

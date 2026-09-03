@@ -613,6 +613,7 @@ fn retained_pane_actions_keep_their_slot() {
         .semantic_action_at(
             "pane-2",
             &hl_extension::PaneSemanticAction {
+                generation: tree.generation,
                 revision: tree.revision,
                 node: button.id,
                 action: hl_extension::SemanticActionKind::Invoke,
@@ -645,6 +646,7 @@ fn semantics_are_redacted_and_actions_reject_stale_revisions() {
     fixture
         .page
         .semantic_action(&hl_extension::PaneSemanticAction {
+            generation: tree.generation,
             revision: tree.revision,
             node: field.id,
             action: hl_extension::SemanticActionKind::Change,
@@ -656,6 +658,7 @@ fn semantics_are_redacted_and_actions_reject_stale_revisions() {
         Some(Signal::Interaction(Event::Change { .. }))
     ));
     let stale = fixture.page.semantic_action(&hl_extension::PaneSemanticAction {
+        generation: tree.generation,
         revision: tree.revision.saturating_sub(1),
         node: field.id,
         action: hl_extension::SemanticActionKind::Change,
@@ -711,6 +714,7 @@ fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
     );
 
     let rejected = fixture.page.semantic_action(&hl_extension::PaneSemanticAction {
+        generation: tree.generation,
         revision: tree.revision,
         node: disabled.id,
         action: hl_extension::SemanticActionKind::Invoke,
@@ -856,6 +860,7 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         .semantic_action_at(
             "pane-1",
             &hl_extension::PaneSemanticAction {
+                generation: faulted.generation,
                 revision: faulted.revision,
                 node: fault.id,
                 action: hl_extension::SemanticActionKind::Invoke,
@@ -885,6 +890,7 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
             .semantic_action_at(
                 "pane-1",
                 &hl_extension::PaneSemanticAction {
+                    generation: pending.generation,
                     revision: pending.revision,
                     node: fault.id,
                     action: hl_extension::SemanticActionKind::Invoke,

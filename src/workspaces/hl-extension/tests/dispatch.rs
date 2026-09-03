@@ -417,6 +417,7 @@ impl TerminalSurface for Host {
         self.ledger.note("terminal.semantics");
         Ok(PaneSemanticTree {
             slot: slot.into(),
+            generation: 0,
             revision: 4,
             truncated: false,
             root: SemanticNode {
@@ -505,6 +506,7 @@ fn pane_semantic_read_and_control_are_separately_granted() {
     let action = Request::PaneSemanticAction {
         slot: "s1".into(),
         action: PaneSemanticAction {
+            generation: 0,
             revision: 4,
             node: 2,
             action: SemanticActionKind::Invoke,
@@ -549,6 +551,7 @@ fn native_semantic_actions_require_the_underlying_domain_grant() {
     let action = |node| Request::PaneSemanticAction {
         slot: "workspace".into(),
         action: PaneSemanticAction {
+            generation: 0,
             revision: 1,
             node,
             action: SemanticActionKind::Invoke,

@@ -70,7 +70,7 @@ try {
     await kill.run({ id: immutable, signal: 'SIGKILL', confirm: true });
     if (JSON.stringify(terminationCalls) !== JSON.stringify([['stop', immutable], ['remove', immutable], ['kill', immutable, 'SIGKILL']])) process.exit(1);
     if (!tools({ terminal: { panes: async () => ({ panes: [], truncated: false }) } }).some(({ name }) => name === 'husklet_pane_list')) process.exit(1);
-    const xml = semanticXml({ slot: 'packed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
+    const xml = semanticXml({ slot: 'packed', generation: 1, revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     if (!xml.startsWith('<pane slot="packed"')) process.exit(1);
   `], { cwd: consumer, stdio: 'pipe' });
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
@@ -80,7 +80,7 @@ try {
     const server = createServer(session);
     const definitions: ToolDefinition[] = tools({} as Parameters<typeof tools>[0]);
     const bytes: TerminalWriteBytesInput = { slot: 'packed', input_base64: 'AAP//g==' };
-    const xml: string = semanticXml({ slot: 'typed', revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
+    const xml: string = semanticXml({ slot: 'typed', generation: 1, revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
     void server; void definitions; void bytes; void xml;
     // @ts-expect-error a Session is required
     createServer({});

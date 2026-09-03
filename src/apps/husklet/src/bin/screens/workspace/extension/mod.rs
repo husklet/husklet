@@ -172,6 +172,7 @@ impl Interface {
         }
         Ok(PaneSemanticTree {
             slot: slot.to_owned(),
+            generation: 0,
             revision: self.semantic_revision(tree),
             root,
             truncated,

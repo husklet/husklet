@@ -1651,6 +1651,7 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         Rc::new(|slot: &str| {
             Ok(hl_extension::PaneSemanticTree {
                 slot: slot.to_owned(),
+                generation: 0,
                 revision: 0,
                 root: hl_extension::SemanticNode {
                     id: 0,
@@ -2288,6 +2289,7 @@ mod panes {
             Rc::new(move |slot| {
                 Ok(hl_extension::PaneSemanticTree {
                     slot: slot.to_owned(),
+                    generation: 0,
                     revision: 1,
                     root: hl_extension::SemanticNode {
                         id: 0,
@@ -2348,6 +2350,29 @@ mod panes {
             gallery.semantics("sample", "pane-7").unwrap().root.label.as_deref(),
             Some("sample")
         );
+        let observed = gallery.semantics("sample", "pane-7").unwrap();
+        assert_eq!(observed.generation, generation);
+        let replacement = gallery.enrol(
+            "sample",
+            &interface,
+            &home,
+            &[],
+            Rc::new(|_| {}),
+        );
+        assert_ne!(replacement, observed.generation);
+        readable(&gallery, "sample");
+        let stale = gallery.semantic_action(
+            "sample",
+            "pane-7",
+            &hl_extension::PaneSemanticAction {
+                generation: observed.generation,
+                revision: observed.revision,
+                node: 0,
+                action: hl_extension::SemanticActionKind::Invoke,
+                value: None,
+            },
+        );
+        assert!(matches!(stale, Err(hl_extension::HostError::Conflict(detail)) if detail.contains("stale pane generation")));
     }
 
     /// Runs the main loop until a condition holds, which is how text fed to a
@@ -2627,6 +2652,7 @@ mod panes {
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
         let action = hl_extension::PaneSemanticAction {
+            generation: tree.generation,
             revision: tree.revision,
             node: settings.id,
             action: hl_extension::SemanticActionKind::Invoke,
@@ -2920,6 +2946,7 @@ mod panes {
             sent.send(request.semantic_action(
                 &stale,
                 &hl_extension::PaneSemanticAction {
+                    generation: 0,
                     revision: 0,
                     node: 0,
                     action: hl_extension::SemanticActionKind::Invoke,

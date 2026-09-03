@@ -49,6 +49,7 @@ export async function runPaneAgentTurn(client, {
 
   const terminalBefore = await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 });
   const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });
+  const generation = attribute(semanticBefore, 'generation');
   const revision = attribute(semanticBefore, 'revision');
   const generation = semantic.generation;
   if (!Number.isSafeInteger(generation) || generation < 0
@@ -70,7 +71,7 @@ export async function runPaneAgentTurn(client, {
     timeout_ms: waitMs,
   });
   await call(client, 'husklet_pane_action', {
-    slot: semantic.slot, revision, node, action: 'invoke',
+    slot: semantic.slot, generation, revision, node, action: 'invoke',
   });
   const changed = JSON.parse(await waiting);
   const semanticAfter = changed.changed

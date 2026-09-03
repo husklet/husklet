@@ -138,7 +138,7 @@ impl Console {
         let topology = Self::topology(window)?;
         let mut panes = Vec::new();
         for tab in topology.tabs {
-            Self::inventory_node(&tab.root, &tab.id, &tab.title, &mut panes);
+            Self::inventory_node(window, &tab.root, &tab.id, &tab.title, &mut panes);
         }
         if Window::gallery(window).is_some_and(|gallery| gallery.native_semantics("workspace").is_ok()) {
             panes.push(InspectablePane {
@@ -157,11 +157,13 @@ impl Console {
         Ok(PaneInventory { panes, truncated })
     }
 
-    fn inventory_node(node: &LayoutNode, tab: &str, title: &str, panes: &mut Vec<InspectablePane>) {
+    fn inventory_node(window: &Rc<TermWin>, node: &LayoutNode, tab: &str, title: &str, panes: &mut Vec<InspectablePane>) {
         match node {
             LayoutNode::Pane { pane, focused, .. } => panes.push(InspectablePane {
                 slot: pane.slot.clone(),
-                generation: 0,
+                generation: pane.provider.as_ref().and_then(|provider| {
+                    Window::gallery(window)?.generation(&provider.extension)
+                }).unwrap_or(0),
                 revision: 0,
                 kind: if pane.occupant == Occupant::Surface {
                     PaneKind::Surface
@@ -174,8 +176,8 @@ impl Console {
                 focused: *focused,
             }),
             LayoutNode::Split { first, second, .. } => {
-                Self::inventory_node(first, tab, title, panes);
-                Self::inventory_node(second, tab, title, panes);
+                Self::inventory_node(window, first, tab, title, panes);
+                Self::inventory_node(window, second, tab, title, panes);
             }
         }
     }

@@ -586,6 +586,7 @@ mod tests {
             Request::PaneSemanticAction {
                 slot: "7".into(),
                 action: crate::port::PaneSemanticAction {
+                    generation: 0,
                     revision: 1,
                     node: 2,
                     action: crate::port::SemanticActionKind::Invoke,
@@ -656,6 +657,18 @@ mod tests {
             .capability(),
             Capability::ImageWrite
         );
+    }
+
+    #[test]
+    fn revision_only_semantic_actions_fail_closed_at_the_wire_boundary() {
+        let legacy = serde_json::json!({
+            "call": "pane_semantic_action",
+            "with": {
+                "slot": "7",
+                "action": { "revision": 1, "node": 2, "action": "invoke", "value": null }
+            }
+        });
+        assert!(serde_json::from_value::<Request>(legacy).is_err());
     }
 
     #[test]
