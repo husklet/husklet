@@ -153,11 +153,16 @@ impl CheckpointJourney {
         let app = app.clone();
         let parent = parent.clone();
         let window = window.clone();
+        let mut last_topology_failure = String::new();
         glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
             let Some(terminals) = Self::terminals(&window) else {
                 return glib::ControlFlow::Continue;
             };
-            if !Self::restored_topology(&parent, &window, &terminals) {
+            if let Err(failure) = Self::restored_topology(&parent, &window, &terminals) {
+                if failure != last_topology_failure {
+                    Self::record(&path, &format!("waiting_topology {failure}"));
+                    last_topology_failure = failure;
+                }
                 return glib::ControlFlow::Continue;
             }
             for (slot, terminal) in terminals.iter().enumerate() {
@@ -250,39 +255,58 @@ impl CheckpointJourney {
         parent: &gtk::ApplicationWindow,
         window: &Rc<TermWin>,
         terminals: &[vte4::Terminal; 3],
-    ) -> bool {
-        if window.entries.borrow().iter().filter(|entry| entry.persisted).count() != 2
-            || parent.width() != 913
-            || parent.height() != 617
-        {
-            return false;
+    ) -> Result<(), String> {
+        let tab_count = window.entries.borrow().iter().filter(|entry| entry.persisted).count();
+        if tab_count != 2 || parent.width() != 913 || parent.height() != 617 {
+            return Err(format!(
+                "tabs={tab_count} geometry={}x{}",
+                parent.width(),
+                parent.height()
+            ));
         }
         let tabs = Window::tabs(window);
         let Some((split_page, _, split_slots)) = tabs
             .iter()
             .find(|(_, _, slots)| slots.iter().map(String::as_str).eq(["0", "1"]))
         else {
-            return false;
+            return Err(format!("missing-split tabs={:?}", Self::tab_slots(&tabs)));
         };
         if !tabs
             .iter()
             .any(|(_, _, slots)| slots.iter().map(String::as_str).eq(["2"]))
             || split_slots.len() != 2
         {
-            return false;
+            return Err(format!("missing-other-tab tabs={:?}", Self::tab_slots(&tabs)));
         }
         let focused_slot = window
             .focused
             .borrow()
             .as_ref()
             .and_then(|terminal| Slots::new(window).of(terminal));
-        window.stack.visible_child_name().as_deref() == Some(split_page.as_str())
-            && focused_slot.as_deref() == Some("1")
-            && terminals.iter().enumerate().all(|(slot, terminal)| {
-                Terminal::new(terminal)
+        let history = terminals
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, terminal)| {
+                (!Terminal::new(terminal)
                     .history()
-                    .contains(&format!("history-slot-{slot}"))
+                    .contains(&format!("history-slot-{slot}")))
+                .then_some(slot)
             })
+            .collect::<Vec<_>>();
+        if window.stack.visible_child_name().as_deref() != Some(split_page.as_str())
+            || focused_slot.as_deref() != Some("1")
+            || !history.is_empty()
+        {
+            return Err(format!(
+                "selected={:?} expected={split_page} focused={focused_slot:?} missing-history={history:?}",
+                window.stack.visible_child_name()
+            ));
+        }
+        Ok(())
+    }
+
+    fn tab_slots(tabs: &[(String, gtk::Widget, Vec<String>)]) -> Vec<Vec<String>> {
+        tabs.iter().map(|(_, _, slots)| slots.clone()).collect()
     }
 
     fn record(path: &str, event: &str) {
