@@ -60,6 +60,7 @@ extern long checkpoint_mixed_sse(long);
 extern long checkpoint_capacity_prefix(long);
 extern double checkpoint_far_movsd(void);
 extern long checkpoint_addr32_call(long);
+extern long checkpoint_call_mem(long);
 __asm__(".pushsection .text.checkpoint_jcc_link,\"ax\",@progbits\n"
         ".balign 4096\n"
         ".global checkpoint_link_target\n.type checkpoint_link_target,@function\n"
@@ -125,6 +126,28 @@ __asm__(".text\n"
         "1: ret\n"
         ".size checkpoint_addr32_call,.-checkpoint_addr32_call\n");
 
+/* Keep this as the dominant census-shaped FF /2 form: a 64-bit SIB memory
+ * operand, not a register or RIP-relative call.  Each checkpoint generation
+ * must rebuild and execute this translated exit rather than inherit code or
+ * an indirect target from the process that produced the image. */
+__asm__(".text\n"
+        ".global checkpoint_call_mem_target\n.type checkpoint_call_mem_target,@function\n"
+        "checkpoint_call_mem_target:\n"
+        "lea 42(%rdi),%rax\n"
+        "ret\n"
+        ".size checkpoint_call_mem_target,.-checkpoint_call_mem_target\n"
+        ".pushsection .data.checkpoint_call_mem,\"aw\",@progbits\n"
+        ".balign 8\n"
+        ".Lcheckpoint_call_mem_slot: .quad checkpoint_call_mem_target\n"
+        ".popsection\n"
+        ".global checkpoint_call_mem\n.type checkpoint_call_mem,@function\n"
+        "checkpoint_call_mem:\n"
+        "lea .Lcheckpoint_call_mem_slot(%rip),%rax\n"
+        "xor %ecx,%ecx\n"
+        "call *(%rax,%rcx,4)\n"
+        "ret\n"
+        ".size checkpoint_call_mem,.-checkpoint_call_mem\n");
+
 static long checkpoint_link_check(int phase) {
     volatile long warm = checkpoint_link_target(0, 31 + phase, 0, 4);
     long linked = checkpoint_link_source(1, 31 + phase, 0, 4);
@@ -150,6 +173,10 @@ static long checkpoint_addr32_call_check(int phase) {
     for (int iteration = 0; iteration < 256; ++iteration) value = checkpoint_addr32_call(phase);
     return value;
 }
+
+static long checkpoint_call_mem_check(int phase) {
+    return checkpoint_call_mem(phase);
+}
 #else
 static long checkpoint_link_check(int phase) {
     return 42 + phase;
@@ -169,6 +196,10 @@ static double checkpoint_movsd_check(void) {
     return 42.0;
 }
 static long checkpoint_addr32_call_check(int phase) {
+    return 42 + phase;
+}
+
+static long checkpoint_call_mem_check(int phase) {
     return 42 + phase;
 }
 #endif
@@ -240,14 +271,16 @@ int main(int argc, char **argv) {
     long initial_capacity = checkpoint_capacity_check(0);
     double initial_movsd = checkpoint_movsd_check();
     long initial_addr32_call = checkpoint_addr32_call_check(0);
+    long initial_call_mem = checkpoint_call_mem_check(0);
     if (initial_link != 42 || initial_mixed != 42 || initial_capacity != 42 || initial_movsd != 42.0 ||
-        initial_addr32_call != 42)
+        initial_addr32_call != 42 || initial_call_mem != 42)
         return 16;
     dprintf(STDOUT_FILENO, "JCC-LINK phase=0 value=%ld\n", initial_link);
     dprintf(STDOUT_FILENO, "MIXED-SSE phase=0 value=%ld\n", initial_mixed);
     dprintf(STDOUT_FILENO, "CAPACITY-PREFIX phase=0 value=%ld\n", initial_capacity);
     dprintf(STDOUT_FILENO, "FAR-MOVSD phase=0 value=%.0f\n", initial_movsd);
     dprintf(STDOUT_FILENO, "ADDR32-CALL phase=0 value=%ld\n", initial_addr32_call);
+    dprintf(STDOUT_FILENO, "CALL-MEM phase=0 value=%ld\n", initial_call_mem);
     dprintf(STDOUT_FILENO, "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader,
             (long)sleeper, (long)worker, (long)group, (long)session, (long)foreground);
 
@@ -273,19 +306,24 @@ int main(int argc, char **argv) {
         long restored_capacity = checkpoint_capacity_check(next_cycle);
         double restored_movsd = checkpoint_movsd_check();
         long restored_addr32_call = checkpoint_addr32_call_check(next_cycle);
+        long restored_call_mem = checkpoint_call_mem_check(next_cycle);
         if (restored_link != 42 + next_cycle || restored_mixed != 42 + next_cycle ||
             restored_capacity != 42 + next_cycle || restored_movsd != 42.0 ||
-            restored_addr32_call != 42 + next_cycle)
+            restored_addr32_call != 42 + next_cycle || restored_call_mem != 42 + next_cycle)
             return 17;
         dprintf(STDOUT_FILENO, "JCC-LINK phase=%d value=%ld\n", next_cycle, restored_link);
         dprintf(STDOUT_FILENO, "MIXED-SSE phase=%d value=%ld\n", next_cycle, restored_mixed);
         dprintf(STDOUT_FILENO, "CAPACITY-PREFIX phase=%d value=%ld\n", next_cycle, restored_capacity);
         dprintf(STDOUT_FILENO, "FAR-MOVSD phase=%d value=%.0f\n", next_cycle, restored_movsd);
         dprintf(STDOUT_FILENO, "ADDR32-CALL phase=%d value=%ld\n", next_cycle, restored_addr32_call);
+        dprintf(STDOUT_FILENO, "CALL-MEM phase=%d value=%ld\n", next_cycle, restored_call_mem);
 
         pid_t child = fork();
         if (child < 0) return 9;
-        if (child == 0) return helper(next_cycle);
+        if (child == 0) {
+            long child_call_mem = checkpoint_call_mem_check(100 + next_cycle);
+            return child_call_mem == 142 + next_cycle ? helper(next_cycle) : 18;
+        }
         int child_status = 0;
         if (waitpid(child, &child_status, 0) != child || !WIFEXITED(child_status) ||
             WEXITSTATUS(child_status) != helper(next_cycle))

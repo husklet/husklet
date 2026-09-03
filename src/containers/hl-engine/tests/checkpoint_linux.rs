@@ -2742,6 +2742,9 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     assert_eq!(output.matches("ADDR32-CALL phase=0 value=42").count(), 1, "{output}");
     assert_eq!(output.matches("ADDR32-CALL phase=1 value=43").count(), 1, "{output}");
     assert_eq!(output.matches("ADDR32-CALL phase=2 value=44").count(), 1, "{output}");
+    assert_eq!(output.matches("CALL-MEM phase=0 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("CALL-MEM phase=1 value=43").count(), 1, "{output}");
+    assert_eq!(output.matches("CALL-MEM phase=2 value=44").count(), 1, "{output}");
     if translit {
         let diagnostic_text = [
             capture_terminal.text(),
@@ -2777,6 +2780,20 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             "each capture/restore generation must execute translated bodies: {shapes:?}\n{diagnostic_text}"
         );
         if isa == GuestIsa::X86_64 {
+            let call_mem = diagnostic_text
+                .lines()
+                .filter(|line| line.starts_with("[diag] x86-exit-family "))
+                .map(|line| {
+                    line.split_whitespace()
+                        .find_map(|field| field.strip_prefix("t_call_mem="))
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or_else(|| panic!("missing t_call_mem in {line}"))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                call_mem.len() == 3 && call_mem[0] >= 1 && call_mem[1..].iter().all(|count| *count >= 2),
+                "each x86 capture/restore generation, and each post-restore fork child, must execute translated memory-indirect CALL exits: {call_mem:?}\n{diagnostic_text}"
+            );
             assert!(
                 shapes.iter().all(|(_, chained, ..)| *chained > 0),
                 "each x86 capture/restore process must execute a newly chained JCC: {shapes:?}\n{diagnostic_text}"

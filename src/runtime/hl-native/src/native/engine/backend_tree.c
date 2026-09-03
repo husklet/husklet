@@ -363,15 +363,15 @@ enum hl_backend_shape_translated_exit {
     HL_BACKEND_SHAPE_T_DIRECT_CALL,
     HL_BACKEND_SHAPE_T_RETURN,
     HL_BACKEND_SHAPE_T_INDIRECT_BRANCH,
+    HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY,
     HL_BACKEND_SHAPE_T_INDIRECT_CALL,
+    HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY,
     HL_BACKEND_SHAPE_T_SYSCALL,
     HL_BACKEND_SHAPE_T_IRQ,
     HL_BACKEND_SHAPE_T_FAULT,
     HL_BACKEND_SHAPE_T_OTHER,
     HL_BACKEND_SHAPE_T_COUNT,
 };
-#define HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY HL_BACKEND_SHAPE_T_INDIRECT_BRANCH
-#define HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY HL_BACKEND_SHAPE_T_INDIRECT_CALL
 
 /* Why a completed transliterated descriptor used its sequential dispatcher exit.  These are execution
    facts, carried by the emitted terminal marker: counting them while building would include cold blocks
@@ -1456,6 +1456,35 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
                                                 memory_order_relaxed));
 }
 
+static int hl_backend_exit_family_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
+    struct hl_backend_tree_summary summary;
+    hl_backend_tree_summary_in(shared, &summary);
+    uint64_t total = 0;
+    for (unsigned shape = 0; shape < HL_BACKEND_SHAPE_T_COUNT; ++shape)
+        total += summary.translated_exit[shape];
+    return snprintf(
+        record, capacity,
+        "[diag] x86-exit-family version=1 translated_entries=%llu total=%llu "
+        "t_fallthrough=%llu t_jcc_taken=%llu t_jcc_fall=%llu t_direct_jmp=%llu t_direct_call=%llu "
+        "t_ret=%llu t_jmp_reg=%llu t_jmp_mem=%llu t_call_reg=%llu t_call_mem=%llu "
+        "t_syscall=%llu t_irq=%llu t_fault=%llu t_other=%llu\n",
+        (unsigned long long)summary.translated_entries, (unsigned long long)total,
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_NOT_TAKEN],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_JUMP],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_CALL],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_RETURN],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_SYSCALL],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_IRQ],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FAULT],
+        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_OTHER]);
+}
+
 static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
     struct hl_backend_tree_summary summary;
     hl_backend_tree_summary_in(shared, &summary);
@@ -1518,6 +1547,9 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
     int shape = hl_backend_shape_format(shared, record + formatted, sizeof record - (size_t)formatted);
     if (shape <= 0 || (size_t)shape >= sizeof record - (size_t)formatted) return;
     formatted += shape;
+    int exit_family = hl_backend_exit_family_format(shared, record + formatted, sizeof record - (size_t)formatted);
+    if (exit_family <= 0 || (size_t)exit_family >= sizeof record - (size_t)formatted) return;
+    formatted += exit_family;
     int would_link = hl_backend_would_link_format(shared, record + formatted, sizeof record - (size_t)formatted);
     if (would_link <= 0 || (size_t)would_link >= sizeof record - (size_t)formatted) return;
     formatted += would_link;
