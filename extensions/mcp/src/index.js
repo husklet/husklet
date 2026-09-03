@@ -162,6 +162,36 @@ const terminalBytes = z.object({
   }),
 }).strict();
 
+const workspaceMutation = z.discriminatedUnion('operation', [
+  z.object({ operation: z.literal('create'), configuration: workspaceConfiguration, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+  z.object({ operation: z.literal('start'), name: id, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+  z.object({ operation: z.literal('stop'), name: id, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+  z.object({ operation: z.literal('delete'), name: id, generation: workspaceGeneration, confirm: z.literal(true), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+]);
+
+async function observeWorkspaceMutation(api, input) {
+  const action = input.operation === 'delete' ? 'remove' : input.operation;
+  const workspaceName = input.operation === 'create' ? input.configuration.name : input.name;
+  let settle;
+  let fail;
+  const observed = new Promise((resolve, reject) => { settle = resolve; fail = reject; });
+  let timer;
+  const dispose = await api.watchWorkspaceLifecycle((change) => {
+    if (change?.workspace === workspaceName && change?.action === action) settle(change);
+  });
+  try {
+    timer = setTimeout(() => fail(new Error(`timed out waiting for ${action} lifecycle change for workspace ${workspaceName}`)), input.timeout_ms);
+    let result;
+    if (input.operation === 'create') result = await api.create(input.configuration);
+    else if (input.operation === 'delete') { await api.delete(input.name, input.generation); result = { done: true }; }
+    else { await api[input.operation](input.name); result = { done: true }; }
+    return { result, change: await observed };
+  } finally {
+    clearTimeout(timer);
+    await dispose();
+  }
+}
+
 export function tools(api) {
   const definitions = [
     define('husklet_workspace_info', 'Describe the hosting workspace.', empty, () => api.info()),
@@ -172,6 +202,7 @@ export function tools(api) {
     define('husklet_workspace_update', 'Replace the exact observed stopped workspace generation after explicit confirmation.', workspaceUpdate, ({ name, generation, configuration }) => api.update(name, generation, configuration)),
     ...['start', 'stop', 'restart'].map((action) => define(`husklet_workspace_${action}`, `${action} a named workspace.`, z.object({ name: id }).strict(), async ({ name }) => { await api[action](name); return { done: true }; })),
     define('husklet_workspace_delete', 'Delete the exact observed stopped workspace generation after explicit confirmation.', z.object({ name: id, generation: workspaceGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.delete(name, generation); return { done: true }; }),
+    define('husklet_workspace_mutate_wait', 'Arm lifecycle observation, perform one bounded workspace mutation, then return its result and matching authoritative change.', workspaceMutation, (input) => observeWorkspaceMutation(api, input)),
     define('husklet_extension_list', 'List bounded installed extension records and lifecycle status.', empty, () => api.extensions.list()),
     define('husklet_extension_inspect', 'Inspect one installed extension record.', z.object({ name: extensionName }).strict(), ({ name }) => api.extensions.inspect(name)),
     define('husklet_extension_enable', 'Enable the exact inspected extension image after explicit confirmation.', z.object({ name: extensionName, image_digest: imageDigest, confirm: z.literal(true) }).strict(), async ({ name, image_digest }) => { await api.extensions.enable(name, image_digest); return { done: true }; }),

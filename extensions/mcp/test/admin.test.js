@@ -24,6 +24,8 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const calls = [];
   const sockets = new Set();
   let failRead = false;
+  let failLifecycleMutation = false;
+  let suppressLifecycle = false;
   let channel = 60;
   let revision = 0;
   const host = net.createServer((socket) => {
@@ -52,9 +54,15 @@ test('admin workflow confines files to socket workspace and cleans success and f
         }
         else if (call === 'container_create') answer(frame, 'identity', 'c'.repeat(64));
         else if (call === 'network_create') answer(frame, 'identity', 'n'.repeat(32));
+        else if (call === 'workspace_start' && failLifecycleMutation) {
+          failLifecycleMutation = false;
+          socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 3, payload: {
+            error: 'failed', call, detail: 'fixture start failure',
+          } }));
+        }
         else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
-          if (call === 'workspace_start') lifecycle(argument.name, 'start');
+          if (call === 'workspace_start' && !suppressLifecycle) lifecycle(argument.name, 'start');
           if (call === 'workspace_stop') lifecycle(argument.name, 'stop');
           if (call === 'workspace_delete') lifecycle(argument.name, 'remove');
           if (call === 'terminal_write_pane') socket.write(encode({ channel: channel++, kind: KIND.event, payload: {
@@ -95,6 +103,25 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.deepEqual(result.lifecycle.map(({ change }) => [change.workspace, change.action]), [
     ['managed', 'create'], ['managed', 'start'], ['managed', 'stop'], ['managed', 'remove'],
   ]);
+  const workflowEnd = calls.length;
+
+  failLifecycleMutation = true;
+  const failedStart = calls.length;
+  const failed = await client.callTool({ name: 'husklet_workspace_mutate_wait', arguments: {
+    operation: 'start', name: 'managed', timeout_ms: 100,
+  } });
+  assert.equal(failed.isError, true);
+  assert.deepEqual(calls.slice(failedStart).map(({ call }) => call), ['event_subscribe', 'workspace_start', 'event_unsubscribe']);
+
+  suppressLifecycle = true;
+  const timedStart = calls.length;
+  const timed = await client.callTool({ name: 'husklet_workspace_mutate_wait', arguments: {
+    operation: 'start', name: 'managed', timeout_ms: 5,
+  } });
+  suppressLifecycle = false;
+  assert.equal(timed.isError, true);
+  assert.match(timed.content[0].text, /timed out waiting for start/);
+  assert.deepEqual(calls.slice(timedStart).map(({ call }) => call), ['event_subscribe', 'workspace_start', 'event_unsubscribe']);
 
   const beforeMismatch = calls.length;
   await assert.rejects(() => runAgentAdmin(client, { ...options, hostingWorkspace: 'managed' }), /does not match socket workspace/);
@@ -367,7 +394,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   await client.close();
   assert.equal(diagnostics, '');
 
-  assert.deepEqual(calls.slice(0, beforeMismatch).map(({ call }) => call), [
+  assert.deepEqual(calls.slice(0, workflowEnd).map(({ call }) => call), [
     'workspace_info', 'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
     'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir',
     'filesystem_write', 'filesystem_read', 'event_subscribe', 'terminal_write_pane', 'event_unsubscribe',

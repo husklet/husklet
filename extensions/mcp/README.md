@@ -119,6 +119,12 @@ last observed for its immutable container ID. Supplying that cursor prevents the
 subscription's unchanged initial catalogue from completing the wait; a state
 transition, disappearance, or changed creation identity completes it.
 
+Administrative clients should use `husklet_workspace_mutate_wait` for workspace
+create/start/stop/delete workflows. It waits for the host subscription
+acknowledgement before invoking control authority, ignores unrelated changes,
+and unsubscribes after success, failure, or its bounded timeout. Existing
+standalone mutation and wait tools remain available.
+
 Container creation accepts only a bounded image reference and name, while exec
 accepts an argv vector rather than shell text. Stopping or signaling the owning
 container requires literal `confirm: true`; the signal remains explicit and is

@@ -685,6 +685,34 @@ test('workspace event wait filters one bounded batch and always disposes', async
   assert.equal(disposed, 1);
 });
 
+test('workspace composite mutation arms before authority, ignores unrelated changes, and disposes', async () => {
+  const { api } = fake(); const order = []; let listener; let disposed = 0;
+  api.watchWorkspaceLifecycle = async (next) => { order.push('subscribe'); listener = next; return async () => { order.push('unsubscribe'); disposed += 1; }; };
+  api.start = async (name) => {
+    order.push(`start:${name}`);
+    listener({ workspace: 'other', action: 'start', revision: 1, coalesced: 0 });
+    listener({ workspace: name, action: 'start', revision: 2, coalesced: 0 });
+  };
+  const mutate = tools(api).find(({ name }) => name === 'husklet_workspace_mutate_wait');
+  assert.equal(mutate.inputSchema.safeParse({ operation: 'delete', name: 'managed', generation }).success, false);
+  const answer = JSON.parse((await mutate.run({ operation: 'start', name: 'managed', timeout_ms: 1000 })).content[0].text);
+  assert.deepEqual(answer, { result: { done: true }, change: { workspace: 'managed', action: 'start', revision: 2, coalesced: 0 } });
+  assert.deepEqual(order, ['subscribe', 'start:managed', 'unsubscribe']);
+  assert.equal(disposed, 1);
+});
+
+test('workspace composite mutation disposes on authority failure and observation timeout', async () => {
+  const { api } = fake(); let disposed = 0;
+  api.watchWorkspaceLifecycle = async () => async () => { disposed += 1; };
+  api.stop = async () => { throw new Error('stop refused'); };
+  const mutate = tools(api).find(({ name }) => name === 'husklet_workspace_mutate_wait');
+  await assert.rejects(() => mutate.run({ operation: 'stop', name: 'managed', timeout_ms: 1000 }), /stop refused/);
+  assert.equal(disposed, 1);
+  api.stop = async () => {};
+  await assert.rejects(() => mutate.run({ operation: 'stop', name: 'managed', timeout_ms: 1 }), /timed out waiting for stop/);
+  assert.equal(disposed, 2);
+});
+
 test('execution change wait filters immutable identity and returns subscription credit', async () => {
   const { api } = fake();
   let listener; let disposed = 0;

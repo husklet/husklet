@@ -35,19 +35,16 @@ export async function runAgentAdmin(client, {
   let fileCreated = false;
   const cleanupErrors = [];
   const lifecycle = [];
-  const mutate = async (action, operation) => {
-    const waiting = json(client, 'husklet_workspace_wait', {
-      workspace: workspaceConfiguration.name, action, timeout_ms: waitMs,
-    });
-    const value = await operation();
-    lifecycle.push(await waiting);
-    return value;
+  const mutate = async (input) => {
+    const observed = await json(client, 'husklet_workspace_mutate_wait', { ...input, timeout_ms: waitMs });
+    lifecycle.push({ changed: true, change: observed.change });
+    return observed.result;
   };
   try {
-    const created = await mutate('create', () => json(client, 'husklet_workspace_create', { configuration: workspaceConfiguration }));
+    const created = await mutate({ operation: 'create', configuration: workspaceConfiguration });
     workspaceGeneration = created.generation;
     workspaceCreated = true;
-    await mutate('start', () => call(client, 'husklet_workspace_start', { name: workspaceConfiguration.name }));
+    await mutate({ operation: 'start', name: workspaceConfiguration.name });
     workspaceStarted = true;
     await call(client, 'husklet_file_mkdir', { path: directory });
     directoryCreated = true;
@@ -67,11 +64,11 @@ export async function runAgentAdmin(client, {
       try { await call(client, 'husklet_file_remove', { path: directory, confirm: true }); } catch (error) { cleanupErrors.push(error); }
     }
     if (workspaceStarted) {
-      try { await mutate('stop', () => call(client, 'husklet_workspace_stop', { name: workspaceConfiguration.name })); }
+      try { await mutate({ operation: 'stop', name: workspaceConfiguration.name }); }
       catch (error) { cleanupErrors.push(error); }
     }
     if (workspaceCreated) {
-      try { await mutate('remove', () => call(client, 'husklet_workspace_delete', { name: workspaceConfiguration.name, generation: workspaceGeneration, confirm: true })); }
+      try { await mutate({ operation: 'delete', name: workspaceConfiguration.name, generation: workspaceGeneration, confirm: true }); }
       catch (error) { cleanupErrors.push(error); }
     }
     if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'administrative cleanup failed');
