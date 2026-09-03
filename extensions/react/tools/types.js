@@ -67,7 +67,71 @@ function preamble() {
 // and the handlers for the interactions it can report. A property no component
 // declares is a type error, which is the whole point of generating this.
 
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
+
+export interface CommandPaletteItem {
+  id: string;
+  title: string;
+  group?: string;
+  detail?: string;
+  shortcut?: string;
+  keywords?: readonly string[];
+  disabled?: boolean;
+  destructive?: boolean;
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+  onInvoke?: (command: CommandPaletteItem) => void;
+}
+export interface CommandPaletteViewProps extends NodeProps {
+  commands?: readonly CommandPaletteItem[];
+  initialQuery?: string;
+  placeholder?: string;
+  emptyLabel?: string;
+  onQueryChange?: (query: string) => void;
+  onSelect?: (command: CommandPaletteItem) => void;
+}
+export const CommandPaletteView: ComponentType<CommandPaletteViewProps>;
+export function filterCommands(commands: readonly CommandPaletteItem[], query: string): CommandPaletteItem[];
+export const COMMAND_PALETTE_ITEM_LIMIT: 256;
+export const COMMAND_PALETTE_QUERY_BYTE_LIMIT: 128;
+export const COMMAND_PALETTE_TEXT_BYTE_LIMIT: 256;
+
+export interface TerminalTranscriptLine {
+  id?: string | number;
+  number?: number;
+  text: string;
+  timestamp?: string;
+  stream?: 'stdout' | 'stderr' | 'system';
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+}
+
+export interface TerminalTranscriptAction {
+  id?: string;
+  label: string;
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+  variant?: 'solid' | 'outline' | 'ghost' | 'text';
+  destructive?: boolean;
+  enabled?: boolean;
+  onInvoke?: () => void;
+}
+
+export interface TerminalTranscriptProps extends NodeProps {
+  lines?: readonly (string | TerminalTranscriptLine)[];
+  cursor?: { line: number; column: number };
+  lineNumbers?: boolean;
+  timestamps?: boolean;
+  selected?: string | number;
+  truncated?: boolean;
+  droppedLines?: number;
+  actions?: readonly TerminalTranscriptAction[];
+  onSelect?: (line: TerminalTranscriptLine, sourceIndex: number) => void;
+  emptyLabel?: string;
+}
+
+export const TerminalTranscript: ComponentType<TerminalTranscriptProps>;
+export const TERMINAL_TRANSCRIPT_LINE_LIMIT: 256;
+export const TERMINAL_TRANSCRIPT_LINE_BYTE_LIMIT: 2048;
+export const TERMINAL_TRANSCRIPT_BYTE_LIMIT: 65536;
+export const TERMINAL_TRANSCRIPT_ACTION_LIMIT: 8;
 
 /** A spacing or sizing quantity: steps on the 4px scale unless named. */
 export type Length = number | 'fill' | 'content' | { chars: number } | { step: number };
@@ -77,6 +141,22 @@ export type Edges = Length | { top?: Length; end?: Length; bottom?: Length; star
 
 /** An exact extent, or a floor and a ceiling. */
 export type Bounds = Length | { minimum?: Length; maximum?: Length };
+
+export interface JsonTreeEvent { path: string; type: string; value?: unknown; text?: string; }
+export interface JsonTreeProps {
+  value: unknown;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxStringLength?: number;
+  initiallyExpanded?: string[];
+  height?: Length | Bounds;
+  grow?: number | boolean;
+  onSelect?: (event: JsonTreeEvent) => void;
+  onCopy?: (event: JsonTreeEvent) => void;
+}
+export const JsonTree: import('react').ComponentType<JsonTreeProps>;
+export const ObjectInspector: typeof JsonTree;
+export function inspectJson(value: unknown, options?: Pick<JsonTreeProps, 'maxDepth' | 'maxNodes' | 'maxStringLength'>): { rows: Array<Record<string, unknown>>; limits: Record<string, number>; truncated: boolean };
 
 /** One selectable option offered by a choice control. */
 export interface Choice {
@@ -134,9 +214,21 @@ function component(tag, props, enums) {
 function api(tags) {
   const components = tags.map((tag) => `export const ${tag.name}: ComponentType<${tag.name}Props>;`);
   return `
-import type { ComponentType } from 'react';
-
 ${components.join('\n')}
+
+export interface ConfirmActionProps {
+  authorityKey: string;
+  label: string;
+  confirmLabel: string;
+  question: string;
+  onConfirm: (authorityKey: string) => void | Promise<void>;
+  enabled?: boolean;
+  cancelLabel?: string;
+  pendingLabel?: string;
+  onCancel?: (authorityKey: string) => void;
+}
+export const ConfirmAction: ComponentType<ConfirmActionProps>;
+export const CONFIRM_ACTION_TEXT_BYTE_LIMIT: 1024;
 
 /** Every tag name, in catalogue order. */
 export const tags: string[];
@@ -363,7 +455,7 @@ export interface WorkspaceApi {
     inspect(reference: string): Promise<NetworkSummary>;
     create(name: string): Promise<string>;
     remove(reference: string): Promise<void>;
-    connect(reference: string, container: string): Promise<void>;
+    connect(reference: string, container: string, options?: { aliases?: readonly string[] }): Promise<void>;
     disconnect(reference: string, container: string): Promise<void>;
   };
   terminal: {

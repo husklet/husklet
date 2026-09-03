@@ -5428,6 +5428,20 @@ export const DiffLine: ComponentType<DiffLineProps>;
 export const StackTrace: ComponentType<StackTraceProps>;
 export const StackFrame: ComponentType<StackFrameProps>;
 
+export interface ConfirmActionProps {
+  authorityKey: string;
+  label: string;
+  confirmLabel: string;
+  question: string;
+  onConfirm: (authorityKey: string) => void | Promise<void>;
+  enabled?: boolean;
+  cancelLabel?: string;
+  pendingLabel?: string;
+  onCancel?: (authorityKey: string) => void;
+}
+export const ConfirmAction: ComponentType<ConfirmActionProps>;
+export const CONFIRM_ACTION_TEXT_BYTE_LIMIT: 1024;
+
 /** Every tag name, in catalogue order. */
 export const tags: string[];
 

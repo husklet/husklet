@@ -69,7 +69,7 @@ test('the playground renders one frame holding the three panes', () => {
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    tags.length + 26,
+    tags.length + 27,
     'every component and all end-user flows are listed',
   );
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');

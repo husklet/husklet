@@ -55,6 +55,7 @@ import { QUERY_PLAN_STORY, QueryPlanStory } from './query-plan.js';
 import { TERMINAL_TRANSCRIPT_STORY, TerminalTranscriptStory } from './terminal-transcript.js';
 import { COMMAND_PALETTE_STORY, CommandPaletteStory } from './command-palette.js';
 import { JSON_TREE_STORY, JsonTreeStory } from './json-tree.js';
+import { CONFIRMATION_STORY, ConfirmationStory } from './confirmation.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -72,7 +73,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
     || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
     || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
     || selected === MEMORY_STORY || selected === DISASSEMBLY_STORY || selected === TIMELINE_VIEW_STORY
-    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY || selected === QUERY_PLAN_STORY || selected === TERMINAL_TRANSCRIPT_STORY || selected === COMMAND_PALETTE_STORY || selected === JSON_TREE_STORY;
+    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY || selected === QUERY_PLAN_STORY || selected === TERMINAL_TRANSCRIPT_STORY || selected === COMMAND_PALETTE_STORY || selected === JSON_TREE_STORY || selected === CONFIRMATION_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -109,6 +110,7 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, { key: CONFIRMATION_STORY, label: CONFIRMATION_STORY, selected: selected === CONFIRMATION_STORY, onInvoke: () => onSelect(CONFIRMATION_STORY) }),
       h(ListItemButton, { key: COMMAND_PALETTE_STORY, label: COMMAND_PALETTE_STORY, selected: selected === COMMAND_PALETTE_STORY, onInvoke: () => onSelect(COMMAND_PALETTE_STORY) }),
       h(ListItemButton, { key: JSON_TREE_STORY, label: JSON_TREE_STORY, selected: selected === JSON_TREE_STORY, onInvoke: () => onSelect(JSON_TREE_STORY) }),
       h(ListItemButton, { key: TERMINAL_TRANSCRIPT_STORY, label: TERMINAL_TRANSCRIPT_STORY, selected: selected === TERMINAL_TRANSCRIPT_STORY, onInvoke: () => onSelect(TERMINAL_TRANSCRIPT_STORY) }),
@@ -237,6 +239,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
       { key: 'stage', pad: 4, grow: true },
       name === QUERY_PLAN_STORY
         ? h(QueryPlanStory)
+        : name === CONFIRMATION_STORY
+        ? h(ConfirmationStory)
         : name === COMMAND_PALETTE_STORY
         ? h(CommandPaletteStory)
         : name === JSON_TREE_STORY

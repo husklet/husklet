@@ -10,6 +10,7 @@ export * from './hooks.js';
 export * from './terminal-transcript.js';
 export * from './command-palette.js';
 export * from './json-tree.js';
+export * from './confirm-action.js';
 
 /** Surface handles awaiting a slot or registered by their owned slot. */
 const attached = new WeakMap();

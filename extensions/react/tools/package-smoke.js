@@ -47,9 +47,9 @@ try {
     cwd: consumer, stdio: 'pipe',
   });
   const runtime = execFileSync(process.execPath, ['--input-type=module', '--eval', `
-    import { Button, CommandPaletteView, TerminalTranscript, acceptsChildren, connect, tags, workspace } from '@husklet/react';
+    import { Button, CommandPaletteView, ConfirmAction, TerminalTranscript, acceptsChildren, connect, tags, workspace } from '@husklet/react';
     import catalogue from '@husklet/react/catalogue' with { type: 'json' };
-    if (typeof connect !== 'function' || typeof workspace !== 'function' || typeof TerminalTranscript !== 'function' || typeof CommandPaletteView !== 'function') process.exit(1);
+    if (typeof connect !== 'function' || typeof workspace !== 'function' || typeof TerminalTranscript !== 'function' || typeof CommandPaletteView !== 'function' || typeof ConfirmAction !== 'function') process.exit(1);
     if (Button !== 'Button' || !acceptsChildren('Column')) process.exit(2);
     if (catalogue.tags.length !== tags.length || catalogue.tags[0].name !== tags[0]) process.exit(3);
   `], { cwd: consumer, encoding: 'utf8' });
@@ -73,7 +73,7 @@ try {
   assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { CommandPaletteView, TerminalTranscript, render, useHostEvents, usePaneSelection, workspace, type CommandPaletteViewProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
+    import { CommandPaletteView, ConfirmAction, TerminalTranscript, render, useHostEvents, usePaneSelection, workspace, type CommandPaletteViewProps, type ConfirmActionProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
@@ -87,6 +87,8 @@ try {
     void TerminalTranscript; void transcriptProps;
     const paletteProps: CommandPaletteViewProps = { commands: [{ id: 'open', title: 'Open terminal', group: 'Workspace' }] };
     void CommandPaletteView; void paletteProps;
+    const confirmationProps: ConfirmActionProps = { authorityKey: 'volume:cache:g7', label: 'Remove', confirmLabel: 'Confirm remove', question: 'Remove cache?', onConfirm: async (authority) => { void authority; } };
+    void ConfirmAction; void confirmationProps;
     void api.subscribe('terminal');
     void api.subscribe('volumes');
     void api.subscribe('extensions');
