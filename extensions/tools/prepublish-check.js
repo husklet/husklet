@@ -14,6 +14,7 @@ const starter = JSON.parse(fs.readFileSync(path.join(root, 'react/examples/start
 const applications = [readJson('storybook'), readJson('workspace-manager')];
 const expected = process.env.RELEASE_VERSION ?? react.version;
 const starterDockerfile = fs.readFileSync(path.join(root, 'react/examples/starter/Dockerfile'), 'utf8');
+const starterManifest = fs.readFileSync(path.join(root, 'react/examples/starter/extension.toml'), 'utf8');
 
 for (const manifest of [react, mcp]) {
   assert.equal(manifest.version, expected, `${manifest.name} version must equal ${expected}`);
@@ -30,6 +31,11 @@ assert.match(
   starterDockerfile,
   new RegExp(`^ARG HUSKLET_REACT_IMAGE=ghcr\\.io/husklet/husklet/extension-react-base:${expected.replaceAll('.', '\\.')}$`, 'm'),
   'starter must default to the exact paired multi-architecture base image',
+);
+assert.match(
+  starterManifest,
+  new RegExp(`^version = "${expected.replaceAll('.', '\\.')}"$`, 'm'),
+  'starter manifest must declare the exact paired React release',
 );
 for (const manifest of applications) {
   assert.equal(manifest.private, true, `${manifest.name} is an image application, not a public npm package`);

@@ -13,6 +13,8 @@ COPY examples/starter ./examples/starter
 COPY src ./src
 RUN test -n "${HUSKLET_REACT_VERSION}" \
     && npm pkg set "version=${HUSKLET_REACT_VERSION}" \
+    && sed -i "s/^version = .*/version = \"${HUSKLET_REACT_VERSION}\"/" examples/starter/extension.toml \
+    && test "$(sed -n 's/^version = "\([^"]*\)"$/\1/p' examples/starter/extension.toml)" = "${HUSKLET_REACT_VERSION}" \
     && test "$(node -p "require('./package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && npm pack --ignore-scripts --pack-destination /out
 

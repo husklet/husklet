@@ -148,6 +148,7 @@ try {
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);
+  assert.match(starterManifest, new RegExp(`^version = "${manifest.version.replaceAll('.', '\\.')}"$`, 'm'));
   assert.match(starterManifest, /^protocol = 1$/m);
   assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
 
@@ -225,6 +226,7 @@ try {
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
+  assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
@@ -242,6 +244,10 @@ try {
   fs.mkdirSync(baseOutput);
   packageStageFiles(dockerfile, baseSource);
   execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: baseSource, stdio: 'pipe' });
+  const baseStarterManifest = path.join(baseSource, 'examples/starter/extension.toml');
+  fs.writeFileSync(baseStarterManifest, fs.readFileSync(baseStarterManifest, 'utf8')
+    .replace(/^version = .*$/m, 'version = "9.8.7"'));
+  assert.match(fs.readFileSync(baseStarterManifest, 'utf8'), /^version = "9\.8\.7"$/m);
   const basePack = JSON.parse(execFileSync('npm', [
     'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
   ], { cwd: baseSource, encoding: 'utf8' }));

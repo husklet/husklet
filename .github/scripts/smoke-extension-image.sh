@@ -44,6 +44,10 @@ if [[ "$kind" == base ]]; then
       for (const file of ["Dockerfile", "extension.toml", "main.js", "package.json"]) {
         if (!fs.statSync(`${starter}/${file}`).isFile()) throw new Error(`starter omits ${file}`);
       }
+      const starterManifest = fs.readFileSync(`${starter}/extension.toml`, "utf8");
+      if (!starterManifest.includes(`version = "${process.env.EXPECTED_VERSION}"`)) {
+        throw new Error("starter manifest version does not match SDK/base image");
+      }
     '
 else
   [[ "$(inspect '{{index .Config.Labels "husklet.extension.manifest"}}')" == /etc/husklet/extension.toml ]] \
