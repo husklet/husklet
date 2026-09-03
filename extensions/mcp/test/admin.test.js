@@ -63,7 +63,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
             error: 'failed', call, detail: 'fixture start failure',
           } }));
         }
-        else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn', 'terminal_write_pane'].includes(call)) {
+        else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn_observed', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
           if (call === 'workspace_start' && !suppressLifecycle) lifecycle(argument.name, 'start');
           if (call === 'workspace_stop') lifecycle(argument.name, 'stop');
@@ -349,11 +349,15 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const exactCommand = ['printf', '%s', '$(touch /tmp/not-run)', 'two words', "single'quote", ''];
   const spawnStart = calls.length;
   const spawned = await client.callTool({
-    name: 'husklet_terminal_spawn', arguments: { slot: 'admin-terminal', command: exactCommand },
+    name: 'husklet_terminal_spawn', arguments: {
+      slot: 'admin-terminal', generation: 3, revision: 1, command: exactCommand,
+    },
   });
   assert.notEqual(spawned.isError, true);
   assert.deepEqual(calls.slice(spawnStart), [{
-    call: 'terminal_spawn', with: { slot: 'admin-terminal', command: exactCommand },
+    call: 'terminal_spawn_observed', with: {
+      slot: 'admin-terminal', generation: 3, revision: 1, command: exactCommand,
+    },
   }]);
 
   const exactInput = 'é'.repeat(32_768);
