@@ -43,8 +43,10 @@ async function fakeHost(context, { greet = true } = {}) {
           ? { reply: 'workspace', with: { name: 'dev' } }
           : frame.payload.call === 'container_attach_terminal'
             ? { reply: 'identity', with: 'p-attached' }
+            : frame.payload.call === 'extension_acquisition_status'
+              ? { reply: 'extension_acquisition', with: { job: 'terminal-agent-job', revision: 4, state: 'ready', candidate: { name: 'terminal-agent', image_digest: `sha256:${'d'.repeat(64)}`, requested: ['interface', 'container-attach'] } } }
             : frame.payload.call === 'extension_install'
-              ? { reply: 'extension', with: { name: 'terminal-agent', image_digest: 'sha256:abc', status: 'standby' } }
+              ? { reply: 'extension', with: { name: 'terminal-agent', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby' } }
             : frame.payload.call === 'terminal_open_tab'
               ? { reply: 'identity', with: 'terminal-default' }
             : frame.payload.call === 'terminal_split_observed'
@@ -206,6 +208,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   assert.deepEqual(calls, [
     { call: 'workspace_info' }, { call: 'workspace_info' },
     { call: 'container_attach_terminal', with: { id, command: ['printf', 'é'] } },
+    { call: 'extension_acquisition_status', with: { job: 'terminal-agent-job' } },
     { call: 'extension_install', with: { job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'] } },
     { call: 'terminal_open_tab', with: { title: 'Terminal' } },
     { call: 'terminal_split_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, division: 'below' } },

@@ -30,7 +30,9 @@ const extensionInventoryCursor = z.object({
 }).strict();
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
-const extensionGrant = z.array(extensionCapability).max(24);
+const extensionGrant = z.array(extensionCapability).max(24).superRefine((granted, context) => {
+  if (new Set(granted).size !== granted.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'granted capabilities must be unique' });
+});
 const acquisitionRevision = z.number().int().nonnegative().safe();
 const signalName = z.string().min(1).max(32).refine(
   (value) => new TextEncoder().encode(value).byteLength <= 32,
@@ -223,6 +225,23 @@ async function observeWorkspaceMutation(api, input) {
   }
 }
 
+async function commitExtension(api, operation, job, revision, granted) {
+  const status = await api.extensions.acquisition(job);
+  if (status?.job !== job || status?.revision !== revision || status?.state !== 'ready' || status?.candidate == null) {
+    throw new Error(`extension ${operation} requires the exact ready acquisition job and revision`);
+  }
+  const candidate = status.candidate;
+  if (!imageDigest.safeParse(candidate.image_digest).success) throw new Error('ready extension candidate has no complete immutable image digest');
+  const requested = new Set(candidate.requested ?? []);
+  const widened = granted.find((capability) => !requested.has(capability));
+  if (widened != null) throw new Error(`grant ${widened} was not requested by the observed extension candidate`);
+  const installed = await api.extensions[operation](job, revision, granted);
+  if (installed?.name !== candidate.name || installed?.image_digest !== candidate.image_digest) {
+    throw new Error(`host returned an extension identity that does not match the observed candidate after ${operation}`);
+  }
+  return { ...installed, job, revision, consented_grants: granted };
+}
+
 export function tools(api) {
   const definitions = [
     define('husklet_workspace_info', 'Describe the hosting workspace.', empty, () => api.info()),
@@ -242,8 +261,8 @@ export function tools(api) {
     define('husklet_extension_acquire', 'Start bounded asynchronous inspection of one image reference after explicit confirmation.', z.object({ reference: imageReference, confirm: z.literal(true) }).strict(), ({ reference }) => api.extensions.startAcquisition(reference)),
     define('husklet_extension_acquisition', 'Read complete bounded acquisition progress, candidate digest, installed digest observed for consent, manifest identity, and requested grants without local clipping.', z.object({ job: extensionJob }).strict(), ({ job }) => api.extensions.acquisition(job), detailResult),
     define('husklet_extension_acquisition_cancel', 'Cancel one observed acquisition revision after explicit confirmation.', z.object({ job: extensionJob, revision: acquisitionRevision, confirm: z.literal(true) }).strict(), async ({ job, revision }) => { await api.extensions.cancelAcquisition(job, revision); return { done: true, job, revision }; }),
-    define('husklet_extension_install', 'Consent and atomically install the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.install(job, revision, granted)),
-    define('husklet_extension_update', 'Consent and atomically replace an installed extension with the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.update(job, revision, granted)),
+    define('husklet_extension_install', 'Re-read and consent to the exact ready job/revision/digest, refuse grants outside its manifest request, atomically install, and verify the returned immutable identity.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => commitExtension(api, 'install', job, revision, granted), detailResult),
+    define('husklet_extension_update', 'Re-read and consent to the exact ready job/revision/digest, refuse grants outside its manifest request, atomically update, and verify the returned immutable identity.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => commitExtension(api, 'update', job, revision, granted), detailResult),
     define('husklet_container_list', 'List containers, failing closed if MCP cannot return the complete host inventory.', empty, () => api.containers.list(), inventory()),
     define('husklet_container_inspect', 'Inspect one complete container record without local clipping.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value), detailResult),
     define('husklet_container_processes', 'Read a bounded timestamped process snapshot bound to the complete immutable container ID actually sampled; scope says initial or full namespace, and PIDs are snapshot-local and reusable.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),

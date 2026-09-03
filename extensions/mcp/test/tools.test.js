@@ -13,7 +13,7 @@ function fake() {
   return { calls, api: {
     info: record('info', { name: 'demo', token: 'never expose me' }), list: record('list'), inspect: record('inspect'), create: record('workspace.create'), adopt: record('workspace.adopt'), update: record('workspace.update'),
     start: record('workspace.start'), stop: record('workspace.stop'), restart: record('workspace.restart'), delete: record('workspace.delete'),
-    extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition'), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install'), update: record('extensions.update') },
+    extensions: { list: record('extensions.list'), inspect: record('extensions.inspect'), enable: record('extensions.enable'), disable: record('extensions.disable'), remove: record('extensions.remove'), startAcquisition: record('extensions.startAcquisition'), acquisition: record('extensions.acquisition', { job: 'j', revision: 4, state: 'ready', candidate: { name: 'example', image_digest: `sha256:${'d'.repeat(64)}`, requested: ['interface', 'container-attach'] } }), cancelAcquisition: record('extensions.cancelAcquisition'), install: record('extensions.install', { name: 'example', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby' }), update: record('extensions.update', { name: 'example', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby' }) },
     containers: { list: record('containers.list'), inspect: record('containers.inspect'), processes: record('containers.processes'), execution: record('containers.execution'), executions: record('containers.executions'), executionLogs: record('containers.executionLogs'), waitExecution: record('containers.waitExecution'), signalExecution: record('containers.signalExecution'), removeExecution: record('containers.removeExecution'), logs: record('containers.logs'), create: record('containers.create'), exec: record('containers.exec'), start: record('containers.start'), stop: record('containers.stop'), pause: record('containers.pause'), unpause: record('containers.unpause'), restart: record('containers.restart'), rename: record('containers.rename'), remove: record('containers.remove'), kill: record('containers.kill') },
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
@@ -299,7 +299,7 @@ test('extension acquisition is asynchronous, digest-observable, grant-bounded, a
   await byName('husklet_extension_acquisition_cancel').run({ job: 'j', revision: 4, confirm: true });
   await byName('husklet_extension_install').run({ job: 'j', revision: 4, granted: ['interface', 'container-attach'], confirm: true });
   await byName('husklet_extension_update').run({ job: 'j', revision: 4, granted: ['interface'], confirm: true });
-  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j', 4], ['extensions.install', 'j', 4, ['interface', 'container-attach']], ['extensions.update', 'j', 4, ['interface']]]);
+  assert.deepEqual(calls, [['extensions.startAcquisition', 'example:1'], ['extensions.acquisition', 'j'], ['extensions.cancelAcquisition', 'j', 4], ['extensions.acquisition', 'j'], ['extensions.install', 'j', 4, ['interface', 'container-attach']], ['extensions.acquisition', 'j'], ['extensions.update', 'j', 4, ['interface']]]);
 });
 
 test('extension wait filters acquisition jobs and disposes its credit-controlled watcher', async () => {
@@ -1065,8 +1065,8 @@ test('a real MCP client lists strict tools and calls through the React session c
       if (name === 'extension_list') return { reply: 'extensions', with: [{ name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' }] };
       if (name === 'extension_disable') return { reply: 'done' };
       if (name === 'extension_acquisition_start') return { reply: 'extension_acquisition_job', with: { job: 'job-live' } };
-      if (name === 'extension_acquisition_status') return { reply: 'extension_acquisition', with: { job: 'job-live', reference: 'example:1', revision: 3, state: 'ready', candidate: { name: 'example', version: '1', image_digest: 'sha256:def', requested: ['interface'], installed_image_digest: 'sha256:abc' }, error: null } };
-      if (name === 'extension_install') return { reply: 'extension', with: { name: 'example', image_digest: 'sha256:def', status: 'standby' } };
+      if (name === 'extension_acquisition_status') return { reply: 'extension_acquisition', with: { job: 'job-live', reference: 'example:1', revision: 3, state: 'ready', candidate: { name: 'example', version: '1', image_digest: `sha256:${'d'.repeat(64)}`, requested: ['interface'], installed_image_digest: `sha256:${'a'.repeat(64)}` }, error: null } };
+      if (name === 'extension_install') return { reply: 'extension', with: { name: 'example', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby' } };
       if (name === 'execution_inspect') return { reply: 'execution', with: {
         id: argument.id, container_id: 'container-1', running: true, exit_code: null,
       } };
@@ -1119,7 +1119,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   const acquired = await client.callTool({ name: 'husklet_extension_acquire', arguments: { reference: 'example:1', confirm: true } });
   assert.equal(JSON.parse(acquired.content[0].text).job, 'job-live');
   const candidate = await client.callTool({ name: 'husklet_extension_acquisition', arguments: { job: 'job-live' } });
-  assert.equal(JSON.parse(candidate.content[0].text).candidate.image_digest, 'sha256:def');
+  assert.equal(JSON.parse(candidate.content[0].text).candidate.image_digest, `sha256:${'d'.repeat(64)}`);
   await client.callTool({ name: 'husklet_extension_install', arguments: { job: 'job-live', revision: 3, granted: ['interface'], confirm: true } });
   const immutableExecution = 'b'.repeat(32);
   const execution = await client.callTool({ name: 'husklet_container_execution', arguments: { id: immutableExecution } });
@@ -1158,6 +1158,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['extension_list', undefined],
     ['extension_disable', { name: 'manager', image_digest: `sha256:${'a'.repeat(64)}` }],
     ['extension_acquisition_start', { reference: 'example:1' }],
+    ['extension_acquisition_status', { job: 'job-live' }],
     ['extension_acquisition_status', { job: 'job-live' }],
     ['extension_install', { job: 'job-live', revision: 3, granted: ['interface'] }],
     ['execution_inspect', { id: immutableExecution }],

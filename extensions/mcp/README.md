@@ -155,8 +155,14 @@ host's `ExtensionControl` grant. Acquisition uses the separate
 reveals the resolved digest, the installed digest observed for that consent
 revision, manifest identity, and requested grants, and only a
 second confirmed install or update echoes that observed revision and commits the
-caller-selected grant; a changed candidate or installed generation therefore
-makes stale consent fail. Cancellation is also explicit, confirmed, and bound to
+caller-selected grant. MCP re-reads that exact ready revision before mutation,
+refuses duplicate grants or any capability the manifest did not request, and
+then verifies that the returned installed name and immutable digest still match
+the observed candidate. The successful receipt includes `job`, `revision`, and
+`consented_grants`; these are the consent sent to the host, not a claim about
+capabilities absent from the returned public installation record. A changed
+candidate or installed generation therefore makes stale consent fail.
+Cancellation is also explicit, confirmed, and bound to
 the observed acquisition revision, so it cannot discard a candidate that became
 ready after the client last inspected the job; no MCP call performs an
 unobservable blocking pull.
@@ -170,6 +176,11 @@ A job-specific acquisition wait requires the revision already observed and retur
 only a strictly newer revision, so clients can arm before acting without accepting
 queued old state. Acquisition notifications never carry manifest contents; clients fetch
 status only after an invalidation, and coalescing is reported explicitly.
+Install returns `standby`; enablement is a separate confirmed operation. An
+enable receipt proves only that the exact installed digest was accepted. Read or
+wait for the installed record, then use pane inventory to discover a provider
+that is actually mounted; MCP does not claim that successful enablement has
+already created or exposed a pane.
 
 `husklet_pane_wait` applies the same rule to a specific pane: pass the last
 observed generation and revision, and the wait ignores the host's unchanged
