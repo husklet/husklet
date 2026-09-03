@@ -53,6 +53,7 @@ impl Form {
             (CreatePage::Docker, form.docker()),
             (CreatePage::Network, form.network()),
         ]);
+        form.bind_creation_requirements(&view.create);
         window.set_default_widget(Some(&view.create));
 
         {
@@ -113,6 +114,26 @@ impl Form {
         }
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "newws");
+    }
+
+    /// Keeps the primary creation action truthful while required values are
+    /// being edited. Submission validates again because callbacks may still be
+    /// invoked programmatically and the rest of the form has richer rules.
+    fn bind_creation_requirements(&self, create: &gtk::Button) {
+        let update = {
+            let name = self.name.clone();
+            let image = self.image.clone();
+            let create = create.clone();
+            move || {
+                create.set_sensitive(!name.text().trim().is_empty() && !image.text().trim().is_empty());
+            }
+        };
+        update();
+        {
+            let update = update.clone();
+            self.name.connect_changed(move |_| update());
+        }
+        self.image.connect_changed(move |_| update());
     }
 }
 
@@ -521,5 +542,25 @@ mod create_tests {
         create_workspace(&mut store, WorkspaceConfig::new("demo", "image:latest", Arch::Arm64)).unwrap();
 
         assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+    }
+
+    #[test]
+    fn creation_action_tracks_both_required_fields() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let form = Form::new();
+            let create = gtk::Button::with_label("Create workspace");
+            form.bind_creation_requirements(&create);
+
+            assert!(!create.is_sensitive());
+            form.name.set_text("demo");
+            assert!(!create.is_sensitive());
+            form.image.set_text("alpine:3.20");
+            assert!(create.is_sensitive());
+            form.name.set_text("   ");
+            assert!(!create.is_sensitive());
+        });
+        if !ran {
+            eprintln!("skipped: no display connection, so creation sensitivity cannot be rendered");
+        }
     }
 }
