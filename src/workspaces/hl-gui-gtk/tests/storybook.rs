@@ -20,6 +20,7 @@ mod unix {
         "Validated settings form",
         "Keyboard and semantic actions",
         "Drag and keyboard reorder",
+        "Workspace layout control",
         "DataTable",
         "Navigation and transient UI",
         "Bounded streaming log",
@@ -223,6 +224,10 @@ mod unix {
             }
             "Drag and keyboard reorder" => {
                 find::<gtk::Button>(root, |button| button.label().as_deref() == Some("↓ Build")).emit_clicked();
+            }
+            "Workspace layout control" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Open pane chooser"))
+                    .emit_clicked();
             }
             "Extension acquisition" => {
                 find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download")).emit_clicked();

@@ -30,7 +30,7 @@ import { DependencyGraphStory, boundedGraph, NODE_LIMIT } from '../src/dependenc
 import { JsonTreeStory } from '../src/json-tree.js';
 import { ConfirmationStory } from '../src/confirmation.js';
 import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_LIMIT, LOG_LIMIT } from '../src/container-operations.js';
-import { WorkspaceLayoutStory, boundedPanes, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
+import { WorkspaceLayoutStory, boundedPanes, retainEvents, EVENT_LIMIT, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
 import { ExtensionLifecycleStory, boundedExtensions, EXTENSION_LIMIT, GRANT_LIMIT, FIELD_LIMIT } from '../src/extension-lifecycle.js';
 import { WorkspaceFileEditStory, boundedFiles, FILE_LIMIT, PATH_LIMIT, CONTENT_LIMIT } from '../src/workspace-file-edit.js';
 import { ImagePullStory, boundedPull, LAYER_LIMIT, REFERENCE_LIMIT, STATUS_LIMIT } from '../src/image-pull.js';
@@ -156,14 +156,24 @@ test('workspace layout bounds slots and interactively splits by stable identity'
   assert.equal(bounded[0].occupant, 'empty');
   assert.equal(bounded[0].title.length, TITLE_LIMIT);
   assert(!bounded[0].title.includes('\n'));
+  assert.equal(retainEvents(Array.from({ length: 9 }, (_, index) => String(index)), 'latest').length, EVENT_LIMIT);
 
   const stage = host();
   const first = stage.render(h(WorkspaceLayoutStory));
   const split = node(first.patches, 'Button', 'Split below');
+  const chooser = node(first.patches, 'Button', 'Open pane chooser');
+  const focus = node(first.patches, 'Button', 'Focus selected pane');
   assert(split);
-  const before = stage.frames.length;
+  assert(chooser && focus, 'chooser and keyboard focus controls are visible');
+  assert(first.patches.some((patch) => patch.SetProp?.value?.Text === 'nested horizontal split'));
+  assert(first.patches.some((patch) => patch.SetProp?.value?.Text?.includes('workspace-manager/containers')));
+  let before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: chooser, id: `${chooser}:Invoke` }));
+  let changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text?.includes('workspace-manager/containers')));
+  before = stage.frames.length;
   assert(stage.surface.dispatch({ trigger: 'Invoke', node: split, id: `${split}:Invoke` }));
-  const changed = stage.since(before);
+  changed = stage.since(before);
   assert(changed.some((patch) => patch.SetProp?.prop === 'Orientation'));
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Split pane-terminal-1 below into pane-new-4.'));
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'pane-new-4 · terminal'));
