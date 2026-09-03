@@ -228,9 +228,17 @@ fn slot_state(rootfs: &Path, suffix: &str) -> Vec<String> {
 
 fn progress_sizes(rootfs: &Path) -> [u64; 3] {
     std::array::from_fn(|slot| {
-        std::fs::metadata(rootfs.join(format!("tmp/husklet-gui-progress-{slot}")))
-            .unwrap()
-            .len()
+        let path = rootfs.join(format!("tmp/husklet-gui-progress-{slot}"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                if metadata.len() > 0 {
+                    break metadata.len();
+                }
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {}", path.display());
+            std::thread::sleep(Duration::from_millis(20));
+        }
     })
 }
 
