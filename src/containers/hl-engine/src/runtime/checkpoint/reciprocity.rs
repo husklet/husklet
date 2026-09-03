@@ -19,8 +19,10 @@
 //! owned by a sealed member of this capture.
 //!
 //! What this proves: over the whole sealed tree, every captured `AF_UNIX` pair
-//! endpoint is named exactly once, by exactly one owner, and names back exactly
-//! one endpoint that names it in return with the same socket type.
+//! endpoint identity has one consistent description and names back exactly one
+//! endpoint that names it in return with the same socket type. An endpoint may
+//! be named by multiple descriptors: `fork` and `dup` deliberately create those
+//! aliases, while the image-wide sink claim elects one queue/state publisher.
 //!
 //! What it does not prove: that the far end was quiescent for any reason other
 //! than membership in the freeze, that unlinked host peers outside the guest
@@ -74,9 +76,7 @@ pub(super) enum Violation {
     SelfReciprocal { group: u64, object: u64 },
     /// The record's socket type is not one restore can rebuild.
     UnsupportedSocketType { group: u64, object: u64, socket_type: i64 },
-    /// The same object identity is owned by two descriptors. Exactly one owner
-    /// is the whole point: two owners means the identity does not name an
-    /// endpoint.
+    /// Two descriptors give conflicting descriptions of one object identity.
     DuplicateOwner {
         object: u64,
         first_group: u64,
@@ -146,7 +146,7 @@ impl std::fmt::Display for Violation {
                 second_descriptor,
             } => write!(
                 formatter,
-                "socket object {object:016x} is owned twice: proc.{first_group} fd {first_descriptor} and \
+                "socket object {object:016x} has conflicting aliases: proc.{first_group} fd {first_descriptor} and \
                  proc.{second_group} fd {second_descriptor}"
             ),
             Self::MissingReciprocalPeer {
@@ -248,19 +248,21 @@ impl SocketTopology {
                     peer,
                     socket_type,
                 };
-                // The same object reaching a second descriptor in the same
-                // process is the same defect as reaching a second process: the
-                // identity has stopped naming one endpoint either way.
-                if let Some(first) = owners.insert(object, endpoint)
-                    && (first.group != group || first.guest_descriptor != guest_descriptor)
-                {
-                    return Err(Violation::DuplicateOwner {
-                        object,
-                        first_group: first.group,
-                        first_descriptor: first.guest_descriptor,
-                        second_group: group,
-                        second_descriptor: guest_descriptor,
-                    });
+                if let Some(first) = owners.get(&object) {
+                    // A fork-inherited or dup'd descriptor is an alias, not a second endpoint owner.
+                    // Queue and state capture already use the image-wide sink claim to elect one
+                    // publisher; retain the first descriptor only as the canonical diagnostic name.
+                    if first.peer != endpoint.peer || first.socket_type != endpoint.socket_type {
+                        return Err(Violation::DuplicateOwner {
+                            object,
+                            first_group: first.group,
+                            first_descriptor: first.guest_descriptor,
+                            second_group: group,
+                            second_descriptor: guest_descriptor,
+                        });
+                    }
+                } else {
+                    owners.insert(object, endpoint);
                 }
             }
         }
@@ -368,28 +370,28 @@ mod tests {
     }
 
     #[test]
-    fn one_object_owned_by_two_members_is_refused_by_name() {
+    fn fork_inherited_socket_alias_is_admitted_once() {
         let mut first = socket(10, 0x11, 0x22);
         first.extend(socket(11, 0x22, 0x11));
         let topology = topology(&[("proc.1/fds", first), ("proc.2/fds", socket(4, 0x11, 0x22))]);
-        assert_eq!(
-            topology.join(),
-            Err(Violation::DuplicateOwner {
-                object: 0x11,
-                first_group: 1,
-                first_descriptor: 10,
-                second_group: 2,
-                second_descriptor: 4,
-            })
-        );
+        assert_eq!(topology.join(), Ok(2));
     }
 
     #[test]
-    fn two_descriptors_in_one_process_sharing_an_object_are_refused() {
+    fn dup_alias_in_one_process_is_admitted_once() {
         let mut inventory = socket(10, 0x11, 0x22);
         inventory.extend(socket(12, 0x11, 0x22));
+        inventory.extend(socket(14, 0x22, 0x11));
         let topology = topology(&[("proc.1/fds", inventory)]);
-        assert!(matches!(topology.join(), Err(Violation::DuplicateOwner { .. })));
+        assert_eq!(topology.join(), Ok(2));
+    }
+
+    #[test]
+    fn aliases_that_disagree_about_the_peer_are_refused() {
+        let mut first = socket(3, 0x11, 0x22);
+        first.extend(socket(4, 0x22, 0x11));
+        let topology = topology(&[("proc.1/fds", first), ("proc.2/fds", socket(3, 0x11, 0x33))]);
+        assert!(matches!(topology.join(), Err(Violation::DuplicateOwner { object: 0x11, .. })));
     }
 
     #[test]
