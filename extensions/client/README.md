@@ -17,6 +17,8 @@ const host = workspace(session);
 const pane = (await host.terminal.panes()).panes[0];
 const readable = await host.terminal.toText(pane.slot, { lines: 200 });
 console.log(readable.kind, readable.text);
+const next = await host.terminal.waitForText(pane.slot, readable.snapshot, { timeoutMs: 10_000 });
+if (next.changed) console.log(next.readable.text);
 ```
 
 For a framework-neutral extension, copy the complete starter from the installed

@@ -13,6 +13,8 @@ const host = workspace(session);
 const panes = await host.terminal.panes();
 const readable = await host.terminal.toText(panes.panes[0].slot, { lines: 200 });
 console.log(readable.text);
+const next = await host.terminal.waitForText(panes.panes[0].slot, readable.snapshot);
+if (next.changed) console.log(next.readable.text);
 await session.close();
 ```
 
@@ -87,6 +89,7 @@ wrong caller.
 - `host.terminal.switchOccupant(...)` — `terminal_switch_occupant`, requires `terminal-control`.
 - `host.terminal.switchOccupantObserved(...)` — `terminal_switch_occupant_observed`, requires `terminal-control`.
 - `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `pane-observe` and the corresponding `terminal-output` or `pane-semantic-read` grant.
+- `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `pane-observe` and the corresponding read grant.
 
 ## Files
 

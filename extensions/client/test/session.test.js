@@ -56,6 +56,57 @@ test('real Unix stream drives a typed inventory watcher and returns event credit
   }
 });
 
+test('real Unix pane text wait subscribes before reading and disposes after a changed cursor', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        if (frame.payload.call === 'event_subscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+          socket.write(encode({ channel: 11, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+            slot: 'shell', kind: 'terminal', generation: 2, revision: 3, coalesced: 0,
+          } } }));
+          socket.write(encode({ channel: 11, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+            slot: 'shell', kind: 'terminal', generation: 2, revision: 4, coalesced: 0,
+          } } }));
+        } else if (frame.payload.call === 'pane_list') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [{
+            slot: 'shell', generation: 2, revision: 4, kind: 'terminal', provider: null,
+            tab: 'tab', title: 'Shell', focused: true,
+          }], truncated: false } } }));
+        } else if (frame.payload.call === 'terminal_read_pane') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: {
+            slot: 'shell', generation: 2, revision: 4, columns: 80, rows: 24, lines: ['done'],
+            cursor_column: 4, cursor_row: 0, truncated: false,
+          } } }));
+        } else if (frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'text-wait', granted: ['pane-observe', 'terminal-output'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).terminal.waitForText('shell', { generation: 2, revision: 3 });
+    assert.equal(result.changed, true); assert.equal(result.readable.text, 'done');
+    assert.deepEqual(calls, ['event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('negotiated grants are immutable and deny calls and topics before any socket write', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-grants-'));
   const socketPath = path.join(directory, 'host.sock');

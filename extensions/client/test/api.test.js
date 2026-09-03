@@ -991,3 +991,68 @@ test('pane text conversion never guesses when bounded discovery omitted the slot
   await assert.rejects(pending, /cannot be resolved from a truncated inventory/);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
+
+test('pane text wait arms first, ignores its unchanged cursor, and disposes after a later revision', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).terminal.waitForText(
+    'shell', { generation: 4, revision: 8 }, { lines: 40, timeoutMs: 1_000 },
+  );
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 17, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+    slot: 'shell', kind: 'terminal', generation: 4, revision: 8, coalesced: 0,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit, 'the initial unchanged snapshot is acknowledged without a read');
+  stage.host.write(encode({ channel: 17, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+    slot: 'shell', kind: 'terminal', generation: 4, revision: 9, coalesced: 2,
+  } } }));
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+    panes: [{ slot: 'shell', generation: 4, revision: 9, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }],
+    truncated: false,
+  } } }));
+  assert.deepEqual((await next()).payload, { call: 'terminal_read_pane', with: { slot: 'shell', lines: 40 } });
+  const snapshot = { slot: 'shell', generation: 4, revision: 9, columns: 80, rows: 24,
+    lines: ['ready'], cursor_column: 5, cursor_row: 0, truncated: false };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: snapshot } }));
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await pending, { changed: true, readable: { kind: 'terminal', text: 'ready', snapshot } });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('pane text wait accepts slot replacement and rejects incomplete cursors before subscribing', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  await assert.rejects(api.terminal.waitForText('shell', { generation: 4 }), /exact nonnegative generation and revision/);
+  const pending = api.terminal.waitForText('shell', { generation: 4, revision: 8 }, { timeoutMs: 1_000 });
+  assert.equal((await next()).payload.call, 'event_subscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 18, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+    slot: 'shell', kind: 'native', generation: 5, revision: 1, coalesced: 0,
+  } } }));
+  assert.equal((await next()).payload.call, 'pane_list'); await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+    panes: [{ slot: 'shell', generation: 5, revision: 1, kind: 'native', provider: null, tab: null, title: 'Settings', focused: true }], truncated: false,
+  } } }));
+  assert.equal((await next()).payload.call, 'pane_semantic_read');
+  const snapshot = { slot: 'shell', generation: 5, revision: 1, truncated: false,
+    root: { id: 0, role: 'page', label: 'Settings', value: null, disabled: false, destructive: false, actions: [], children: [] } };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'semantics', with: snapshot } }));
+  assert.equal((await next()).payload.call, 'event_unsubscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await pending).readable.kind, 'ui');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('pane text wait timeout returns its cursor and releases subscription credit', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const after = { generation: 4, revision: 8 };
+  const pending = workspace(stage.session).terminal.waitForText('shell', after, { timeoutMs: 5 });
+  assert.equal((await next()).payload.call, 'event_subscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await pending, { changed: false, after });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});

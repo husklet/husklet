@@ -263,6 +263,11 @@ export interface WorkspaceApi {
     semantics(slot: string): Promise<PaneSemanticTree>;
     /** Discover the pane kind and return terminal screen text or bounded semantic XML. */
     toText(slot: string, options?: { lines?: number }): Promise<ReadablePane>;
+    /** Wait for a pane cursor to change, then return a fresh bounded text projection. */
+    waitForText(slot: string, after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>, options?: {
+      lines?: number;
+      timeoutMs?: number;
+    }): Promise<{ changed: true; readable: ReadablePane } | { changed: false; after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'> }>;
     act(slot: string, action: PaneSemanticAction): Promise<void>;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;

@@ -447,6 +447,48 @@ export function workspace(session, { signal } = {}) {
   api.watchNetworks = (listener) => watch('networks', 'networks', listener, 'network');
   api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
   api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
+  api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane text wait requires a nonempty slot');
+    if (after == null || !Number.isSafeInteger(after.generation) || after.generation < 0
+      || !Number.isSafeInteger(after.revision) || after.revision < 0) {
+      throw new TypeError('pane text wait requires an exact nonnegative generation and revision cursor');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('pane text wait timeout must be between 1 and 30000ms');
+    }
+    let dispose; let timer; let settled = false; let reading = false; let pending;
+    return new Promise((resolve, reject) => {
+      const finish = (value, error) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const observe = (change) => {
+        if (settled || change.slot !== slot
+          || (change.generation === after.generation && change.revision === after.revision)) return;
+        pending = change;
+        if (reading) return;
+        reading = true;
+        void (async () => {
+          try {
+            while (pending && !settled) {
+              pending = undefined;
+              const readable = await api.terminal.toText(slot, { lines });
+              const cursor = readable.snapshot;
+              if (cursor.generation === after.generation && cursor.revision === after.revision) continue;
+              finish({ changed: true, readable });
+            }
+          } catch (error) { finish(undefined, error); }
+          finally { reading = false; }
+        })();
+      };
+      api.watchPaneChanges(observe).then((stop) => {
+        dispose = stop;
+        if (settled) void stop();
+      }, (error) => finish(undefined, error));
+      timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
+    });
+  };
   api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
     const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
     if (!providerName(extension) || !providerName(provider)) throw new TypeError('provider wait requires exact bounded extension and provider names');
