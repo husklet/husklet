@@ -481,6 +481,7 @@ export interface WorkspaceApi {
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
     split(slot: string, division: Division): Promise<string>;
+    splitObserved(slot: string, generation: number, revision: number, division: Division): Promise<string>;
     spawn(slot: string, command: string[]): Promise<void>;
     read(slot: string, lines?: number): Promise<PaneText>;
     semantics(slot: string): Promise<PaneSemanticTree>;

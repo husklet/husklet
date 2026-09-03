@@ -1060,6 +1060,15 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalControl,
         ),
         (
+            Request::TerminalSplitObserved {
+                slot: "s1".into(),
+                generation: 7,
+                revision: 11,
+                division: Division::Below,
+            },
+            Capability::TerminalControl,
+        ),
+        (
             Request::TerminalSpawn {
                 slot: "s1".into(),
                 command: vec!["ls".into()],

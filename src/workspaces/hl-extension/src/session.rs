@@ -198,6 +198,7 @@ impl Session {
             | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
             | Request::TerminalSplit { .. }
+            | Request::TerminalSplitObserved { .. }
             | Request::TerminalSpawn { .. }
             | Request::TerminalReadPane { .. }
             | Request::TerminalWritePane { .. }
@@ -584,6 +585,9 @@ impl Session {
         match request {
             Request::TerminalOpenTab { title } => Ok(Reply::Identity(port.open_tab(title)?)),
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
+            Request::TerminalSplitObserved { slot, division, .. } => {
+                Ok(Reply::Identity(port.split(slot, *division)?))
+            }
             Request::TerminalSpawn { slot, command } => {
                 validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)

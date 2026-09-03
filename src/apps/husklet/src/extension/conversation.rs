@@ -686,7 +686,8 @@ impl Conversation {
             }
             *generation = pane.generation;
         } else if let hl_extension::Request::TerminalWritePane { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalClosePaneObserved { slot, generation, revision } = &mut request
+        | hl_extension::Request::TerminalClosePaneObserved { slot, generation, revision }
+        | hl_extension::Request::TerminalSplitObserved { slot, generation, revision, .. } = &mut request
         {
             let topology = services.terminal.topology().ok().map(|topology| {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();

@@ -262,6 +262,13 @@ export function workspace(session) {
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
       split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
+      splitObserved: (slot, generation, revision, division) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+          throw new TypeError('terminal split requires nonnegative safe integer generation and revision');
+        }
+        return session.call('terminal_split_observed', { slot, generation, revision, division })
+          .then((reply) => expect(reply, 'identity'));
+      },
       spawn: (slot, command) => {
         if (!Array.isArray(command) || command.length === 0 || command.length > 64
           || command.some((argument) => typeof argument !== 'string'
@@ -546,7 +553,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

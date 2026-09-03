@@ -47,6 +47,8 @@ async function fakeHost(context, { greet = true } = {}) {
               ? { reply: 'extension', with: { name: 'terminal-agent', image_digest: 'sha256:abc', status: 'standby' } }
             : frame.payload.call === 'terminal_open_tab'
               ? { reply: 'identity', with: 'terminal-default' }
+            : frame.payload.call === 'terminal_split_observed'
+              ? { reply: 'identity', with: 'pane-split' }
             : frame.payload.call === 'terminal_close_pane_observed'
               ? { reply: 'done' }
             : frame.payload.call === 'network_connect'
@@ -134,6 +136,10 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   assert.equal(JSON.parse(installed.content[0].text).name, 'terminal-agent');
   const opened = await client.callTool({ name: 'husklet_terminal_open', arguments: {} });
   assert.equal(JSON.parse(opened.content[0].text), 'terminal-default');
+  const split = await client.callTool({ name: 'husklet_terminal_split', arguments: {
+    slot: 'pane-observed', generation: 9, revision: 12, division: 'below',
+  } });
+  assert.equal(JSON.parse(split.content[0].text), 'pane-split');
   await client.callTool({ name: 'husklet_terminal_close', arguments: {
     slot: 'pane-observed', generation: 9, revision: 12, confirm: true,
   } });
@@ -145,6 +151,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
     { call: 'container_attach_terminal', with: { id, command: ['printf', 'é'] } },
     { call: 'extension_install', with: { job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'] } },
     { call: 'terminal_open_tab', with: { title: 'Terminal' } },
+    { call: 'terminal_split_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, division: 'below' } },
     { call: 'terminal_close_pane_observed', with: { slot: 'pane-observed', generation: 9, revision: 12 } },
     { call: 'network_connect', with: { reference: network, container: id, aliases } },
   ]);

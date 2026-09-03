@@ -57,6 +57,9 @@ pane inventory or snapshot XML. The host compares both immediately before
 closing, so confirmation for a removed or replaced pane cannot close its
 successor. The React `closeObserved` method exposes the same safe path while
 the legacy `close(slot)` call remains available for source compatibility.
+`husklet_terminal_split` requires the same cursor and refuses to split a pane
+that was replaced after observation. React retains legacy `split` for source
+compatibility and exposes the safe path as `splitObserved`.
 
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one

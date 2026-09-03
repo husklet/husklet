@@ -221,6 +221,13 @@ pub enum Request {
         slot: String,
         division: Division,
     },
+    /// Splits only the exact pane occupant snapshot the caller observed.
+    TerminalSplitObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        division: Division,
+    },
     TerminalSpawn {
         slot: String,
         command: Vec<String>,
@@ -389,6 +396,7 @@ impl Request {
             Self::PaneList => Capability::PaneObserve,
             Self::TerminalOpenTab { .. }
             | Self::TerminalSplit { .. }
+            | Self::TerminalSplitObserved { .. }
             | Self::TerminalSpawn { .. }
             | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
