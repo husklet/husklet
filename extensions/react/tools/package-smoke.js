@@ -99,6 +99,7 @@ try {
   ]) {
     assert(names.has(required), `npm package omits ${required}`);
   }
+  assert(!names.has('Dockerfile'), 'context-dependent base Dockerfile must not masquerade as a standalone npm artifact');
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')), 'developer-only files leaked into package');
 
   const tarball = execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
@@ -284,6 +285,8 @@ try {
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
   assert.match(readme, /one published Husklet SDK base image/);
+  assert.match(readme, /repository's `extensions\/react\/Dockerfile` is release infrastructure/);
+  assert.match(readme, /complete `examples\/starter` Docker context/);
   assert.match(readme, /pin that argument to a\s+registry digest/);
   assert.match(readme, /offline OCI build still requires.*base image to\s+already exist/s);
   assert(!readme.includes('immutable base-image tag'), 'a mutable version tag must not be documented as immutable');
