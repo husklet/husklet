@@ -155,15 +155,37 @@ impl CheckpointJourney {
         let parent = parent.clone();
         let window = window.clone();
         let mut last_topology_failure = String::new();
+        let mut topology_stage = 0;
         glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
             let Some(terminals) = Self::terminals(&window) else {
                 return glib::ControlFlow::Continue;
             };
+            if topology_stage == 1 {
+                if !Terminal::new(&terminals[2]).history().contains("history-slot-2") {
+                    return glib::ControlFlow::Continue;
+                }
+                let Some(split_page) = Self::tab_for_slots(&window, &["0", "1"]) else {
+                    return glib::ControlFlow::Continue;
+                };
+                Page::new(&window, &split_page).select();
+                Panes::focus_when_mapped(&window, "1");
+                topology_stage = 2;
+                return glib::ControlFlow::Continue;
+            }
             if let Err(failure) = Self::restored_topology(&parent, &window, &terminals) {
                 if failure != last_topology_failure {
                     Self::record(&path, &format!("waiting_topology {failure}"));
                     last_topology_failure = failure;
                 }
+                return glib::ControlFlow::Continue;
+            }
+            if topology_stage == 0 {
+                let Some(other_tab) = Self::tab_for_slots(&window, &["2"]) else {
+                    return glib::ControlFlow::Continue;
+                };
+                Page::new(&window, &other_tab).select_and_focus();
+                topology_stage = 1;
+                Self::record(&path, &Self::event("history_probe_tab_selected", cycle));
                 return glib::ControlFlow::Continue;
             }
             for (slot, terminal) in terminals.iter().enumerate() {
@@ -292,7 +314,10 @@ impl CheckpointJourney {
             .borrow()
             .as_ref()
             .and_then(|terminal| Slots::new(window).of(terminal));
-        let history = terminals
+        // The other tab has not been mapped yet, so VTE reports no rows for it
+        // even though its replay buffer is populated. The caller selects that
+        // tab and verifies slot 2 before returning here for the final check.
+        let history = terminals[..2]
             .iter()
             .enumerate()
             .filter_map(|(slot, terminal)| {
@@ -320,6 +345,13 @@ impl CheckpointJourney {
 
     fn tab_slots(tabs: &[(String, gtk::Widget, Vec<String>)]) -> Vec<Vec<String>> {
         tabs.iter().map(|(_, _, slots)| slots.clone()).collect()
+    }
+
+    fn tab_for_slots(window: &Rc<TermWin>, wanted: &[&str]) -> Option<String> {
+        Window::tabs(window)
+            .into_iter()
+            .find(|(_, _, slots)| slots.iter().map(String::as_str).eq(wanted.iter().copied()))
+            .map(|(name, _, _)| name)
     }
 
     fn record(path: &str, event: &str) {
