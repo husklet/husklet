@@ -534,7 +534,20 @@ export function Volumes({ api, resource, volumeDetails }) {
   const detailsSource = volumeDetails ?? localDetails;
   const [name, setName] = useState('');
   const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, detail: null, error: null });
-  const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
+  const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
+  const create = async () => {
+    const requested = name.trim();
+    if (!requested || creation.state === 'loading') return;
+    setCreation({ state: 'loading', name: requested, error: null });
+    try {
+      await api.volumes.create(requested);
+      await resource.reload();
+      setName('');
+      setCreation({ state: 'success', name: requested, error: null });
+    } catch (cause) {
+      setCreation({ state: 'error', name: requested, error: cause });
+    }
+  };
   const currentVolumes = useRef(new Map());
   currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
   const remove = async (volume) => {
@@ -553,7 +566,10 @@ export function Volumes({ api, resource, volumeDetails }) {
   };
   const view = bounded(resource.data);
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
-    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
+    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', enabled: creation.state !== 'loading', onChange: (event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); } }), h(Button, { label: creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create', enabled: creation.state !== 'loading' && name.trim().length > 0, onInvoke: () => { void create(); } }), h(Button, { label: 'Refresh', enabled: creation.state !== 'loading', onInvoke: resource.reload })),
+    creation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `Creating volume ${creation.name}…` })) : null,
+    creation.state === 'error' ? h(Text, { label: boundedMessage(creation.error), color: 'danger', wrap: true }) : null,
+    creation.state === 'success' ? h(Text, { label: `Created volume ${creation.name}.`, color: 'positive', wrap: true }) : null,
     h(ErrorText, { error: resource.error }),
     h(InventoryEmpty, { resource, records: view.records, label: 'No volumes', detail: 'Create a named volume above when a workload needs durable storage.' }),
     ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },

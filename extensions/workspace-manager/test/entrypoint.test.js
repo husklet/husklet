@@ -73,6 +73,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
               ? { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }
               : name === 'network_create'
                 ? { reply: 'identity', with: networkId }
+                : name === 'volume_create'
+                  ? { reply: 'volume', with: { name: frame.payload.with.name, driver: 'local', generation: 'b'.repeat(32) } }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }] }
               : name === 'network_inspect'
@@ -232,6 +234,13 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 21, kind: KIND.event, payload: invocation(requests, 'Volumes') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Volume name')));
+    peer.write(encode({ channel: 43, kind: KIND.event, payload: changeInvocation(requests, 'Volume name', 'socket-cache') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'socket-cache')));
+    peer.write(encode({ channel: 44, kind: KIND.event, payload: invocation(requests, 'Create') }));
+    await until(() => calls.includes('volume_create') && requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Created volume socket-cache.')));
+    assert.deepEqual(requests.find((request) => request.call === 'volume_create').with, { name: 'socket-cache' });
     peer.write(encode({ channel: 22, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
     await until(() => calls.includes('volume_inspect') && requests.some((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 205));

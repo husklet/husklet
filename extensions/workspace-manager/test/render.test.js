@@ -651,6 +651,34 @@ test('shared volume confirmation disables both final actions while removal is pe
   assert.ok(labelled(stage, 'Remove'), 'successful removal closes the shared confirmation');
 });
 
+test('volume creation exposes pending failure and retained retry before claiming success', async () => {
+  const calls = [];
+  let rejectFirst;
+  let attempt = 0;
+  const controlled = { volumes: {
+    ...api.volumes,
+    create: async (name) => {
+      calls.push(['create', name]); attempt += 1;
+      if (attempt === 1) await new Promise((_, reject) => { rejectFirst = reject; });
+      return name;
+    },
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host(); stage.render(h(Volumes, { api: controlled, resource }));
+  change(stage, 'Volume name', ' cache-data '); invoke(stage, 'Create'); await settled();
+  assert.ok(labelled(stage, 'Creating volume cache-data…'));
+  assert.equal(isEnabled(stage, 'Creating…'), false);
+  assert.deepEqual(calls, [['create', 'cache-data']]);
+  rejectFirst(new Error(`storage unavailable ${'x'.repeat(600)}`)); await settled(); await settled();
+  assert.ok(labelled(stage, 'Retry create'));
+  const failures = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text?.startsWith('storage unavailable'));
+  assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+  invoke(stage, 'Retry create'); await settled(); await settled();
+  assert.deepEqual(calls, [['create', 'cache-data'], ['create', 'cache-data'], ['reload']]);
+  assert.ok(labelled(stage, 'Created volume cache-data.'));
+});
+
 test('network connect validates aliases, exposes progress, success, bounded failure and retained retry', async () => {
   const calls = [];
   let release;
