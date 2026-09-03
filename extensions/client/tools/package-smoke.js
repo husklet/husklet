@@ -121,11 +121,18 @@ try {
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
-    import { PROTOCOL_VERSION as subpathVersion, validateRequest } from '@husklet/client/protocol';
+    import { PROTOCOL_VERSION as subpathVersion, validateRequest, validateUiEvent } from '@husklet/client/protocol';
+    const event = validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 1, id: 'drop-1', source: 2, x: 3, y: 4 });
     if (PROTOCOL_VERSION !== subpathVersion || typeof Session !== 'function'
       || typeof workspace !== 'function' || typeof semanticXml !== 'function'
       || protocolSurface.requests.workspace_info.api !== 'info'
-      || typeof validateRequest !== 'function') process.exit(1);
+      || typeof validateRequest !== 'function' || event.interaction !== 'drop') process.exit(1);
+    try {
+      validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 1, id: 'drop-1', x: 3, y: 4 });
+      process.exit(1);
+    } catch (error) {
+      if (!(error instanceof TypeError)) process.exit(1);
+    }
   `], { cwd: consumer, stdio: 'pipe' });
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
@@ -134,9 +141,10 @@ try {
       type PaneSemanticTree, type ProcessList, type Session, type TerminalTopology,
       type WorkspaceConfiguration,
     } from '@husklet/client';
-    import { PROTOCOL_VERSION, type WireRequest } from '@husklet/client/protocol';
+    import { PROTOCOL_VERSION, type WireRequest, type WireUiEvent } from '@husklet/client/protocol';
     declare const session: Session;
     const host = workspace(session);
+    const cancellable = host.withSignal(new AbortController().signal);
     const configuration: Promise<WorkspaceConfiguration> = host.inspect('project');
     const create: ContainerCreateSpec = { image: 'alpine:3.20', name: 'worker', command: ['sleep', '10'] };
     const container: Promise<string> = host.containers.create(create);
@@ -149,10 +157,11 @@ try {
     declare const tree: PaneSemanticTree;
     const xml: string = semanticXml(tree);
     const request: WireRequest = { call: 'workspace_info' };
+    const event: WireUiEvent = { interaction: 'key', trigger: 'Key', node: 1, id: 'key-1', key: 'Enter', keycode: 13, modifiers: 0, pressed: true };
     const protocol: 1 = PROTOCOL_VERSION;
     const lifecycle: ConnectOptions = { connectTimeout: 5_000, onClose: (error) => { void error.message; } };
     void configuration; void container; void processes; void topology; void text; void input;
-    void acted; void xml; void request; void protocol; void lifecycle;
+    void acted; void xml; void request; void event; void protocol; void lifecycle; void cancellable.info();
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',

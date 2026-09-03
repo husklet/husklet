@@ -172,10 +172,12 @@ try {
     import { CommandPaletteView, ConfirmAction, TerminalTranscript, render, useHostEvents, usePaneSelection, workspace, type CommandPaletteViewProps, type ConfirmActionProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
+    const cancellable = api.withSignal(new AbortController().signal);
     const table: Promise<ProcessList> = api.containers.processes('container');
     const attachmentGrant: ExtensionCapability = 'container-attach';
     void attachmentGrant;
     void table;
+    void cancellable.info();
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
     void api.containers.create({ image: 'alpine:3.20', name: 'worker', command: ['sleep', '10'], environment: [['MODE', 'test']], mounts: [{ volume: 'cache', target: '/cache', read_only: true }], ports: [{ container: 8080, host: null, protocol: 'tcp' }], memory_mb: 256, cpus: 2, pids_limit: 128 });
     void api.containers.executions();
