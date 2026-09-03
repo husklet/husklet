@@ -30,8 +30,9 @@ docker build -t my-extension .
 is bound to the same version as the package that supplied the starter. The manifest
 label names the file inside the image—the host
 does not accept an inline placeholder—and `COPY --chown=node:node` preserves the
-base image's non-root runtime. Pin `HUSKLET_REACT_IMAGE` to the release version
-you tested before publishing an extension; `latest` is only the starter default.
+base image's non-root runtime. The starter defaults to the immutable base-image
+tag released with this SDK; override `HUSKLET_REACT_IMAGE` deliberately when
+testing against another runtime.
 
 ```jsx
 import React, { useState } from 'react';

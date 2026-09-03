@@ -1,5 +1,5 @@
 # A complete extension built on the multi-architecture Husklet React base.
-ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:latest
+ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:0.1.0
 FROM ${HUSKLET_REACT_IMAGE}
 
 WORKDIR /app

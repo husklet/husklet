@@ -123,12 +123,15 @@ try {
   const starterDockerfile = fs.readFileSync(path.join(installedStarter, 'Dockerfile'), 'utf8');
   const starterManifest = fs.readFileSync(path.join(installedStarter, 'extension.toml'), 'utf8');
   execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], { stdio: 'pipe' });
-  assert.match(starterDockerfile, /^ARG HUSKLET_REACT_IMAGE=ghcr\.io\/husklet\/husklet\/extension-react-base:latest$/m);
   assert.equal(starterPackage.private, true);
   assert.equal(starterPackage.type, 'module');
   assert.equal(starterPackage.scripts.start, 'node main.js');
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
   assert.equal(starterPackage.dependencies.react, '18.3.1');
+  assert.match(
+    starterDockerfile,
+    new RegExp(`^ARG HUSKLET_REACT_IMAGE=ghcr\\.io/husklet/husklet/extension-react-base:${manifest.version.replaceAll('.', '\\.')}$`, 'm'),
+  );
   assert.match(starterDockerfile, /^FROM \$\{HUSKLET_REACT_IMAGE\}$/m);
   assert.match(starterDockerfile, /COPY --chown=node:node main\.js \/app\/main\.js/);
   assert.match(starterDockerfile, /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/);

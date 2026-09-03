@@ -13,6 +13,7 @@ const mcp = readJson('mcp');
 const starter = JSON.parse(fs.readFileSync(path.join(root, 'react/examples/starter/package.json')));
 const applications = [readJson('storybook'), readJson('workspace-manager')];
 const expected = process.env.RELEASE_VERSION ?? react.version;
+const starterDockerfile = fs.readFileSync(path.join(root, 'react/examples/starter/Dockerfile'), 'utf8');
 
 for (const manifest of [react, mcp]) {
   assert.equal(manifest.version, expected, `${manifest.name} version must equal ${expected}`);
@@ -25,6 +26,11 @@ assert.equal(mcp.dependencies['@husklet/react'], expected, 'MCP must depend on t
 assert.equal(starter.private, true, 'the copied starter must never be published independently');
 assert.equal(starter.dependencies['@husklet/react'], expected, 'starter must depend on the exact paired React release');
 assert.equal(starter.dependencies.react, '18.3.1');
+assert.match(
+  starterDockerfile,
+  new RegExp(`^ARG HUSKLET_REACT_IMAGE=ghcr\\.io/husklet/husklet/extension-react-base:${expected.replaceAll('.', '\\.')}$`, 'm'),
+  'starter must default to the exact paired multi-architecture base image',
+);
 for (const manifest of applications) {
   assert.equal(manifest.private, true, `${manifest.name} is an image application, not a public npm package`);
   assert.equal(manifest.dependencies['@husklet/react'], 'file:../react');

@@ -128,6 +128,7 @@ jobs:
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/mcp
           npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --workspace @husklet/mcp
           npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix react/examples/starter
+          sed -i "s|^ARG HUSKLET_REACT_IMAGE=.*|ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:$RELEASE_VERSION|" react/examples/starter/Dockerfile
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Verify and pack-test the exact package pair
