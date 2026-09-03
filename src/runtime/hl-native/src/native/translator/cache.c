@@ -443,7 +443,13 @@ static _Atomic int g_ever_threaded;
 // FULL table made map_put a no-op -> map_body() then returned NULL for a freshly-translated block, and
 // patch_links_to() back-patched a `b (NULL - slot)` wild branch (mongod, ~65K blocks of C++ static init,
 // crashed with SIGILL/SIGSEGV here). NOT the leaked container-state MAP_N (that one is unrelated, 64K).
-#define JIT_MAP_INITIAL_N (1u << 17)
+/* Keep the bootstrap view proportional to a short-lived tool, then grow it at the existing 40% load
+   threshold.  The backing arrays retain JIT_MAP_N slots, so this changes neither the maximum nor any
+   signal-side lifetime rule.  A fork+exec `/bin/sh` publishes about 1,900 blocks: starting it at 2^17
+   spread those writes over thousands of COW-inherited pages even though fewer than 2^11 entries were
+   live.  2^13 keeps that image below the first growth point (3,276 entries); larger applications retain
+   the existing doubling path to the full bound. */
+#define JIT_MAP_INITIAL_N (1u << 13)
 #define JIT_MAP_N (1u << 19)
 #define TXPG_N (1u << 18)
 #define TXLN_N (1u << 21)
