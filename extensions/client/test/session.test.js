@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, Session, workspace } from '../src/index.js';
+import { connect, ExecutionOperationError, Session, workspace } from '../src/index.js';
 import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
 
 test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
@@ -699,6 +699,79 @@ test('real Unix restart wait requires the same container at a newer running gene
     const result = await workspace(session).containers.restartAndWait(id, 7);
     assert.equal(result.changed, true); assert.equal(result.container.generation, 8); assert.equal(result.container.state, 'running');
     assert.deepEqual(calls, ['event_subscribe', 'container_restart', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const containerId = 'c'.repeat(64); const executionId = 'e'.repeat(32);
+  const execution = { id: executionId, container_id: containerId, running: false, exit_code: 0, pid: 22, command: ['printf', 'ok'], user: 'root' };
+  const output = { stdout: [111, 107], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue;
+      calls.push(frame.payload.call);
+      if (frame.payload.call === 'container_exec') {
+        assert.deepEqual(frame.payload.with, { id: containerId, command: ['printf', 'ok'], user: 'root', working_directory: '/tmp' });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
+      } else if (frame.payload.call === 'execution_wait') {
+        assert.deepEqual(frame.payload.with, { id: executionId, timeout_ms: 321 });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'execution', with: execution } }));
+      } else if (frame.payload.call === 'execution_logs') {
+        assert.deepEqual(frame.payload.with, { id: executionId, stdout: true, stderr: false });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'logs', with: output } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const containers = workspace(session).containers;
+    await assert.rejects(containers.execAndWait(containerId, { command: ['true'], timeoutMs: 0 }), /timeout/);
+    await assert.rejects(containers.execAndWait(containerId, { command: ['true'], stdout: false, stderr: false }), /at least one/);
+    assert.deepEqual(calls, [], 'invalid later-stage options must not create an execution');
+    assert.deepEqual(await containers.execAndWait(containerId, {
+      command: ['printf', 'ok'], user: 'root', workingDirectory: '/tmp', timeoutMs: 321, stderr: false,
+    }), { execution, output });
+    assert.deepEqual(calls, ['container_exec', 'execution_wait', 'execution_logs']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix execAndWait preserves execution identity when waiting fails and never removes it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-wait-failure-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const containerId = 'a'.repeat(32); const executionId = 'b'.repeat(32);
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'container_exec') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
+      } else if (frame.payload.call === 'execution_wait') {
+        socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'wait timed out' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait-failure', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(workspace(session).containers.execAndWait(containerId, { command: ['sleep', '1'], timeoutMs: 1 }), (error) => {
+      assert(error instanceof ExecutionOperationError); assert.equal(error.executionId, executionId);
+      assert.equal(error.phase, 'wait'); assert.equal(error.cause?.kind, 'failed'); return true;
+    });
+    assert.deepEqual(calls, ['container_exec', 'execution_wait']);
+    assert(!calls.includes('execution_remove'));
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

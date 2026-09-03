@@ -65,6 +65,19 @@ const restarted = await host.containers.restartAndWait(container.id, container.g
 if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
 ```
 
+Execute without a shell string, wait for completion, and fetch selected bounded
+output streams in one ordered composition:
+
+```js
+const { execution, output } = await host.containers.execAndWait(container.id, {
+  command: ['printf', 'ok'], timeoutMs: 10_000, stdout: true, stderr: false,
+});
+```
+
+All options are validated before creation. A wait or log failure throws
+`ExecutionOperationError` with the retained `executionId` and failing `phase`;
+the client never removes that execution automatically.
+
 Pane occupant changes can likewise be armed and verified without racing a raw
 subscription against the mutation:
 

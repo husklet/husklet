@@ -9,6 +9,17 @@ export { semanticXml };
 import { Session } from './session.js';
 import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from './generated-protocol.js';
 
+/** A post-creation execution failure whose immutable identity remains recoverable. */
+export class ExecutionOperationError extends Error {
+  constructor(executionId, phase, cause) {
+    super(`execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'ExecutionOperationError';
+    this.executionId = executionId;
+    this.phase = phase;
+    this.cause = cause;
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze(['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
@@ -75,6 +86,16 @@ function exactCommand(command) {
     throw new TypeError('command must contain 1..64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
   }
   return command;
+}
+
+function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+    throw new RangeError('execution wait timeout must be an integer from 1 through 30000 milliseconds');
+  }
+  if (typeof stdout !== 'boolean' || typeof stderr !== 'boolean' || (!stdout && !stderr)) {
+    throw new TypeError('execution output requires at least one boolean stdout or stderr stream');
+  }
+  return { timeoutMs, stdout, stderr };
 }
 
 function immutableDigest(value, noun) {
@@ -223,6 +244,21 @@ export function workspace(session, { signal } = {}) {
           user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
+      execAndWait: async (id, { command, user, workingDirectory, ...waitOptions } = {}) => {
+        const containerId = immutableIdentity(id, [32, 64], 'container');
+        const argv = exactCommand(command);
+        const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
+        const executionId = await api.containers.exec(containerId, { command: argv, user, workingDirectory });
+        let phase = 'wait';
+        try {
+          const execution = await api.containers.waitExecution(executionId, { timeoutMs });
+          phase = 'logs';
+          const output = await api.containers.executionLogs(executionId, { stdout, stderr });
+          return { execution, output };
+        } catch (cause) {
+          throw new ExecutionOperationError(executionId, phase, cause);
+        }
+      },
       attachTerminal: (id, command) => session.call('container_attach_terminal', {
         id: immutableIdentity(id, [32, 64], 'container'), command: exactCommand(command),
       }).then((reply) => expect(reply, 'identity')),
@@ -990,7 +1026,7 @@ export const protocolSurface = Object.freeze({
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'attachTerminal'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],

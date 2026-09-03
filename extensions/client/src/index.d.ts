@@ -138,6 +138,12 @@ export class ExtensionError extends Error {
   readonly capability?: string;
 }
 
+export class ExecutionOperationError extends Error {
+  readonly executionId: string;
+  readonly phase: 'wait' | 'logs';
+  readonly cause: unknown;
+}
+
 export interface ConnectOptions {
   path?: string;
   pendingLimit?: number;
@@ -256,6 +262,11 @@ export interface WorkspaceApi {
     executions(): Promise<ExecutionList>;
     executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
+    /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
+    execAndWait(id: string, options: {
+      command: string[]; user?: string; workingDirectory?: string; timeoutMs?: number;
+      stdout?: boolean; stderr?: boolean;
+    }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
     removeExecution(id: string): Promise<void>;
     create(configuration: ContainerCreateSpec): Promise<string>;

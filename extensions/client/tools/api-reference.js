@@ -39,6 +39,9 @@ groups.get('Extensions').push(
   '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `container-read` and `container-control`.',
   '- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `container-read` and `container-control`.',
 );
+groups.get('Processes and executions').push(
+  '- `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID in `ExecutionOperationError` and never auto-remove the record.',
+);
 
 const topicCapability = Object.fromEntries(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
 const sections = [...groups].map(([heading, operations]) => `## ${heading}\n\n${operations.join('\n')}`).join('\n\n');
