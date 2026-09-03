@@ -1299,6 +1299,20 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     );
     assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
 
+    let mut invalid_container_name = spec.clone();
+    invalid_container_name.name = "-worker".into();
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: invalid_container_name }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    let mut invalid_network = spec.clone();
+    invalid_network.network = Some("-private".into());
+    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: invalid_network }, &services(&host)), Err(Failure::Conflict { .. })));
+    let mut oversized_network = spec.clone();
+    oversized_network.network = Some("n".repeat(256));
+    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: oversized_network }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
+
     let mut oversized_hostname = spec.clone();
     oversized_hostname.hostname = Some("h".repeat(254));
     assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: oversized_hostname }, &services(&host)), Err(Failure::Conflict { .. })));

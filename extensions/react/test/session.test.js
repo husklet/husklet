@@ -473,12 +473,15 @@ test('configured container creation preserves its bounded typed specification', 
   const spec = {
     image: 'alpine:3.20', name: 'worker', hostname: 'h'.repeat(253), entrypoint: ['/init'], command: ['serve'],
     environment: [['MODE', 'agent']], working_directory: '/work', user: '1000',
-    labels: [['owner', 'agent']], mounts: [{ volume: 'cache', target: '/cache', read_only: true }],
+    labels: [['owner', 'agent']], mounts: [{ volume: 'cache', target: '/cache' }],
     network: 'private', ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
     memory_mb: 512, cpus: 2, pids_limit: 128,
   };
   const pending = workspace(stage.session).containers.create(spec);
-  assert.deepEqual((await next()).payload, { call: 'container_create', with: { spec } });
+  assert.deepEqual((await next()).payload, { call: 'container_create', with: {
+    spec: { ...spec, mounts: [{ volume: 'cache', target: '/cache', read_only: false }] },
+  } });
+  assert.equal(Object.hasOwn(spec.mounts[0], 'read_only'), false, 'normalization does not mutate caller input');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'c-rich' } }));
   assert.equal(await pending, 'c-rich');
   stage.session.close(); stage.host.destroy(); stage.server.close();

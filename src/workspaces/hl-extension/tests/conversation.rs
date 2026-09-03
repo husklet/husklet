@@ -798,7 +798,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     let host = Host::new();
     let mut session = Session::new(Authority::new(
         ExtensionName::new("containers").expect("name"),
-        Grant::new([Capability::ContainerControl, Capability::VolumeWrite]),
+        Grant::new([Capability::ContainerControl, Capability::VolumeWrite, Capability::NetworkWrite]),
         Vec::new(),
     ));
     let mut sender = hl_extension::Wire::new(extension_end);
@@ -808,7 +808,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
         environment: vec![("é".repeat(128), "value".into())], working_directory: None, user: None,
         labels: Vec::new(), mounts: vec![ContainerVolumeMount {
             volume: "v".repeat(255), target: "/data".into(), read_only: false,
-        }], network: None, ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+        }], network: Some("n".repeat(255)), ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
     }};
     sender.send(&codec::request(&request).expect("request encodes")).expect("request crosses socket");
     let decoded = codec::read_request(&receiver.receive().expect("request arrives")).expect("request decodes");

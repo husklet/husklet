@@ -812,13 +812,12 @@ fn validate_terminal_command(command: &[String]) -> Result<(), Failure> {
 fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<(), Failure> {
     use std::collections::BTreeSet;
 
-    let identifier = |value: &str, limit: usize| {
+    let container_name = |value: &str| {
         !value.is_empty()
-            && value.len() <= limit
-            && value.trim() == value
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+            && value.len() <= 128
+            && value.bytes().enumerate().all(|(index, byte)| {
+                byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte))
+            })
     };
     let argv = |values: &[String], empty: bool| {
         (empty || !values.is_empty())
@@ -840,13 +839,14 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
     let environment_name =
         |value: &str| !value.is_empty() && value.len() <= 256 && !value.contains(['=', '\0']);
     let resource_name = |value: &str| {
-        value.len() <= 255
+        !value.is_empty()
+            && value.len() <= 255
             && value
                 .bytes()
                 .enumerate()
                 .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
     };
-    let valid = identifier(&spec.name, 128)
+    let valid = container_name(&spec.name)
         && spec.hostname.as_ref().is_none_or(|value| {
             !value.is_empty()
                 && value.len() <= 253
@@ -894,7 +894,7 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
             .mounts
             .iter()
             .all(|mount| resource_name(&mount.volume) && absolute(&mount.target))
-        && spec.network.as_ref().is_none_or(|network| identifier(network, 256))
+        && spec.network.as_ref().is_none_or(|network| resource_name(network))
         && spec.ports.len() <= 64
         && spec
             .ports

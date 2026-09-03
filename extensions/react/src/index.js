@@ -165,7 +165,11 @@ export function workspace(session) {
           labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null,
           pids_limit: null, ...configuration,
         };
-        return expect(await session.call('container_create', { spec }), 'identity');
+        const normalized = {
+          ...spec,
+          mounts: spec.mounts.map((mount) => ({ read_only: false, ...mount })),
+        };
+        return expect(await session.call('container_create', { spec: normalized }), 'identity');
       },
       start: (id) => done('container_start', { id }),
       stop: (id) => done('container_stop', { id: immutableIdentity(id, [32, 64], 'container') }),
