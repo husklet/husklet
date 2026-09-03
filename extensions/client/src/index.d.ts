@@ -267,6 +267,11 @@ export interface WorkspaceApi {
       | { changed: false; id: string; state: 'running' }
     >;
     stop(id: string): Promise<void>;
+    /** Arm bounded inventory, stop an immutable ID, then accept only a later exited snapshot. */
+    stopAndWait(id: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; container: ContainerSummary }
+      | { changed: false; id: string; state: 'exited' }
+    >;
     remove(id: string): Promise<void>;
     pause(id: string): Promise<void>;
     unpause(id: string): Promise<void>;

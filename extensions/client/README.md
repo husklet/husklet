@@ -59,6 +59,7 @@ const installed = await host.extensions.installAndWait(status.job, status.revisi
 
 // Arm observation before starting; an unchanged initial snapshot cannot settle this.
 const running = await host.containers.startAndWait(containerId);
+const exited = await host.containers.stopAndWait(containerId);
 if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
 ```
 
