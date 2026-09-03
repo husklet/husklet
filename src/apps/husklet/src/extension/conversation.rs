@@ -303,10 +303,21 @@ impl Conversation {
     pub fn serve(&mut self, services: &Services<'_>) -> Result<(), Fault> {
         const OBSERVE: Duration = Duration::from_millis(250);
         self.control.set_read_timeout(Some(OBSERVE))?;
+        let mut partial_since = None;
         loop {
             match self.wire.receive() {
-                Ok(frame) => self.exchange(&frame, services)?,
-                Err(Transit::Pending) => self.observe(services)?,
+                Ok(frame) => {
+                    partial_since = None;
+                    self.exchange(&frame, services)?;
+                }
+                Err(Transit::Pending) => {
+                    if self.wire.buffered() == 0 {
+                        partial_since = None;
+                    } else if partial_since.get_or_insert_with(Instant::now).elapsed() >= self.settle {
+                        return Err(Fault::Malformed("an unfinished frame exceeded its deadline".into()));
+                    }
+                    self.observe(services)?;
+                }
                 Err(Transit::Closed) => return Ok(()),
                 Err(other) => return Err(fault(other)),
             }
@@ -884,11 +895,12 @@ impl Conversation {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
@@ -2112,6 +2124,26 @@ mod tests {
         );
         assert!(fault.to_string().contains("not yet declared"), "{fault}");
         drop(theirs);
+    }
+
+    #[test]
+    fn a_peer_cannot_hold_the_only_conversation_with_an_unfinished_frame() {
+        let deadline = Duration::from_millis(400);
+        let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let encoded = codec::request(&Request::ContainerList)
+            .expect("request")
+            .encode()
+            .expect("frame");
+        let mut stream = wire.into_stream();
+        let started = Instant::now();
+        stream.write_all(&encoded[..5]).expect("partial frame header");
+
+        let fault = served.join().expect("conversation thread").expect_err("partial peer released");
+        assert!(matches!(fault, Fault::Malformed(ref detail) if detail.contains("unfinished frame")));
+        assert!(started.elapsed() >= deadline, "an ordinary observation tick is not mistaken for a stalled frame");
+        assert!(started.elapsed() < Duration::from_secs(2), "the partial-frame deadline remains bounded");
     }
 
     #[test]
