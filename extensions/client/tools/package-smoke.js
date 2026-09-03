@@ -72,7 +72,7 @@ try {
   ], { cwd: root, encoding: 'utf8' }))[0];
   const names = new Set(packed.files.map(({ path: name }) => name));
   for (const required of [
-    'package.json', 'README.md', 'LICENSE', 'src/index.js', 'src/index.d.ts',
+    'package.json', 'README.md', 'API.md', 'LICENSE', 'src/index.js', 'src/index.d.ts',
     'src/generated-protocol.js', 'src/generated-protocol.d.ts', 'src/semantic.js',
     'src/session.js', 'src/wire.js', 'examples/starter/Dockerfile',
     'examples/starter/extension.toml', 'examples/starter/main.js', 'examples/starter/package.json',
@@ -92,6 +92,14 @@ try {
   assert.equal(manifest.exports['./protocol'].types, './src/generated-protocol.d.ts');
 
   const installedClient = path.join(consumer, 'node_modules/@husklet/client');
+  const apiReference = fs.readFileSync(path.join(installedClient, 'API.md'), 'utf8');
+  const examples = [...apiReference.matchAll(/```js\n([\s\S]*?)```/g)].map((match) => match[1]);
+  assert(examples.length >= 2, 'packed API reference must carry short JavaScript examples');
+  for (const [index, example] of examples.entries()) {
+    const source = path.join(consumer, `api-example-${index}.mjs`);
+    fs.writeFileSync(source, example);
+    execFileSync(process.execPath, ['--check', source], { stdio: 'pipe' });
+  }
   const starter = path.join(scratch, 'starter');
   fs.cpSync(path.join(installedClient, 'examples/starter'), starter, { recursive: true });
   const starterManifest = JSON.parse(fs.readFileSync(path.join(starter, 'package.json')));

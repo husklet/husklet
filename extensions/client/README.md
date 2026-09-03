@@ -36,3 +36,7 @@ framing calls carry an explicit internal rationale. `protocolSurface.topics`
 maps every host topic to the typed `subscribe(topic)` / `unsubscribe(topic)`
 API, so extensions do not need to discover normal operations through
 `Session.call()`.
+
+See [API.md](API.md) for the complete schema-checked method and topic reference,
+including capability requirements, observation identities, bounds, errors, and
+short client-only examples.
