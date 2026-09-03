@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, Row, Scroll, Separator, Spinner, Text,
+  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
@@ -243,7 +243,8 @@ function containerActions(item, busy, act) {
     h(Button, { key: 'start', label: running ? 'Restart' : 'Start', enabled: !blocked, onInvoke: () => act(running ? 'restart' : 'start', item.id) }),
     h(Button, { key: 'pause', label: item.state === 'paused' ? 'Resume' : 'Pause', enabled: !blocked && (running || item.state === 'paused'), onInvoke: () => act(item.state === 'paused' ? 'unpause' : 'pause', item.id) }),
     h(ConfirmAction, {
-      key: 'stop', label: 'Stop', confirmLabel: 'Confirm stop',
+      key: 'stop', label: 'Stop', confirmLabel: 'Confirm stop', pendingLabel: 'Confirm stop',
+      authorityKey: `container:${item.id}:stop`,
       question: `Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && running,
       onConfirm: () => act('stop', item.id),
     }),
@@ -303,7 +304,8 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
             : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
-      label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`,
+      authorityKey: `container:${container.id}:kill:SIGKILL`,
+      label: 'Kill', confirmLabel: 'Confirm kill', pendingLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`,
       onConfirm: () => act('kill', container.id, 'SIGKILL'),
     })),
     logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }),
@@ -424,8 +426,8 @@ export function Executions({ api, resource, executionDetails, truncated = false,
         h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
         h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),
         h(Button, { label: busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s', enabled: !busy && item.running, onInvoke: () => void wait(item.id) }),
-        h(ConfirmAction, { label: 'Terminate', confirmLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
-        h(ConfirmAction, { label: 'Remove record', confirmLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
+        h(ConfirmAction, { authorityKey: `execution:${item.id}:SIGTERM`, label: 'Terminate', confirmLabel: 'Confirm SIGTERM', pendingLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
+        h(ConfirmAction, { authorityKey: `execution:${item.id}:remove`, label: 'Remove record', confirmLabel: 'Confirm removal', pendingLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
     h(Omitted, { count: view.omitted }),
     truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
 }
@@ -557,7 +559,8 @@ export function Volumes({ api, resource, volumeDetails }) {
     ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name} generation ${volume.generation}?`,
+        authorityKey: `volume:${volume.name}:${volume.generation}:remove`,
+        label: 'Remove', confirmLabel: 'Confirm remove', pendingLabel: 'Confirm remove', question: `Remove volume ${volume.name} generation ${volume.generation}?`,
         onConfirm: () => remove(volume),
       })),
       inspection.name === volume.name ? h(CardContent, {},
@@ -643,7 +646,8 @@ export function Networks({ api, resource, networkDetails }) {
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: operation.state !== 'loading' && container.trim().length > 0, onInvoke: () => begin(network, 'connect') }), h(Button, {
         label: 'Disconnect', enabled: operation.state !== 'loading' && container.trim().length > 0, tone: 'danger', onInvoke: () => begin(network, 'disconnect'),
       }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
+        authorityKey: `network:${resourceReference(network)}:remove`,
+        label: 'Remove', confirmLabel: 'Confirm remove', pendingLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
         onConfirm: () => remove(network),
       })),
       disconnectRequest?.network === resourceReference(network) ? h(CardContent, {},
@@ -670,27 +674,6 @@ function InventoryEmpty({ resource, records, label, detail }) {
 }
 function Omitted({ count }) { return count > 0 ? h(Text, { label: `${count} more records omitted to keep this view bounded.`, color: 'text-dim' }) : null; }
 
-// A destructive operation is always two distinct interactions. The first
-// only reveals this prompt; only the final button carries destructive
-// metadata and can call the host API.
-function ConfirmAction({ label, confirmLabel, question, enabled = true, onConfirm }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const confirm = async () => {
-    setBusy(true); setError(null);
-    try { await onConfirm(); setConfirming(false); } catch (cause) { setError(cause); } finally { setBusy(false); }
-  };
-  if (!confirming) return h(Button, {
-    label, enabled: enabled && !busy, tone: 'danger', onInvoke: () => { setError(null); setConfirming(true); },
-  });
-  return h(Column, { gap: 1 },
-    h(Text, { label: question, color: 'warning', wrap: true }),
-    h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null,
-      h(Button, { label: confirmLabel, enabled: !busy, tone: 'danger', destructive: true, onInvoke: confirm }),
-      h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => { setError(null); setConfirming(false); } })),
-    h(ErrorText, { error }));
-}
 function title(value) { return value.charAt(0).toUpperCase() + value.slice(1); }
 function stateTone(state) { return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral'; }
 

@@ -629,6 +629,28 @@ test('volume and network mutations expose danger only on final confirm and cance
   assert.ok(labelled(networks, `Network ${networkId} changed or disappeared; inspect and confirm again.`));
 });
 
+test('shared volume confirmation disables both final actions while removal is pending', async () => {
+  let release;
+  const controlled = { volumes: {
+    ...api.volumes,
+    remove: async () => new Promise((resolve) => { release = resolve; }),
+  } };
+  const resource = {
+    data: [{ name: 'cache', driver: 'local', generation: 'd'.repeat(32) }],
+    loading: false, error: null, reload: async () => {},
+  };
+  const stage = host();
+  stage.render(h(Volumes, { api: controlled, resource }));
+  invoke(stage, 'Remove');
+  invoke(stage, 'Confirm remove');
+  await settled();
+  assert.equal(isEnabled(stage, 'Confirm remove'), false);
+  assert.equal(isEnabled(stage, 'Cancel'), false);
+  release();
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'Remove'), 'successful removal closes the shared confirmation');
+});
+
 test('network connect validates aliases, exposes progress, success, bounded failure and retained retry', async () => {
   const calls = [];
   let release;
