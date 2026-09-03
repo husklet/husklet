@@ -150,6 +150,7 @@ export function workspace(session) {
     await operation;
   };
   const api = {
+    get granted() { return session.granted; },
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
     inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
@@ -518,6 +519,34 @@ export function workspace(session) {
   return api;
 }
 
+/** Mirrors Rust Request::capability for every fixed wire call used by this public facade. */
+export function requestCapability(call) {
+  if (['workspace_info', 'workspace_list', 'workspace_inspect'].includes(call)) return 'workspace-read';
+  if (call.startsWith('workspace_')) return 'workspace-control';
+  if (['extension_list', 'extension_inspect', 'extension_provider_list'].includes(call)) return 'extension-read';
+  if (['extension_enable', 'extension_disable', 'extension_remove'].includes(call)) return 'extension-control';
+  if (call.startsWith('extension_')) return 'extension-install';
+  if (call === 'container_attach_terminal') return 'container-attach';
+  if (['container_list', 'container_inspect', 'container_processes', 'container_logs', 'execution_inspect', 'execution_list', 'execution_logs', 'execution_wait'].includes(call)) return 'container-read';
+  if (call.startsWith('container_') || call.startsWith('execution_')) return 'container-control';
+  if (['image_list', 'image_inspect'].includes(call)) return 'image-read';
+  if (call.startsWith('image_')) return 'image-write';
+  if (['volume_list', 'volume_inspect'].includes(call)) return 'volume-read';
+  if (call.startsWith('volume_')) return 'volume-write';
+  if (['network_list', 'network_inspect'].includes(call)) return 'network-read';
+  if (call.startsWith('network_')) return 'network-write';
+  if (['terminal_tabs', 'terminal_topology'].includes(call)) return 'terminal-read';
+  if (call === 'terminal_read_pane') return 'terminal-output';
+  if (call === 'pane_list') return 'pane-observe';
+  if (call === 'pane_semantic_read') return 'pane-semantic-read';
+  if (call === 'pane_semantic_action') return 'pane-semantic-control';
+  if (call.startsWith('terminal_')) return 'terminal-control';
+  if (['filesystem_list', 'filesystem_read', 'filesystem_read_range', 'filesystem_stat'].includes(call)) return 'filesystem-read';
+  if (call.startsWith('filesystem_')) return 'filesystem-write';
+  if (call.startsWith('interface_') || call.startsWith('source_')) return 'interface';
+  throw new RangeError(`unclassified extension request ${call}`);
+}
+
 /**
  * Renders an element tree into the extension's tab.
  *
@@ -682,7 +711,7 @@ export const protocolCoverage = Object.freeze({
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
-    files: ['list', 'stat', 'read', 'readRange', 'write', 'createObserved', 'mkdir', 'rename', 'remove'],
+    files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],

@@ -5655,6 +5655,7 @@ export function useHostEvents(session: Session, listener: (event: HostEvent, cha
 export function usePaneSelection(session: Session, provider?: string | null): PaneSelection | null;
 
 export interface WorkspaceApi {
+  readonly granted: readonly string[];
   info(): Promise<WorkspaceInfo>;
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
@@ -5778,6 +5779,8 @@ export interface WorkspaceApi {
   watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
   watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
 }
+
+export function requestCapability(call: string): string;
 
 export function workspace(session: Session): WorkspaceApi;
 export const protocolCoverage: Readonly<{

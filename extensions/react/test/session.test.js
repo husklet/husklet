@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import net from 'node:net';
 import test from 'node:test';
 
-import { ExtensionError, Session, protocolCoverage, workspace } from '../src/index.js';
+import { ExtensionError, Session, protocolCoverage, requestCapability, workspace } from '../src/index.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -187,7 +188,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drag'));
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drop'));
   assert.ok(!protocolCoverage.unavailable.events.includes('drag'));
-  const api = workspace({ call() { throw new Error('not called'); } });
+  const api = workspace({ granted: ['workspace-read'], call() { throw new Error('not called'); } });
+  assert.deepEqual(api.granted, ['workspace-read']);
   assert.equal(api.renameWorkspace, undefined);
   assert.equal(typeof api.containers.processes, 'function');
   assert.equal(typeof api.volumes.create, 'function');
@@ -196,6 +198,20 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
     'coverage must enumerate every callable typed image authority in API order');
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(typeof api.terminal.switchOccupant, 'function');
+  assert.deepEqual(Object.keys(api.files), protocolCoverage.available.files,
+    'coverage must enumerate observed filesystem authorities as well as compatibility calls');
+});
+
+test('every fixed public facade request is classified with its Rust host capability', () => {
+  const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const calls = new Set([...source.matchAll(/(?:session\.call|done)\('([a-z_]+)'/g)].map((match) => match[1]));
+  calls.delete('event_subscribe'); calls.delete('event_unsubscribe');
+  for (const call of calls) assert.doesNotThrow(() => requestCapability(call), `${call} is unclassified`);
+  assert.equal(requestCapability('container_attach_terminal'), 'container-attach');
+  assert.equal(requestCapability('terminal_read_pane'), 'terminal-output');
+  assert.equal(requestCapability('pane_semantic_action'), 'pane-semantic-control');
+  assert.equal(requestCapability('filesystem_remove_observed'), 'filesystem-write');
+  assert.throws(() => requestCapability('future_unclassified_call'), /unclassified/);
 });
 
 test('terminal occupant switching validates and preserves the exact CAS wire shape', async () => {

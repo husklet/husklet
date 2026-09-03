@@ -32,7 +32,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
-      protocol: 1, extension: 'admin', peer: 'admin', granted: [],
+      protocol: 1, extension: 'admin', peer: 'admin', granted: ['workspace-read', 'workspace-control', 'container-control', 'network-write', 'terminal-control', 'pane-observe', 'filesystem-read', 'filesystem-write'],
     } }));
     const answer = (frame, reply, withValue) => socket.write(encode({
       channel: frame.channel, kind: KIND.response,

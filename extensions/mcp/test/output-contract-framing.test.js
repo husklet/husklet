@@ -13,7 +13,7 @@ test('packaged CLI distinguishes terminal state from truthful bounded log replay
   const socketPath = path.join(directory, 'host.sock'); const containerId = 'c'.repeat(64); const execution = 'e'.repeat(32);
   const oversized = Array.from({ length: 7_501 }, (_, index) => index % 256);
   const host = net.createServer((socket) => { const reader = new Reader();
-    socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: { protocol: 1, extension: 'output-agent', granted: ['workspace-read', 'container-read', 'terminal-read'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: { protocol: 1, extension: 'output-agent', granted: ['workspace-read', 'container-read', 'terminal-read', 'terminal-output'] } }));
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
       if (frame.kind !== KIND.request || frame.channel === CONTROL) continue;
       const call = frame.payload.call; let payload;

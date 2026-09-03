@@ -39,7 +39,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
     const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
-      protocol: 1, extension: 'agent', peer: 'agent', granted: [],
+      protocol: 1, extension: 'agent', peer: 'agent', granted: ['workspace-read', 'workspace-control', 'container-read', 'container-control', 'image-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-install'],
     } }));
     const answer = (frame, reply, withValue) => socket.write(encode({
       channel: frame.channel, kind: KIND.response,

@@ -23,7 +23,11 @@ Common stdio MCP clients accept this copy-paste configuration shape:
 The socket path is a credential, not a discovery endpoint: install an observer
 extension with only the grants the client needs and use its host-provisioned
 socket. Both arguments are mandatory, duplicates and unknown flags are refused,
-and startup verifies `workspace_info.name` before exposing MCP tools. Diagnostics
+and startup verifies `workspace_info.name` before exposing MCP tools. Discovery
+is shaped by the exact grants in the host greeting, so unavailable control tools
+are absent instead of being advertised and failing only after invocation.
+Composite tools require every constituent grant; occupant-aware pane reads also
+require pane observation plus terminal-output or semantic-read authority. Diagnostics
 go to stderr so they cannot corrupt the JSON-RPC stream on stdout. This command
 does not install extensions, discover credentials, or modify client settings.
 Startup abandons a socket that does not complete its host greeting within five

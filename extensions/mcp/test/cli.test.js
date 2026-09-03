@@ -20,7 +20,9 @@ const until = async (condition, milliseconds = 2_000) => {
   }
 };
 
-async function fakeHost(context, { greet = true } = {}) {
+const fixtureGrants = ['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'container-attach', 'extension-read', 'extension-control', 'extension-install', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'filesystem-read', 'filesystem-write'];
+
+async function fakeHost(context, { greet = true, granted = fixtureGrants } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-mcp-cli-'));
   const socketPath = path.join(scratch, 'host.sock');
   const calls = [];
@@ -32,7 +34,7 @@ async function fakeHost(context, { greet = true } = {}) {
     if (!greet) return;
     const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
-      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'workspace-events', 'container-attach', 'extension-install', 'network-write', 'terminal-control'],
+      protocol: 1, extension: 'observer', peer: 'observer', granted,
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
@@ -225,6 +227,17 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   await client.close();
   await until(() => connections.size === 0);
   assert.equal(diagnostics, '');
+});
+
+test('spawned CLI advertises only tools authorized by the real socket greeting', async (context) => {
+  const { socketPath } = await fakeHost(context, { granted: ['workspace-read'] });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [cli, '--socket', socketPath, '--workspace', 'dev'], cwd: path.resolve(import.meta.dirname, '..'), stderr: 'pipe' });
+  const client = new Client({ name: 'least-authority-test', version: '1' });
+  await client.connect(transport);
+  assert.deepEqual((await client.listTools()).tools.map(({ name }) => name).sort(), [
+    'husklet_workspace_info', 'husklet_workspace_inspect', 'husklet_workspace_list', 'husklet_workspace_wait',
+  ].sort());
+  await client.close();
 });
 
 test('spawned CLI preserves loss across filtered workspace event batches and returns credit', async (context) => {

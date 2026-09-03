@@ -216,6 +216,43 @@ const slot = z.object({ slot: id }).strict();
 const define = (name, description, inputSchema, run, pack = result) => ({ name, description, inputSchema, run: async (input) => {
   try { return pack(await run(input)); } catch (error) { throw publicError(error); }
 } });
+
+/** Exact host grants required before a tool may be advertised. `any` models occupant-dependent pane reads. */
+export function toolAuthority(name) {
+  if (['husklet_workspace_info', 'husklet_workspace_list', 'husklet_workspace_inspect', 'husklet_workspace_wait'].includes(name)) return { all: ['workspace-read'] };
+  if (name === 'husklet_workspace_event_wait') return { all: ['workspace-events'] };
+  if (name === 'husklet_workspace_mutate_wait') return { all: ['workspace-read', 'workspace-control'] };
+  if (name.startsWith('husklet_workspace_')) return { all: ['workspace-control'] };
+  if (['husklet_extension_list', 'husklet_extension_inspect', 'husklet_extension_provider_list', 'husklet_extension_provider_catalogue_wait'].includes(name)) return { all: ['extension-read'] };
+  if (name === 'husklet_extension_provider_wait') return { all: ['extension-read', 'pane-observe'] };
+  if (name === 'husklet_extension_wait') return { all: ['extension-read', 'extension-install'] };
+  if (['husklet_extension_enable', 'husklet_extension_disable', 'husklet_extension_remove'].includes(name)) return { all: ['extension-control'] };
+  if (name.startsWith('husklet_extension_')) return { all: ['extension-install'] };
+  if (name === 'husklet_container_attach_terminal') return { all: ['container-attach'] };
+  if (['husklet_container_list', 'husklet_container_inspect', 'husklet_container_processes', 'husklet_container_logs', 'husklet_container_execution', 'husklet_container_change_wait', 'husklet_execution_list', 'husklet_execution_logs', 'husklet_execution_wait', 'husklet_execution_change_wait'].includes(name)) return { all: ['container-read'] };
+  if (name.startsWith('husklet_container_') || name.startsWith('husklet_execution_')) return { all: ['container-control'] };
+  if (['husklet_volume_list', 'husklet_volume_inspect'].includes(name)) return { all: ['volume-read'] };
+  if (name.startsWith('husklet_volume_')) return { all: ['volume-write'] };
+  if (['husklet_network_list', 'husklet_network_inspect'].includes(name)) return { all: ['network-read'] };
+  if (name.startsWith('husklet_network_')) return { all: ['network-write'] };
+  if (['husklet_image_list', 'husklet_image_inspect'].includes(name)) return { all: ['image-read'] };
+  if (name === 'husklet_image_pull_wait') return { all: ['image-write'] };
+  if (name.startsWith('husklet_image_')) return { all: ['image-write'] };
+  if (['husklet_terminal_tabs', 'husklet_terminal_topology'].includes(name)) return { all: ['terminal-read'] };
+  if (name === 'husklet_terminal_read') return { all: ['terminal-output'] };
+  if (name === 'husklet_pane_list' || name === 'husklet_pane_wait') return { all: ['pane-observe'] };
+  if (name === 'husklet_pane_snapshot') return { all: ['pane-semantic-read'] };
+  if (name === 'husklet_pane_read') return { all: ['pane-observe'], any: ['terminal-output', 'pane-semantic-read'] };
+  if (name === 'husklet_pane_action') return { all: ['pane-semantic-control'] };
+  if (name === 'husklet_pane_action_wait') return { all: ['pane-semantic-control', 'pane-observe'] };
+  if (name.startsWith('husklet_terminal_')) return { all: name.endsWith('_wait') || name === 'husklet_terminal_mutate_wait' ? ['terminal-control', 'pane-observe'] : ['terminal-control'] };
+  if (['husklet_file_list', 'husklet_file_stat', 'husklet_file_read', 'husklet_file_read_range'].includes(name)) return { all: ['filesystem-read'] };
+  if (name.startsWith('husklet_file_')) return { all: ['filesystem-write'] };
+  throw new Error(`unclassified MCP authority ${name}`);
+}
+
+const permitted = (authority, granted) => authority.all.every((capability) => granted.has(capability))
+  && (authority.any == null || authority.any.some((capability) => granted.has(capability)));
 const inventory = (field) => (value) => inventoryResult(value, field);
 const PANE_INPUT_BYTES = 64 * 1024;
 const BASE64_INPUT_CHARS = Math.ceil(PANE_INPUT_BYTES / 3) * 4;
@@ -577,7 +614,11 @@ export function tools(api) {
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
-  return definitions.concat(paneTools(api.terminal, api.watchPaneChanges?.bind(api)));
+  const advertised = definitions.concat(paneTools(api.terminal, api.watchPaneChanges?.bind(api)));
+  const classified = advertised.map((tool) => ({ tool, authority: toolAuthority(tool.name) }));
+  if (!Array.isArray(api.granted)) return advertised;
+  const granted = new Set(api.granted);
+  return classified.filter(({ authority }) => permitted(authority, granted)).map(({ tool }) => tool);
 }
 
 export function createServer(session) {

@@ -4,8 +4,30 @@ import path from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer, paneXml, semanticXml, tools } from '../src/index.js';
+import { createServer, paneXml, semanticXml, toolAuthority, tools } from '../src/index.js';
 import { workspace } from '../../react/src/index.js';
+
+test('every advertised MCP tool has an exact host authority classification and grants shape discovery', () => {
+  const { api } = fake();
+  const names = tools(api).map(({ name }) => name);
+  assert.equal(new Set(names).size, names.length);
+  for (const name of names) {
+    const authority = toolAuthority(name);
+    assert(authority.all.length > 0, `${name} has no mandatory authority`);
+  }
+  api.granted = ['workspace-read'];
+  assert.deepEqual(tools(api).map(({ name }) => name).sort(), [
+    'husklet_workspace_info', 'husklet_workspace_inspect', 'husklet_workspace_list',
+  ].sort());
+  api.granted = ['pane-observe', 'terminal-output'];
+  api.terminal.semantics = async () => ({}); api.terminal.act = async () => {};
+  api.watchPaneChanges = async () => async () => {};
+  assert(tools(api).some(({ name }) => name === 'husklet_pane_read'));
+  assert(!tools(api).some(({ name }) => name === 'husklet_pane_action'));
+  api.granted = ['pane-observe', 'pane-semantic-control'];
+  assert(tools(api).some(({ name }) => name === 'husklet_pane_action_wait'));
+  assert(!tools(api).some(({ name }) => name === 'husklet_pane_read'));
+});
 
 function fake() {
   const calls = [];
@@ -83,7 +105,7 @@ test('every confirmation-gated MCP authority is classified with its strongest ob
 });
 
 test('every React method referenced by an advertised MCP handler exists on the real typed facade', () => {
-  const api = workspace({ call: async () => { throw new Error('not invoked'); } });
+  const api = workspace({ granted: [], call: async () => { throw new Error('not invoked'); } });
   const sources = [
     ['index.js', api],
     ['panes.js', api.terminal],
