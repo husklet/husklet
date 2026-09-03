@@ -48,6 +48,9 @@ if (enabled.changed) console.log(enabled.extension.status);
 
 const disabled = await host.extensions.disableAndWait(extension.name, extension.image_digest);
 if (disabled.changed) console.log(disabled.extension.status); // durable standby; provider withdrawal is observed separately
+
+const removed = await host.extensions.removeAndWait(extension.name, extension.image_digest);
+if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
 ```
 
 Pane occupant changes can likewise be armed and verified without racing a raw

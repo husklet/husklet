@@ -257,6 +257,36 @@ test('real Unix extension disable arms inventory before digest-bound authority',
   }
 });
 
+test('real Unix extension remove arms inventory before authority and observes absence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-remove-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'e'.repeat(64)}`;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'extension_remove') socket.write(encode({ channel: 16, kind: KIND.event, payload: {
+        snapshot: 'extensions', of: [],
+      } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'remove-wait', granted: ['extension-read', 'extension-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.removeAndWait('manager', digest);
+    assert.deepEqual(result, { changed: true, removed: { name: 'manager', image_digest: digest }, replacement: null });
+    assert.deepEqual(calls, ['event_subscribe', 'extension_remove', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('negotiated grants are immutable and deny calls and topics before any socket write', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-grants-'));
   const socketPath = path.join(directory, 'host.sock');

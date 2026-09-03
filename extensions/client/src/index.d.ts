@@ -204,6 +204,11 @@ export interface WorkspaceApi {
       | { changed: false; name: string; image_digest: string }
     >;
     remove(name: string, generation: string): Promise<void>;
+    /** Arm inventory, remove this exact digest, then prove that digest is durably absent. */
+    removeAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; removed: { name: string; image_digest: string }; replacement: ExtensionSummary | null }
+      | { changed: false; name: string; image_digest: string }
+    >;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     /** Wait for this exact acquisition job revision to advance, then return its authoritative status. */

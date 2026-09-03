@@ -662,6 +662,34 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.extensions.removeAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension remove wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (!current || current.image_digest !== digest) resolve(current ?? null);
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.remove(name, digest);
+      const replacement = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); }),
+      ]);
+      return replacement === undefined
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, removed: { name, image_digest: digest }, replacement };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (typeof job !== 'string' || job.length === 0 || new TextEncoder().encode(job).byteLength > 128) {
