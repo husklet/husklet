@@ -232,6 +232,13 @@ pub enum Request {
         slot: String,
         command: Vec<String>,
     },
+    /// Runs a command only in the exact terminal snapshot the caller observed.
+    TerminalSpawnObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        command: Vec<String>,
+    },
     TerminalReadPane {
         slot: String,
         lines: Option<usize>,
@@ -405,6 +412,7 @@ impl Request {
             | Self::TerminalSplit { .. }
             | Self::TerminalSplitObserved { .. }
             | Self::TerminalSpawn { .. }
+            | Self::TerminalSpawnObserved { .. }
             | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
             | Self::TerminalClosePane { .. }

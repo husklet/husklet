@@ -1076,6 +1076,15 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalControl,
         ),
         (
+            Request::TerminalSpawnObserved {
+                slot: "s1".into(),
+                generation: 7,
+                revision: 11,
+                command: vec!["ls".into()],
+            },
+            Capability::TerminalControl,
+        ),
+        (
             Request::TerminalWritePane {
                 slot: "s1".into(),
                 generation: 1,

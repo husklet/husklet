@@ -576,7 +576,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const terminal = workspace(stage.session).terminal;
   const topology = terminal.topology();
   const splitting = terminal.splitObserved('s1', 4, 7, 'below');
-  const spawning = terminal.spawn('s1', ['printf', '%s\n', 'ready']);
+  const spawning = terminal.spawnObserved('s1', 4, 7, ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
   const retitling = terminal.retitle('s1', ' Build 🧪 ');
@@ -586,7 +586,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
     call: 'terminal_split_observed', with: { slot: 's1', generation: 4, revision: 7, division: 'below' },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_spawn', with: { slot: 's1', command: ['printf', '%s\n', 'ready'] },
+    call: 'terminal_spawn_observed', with: { slot: 's1', generation: 4, revision: 7, command: ['printf', '%s\n', 'ready'] },
   });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_write_pane', with: { slot: 's1', generation: 4, revision: 7, contents: [...new TextEncoder().encode('echo hello\n')] },
@@ -614,6 +614,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
+  assert.throws(() => terminal.spawnObserved('s1', 4, -1, ['true']), /generation and revision/);
   assert.throws(() => terminal.writeInput('s1', 4, 7, new Uint8Array(65_537)), /65536 byte limit/);
   assert.throws(() => terminal.writeInput('s1', -1, 7, 'x'), /generation and revision/);
   assert.throws(() => terminal.closeObserved('s1', 4, -1), /generation and revision/);

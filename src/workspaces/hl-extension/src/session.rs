@@ -200,6 +200,7 @@ impl Session {
             | Request::TerminalSplit { .. }
             | Request::TerminalSplitObserved { .. }
             | Request::TerminalSpawn { .. }
+            | Request::TerminalSpawnObserved { .. }
             | Request::TerminalReadPane { .. }
             | Request::TerminalWritePane { .. }
             | Request::TerminalResizeGrid { .. }
@@ -590,6 +591,10 @@ impl Session {
                 Ok(Reply::Identity(port.split(slot, *division)?))
             }
             Request::TerminalSpawn { slot, command } => {
+                validate_terminal_command(command)?;
+                port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalSpawnObserved { slot, command, .. } => {
                 validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }

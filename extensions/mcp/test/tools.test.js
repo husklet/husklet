@@ -15,7 +15,7 @@ function fake() {
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), splitObserved: record('terminal.splitObserved'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), retitle: record('terminal.retitle'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close'), closeObserved: record('terminal.closeObserved'), switchOccupant: record('terminal.switchOccupant'), switchOccupantObserved: record('terminal.switchOccupantObserved') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), splitObserved: record('terminal.splitObserved'), spawn: record('terminal.spawn'), spawnObserved: record('terminal.spawnObserved'), focus: record('terminal.focus'), retitle: record('terminal.retitle'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close'), closeObserved: record('terminal.closeObserved'), switchOccupant: record('terminal.switchOccupant'), switchOccupantObserved: record('terminal.switchOccupantObserved') },
     files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
@@ -92,18 +92,19 @@ test('schemas are strict, controls map exactly, and terminal spawn accepts argv 
   const spawn = listed.find(({ name }) => name === 'husklet_terminal_spawn');
   assert(spawn);
   assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: 'echo unsafe' }).success, false);
+  assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['printf'] }).success, false);
   assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: [] }).success, false);
   assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: [''] }).success, false);
   assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['x'.repeat(4097)] }).success, false);
   assert.equal(spawn.inputSchema.safeParse({ slot: 'pane-1', command: ['x'.repeat(513), ...Array(63).fill('x'.repeat(512))] }).success, false);
-  await spawn.run({ slot: 'pane-1', command: ['printf', '%s\n', 'ready'] });
+  await spawn.run({ slot: 'pane-1', generation: 7, revision: 11, command: ['printf', '%s\n', 'ready'] });
   const start = listed.find(({ name }) => name === 'husklet_container_start');
   assert.equal(start.inputSchema.safeParse({ id: 'abc', extra: true }).success, false);
   assert.equal(start.inputSchema.safeParse({ id: 'abc' }).success, false);
   const immutable = 'a'.repeat(64);
   await start.run({ id: immutable });
   assert.deepEqual(calls, [
-    ['terminal.spawn', 'pane-1', ['printf', '%s\n', 'ready']],
+    ['terminal.spawnObserved', 'pane-1', 7, 11, ['printf', '%s\n', 'ready']],
     ['containers.start', immutable],
   ]);
 });
@@ -976,7 +977,7 @@ test('a real MCP client lists strict tools and calls through the React session c
         root: { id: 0, role: 'column', label: 'Live', value: null, disabled: false, actions: ['invoke'], children: [] },
       } };
       if (name === 'pane_semantic_action') return { reply: 'done' };
-      if (name === 'terminal_spawn') return { reply: 'done' };
+      if (name === 'terminal_spawn_observed') return { reply: 'done' };
       if (name === 'terminal_write_pane') return { reply: 'done' };
       if (name === 'event_subscribe') {
         queueMicrotask(() => { for (const listener of events) listener({ snapshot: 'pane_changes', of: {
@@ -1037,7 +1038,7 @@ test('a real MCP client lists strict tools and calls through the React session c
   const networks = await client.callTool({ name: 'husklet_network_list', arguments: {} });
   assert.deepEqual(JSON.parse(networks.content[0].text), [{ id: 'n1', name: 'private', driver: 'bridge' }]);
   await client.callTool({ name: 'husklet_terminal_spawn', arguments: {
-    slot: 'pane-live', command: ['printf', '%s\n', 'ready'],
+    slot: 'pane-live', generation: 13, revision: 11, command: ['printf', '%s\n', 'ready'],
   } });
   await client.callTool({ name: 'husklet_terminal_write_bytes', arguments: {
     slot: 'pane-live', generation: 13, revision: 11, input_base64: Buffer.from([0, 3, 0x80, 0xff]).toString('base64'),
@@ -1064,7 +1065,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     ['image_list', undefined],
     ['volume_list', undefined],
     ['network_list', undefined],
-    ['terminal_spawn', { slot: 'pane-live', command: ['printf', '%s\n', 'ready'] }],
+    ['terminal_spawn_observed', { slot: 'pane-live', generation: 13, revision: 11, command: ['printf', '%s\n', 'ready'] }],
     ['terminal_write_pane', { slot: 'pane-live', generation: 13, revision: 11, contents: [0, 3, 128, 255] }],
     ['pane_semantic_read', { slot: 'pane-live' }],
     ['pane_semantic_read', { slot: 'pane-live' }],

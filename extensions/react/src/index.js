@@ -279,6 +279,19 @@ export function workspace(session) {
         }
         return done('terminal_spawn', { slot, command: [...command] });
       },
+      spawnObserved: (slot, generation, revision, command) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+          throw new TypeError('terminal spawn requires nonnegative safe integer generation and revision');
+        }
+        if (!Array.isArray(command) || command.length === 0 || command.length > 64
+          || command.some((argument) => typeof argument !== 'string'
+            || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
+          || command[0].length === 0
+          || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) {
+          throw new RangeError('terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+        }
+        return done('terminal_spawn_observed', { slot, generation, revision, command: [...command] });
+      },
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
       semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
       act: (slot, action) => {
@@ -561,7 +574,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant', 'switchOccupantObserved'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

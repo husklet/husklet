@@ -160,6 +160,8 @@ Terminal control is pane-addressed and promise-based as well. `terminal.read`
 returns at most 2,000 lines with the cursor and grid dimensions from the same
 authoritative screen snapshot; `terminal.splitObserved(slot, generation, revision, division)`
 splits only that exact snapshot (the legacy `split` remains for compatibility);
+`terminal.spawnObserved(slot, generation, revision, argv)` similarly prevents a
+stale slot from running argv in a replacement terminal (legacy `spawn` remains);
 `terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
 through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only
