@@ -182,6 +182,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
   assert.deepEqual(protocolCoverage.unavailable.extensions, []);
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
+  assert.ok(!protocolCoverage.unavailable.events.some((name) => name.startsWith('global')),
+    'window-level workspace events must not also be advertised as unavailable under stale names');
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drag'));
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drop'));
   assert.ok(!protocolCoverage.unavailable.events.includes('drag'));
@@ -265,12 +267,17 @@ test('workspace input watcher uses its separate grant topic, returns credit, and
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await opening;
   stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'workspace_events', of: {
-    events: [{ event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 12.5, y: 8, button: 1, modifiers: ['shift'], delta_x: null, delta_y: null }], dropped: 3,
+    events: [
+      { event: 'key', key: 'a', modifiers: [], pressed: true, slot: 'pane-2', generation: 7 },
+      { event: 'focus', active: true, slot: 'pane-2', generation: 7 },
+      { event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 12.5, y: 8, button: 1, modifiers: ['shift'], delta_x: null, delta_y: null },
+    ], dropped: 3,
   } } }));
   assert.equal((await next()).kind, KIND.credit);
   assert.equal(batches[0].dropped, 3);
   assert.equal(batches[0].events[0].slot, 'pane-2');
   assert.equal(batches[0].events[0].generation, 7);
+  assert.equal(batches[0].events[1].slot, 'pane-2');
   const stopping = stop();
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-events' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));

@@ -71,9 +71,20 @@ pub enum WorkspaceEvent {
         key: String,
         modifiers: Vec<String>,
         pressed: bool,
+        /// Focused terminal pane, or none when window chrome owns the key.
+        #[serde(default)]
+        slot: Option<String>,
+        /// Occupant generation paired with `slot`.
+        #[serde(default)]
+        generation: Option<u64>,
     },
     Focus {
         active: bool,
+        /// Focused terminal pane at the window transition, when there is one.
+        #[serde(default)]
+        slot: Option<String>,
+        #[serde(default)]
+        generation: Option<u64>,
     },
     Pointer {
         phase: PointerPhase,

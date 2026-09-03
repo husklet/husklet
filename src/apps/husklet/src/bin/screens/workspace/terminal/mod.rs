@@ -247,6 +247,20 @@ impl TermWin {
             .retain(|observer| observer.observe(event.clone()));
     }
 
+    fn focused_event_identity(window: &Rc<Self>, focus: Option<gtk::Widget>) -> (Option<String>, Option<u64>) {
+        let mut widget = focus;
+        let terminal = loop {
+            let Some(current) = widget else { return (None, None) };
+            if let Ok(terminal) = current.clone().downcast::<vte4::Terminal>() {
+                break terminal;
+            }
+            widget = current.parent();
+        };
+        let slot = Slots::new(window).of(&terminal);
+        let generation = slot.as_ref().map(|_| 0);
+        (slot, generation)
+    }
+
     fn pointer_target(window: &Rc<Self>, x: f64, y: f64) -> Option<PointerTarget> {
         let mut widget = window.stack.pick(x, y, gtk::PickFlags::DEFAULT)?;
         while !PaneChrome::is(&widget) {
@@ -546,11 +560,15 @@ impl Window {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
             let tw = tw.clone();
+            let root = window.clone();
             keys.connect_key_pressed(move |_, key, _c, state| {
+                let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.to_string()),
+                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: true,
+                    slot,
+                    generation,
                 });
                 let shortcut = Shortcut::from_key(key, state);
                 // Window shortcuts are captured before the focused widget sees them. Text-editing
@@ -608,11 +626,15 @@ impl Window {
         }
         {
             let tw = tw.clone();
+            let root = window.clone();
             keys.connect_key_released(move |_, key, _c, state| {
+                let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.to_string()),
+                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: false,
+                    slot,
+                    generation,
                 });
             });
         }
@@ -748,8 +770,11 @@ impl Window {
         {
             let tw = tw.clone();
             window.connect_is_active_notify(move |window| {
+                let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(window));
                 tw.broadcast(hl_extension::WorkspaceEvent::Focus {
                     active: window.is_active(),
+                    slot,
+                    generation,
                 })
             });
         }
@@ -928,5 +953,23 @@ mod shortcut_tests {
             assert!(!editable_captures(true, Some(shortcut)));
         }
         assert!(!editable_captures(true, None));
+    }
+}
+
+#[cfg(test)]
+mod workspace_event_identity_tests {
+    use super::*;
+
+    #[test]
+    fn focused_terminal_identity_is_reported_and_search_focus_is_explicitly_absent() {
+        assert!(crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("event-identity", "offline.invalid", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let terminal = vte4::Terminal::new();
+            Slots::new(&tw).hold(&terminal, "pane-stable".into());
+            assert_eq!(TermWin::focused_event_identity(&tw, Some(terminal.clone().upcast())), (Some("pane-stable".into()), Some(0)));
+
+            assert_eq!(TermWin::focused_event_identity(&tw, Some(tw.search.entry.clone().upcast())), (None, None));
+        }), "workspace event identity requires an Xvfb display");
     }
 }

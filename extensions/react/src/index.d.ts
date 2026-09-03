@@ -5573,8 +5573,8 @@ export interface TabTopology { id: string; title: string; root: LayoutNode }
 export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
 export interface FileEntry { path: string; directory: boolean; size: number }
 export type WorkspaceEvent =
-  | { event: 'key'; key: string; modifiers: string[]; pressed: boolean }
-  | { event: 'focus'; active: boolean }
+  | { event: 'key'; key: string; modifiers: string[]; pressed: boolean; slot?: string | null; generation?: number | null }
+  | { event: 'focus'; active: boolean; slot?: string | null; generation?: number | null }
   | { event: 'pointer'; phase: 'move' | 'enter' | 'leave' | 'press' | 'release' | 'click' | 'context' | 'scroll'; slot: string; generation: number; x: number; y: number; button: number | null; modifiers: string[]; delta_x: number | null; delta_y: number | null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
 export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }

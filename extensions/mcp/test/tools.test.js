@@ -875,7 +875,9 @@ test('workspace event wait filters one bounded batch and always disposes', async
   const { api } = fake(); let listener; let disposed = 0;
   api.watchWorkspaceEvents = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_workspace_event_wait');
-  assert.equal(wait.inputSchema.safeParse({ kind: 'key', slot: 'pane-1', timeout_ms: 1 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ slot: 'pane-1', timeout_ms: 1 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ kind: 'key', slot: 'pane-1', timeout_ms: 1 }).success, true);
+  assert.equal(wait.inputSchema.safeParse({ kind: 'focus', phase: 'press', timeout_ms: 1 }).success, false);
   const pending = wait.run({ kind: 'pointer', slot: 'pane-2', phase: 'press', timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
   listener({ events: [{ event: 'pointer', phase: 'move', slot: 'pane-2', generation: 2, x: 1, y: 2, button: null, modifiers: [], delta_x: null, delta_y: null }], dropped: 2 });

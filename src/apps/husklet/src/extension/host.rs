@@ -240,7 +240,11 @@ mod event_buffer_tests {
     fn overload_is_bounded_and_reported() {
         let events = Events::default();
         for index in 0..Events::LIMIT + 7 {
-            events.observe(WorkspaceEvent::Focus { active: index % 2 == 0 });
+            events.observe(WorkspaceEvent::Focus {
+                active: index % 2 == 0,
+                slot: None,
+                generation: None,
+            });
         }
         let batch = events.drain().unwrap();
         assert_eq!(batch.events.len(), Events::LIMIT);
@@ -251,7 +255,11 @@ mod event_buffer_tests {
     fn callback_contention_never_waits_and_reports_the_loss() {
         let events = Events::default();
         let held = events.inner.queue.lock().unwrap();
-        events.observe(WorkspaceEvent::Focus { active: true });
+        events.observe(WorkspaceEvent::Focus {
+            active: true,
+            slot: None,
+            generation: None,
+        });
         drop(held);
 
         let batch = events.drain().expect("contention loss remains observable");
@@ -265,7 +273,11 @@ mod event_buffer_tests {
         let events = Events::default();
         let weak = events.downgrade();
         drop(events);
-        assert!(!weak.observe(WorkspaceEvent::Focus { active: true }));
+        assert!(!weak.observe(WorkspaceEvent::Focus {
+            active: true,
+            slot: None,
+            generation: None,
+        }));
     }
 }
 

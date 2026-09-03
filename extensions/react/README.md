@@ -198,9 +198,8 @@ authority; callers do not need to infer those operations from TypeScript alone.
 Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
-delete the workspace hosting it. The `unavailable` section names remaining
-areas such as drag/drop events;
-those names deliberately are not callable methods. `Session.onEvent` is
+delete the workspace hosting it. Names under `unavailable` deliberately are not
+callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send. Interface handlers
 receive bounded key, focus, and pointer details, while the credit-controlled
 `workspace-events` subscription carries workspace-level key, focus, and pointer
@@ -208,7 +207,9 @@ activity. Its `dropped` count includes queue pressure, motion coalescing, and
 native callback contention, so consumers can detect every observation gap.
 Pointer events identify the exact pane slot and occupant generation,
 use pane-local coordinates, and distinguish motion, boundary, button, context,
-and scroll phases with bounded modifiers and deltas. Neither is a promise that
+and scroll phases with bounded modifiers and deltas. Key and window-focus
+events also carry the focused terminal slot/generation when a terminal owns
+focus, or explicit null identity while window chrome owns it. Neither is a promise that
 every global workspace snapshot is published.
 
 ## Props
