@@ -871,16 +871,31 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         remove.disabled,
         "the hidden first-step action cannot bypass confirmation state"
     );
-    let cancel = asking
-        .root
-        .children
-        .iter()
+    let replacement = manifest("alpha");
+    let prepared = fixture.roster.borrow().prepare_update(&replacement, "sha256:replacement")
+        .expect("replacement update");
+    fixture.roster.borrow_mut().commit_update(
+        prepared, &Grant::new([Capability::Interface]), 2,
+    ).expect("replacement wins before stale confirmation");
+    fixture.view.semantic_action(&Action {
+        revision: asking.revision, node: confirm.id,
+        action: ActionKind::Invoke, value: None,
+    }).expect("stale confirmation is handled as a refusal");
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Cancel".into()),
+        "stale confirmation transfers focus to the enabled cancellation action"
+    );
+    let refused = fixture.view.semantic_snapshot();
+    let cancel = refused.root.children.iter()
         .find(|node| node.label.as_deref() == Some("Cancel removal"))
         .unwrap();
     fixture
         .view
         .semantic_action(&Action {
-            revision: asking.revision,
+            revision: refused.revision,
             node: cancel.id,
             action: ActionKind::Invoke,
             value: None,

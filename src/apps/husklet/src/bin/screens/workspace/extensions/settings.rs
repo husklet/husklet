@@ -508,6 +508,9 @@ fn removal(
                 refusal.set_text("The extension changed; inspect and confirm removal again.");
                 refusal.set_visible(true);
                 semantics.set_disabled(&cancel_path, false);
+                if restore_focus {
+                    cancel.grab_focus();
+                }
                 return;
             }
             let entry = match shelf.quiesce(&name) {
