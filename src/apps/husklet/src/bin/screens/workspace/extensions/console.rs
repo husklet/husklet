@@ -383,9 +383,11 @@ impl Console {
             )));
         }
         match target {
-            PaneOccupantTarget::Terminal => PaneChooser::terminal_in(window, Some(slot)),
+            PaneOccupantTarget::Terminal => {
+                let _ = PaneChooser::terminal_in(window, Some(slot));
+            }
             PaneOccupantTarget::Surface { extension, provider } => {
-                PaneChooser::provider_in(window, Some(slot), extension, provider)
+                let _ = PaneChooser::provider_in(window, Some(slot), extension, provider);
             }
         }
         let after = Self::pane_inventory(window)?

@@ -3421,7 +3421,7 @@ mod panes {
             &[hl_extension::PaneProvider {
                 id: ExtensionName::new("database").expect("provider id"),
                 title: "Postgres".to_owned(),
-                icon: None,
+                icon: Some("database-symbolic".to_owned()),
             }],
             Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
         );
@@ -3486,6 +3486,7 @@ mod panes {
             .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
             .expect("pane chooser");
         PaneChooser::populate(&bench.window, &chooser);
+        assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
         assert_eq!(
             chooser.tooltip_text().as_deref(),
             Some("Choose pane content; currently showing Postgres · postgres")
@@ -3535,7 +3536,7 @@ mod panes {
     pub(super) fn an_existing_pane_chooser_discovers_a_later_provider() {
         let bench = Bench::new();
         let chooser = PaneChooser::button(&bench.window);
-        assert_eq!(chooser.icon_name().as_deref(), Some("view-grid-symbolic"));
+        assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
         assert_eq!(
             chooser.tooltip_text().as_deref(),
             Some("Choose pane content; currently showing Terminal")
@@ -3572,7 +3573,7 @@ mod panes {
             &[hl_extension::PaneProvider {
                 id: ExtensionName::new("database").expect("provider id"),
                 title: "Postgres".to_owned(),
-                icon: None,
+                icon: Some("database-symbolic".to_owned()),
             }],
             Rc::new(|_| {}),
         );
@@ -3602,7 +3603,7 @@ mod panes {
             &[hl_extension::PaneProvider {
                 id: ExtensionName::new("database").expect("provider id"),
                 title: "Postgres".to_owned(),
-                icon: None,
+                icon: Some("database-symbolic".to_owned()),
             }],
             Rc::new(|_| {}),
         );
@@ -3627,6 +3628,7 @@ mod panes {
             .find(|button| button.label().as_deref() == Some("Postgres"))
             .expect("provider choice");
         postgres.emit_clicked();
+        assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
 
         assert_eq!(
             Panes::at(&bench.window, &first_slot)
@@ -3656,6 +3658,7 @@ mod panes {
             .find(|button| button.label().as_deref() == Some("Terminal"))
             .expect("terminal is always available");
         terminal.emit_clicked();
+        assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
         assert_eq!(
             Panes::at(&bench.window, &second_slot)
                 .expect("restored second pane")

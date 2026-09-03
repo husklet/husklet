@@ -40,6 +40,8 @@ impl PaneChrome {
 
 impl PaneChooser {
     const SEARCH_THRESHOLD: usize = 6;
+    const TERMINAL_ICON: &'static str = "utilities-terminal-symbolic";
+    const PROVIDER_ICON: &'static str = "view-grid-symbolic";
 
     /// A chooser whose contents are rebuilt when it opens.
     ///
@@ -49,7 +51,7 @@ impl PaneChooser {
     /// or uninstalled providers without leaving stale actions behind.
     pub(crate) fn button(window: &Rc<TermWin>) -> gtk::MenuButton {
         let button = gtk::MenuButton::new();
-        button.set_icon_name("view-grid-symbolic");
+        button.set_icon_name(Self::TERMINAL_ICON);
         button.set_tooltip_text(Some("Choose what this pane displays"));
         button.set_focusable(true);
         button.update_property(&[gtk::accessible::Property::Label("Choose pane content")]);
@@ -111,6 +113,19 @@ impl PaneChooser {
                     .as_ref()
                     .map_or_else(|| "Terminal".to_owned(), |(_, extension, _)| extension.clone())
             });
+        let current_icon = selected_provider
+            .and_then(|(extension, id)| {
+                providers
+                    .iter()
+                    .find(|provider| provider.extension == extension && provider.id == id)
+                    .and_then(|provider| provider.icon.as_deref())
+            })
+            .unwrap_or(if identity.is_none() {
+                Self::TERMINAL_ICON
+            } else {
+                Self::PROVIDER_ICON
+            });
+        button.set_icon_name(current_icon);
         let accessible = format!("Choose pane content; currently showing {current_label}");
         button.update_property(&[
             gtk::accessible::Property::Label("Choose pane content"),
@@ -146,7 +161,12 @@ impl PaneChooser {
         {
             let window = window.clone();
             let target = target.clone();
-            terminal.connect_clicked(move |_| Self::terminal_in(&window, target.as_deref()));
+            let chooser = button.clone();
+            terminal.connect_clicked(move |_| {
+                if Self::terminal_in(&window, target.as_deref()) {
+                    chooser.set_icon_name(Self::TERMINAL_ICON);
+                }
+            });
         }
         choices.append(&terminal);
 
@@ -197,7 +217,13 @@ impl PaneChooser {
                 let target = target.clone();
                 let extension = provider.extension;
                 let id = provider.id;
-                choice.connect_clicked(move |_| Self::provider_in(&window, target.as_deref(), &extension, &id));
+                let icon = provider.icon.unwrap_or_else(|| Self::PROVIDER_ICON.to_owned());
+                let chooser = button.clone();
+                choice.connect_clicked(move |_| {
+                    if Self::provider_in(&window, target.as_deref(), &extension, &id) {
+                        chooser.set_icon_name(&icon);
+                    }
+                });
                 choices.append(&choice);
                 groups
                     .last_mut()
@@ -237,22 +263,22 @@ impl PaneChooser {
     }
 
     pub(crate) fn provider(window: &Rc<TermWin>, extension: &str, provider: &str) {
-        Self::provider_in(window, None, extension, provider);
+        let _ = Self::provider_in(window, None, extension, provider);
     }
 
-    pub(crate) fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) {
-        let Some(gallery) = Window::gallery(window) else { return };
+    pub(crate) fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) -> bool {
+        let Some(gallery) = Window::gallery(window) else { return false };
         if !gallery.offers(extension, provider) {
-            return;
+            return false;
         }
         let Some(current) = slot
             .and_then(|slot| Panes::at(window, slot))
             .or_else(|| Self::selected(window))
         else {
-            return;
+            return false;
         };
         if !PaneSwap::can_replace(&current.content) {
-            return;
+            return false;
         }
         let previous_surface = (current.occupant == hl_extension::port::Occupant::Surface)
             .then(|| {
@@ -274,7 +300,7 @@ impl PaneChooser {
                 window.displaced.borrow_mut().insert(current.slot.clone(), terminal);
             }
             gallery.select(extension, provider, &current.slot);
-            return;
+            return true;
         }
         // The parent changed between preflight and replacement. Undo every
         // borrow/registration and put the old interface back exactly where it
@@ -284,20 +310,21 @@ impl PaneChooser {
             Slots::new(window).enrol(&current.content, current.slot, previous.clone(), provider);
             Surface::restore(window, &previous, &current.content);
         }
+        false
     }
 
     pub(crate) fn terminal(window: &Rc<TermWin>) {
-        Self::terminal_in(window, None);
+        let _ = Self::terminal_in(window, None);
     }
 
-    pub(crate) fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) {
+    pub(crate) fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) -> bool {
         let Some(current) = slot
             .and_then(|slot| Panes::at(window, slot))
             .or_else(|| Self::selected(window))
         else {
-            return;
+            return false;
         };
-        Self::terminal_at(window, &current, true);
+        Self::terminal_at(window, &current, true)
     }
 
     /// Restores every pane occupied by one extension without changing layout
@@ -313,7 +340,7 @@ impl PaneChooser {
             })
             .collect();
         for pane in held {
-            Self::terminal_at(window, &pane, false);
+            let _ = Self::terminal_at(window, &pane, false);
         }
     }
 
@@ -337,18 +364,18 @@ impl PaneChooser {
         }
     }
 
-    fn terminal_at(window: &Rc<TermWin>, current: &Occupancy, focus: bool) {
+    fn terminal_at(window: &Rc<TermWin>, current: &Occupancy, focus: bool) -> bool {
         if current.occupant != hl_extension::port::Occupant::Surface {
-            return;
+            return false;
         }
         if !PaneSwap::can_replace(&current.content) {
-            return;
+            return false;
         }
         let identity = Slots::new(window)
             .surface(&current.content)
             .map(|(_, extension, provider)| (extension, provider));
         let Some(terminal) = window.displaced.borrow_mut().remove(&current.slot) else {
-            return;
+            return false;
         };
         Surface::retire(window, &current.content);
         Slots::new(window).release(&current.content);
@@ -356,13 +383,14 @@ impl PaneChooser {
             if focus {
                 terminal.grab_focus();
             }
-            return;
+            return true;
         }
         if let Some((extension, provider)) = identity {
             Slots::new(window).enrol(&current.content, current.slot.clone(), extension.clone(), provider);
             Surface::restore(window, &extension, &current.content);
         }
         window.displaced.borrow_mut().insert(current.slot.clone(), terminal);
+        false
     }
 }
 
