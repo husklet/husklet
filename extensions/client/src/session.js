@@ -1,7 +1,7 @@
 // The conversation with the host: connect, greet, call, and answer.
 
 import net from 'node:net';
-import { CONTROL, KIND, Reader, encode } from './wire.js';
+import { CONTROL, FLAG_END, KIND, Reader, encode } from './wire.js';
 import {
   encodeRequest, PROTOCOL_TOPICS, PROTOCOL_VERSION,
   validateFailure, validateReplyFor, validateSnapshot,
@@ -16,6 +16,8 @@ export const SOCKET = 'HUSKLET_EXTENSION_SOCKET';
 /** The protocol's shared call channel. Replies are ordered on this channel. */
 const CALLS = 2;
 const ERROR = 2;
+const COALESCED = 4;
+const CLOSE_TIMEOUT = 1_000;
 const SNAPSHOT_TOPICS = new Map(PROTOCOL_TOPICS.map(({ wire, snapshot }) => [snapshot, wire]));
 
 function requiredObject(value, label) {
@@ -77,6 +79,8 @@ export class Session {
   #topics = new Set();
   #eventTopics = new Map();
   #pending = [];
+  #pings = new Map();
+  #nextPing = 1;
   #limit;
   #timeout;
   #closed = false;
@@ -84,6 +88,21 @@ export class Session {
   #greeted;
   #ready;
   #rejectReady;
+  #welcomed = false;
+  #backpressured = false;
+  #closing;
+  #dataListener = (chunk) => this.#receive(chunk);
+  #endListener = () => this.#ended();
+  #drainListener = () => { this.#backpressured = false; };
+  #closeListener = () => {
+    this.#finish(new Error('extension host connection closed'));
+    this.#socket.removeListener('data', this.#dataListener);
+    this.#socket.removeListener('end', this.#endListener);
+    this.#socket.removeListener('drain', this.#drainListener);
+    this.#socket.removeListener('close', this.#closeListener);
+    this.#socket.removeListener('error', this.#errorListener);
+  };
+  #errorListener = (error) => this.#finish(error);
 
   constructor(socket, {
     onReply = () => {}, onRows = () => {}, onEvent = () => {}, onEventError = () => {}, onClose = () => {}, pendingLimit = 64, timeout = 30_000,
@@ -106,9 +125,11 @@ export class Session {
     this.#onEventError = onEventError;
     this.#onClose = onClose;
     this.#events.add(onEvent);
-    socket.on('data', (chunk) => this.#receive(chunk));
-    socket.on('close', () => this.#finish(new Error('extension host connection closed')));
-    socket.on('error', (error) => this.#finish(error));
+    socket.on('data', this.#dataListener);
+    socket.on('end', this.#endListener);
+    socket.on('drain', this.#drainListener);
+    socket.on('close', this.#closeListener);
+    socket.on('error', this.#errorListener);
   }
 
   /** Capabilities the host granted, known once the greeting arrives. */
@@ -164,6 +185,7 @@ export class Session {
     if (this.#pending.length >= this.#limit) {
       return Promise.reject(new Error(`extension call limit of ${this.#limit} is exhausted`));
     }
+    if (this.#backpressured) return Promise.reject(new Error('extension socket is applying write backpressure'));
     const payload = encodeRequest(name, argument);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -175,7 +197,7 @@ export class Session {
       }, this.#timeout);
       this.#pending.push({ resolve, reject, timer, name, argument });
       try {
-        this.#socket.write(encode({ channel: CALLS, kind: KIND.request, payload }));
+        this.#write({ channel: CALLS, kind: KIND.request, payload });
       } catch (error) {
         clearTimeout(timer);
         this.#pending.pop();
@@ -186,7 +208,25 @@ export class Session {
 
   /** Answers a row window the host asked for. */
   answer(channel, window) {
-    this.#socket.write(encode({ channel, kind: KIND.response, payload: window }));
+    this.#write({ channel, kind: KIND.response, payload: window });
+  }
+
+  /** Round-trips an opaque bounded heartbeat without consuming call ordering. */
+  ping() {
+    if (this.#closed) return Promise.reject(new Error('extension session is closed'));
+    if (this.#backpressured) return Promise.reject(new Error('extension socket is applying write backpressure'));
+    const token = Buffer.allocUnsafe(8);
+    token.writeBigUInt64LE(BigInt(this.#nextPing++));
+    const key = token.toString('hex');
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pings.delete(key);
+        reject(new Error(`extension ping timed out after ${this.#timeout}ms`));
+      }, this.#timeout);
+      this.#pings.set(key, { resolve, reject, timer });
+      try { this.#write({ channel: CONTROL, kind: KIND.ping, payload: token }); }
+      catch (error) { clearTimeout(timer); this.#pings.delete(key); reject(error); }
+    });
   }
 
   /** Adds a pushed-event observer and returns a synchronous disposer. */
@@ -197,8 +237,30 @@ export class Session {
   }
 
   close() {
+    if (this.#closing) return this.#closing;
     this.#finish(new Error('extension session closed'));
-    this.#socket.end();
+    this.#closing = new Promise((resolve) => {
+      if (this.#socket.destroyed) return resolve();
+      const timer = setTimeout(() => {
+        this.#socket.destroy();
+        this.#detachDataListeners();
+        resolve();
+      }, Math.min(this.#timeout, CLOSE_TIMEOUT));
+      timer.unref?.();
+      this.#socket.end(encode({ channel: CONTROL, kind: KIND.close, payload: Buffer.alloc(0) }), () => {
+        clearTimeout(timer);
+        this.#socket.destroy();
+        this.#detachDataListeners();
+        resolve();
+      });
+    });
+    return this.#closing;
+  }
+
+  #ended() {
+    try { this.#reader.finish(); }
+    catch (error) { this.#finish(error); this.#socket.destroy(); return; }
+    this.#finish(new Error('extension host connection closed'));
   }
 
   #receive(chunk) {
@@ -211,9 +273,35 @@ export class Session {
   }
 
   #handle(frame) {
+    if ((frame.flags & FLAG_END) === 0) throw new Error('fragmented extension frames are unsupported');
+    if ((frame.flags & ERROR) !== 0 && frame.kind !== KIND.response) throw new Error('error flag is only valid on responses');
+    if ((frame.flags & COALESCED) !== 0 && frame.kind !== KIND.event) throw new Error('coalesced flag is only valid on events');
+    if (frame.kind === KIND.ping) {
+      if (!this.#welcomed) throw new Error('host ping arrived before the greeting');
+      this.#write({ channel: frame.channel, kind: KIND.pong, payload: frame.payload });
+      return;
+    }
+    if (frame.kind === KIND.pong) {
+      if (!this.#welcomed) throw new Error('host pong arrived before the greeting');
+      const key = frame.payload.toString('hex');
+      const pending = this.#pings.get(key);
+      if (!pending) throw new Error('host returned an unknown ping token');
+      this.#pings.delete(key); clearTimeout(pending.timer); pending.resolve();
+      return;
+    }
+    if (frame.kind === KIND.reset) throw new Error(`extension host reset the session: ${frame.payload.toString('utf8')}`);
+    if (frame.kind === KIND.close) {
+      if (frame.channel === CONTROL) { this.#finish(new Error('extension host closed the session')); this.#socket.destroy(); }
+      else {
+        const topic = this.#eventTopics.get(frame.channel);
+        this.#eventTopics.delete(frame.channel);
+        if (topic !== undefined) this.#topics.delete(topic);
+      }
+      return;
+    }
     if (frame.channel === CONTROL) return this.#greet(frame);
     // A row request is the one thing the host pushes rather than answers.
-    if (frame.payload && frame.payload.range !== undefined) {
+    if (frame.kind === KIND.event && frame.payload && frame.payload.range !== undefined) {
       return this.#onRows(frame.payload, frame.channel);
     }
     if (frame.kind === KIND.response && frame.channel === CALLS) {
@@ -259,11 +347,23 @@ export class Session {
       } finally {
         // Returning one credit after attempting every listener bounds a producer
         // without allowing one faulty observer to stall the whole event stream.
-        this.#socket.write(encode({ channel: frame.channel, kind: KIND.credit, payload: 1 }));
+        this.#write({ channel: frame.channel, kind: KIND.credit, payload: 1 });
       }
       return;
     }
-    return this.#onReply(frame.payload);
+    throw new Error(`unexpected ${frame.kind} frame on channel ${frame.channel}`);
+  }
+
+  #write(frame) {
+    if (this.#closed && frame.kind !== KIND.close) throw new Error('extension session is closed');
+    if (this.#backpressured) throw new Error('extension socket is applying write backpressure');
+    if (!this.#socket.write(encode(frame))) this.#backpressured = true;
+  }
+
+  #detachDataListeners() {
+    this.#socket.removeListener('data', this.#dataListener);
+    this.#socket.removeListener('end', this.#endListener);
+    this.#socket.removeListener('drain', this.#drainListener);
   }
 
   #finish(error) {
@@ -274,25 +374,36 @@ export class Session {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
+    for (const pending of this.#pings.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.#pings.clear();
+    this.#events.clear();
+    this.#topics.clear();
+    this.#eventTopics.clear();
     try { this.#onClose(error); } catch { /* Lifecycle reporting cannot prevent closure. */ }
   }
 
   /** The host speaks first and states the grant, so an extension knows what it
    * holds before it asks for anything. */
   #greet(frame) {
+    if (this.#welcomed) throw new Error('host sent a second greeting');
+    if (frame.kind !== KIND.open) throw new Error('host greeting must open the control channel');
     const welcome = frame.payload;
     if (!welcome || welcome.protocol === undefined) return;
     if (welcome.protocol !== PROTOCOL) {
       throw new Error(`host speaks protocol ${welcome.protocol}, this extension speaks ${PROTOCOL}`);
     }
     this.#granted = welcome.granted ?? [];
-    this.#socket.write(
-      encode({
+    this.#write(
+      {
         channel: CONTROL,
         kind: KIND.response,
         payload: { protocol: PROTOCOL, name: welcome.peer ?? welcome.extension, features: [] },
-      }),
+      },
     );
+    this.#welcomed = true;
     this.#ready();
   }
 }

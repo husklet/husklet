@@ -164,6 +164,8 @@ export class Session {
   readonly ready: Promise<void>;
   readonly granted: readonly string[];
   call(method: string, params?: unknown): Promise<unknown>;
+  /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
+  ping(): Promise<void>;
   answer(channel: number, window: unknown): void;
   onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
   close(): Promise<void>;

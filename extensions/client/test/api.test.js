@@ -18,7 +18,7 @@ async function pair(options) {
     socket.once('connect', () => resolve(socket));
   });
   const [host, extension] = await Promise.all([accepted, connecting]);
-  host.write(encode({ channel: 0, kind: KIND.request, payload: { protocol: PROTOCOL, extension: 'test', granted: [] } }));
+  host.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'test', granted: [] } }));
   const session = new Session(extension, options);
   await session.ready;
   return { host, session, server };
