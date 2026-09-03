@@ -251,6 +251,13 @@ mod unix {
         );
         tree.apply(&rerender, &mut surface)
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
+        if story == "Extension acquisition" {
+            assert!(
+                find::<gtk::Label>(&root, |label| label.text() == "Cancel download invoked for checking.")
+                    .is_visible(),
+                "cancellation did not produce visible, state-specific acknowledgement"
+            );
+        }
         if story == "Validated settings form" {
             assert!(
                 descendants::<gtk::ToggleButton>(&root)
@@ -466,7 +473,13 @@ mod unix {
                     .emit_clicked();
             }
             "Extension acquisition" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download")).emit_clicked();
+                let cancel = find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download"));
+                assert_eq!(
+                    cancel.accessible_role(),
+                    gtk::AccessibleRole::Button,
+                    "pending acquisition cancellation must remain a native accessible button"
+                );
+                cancel.emit_clicked();
             }
             "Validated settings form" => {
                 find::<gtk::ToggleButton>(root, |button| button.label().as_deref() == Some("backend")).emit_clicked();
@@ -494,6 +507,16 @@ mod unix {
             "{story} emitted {reports:?} instead of a bounded event"
         );
         let event = reports.into_iter().next().expect("one report");
+        if story == "Extension acquisition" {
+            let hl_gui::Event::Invoke { node, id } = &event else {
+                panic!("native cancellation did not emit its typed Invoke interaction: {event:?}")
+            };
+            assert_eq!(
+                tree.handler(*node, hl_gui::Trigger::Invoke),
+                Some(id),
+                "native cancellation must preserve the producer-owned handler identity"
+            );
+        }
         if story == "Validated settings form" {
             let hl_gui::Event::Toggle { node, id, value } = &event else {
                 panic!("native ToggleButton did not emit its typed Toggle interaction: {event:?}")
