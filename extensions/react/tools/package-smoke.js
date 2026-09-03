@@ -219,6 +219,8 @@ try {
         case 'context': return received.x + ',' + received.y;
         case 'focus': return String(received.focused);
         case 'change': return String(received.value);
+        case 'drag': return received.id;
+        case 'drop': return received.source + ':' + received.x + ',' + received.y;
         case 'invoke': case 'submit': case 'close': return received.id;
         default: { const exhaustive: never = received; return exhaustive; }
       }
