@@ -179,15 +179,50 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
     if let (Some(slot), Some(target)) = (slot, value.as_object_mut()) {
         target.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
     }
-    serde_json::to_vec(&value).ok()
+    payload(&value).ok()
 }
 
-fn payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Coding> {
-    hl_rpc::payload(value)
+/// Encodes a cross-language JSON payload while refusing integers JavaScript
+/// cannot distinguish exactly.
+///
+/// # Errors
+/// Returns [`Coding::Malformed`] for an unsafe integer or serialization error,
+/// and [`Coding::Oversize`] when the framed payload bound is exceeded.
+pub fn payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Coding> {
+    let value = serde_json::to_value(value).map_err(|error| Coding::Malformed(error.to_string()))?;
+    safe_numbers(&value)?;
+    hl_rpc::payload(&value)
 }
 
 fn parse<T: serde::de::DeserializeOwned>(frame: &Frame) -> Result<T, Coding> {
-    serde_json::from_slice(&frame.payload).map_err(|error| Coding::Malformed(error.to_string()))
+    let value: serde_json::Value =
+        serde_json::from_slice(&frame.payload).map_err(|error| Coding::Malformed(error.to_string()))?;
+    safe_numbers(&value)?;
+    serde_json::from_value(value).map_err(|error| Coding::Malformed(error.to_string()))
+}
+
+fn safe_numbers(value: &serde_json::Value) -> Result<(), Coding> {
+    match value {
+        serde_json::Value::Number(number) => {
+            let unsafe_integer = number.as_u64().is_some_and(|value| value > crate::JSON_SAFE_INTEGER_MAX)
+                || number.as_i64().is_some_and(|value| {
+                    value < -(crate::JSON_SAFE_INTEGER_MAX as i64) || value > crate::JSON_SAFE_INTEGER_MAX as i64
+                });
+            if unsafe_integer {
+                return Err(Coding::Malformed(format!(
+                    "integer {number} exceeds the lossless JSON boundary {}", crate::JSON_SAFE_INTEGER_MAX
+                )));
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values { safe_numbers(value)?; }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() { safe_numbers(value)?; }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
@@ -209,7 +244,8 @@ fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
 
 #[cfg(test)]
 mod tests {
-    use super::interaction;
+    use super::{interaction, read_request, request, safe_numbers};
+    use crate::{ChannelId, Frame, Kind, PaneChange, PaneChangeKind, Request, Snapshot, JSON_SAFE_INTEGER_MAX};
     use hl_gui::{CollectionSelection, Event, EventId, NodeId, SelectedRow, SourceId, Version};
 
     #[test]
@@ -235,6 +271,42 @@ mod tests {
             serde_json::json!({
                 "source": 7, "version": 3, "rows": [{ "index": 42, "id": "90042" }]
             })
+        );
+    }
+
+    #[test]
+    fn every_typed_payload_refuses_integers_javascript_cannot_preserve() {
+        let boundary = Request::ExtensionAcquisitionCancel {
+            job: "job-1".into(),
+            revision: JSON_SAFE_INTEGER_MAX,
+        };
+        assert_eq!(read_request(&request(&boundary).expect("safe boundary")).unwrap(), boundary);
+
+        let unsafe_outbound = Request::ExtensionAcquisitionCancel {
+            job: "job-1".into(),
+            revision: JSON_SAFE_INTEGER_MAX + 1,
+        };
+        assert!(request(&unsafe_outbound).unwrap_err().to_string().contains("lossless JSON boundary"));
+
+        let unsafe_inbound = Frame::new(
+            ChannelId::new(2),
+            Kind::Request,
+            format!(r#"{{"call":"extension_acquisition_cancel","with":{{"job":"job-1","revision":{}}}}}"#, JSON_SAFE_INTEGER_MAX + 1).into_bytes(),
+        );
+        assert!(read_request(&unsafe_inbound).unwrap_err().to_string().contains("lossless JSON boundary"));
+        assert!(safe_numbers(&serde_json::json!(-(JSON_SAFE_INTEGER_MAX as i64) - 1)).is_err());
+        assert!(
+            Snapshot::PaneChanges(PaneChange {
+                slot: "pane-1".into(),
+                kind: PaneChangeKind::Terminal,
+                revision: JSON_SAFE_INTEGER_MAX + 1,
+                generation: 1,
+                coalesced: 0,
+            })
+            .payload()
+            .unwrap_err()
+            .to_string()
+            .contains("lossless JSON boundary")
         );
     }
 }

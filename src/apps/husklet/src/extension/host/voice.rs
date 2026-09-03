@@ -38,7 +38,7 @@ pub(crate) fn speak_at(voice: &Voice, event: &hl_extension::SurfaceEvent) {
 
 /// Tells an extension which of its manifest-declared pane views was selected.
 pub(super) fn speak_provider(voice: &Voice, selection: &hl_extension::PaneSelection) {
-    let Ok(payload) = serde_json::to_vec(selection) else {
+    let Ok(payload) = hl_extension::codec::payload(selection) else {
         return;
     };
     voice.say(&Frame::new(EVENTS, Kind::Event, payload));
@@ -113,9 +113,7 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     if let (Some(slot), Some(object)) = (slot, value.as_object_mut()) {
         object.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
     }
-    serde_json::to_vec(&value)
-        .ok()
-        .filter(|payload| payload.len() <= Frame::PAYLOAD_LIMIT)
+    hl_extension::codec::payload(&value).ok()
 }
 
 /// The shape every interaction is sent in.
@@ -200,7 +198,7 @@ impl Voice {
                 if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&first.payload) {
                     if let Some(object) = value.as_object_mut() {
                         object.insert("dropped".into(), dropped.into());
-                        if let Ok(payload) = serde_json::to_vec(&value) {
+                        if let Ok(payload) = hl_extension::codec::payload(&value) {
                             first.payload = payload;
                         }
                     }

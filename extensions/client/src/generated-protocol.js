@@ -544,6 +544,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -578,6 +580,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
             "signed": true
           }
         }
@@ -798,6 +802,8 @@ const definitions = {
           "of": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -810,6 +816,8 @@ const definitions = {
           "of": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -822,6 +830,8 @@ const definitions = {
           "of": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -840,6 +850,8 @@ const definitions = {
           "of": {
             "bits": 8,
             "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -852,6 +864,8 @@ const definitions = {
           "of": {
             "bits": 8,
             "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -896,6 +910,8 @@ const definitions = {
         "schema": {
           "bits": 16,
           "kind": "integer",
+          "maximum": 65535,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -907,6 +923,8 @@ const definitions = {
           "of": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -958,6 +976,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "signed": true
         }
       }
@@ -1073,6 +1093,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1150,6 +1172,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "signed": true
         }
       },
@@ -1159,6 +1183,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "signed": true
         }
       },
@@ -1198,6 +1224,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1214,6 +1242,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -1261,6 +1291,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1273,6 +1305,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1303,6 +1337,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1474,6 +1510,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1483,6 +1521,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1494,6 +1534,8 @@ const definitions = {
           "of": {
             "bits": 8,
             "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1524,6 +1566,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1558,6 +1602,8 @@ const definitions = {
         "schema": {
           "bits": 16,
           "kind": "integer",
+          "maximum": 65535,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1567,6 +1613,8 @@ const definitions = {
         "schema": {
           "bits": 16,
           "kind": "integer",
+          "maximum": 65535,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -1628,6 +1676,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1691,6 +1741,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1700,6 +1752,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -1722,6 +1776,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1738,6 +1794,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -1780,6 +1838,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1818,6 +1878,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1830,6 +1892,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1881,6 +1945,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1890,6 +1956,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "signed": true
         }
       }
@@ -1912,6 +1980,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -1921,6 +1991,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2033,6 +2105,8 @@ const definitions = {
               "schema": {
                 "bits": 16,
                 "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -2069,6 +2143,8 @@ const definitions = {
           "of": {
             "bits": 8,
             "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -2080,6 +2156,8 @@ const definitions = {
           "of": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -2137,6 +2215,8 @@ const definitions = {
     "of": {
       "bits": 64,
       "kind": "integer",
+      "maximum": 9007199254740991,
+      "minimum": 0,
       "signed": false
     },
     "serde": {}
@@ -2202,6 +2282,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2211,6 +2293,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2220,6 +2304,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -2401,6 +2487,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2410,6 +2498,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2419,6 +2509,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2459,6 +2551,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2468,6 +2562,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2557,6 +2653,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2566,6 +2664,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2575,6 +2675,8 @@ const definitions = {
         "schema": {
           "bits": 16,
           "kind": "integer",
+          "maximum": 65535,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2584,6 +2686,8 @@ const definitions = {
         "schema": {
           "bits": 16,
           "kind": "integer",
+          "maximum": 65535,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2603,6 +2707,8 @@ const definitions = {
         "schema": {
           "bits": 32,
           "kind": "integer",
+          "maximum": 4294967295,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2612,6 +2718,8 @@ const definitions = {
         "schema": {
           "bits": 32,
           "kind": "integer",
+          "maximum": 4294967295,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -2943,6 +3051,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -3301,6 +3411,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
             "signed": true
           }
         }
@@ -3456,6 +3568,8 @@ const definitions = {
     "of": {
       "bits": 64,
       "kind": "integer",
+      "maximum": 9007199254740991,
+      "minimum": 0,
       "signed": false
     },
     "serde": {}
@@ -3468,6 +3582,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -3494,6 +3610,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -3503,6 +3621,8 @@ const definitions = {
         "schema": {
           "bits": 32,
           "kind": "integer",
+          "maximum": 4294967295,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -3641,6 +3761,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -3716,6 +3838,8 @@ const definitions = {
     "of": {
       "bits": 64,
       "kind": "integer",
+      "maximum": 9007199254740991,
+      "minimum": 0,
       "signed": false
     },
     "serde": {}
@@ -3777,6 +3901,8 @@ const definitions = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -5248,6 +5374,8 @@ const definitions = {
     "of": {
       "bits": 64,
       "kind": "integer",
+      "maximum": 9007199254740991,
+      "minimum": 0,
       "signed": false
     },
     "serde": {}
@@ -5337,6 +5465,8 @@ const definitions = {
           "of": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -5349,6 +5479,8 @@ const definitions = {
           "of": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -5397,6 +5529,8 @@ const definitions = {
           "of": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -5483,6 +5617,8 @@ const definitions = {
                 "of": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -5520,6 +5656,8 @@ const definitions = {
                 "of": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -5553,6 +5691,8 @@ const definitions = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -5580,6 +5720,8 @@ const definitions = {
                 "of": {
                   "bits": 32,
                   "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -5641,6 +5783,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -5742,6 +5886,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       },
@@ -5751,6 +5897,8 @@ const definitions = {
         "schema": {
           "bits": 64,
           "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
           "signed": false
         }
       }
@@ -5846,6 +5994,8 @@ const definitions = {
           "of": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -6328,6 +6478,8 @@ const roots = {
             "of": {
               "bits": 8,
               "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -6659,6 +6811,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -6683,6 +6837,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -6715,6 +6871,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -6862,6 +7020,8 @@ const roots = {
               "schema": {
                 "bits": 32,
                 "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -7464,6 +7624,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7473,6 +7635,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7530,6 +7694,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7539,6 +7705,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7575,6 +7743,8 @@ const roots = {
                 "of": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -7638,6 +7808,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7647,6 +7819,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7658,6 +7832,8 @@ const roots = {
                 "of": {
                   "bits": 8,
                   "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -7683,6 +7859,8 @@ const roots = {
               "schema": {
                 "bits": 16,
                 "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7692,6 +7870,8 @@ const roots = {
               "schema": {
                 "bits": 16,
                 "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -7716,6 +7896,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7725,6 +7907,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7734,6 +7918,8 @@ const roots = {
               "schema": {
                 "bits": 16,
                 "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7743,6 +7929,8 @@ const roots = {
               "schema": {
                 "bits": 16,
                 "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -7782,6 +7970,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7791,6 +7981,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -7830,6 +8022,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7839,6 +8033,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -7885,6 +8081,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7894,6 +8092,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7948,6 +8148,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7957,6 +8159,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -7989,6 +8193,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -8021,6 +8227,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -8030,6 +8238,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -8095,6 +8305,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -8104,6 +8316,8 @@ const roots = {
               "schema": {
                 "bits": 64,
                 "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
                 "signed": false
               }
             },
@@ -8157,6 +8371,8 @@ const roots = {
                 "of": {
                   "bits": 8,
                   "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -8185,6 +8401,8 @@ const roots = {
                 "of": {
                   "bits": 8,
                   "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -8624,7 +8842,7 @@ function validate(schema, value, path) {
     case 'unit': if (value !== undefined && value !== null) fail(path, 'absent'); return;
     case 'string': if (typeof value !== 'string') fail(path, 'a string'); return;
     case 'boolean': if (typeof value !== 'boolean') fail(path, 'a boolean'); return;
-    case 'integer': if (!Number.isSafeInteger(value) || (!schema.signed && value < 0)) fail(path, 'a safe integer'); return;
+    case 'integer': if (!Number.isSafeInteger(value) || value < schema.minimum || value > schema.maximum) fail(path, `an integer from ${schema.minimum} through ${schema.maximum}`); return;
     case 'float': if (typeof value !== 'number' || !Number.isFinite(value)) fail(path, 'a finite number'); return;
     case 'optional': if (value !== null && value !== undefined) validate(schema.of, value, path); return;
     case 'newtype': return validate(schema.of, value, path);

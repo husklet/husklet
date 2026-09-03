@@ -57,6 +57,10 @@ pub use subscription::{
     WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
 };
 
+/// Largest integer encoded as a JSON number on the cross-language wire.
+/// JavaScript cannot distinguish consecutive integers beyond this boundary.
+pub const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
+
 /// The host's opening frame, carrying this domain's grant.
 pub type Welcome = hl_rpc::Welcome<Capability>;
 

@@ -375,6 +375,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -409,6 +411,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
               "signed": true
             }
           }
@@ -629,6 +633,8 @@
             "of": {
               "bits": 32,
               "kind": "integer",
+              "maximum": 4294967295,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -641,6 +647,8 @@
             "of": {
               "bits": 16,
               "kind": "integer",
+              "maximum": 65535,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -653,6 +661,8 @@
             "of": {
               "bits": 32,
               "kind": "integer",
+              "maximum": 4294967295,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -671,6 +681,8 @@
             "of": {
               "bits": 8,
               "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -683,6 +695,8 @@
             "of": {
               "bits": 8,
               "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -727,6 +741,8 @@
           "schema": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -738,6 +754,8 @@
             "of": {
               "bits": 16,
               "kind": "integer",
+              "maximum": 65535,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -789,6 +807,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
             "signed": true
           }
         }
@@ -904,6 +924,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -981,6 +1003,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
             "signed": true
           }
         },
@@ -990,6 +1014,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
             "signed": true
           }
         },
@@ -1029,6 +1055,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1045,6 +1073,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1092,6 +1122,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1104,6 +1136,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1134,6 +1168,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1305,6 +1341,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1314,6 +1352,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1325,6 +1365,8 @@
             "of": {
               "bits": 8,
               "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1355,6 +1397,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1389,6 +1433,8 @@
           "schema": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1398,6 +1444,8 @@
           "schema": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1459,6 +1507,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1522,6 +1572,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1531,6 +1583,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1553,6 +1607,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1569,6 +1625,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -1611,6 +1669,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1649,6 +1709,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1661,6 +1723,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1712,6 +1776,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1721,6 +1787,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
             "signed": true
           }
         }
@@ -1743,6 +1811,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1752,6 +1822,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -1864,6 +1936,8 @@
                 "schema": {
                   "bits": 16,
                   "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -1900,6 +1974,8 @@
             "of": {
               "bits": 8,
               "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1911,6 +1987,8 @@
             "of": {
               "bits": 16,
               "kind": "integer",
+              "maximum": 65535,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -1968,6 +2046,8 @@
       "of": {
         "bits": 64,
         "kind": "integer",
+        "maximum": 9007199254740991,
+        "minimum": 0,
         "signed": false
       },
       "serde": {}
@@ -2033,6 +2113,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2042,6 +2124,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2051,6 +2135,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -2232,6 +2318,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2241,6 +2329,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2250,6 +2340,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2290,6 +2382,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2299,6 +2393,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2388,6 +2484,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2397,6 +2495,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2406,6 +2506,8 @@
           "schema": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2415,6 +2517,8 @@
           "schema": {
             "bits": 16,
             "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2434,6 +2538,8 @@
           "schema": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2443,6 +2549,8 @@
           "schema": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -2774,6 +2882,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -3132,6 +3242,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
               "signed": true
             }
           }
@@ -3287,6 +3399,8 @@
       "of": {
         "bits": 64,
         "kind": "integer",
+        "maximum": 9007199254740991,
+        "minimum": 0,
         "signed": false
       },
       "serde": {}
@@ -3299,6 +3413,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -3325,6 +3441,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -3334,6 +3452,8 @@
           "schema": {
             "bits": 32,
             "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -3472,6 +3592,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -3547,6 +3669,8 @@
       "of": {
         "bits": 64,
         "kind": "integer",
+        "maximum": 9007199254740991,
+        "minimum": 0,
         "signed": false
       },
       "serde": {}
@@ -3608,6 +3732,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -5079,6 +5205,8 @@
       "of": {
         "bits": 64,
         "kind": "integer",
+        "maximum": 9007199254740991,
+        "minimum": 0,
         "signed": false
       },
       "serde": {}
@@ -5168,6 +5296,8 @@
             "of": {
               "bits": 32,
               "kind": "integer",
+              "maximum": 4294967295,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -5180,6 +5310,8 @@
             "of": {
               "bits": 32,
               "kind": "integer",
+              "maximum": 4294967295,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -5228,6 +5360,8 @@
             "of": {
               "bits": 64,
               "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -5314,6 +5448,8 @@
                   "of": {
                     "bits": 64,
                     "kind": "integer",
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -5351,6 +5487,8 @@
                   "of": {
                     "bits": 64,
                     "kind": "integer",
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -5384,6 +5522,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -5411,6 +5551,8 @@
                   "of": {
                     "bits": 32,
                     "kind": "integer",
+                    "maximum": 4294967295,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -5472,6 +5614,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -5573,6 +5717,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         },
@@ -5582,6 +5728,8 @@
           "schema": {
             "bits": 64,
             "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
             "signed": false
           }
         }
@@ -5677,6 +5825,8 @@
             "of": {
               "bits": 16,
               "kind": "integer",
+              "maximum": 65535,
+              "minimum": 0,
               "signed": false
             }
           }
@@ -6633,6 +6783,8 @@
               "of": {
                 "bits": 8,
                 "kind": "integer",
+                "maximum": 255,
+                "minimum": 0,
                 "signed": false
               }
             }
@@ -6964,6 +7116,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -6988,6 +7142,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7020,6 +7176,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7167,6 +7325,8 @@
                 "schema": {
                   "bits": 32,
                   "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -7769,6 +7929,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7778,6 +7940,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7835,6 +7999,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7844,6 +8010,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7880,6 +8048,8 @@
                   "of": {
                     "bits": 64,
                     "kind": "integer",
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -7943,6 +8113,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7952,6 +8124,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7963,6 +8137,8 @@
                   "of": {
                     "bits": 8,
                     "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -7988,6 +8164,8 @@
                 "schema": {
                   "bits": 16,
                   "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -7997,6 +8175,8 @@
                 "schema": {
                   "bits": 16,
                   "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -8021,6 +8201,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8030,6 +8212,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8039,6 +8223,8 @@
                 "schema": {
                   "bits": 16,
                   "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8048,6 +8234,8 @@
                 "schema": {
                   "bits": 16,
                   "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -8087,6 +8275,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8096,6 +8286,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -8135,6 +8327,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8144,6 +8338,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               }
@@ -8190,6 +8386,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8199,6 +8397,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8253,6 +8453,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8262,6 +8464,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8294,6 +8498,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8326,6 +8532,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8335,6 +8543,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8400,6 +8610,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8409,6 +8621,8 @@
                 "schema": {
                   "bits": 64,
                   "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "signed": false
                 }
               },
@@ -8462,6 +8676,8 @@
                   "of": {
                     "bits": 8,
                     "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -8490,6 +8706,8 @@
                   "of": {
                     "bits": 8,
                     "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
                     "signed": false
                   }
                 }
@@ -8922,7 +9140,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:427125fc5f39803a",
+  "source_fingerprint": "fnv1a64:a48a819b2bd5b7ec",
   "specification_version": 1,
   "topics": [
     {

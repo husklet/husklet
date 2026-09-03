@@ -913,10 +913,13 @@ impl Conversation {
         };
         for message in self.outbox.drain(channel) {
             let payload = if topic == Topic::PaneChanges && message.superseded > 0 {
-                serde_json::from_slice::<Snapshot>(&message.payload)
-                    .map(|snapshot| snapshot.with_coalesced(message.superseded))
-                    .and_then(|snapshot| serde_json::to_vec(&snapshot))
-                    .unwrap_or(message.payload)
+                match serde_json::from_slice::<Snapshot>(&message.payload) {
+                    Ok(snapshot) => snapshot
+                        .with_coalesced(message.superseded)
+                        .payload()
+                        .unwrap_or(message.payload),
+                    Err(_) => message.payload,
+                }
             } else {
                 message.payload
             };

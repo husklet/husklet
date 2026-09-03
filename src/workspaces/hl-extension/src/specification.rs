@@ -8,6 +8,7 @@ use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
+    ("src/lib.rs", include_str!("lib.rs")),
     ("src/specification.rs", include_str!("specification.rs")),
     ("src/request.rs", include_str!("request.rs")),
     ("src/port.rs", include_str!("port.rs")),
@@ -314,7 +315,12 @@ fn type_schema(ty: &Type, owner: &str, references: &mut BTreeSet<String>) -> Val
                 "f64" => json!({"kind":"float","bits":64}),
                 primitive if integer(primitive).is_some() => {
                     let (bits, signed) = integer(primitive).unwrap();
-                    json!({"kind":"integer","bits":bits,"signed":signed})
+                    let native_max = if signed { (1_u128 << (bits - 1)) - 1 } else { (1_u128 << bits) - 1 };
+                    let maximum = native_max.min(u128::from(crate::JSON_SAFE_INTEGER_MAX)) as u64;
+                    let minimum = if signed {
+                        (-(1_i128 << (bits - 1))).max(-(i128::from(crate::JSON_SAFE_INTEGER_MAX))) as i64
+                    } else { 0 };
+                    json!({"kind":"integer","bits":bits,"signed":signed,"minimum":minimum,"maximum":maximum})
                 }
                 _ => {
                     references.insert(name.clone());
@@ -485,5 +491,24 @@ mod tests {
             }
         }
         visit(&document, definitions);
+    }
+
+    #[test]
+    fn every_integer_declares_its_native_and_javascript_safe_range() {
+        fn visit(value: &serde_json::Value) {
+            if value.get("kind").and_then(serde_json::Value::as_str) == Some("integer") {
+                let minimum = value["minimum"].as_i64().expect("integer minimum");
+                let maximum = value["maximum"].as_u64().expect("integer maximum");
+                assert!(minimum >= -(crate::JSON_SAFE_INTEGER_MAX as i64));
+                assert!(maximum <= crate::JSON_SAFE_INTEGER_MAX);
+                assert!(minimum <= maximum as i64);
+            }
+            match value {
+                serde_json::Value::Array(values) => values.iter().for_each(visit),
+                serde_json::Value::Object(values) => values.values().for_each(visit),
+                _ => {}
+            }
+        }
+        visit(&serde_json::from_str(&super::document()).unwrap());
     }
 }

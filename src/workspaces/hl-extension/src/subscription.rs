@@ -3,7 +3,7 @@
 //! Routing, credit, and the bulk byte streams are `hl-rpc`'s; what is in a
 //! listing is this domain's, and is here.
 
-use hl_rpc::{Coding, Frame};
+use hl_rpc::Coding;
 
 use crate::port::{
     ContainerSummary, ExecutionList, ExtensionSummary, ImagePullChange, ImageSummary, NetworkSummary, TabSummary,
@@ -179,11 +179,7 @@ impl Snapshot {
     /// Returns `Coding::Oversize` when the encoded listing exceeds the payload
     /// limit, and `Coding::Malformed` when it cannot be serialized.
     pub fn payload(&self) -> Result<Vec<u8>, Coding> {
-        let bytes = serde_json::to_vec(self).map_err(|error| Coding::Malformed(error.to_string()))?;
-        if bytes.len() > Frame::PAYLOAD_LIMIT {
-            return Err(Coding::Oversize(bytes.len()));
-        }
-        Ok(bytes)
+        crate::codec::payload(self)
     }
 
     /// Applies transport coalescing immediately before delivery. Keeping this

@@ -26,3 +26,17 @@ test('generated validators follow authoritative request/reply/failure/snapshot r
   assert.equal(PROTOCOL_REPLIES.event_subscribe, 'done');
   assert.equal(PROTOCOL_TOPICS.find(({ wire }) => wire === 'pane-changes').snapshot, 'pane_changes');
 });
+
+test('integer widths and the cross-language lossless boundary are enforced before framing', () => {
+  const safe = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(validateRequest({ call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: safe } }),
+    { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: safe } });
+  assert.throws(() => validateRequest({ call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: safe + 1 } }),
+    /integer from 0 through 9007199254740991/);
+  assert.throws(() => validateRequest({ call: 'terminal_write_pane', with: {
+    slot: 'p1', generation: 1, revision: 1, contents: [256],
+  } }), /integer from 0 through 255/);
+  assert.throws(() => validateSnapshot({ snapshot: 'pane_changes', of: {
+    slot: 'p1', kind: 'terminal', generation: safe + 1, revision: 1, coalesced: 0,
+  } }), /integer from 0 through 9007199254740991/);
+});
