@@ -238,6 +238,12 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Verify both images from the published registry manifest
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+        run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" base
+
   first-party-extensions:
     name: Publish ${{ matrix.extension }} / multi-architecture
     needs: [smoke, native-linux-reproducibility, react-extension-base]
@@ -325,6 +331,13 @@ jobs:
             HUSKLET_EXTENSION_VERSION=${{ steps.version.outputs.version }}
           provenance: mode=max
           sbom: true
+
+      - name: Verify both images from the published registry manifest
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          EXTENSION: ${{ matrix.extension }}
+          IMAGE: ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:${{ steps.version.outputs.version }}
+        run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" "$EXTENSION"
 
   dmg:
     name: Signed and notarized DMG

@@ -25,6 +25,8 @@ workflow="$root/.github/workflows/release.yml"
   || fail "release must build both architectures before both image publication steps"
 [[ "$(grep -Fc '.github/scripts/smoke-extension-image.sh' "$workflow")" == 2 ]] \
   || fail "release must run the packaged-image smoke before both publication steps"
+[[ "$(grep -Fc '.github/scripts/verify-published-extension-image.sh' "$workflow")" == 2 ]] \
+  || fail "release must verify both published multi-architecture registry manifests"
 
 for extension in storybook workspace-manager; do
   dockerfile="extensions/$extension/Dockerfile"
