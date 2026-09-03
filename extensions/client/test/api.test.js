@@ -917,3 +917,51 @@ test('pane semantics and actions preserve revision and node identity', async () 
   await acted;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
+
+test('one client operation projects terminal panes into visible screen text', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).terminal.toText('shell', { lines: 40 });
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+    panes: [{ slot: 'shell', generation: 4, revision: 8, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }],
+    truncated: false,
+  } } }));
+  assert.deepEqual((await next()).payload, { call: 'terminal_read_pane', with: { slot: 'shell', lines: 40 } });
+  const snapshot = { slot: 'shell', generation: 4, revision: 8, columns: 80, rows: 24,
+    lines: ['$ printf ready', 'ready'], cursor_column: 0, cursor_row: 2, truncated: false };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: snapshot } }));
+  assert.deepEqual(await pending, { kind: 'terminal', text: '$ printf ready\nready', snapshot });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('the same client operation projects every UI pane into bounded semantic XML', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).terminal.toText('settings');
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+    panes: [{ slot: 'settings', generation: 2, revision: 5, kind: 'native', provider: null, tab: null, title: 'Settings', focused: false }],
+    truncated: false,
+  } } }));
+  assert.deepEqual((await next()).payload, { call: 'pane_semantic_read', with: { slot: 'settings' } });
+  const snapshot = { slot: 'settings', generation: 2, revision: 5, truncated: false,
+    root: { id: 0, role: 'page', label: 'Workspace settings', value: null, disabled: false,
+      destructive: false, actions: [], children: [] } };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'semantics', with: snapshot } }));
+  const result = await pending;
+  assert.equal(result.kind, 'ui');
+  assert.deepEqual(result.snapshot, snapshot);
+  assert.match(result.text, /^<pane slot="settings" generation="2" revision="5"/);
+  assert.match(result.text, /<label>Workspace settings<\/label>/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('pane text conversion never guesses when bounded discovery omitted the slot', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).terminal.toText('omitted');
+  await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'panes', with: { panes: [], truncated: true },
+  } }));
+  await assert.rejects(pending, /cannot be resolved from a truncated inventory/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});

@@ -11,8 +11,8 @@ import { connect, workspace } from '@husklet/client';
 const session = await connect({ timeout: 10_000, pendingLimit: 32 });
 const host = workspace(session);
 const panes = await host.terminal.panes();
-const screen = await host.terminal.read(panes.panes[0].slot, 200);
-console.log(screen.lines.join('\n'));
+const readable = await host.terminal.toText(panes.panes[0].slot, { lines: 200 });
+console.log(readable.text);
 await session.close();
 ```
 
@@ -86,6 +86,7 @@ wrong caller.
 - `host.terminal.ratioObserved(...)` — `terminal_ratio_observed`, requires `terminal-control`.
 - `host.terminal.switchOccupant(...)` — `terminal_switch_occupant`, requires `terminal-control`.
 - `host.terminal.switchOccupantObserved(...)` — `terminal_switch_occupant_observed`, requires `terminal-control`.
+- `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `pane-observe` and the corresponding `terminal-output` or `pane-semantic-read` grant.
 
 ## Files
 

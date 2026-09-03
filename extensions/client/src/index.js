@@ -4,7 +4,8 @@ export {
   PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, encodeRequest,
   validateRequest, validateReply, validateReplyFor, validateFailure, validateSnapshot,
 } from './generated-protocol.js';
-export { semanticXml } from './semantic.js';
+import { semanticXml } from './semantic.js';
+export { semanticXml };
 import { Session } from './session.js';
 import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from './generated-protocol.js';
 
@@ -272,6 +273,23 @@ export function workspace(session, { signal } = {}) {
       },
       read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
       semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+      /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
+      toText: async (slot, { lines } = {}) => {
+        const inventory = expect(await session.call('pane_list'), 'panes');
+        const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+        if (!pane) {
+          const detail = inventory.truncated
+            ? 'pane cannot be resolved from a truncated inventory'
+            : 'pane does not exist';
+          throw new Error(`${detail}: ${slot}`);
+        }
+        if (pane.kind === 'terminal') {
+          const snapshot = expect(await session.call('terminal_read_pane', { slot, lines }), 'text');
+          return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
+        }
+        const snapshot = expect(await session.call('pane_semantic_read', { slot }), 'semantics');
+        return { kind: 'ui', text: semanticXml(snapshot), snapshot };
+      },
       act: (slot, action) => {
         if (!Number.isSafeInteger(action?.generation) || action.generation < 0
           || !Number.isSafeInteger(action?.revision) || action.revision < 0

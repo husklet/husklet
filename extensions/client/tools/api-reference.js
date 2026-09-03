@@ -21,6 +21,9 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
   assert(group, `no documentation group for ${wire}`);
   groups.get(group).push(`- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
 }
+groups.get('Terminal and panes').push(
+  '- `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `pane-observe` and the corresponding `terminal-output` or `pane-semantic-read` grant.',
+);
 
 const topicCapability = Object.fromEntries(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
 const sections = [...groups].map(([heading, operations]) => `## ${heading}\n\n${operations.join('\n')}`).join('\n\n');
@@ -43,8 +46,8 @@ import { connect, workspace } from '@husklet/client';
 const session = await connect({ timeout: 10_000, pendingLimit: 32 });
 const host = workspace(session);
 const panes = await host.terminal.panes();
-const screen = await host.terminal.read(panes.panes[0].slot, 200);
-console.log(screen.lines.join('\\n'));
+const readable = await host.terminal.toText(panes.panes[0].slot, { lines: 200 });
+console.log(readable.text);
 await session.close();
 \`\`\`
 

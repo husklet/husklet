@@ -8,6 +8,17 @@ const session = await connect();
 console.log(await workspace(session).info());
 ```
 
+Every discovered pane has one framework-neutral text projection. Terminal panes
+return their interpreted visible screen and cursor snapshot; native and extension
+UI panes return bounded semantic XML:
+
+```js
+const host = workspace(session);
+const pane = (await host.terminal.panes()).panes[0];
+const readable = await host.terminal.toText(pane.slot, { lines: 200 });
+console.log(readable.kind, readable.text);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

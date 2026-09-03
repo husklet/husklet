@@ -82,13 +82,16 @@ export interface PaneSummary {
   provider: { extension: string; provider: string } | null;
 }
 export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; generation: number; revision: number; columns: number; rows: number; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
+export interface PaneText { slot: string; generation?: number; revision?: number; columns?: number; rows?: number; lines: string[]; cursor_column?: number; cursor_row?: number; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
 export interface InspectablePane { slot: string; generation: number; revision: number; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
 export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
 export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
 export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
 export interface PaneSemanticTree { slot: string; generation: number; revision: number; root: SemanticNode; truncated: boolean }
+export type ReadablePane =
+  | { kind: 'terminal'; text: string; snapshot: PaneText }
+  | { kind: 'ui'; text: string; snapshot: PaneSemanticTree };
 export interface PaneSemanticAction { generation: number; revision: number; node: number; action: SemanticActionKind; value?: string | null }
 export interface GridSize { columns: number; rows: number }
 export type LayoutNode =
@@ -258,6 +261,8 @@ export interface WorkspaceApi {
     spawnObserved(slot: string, generation: number, revision: number, command: string[]): Promise<void>;
     read(slot: string, lines?: number): Promise<PaneText>;
     semantics(slot: string): Promise<PaneSemanticTree>;
+    /** Discover the pane kind and return terminal screen text or bounded semantic XML. */
+    toText(slot: string, options?: { lines?: number }): Promise<ReadablePane>;
     act(slot: string, action: PaneSemanticAction): Promise<void>;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
