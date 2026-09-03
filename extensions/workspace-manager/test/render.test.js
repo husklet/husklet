@@ -146,7 +146,7 @@ test('image inspect renders real typed details through a bounded source and retr
   invoke(stage, 'Retry inspect');
   await settled(); await settled();
   assert.equal(attempts, 2);
-  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.ok(labelled(stage, '$.id'), 'image inspection uses the native bounded object projection');
   assert.deepEqual(mutations, [{ Length: { source: 201, version: 1, rows: 9 } }]);
   assert.equal(imageDetails.answer({ source: 201, version: 1, id: 8, range: { start: 0, count: 999 } }).rows.length, 4);
 });
@@ -161,6 +161,17 @@ test('an empty typed image inspection has an explicit semantic empty state', asy
   assert.ok(labelled(stage, 'No image details'));
   assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) =>
     patch.SetProp?.prop === 'Detail' && patch.SetProp.value?.Text === 'The host returned no inspectable fields.'));
+});
+
+test('structured resource inspection applies the manager hard bounds visibly', async () => {
+  const oversized = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`field_${index}`, `value-${index}`]));
+  const controlled = { images: { ...api.images, inspect: async () => ({ id: 'sha256:bounded', ...oversized }) } };
+  const resource = { data: [{ id: 'sha256:bounded', reference: 'bounded:latest', size: 1 }], loading: false, error: null, reload: async () => {} };
+  const stage = host();
+  stage.render(h(Images, { api: controlled, resource, imageDetails: new ImageDetailsSource() }));
+  invoke(stage, 'Inspect'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Inspection is bounded to 128 nodes, depth 8, and 256 characters per string. Truncated values are marked.'));
+  assert.ok(!labelled(stage, '$.field_199'), 'fields beyond the native inspector bound never become nodes');
 });
 
 test('image pull progress is determinate, cancellable and retryable from retained input', async () => {
@@ -233,7 +244,7 @@ test('network inspection exposes loading, retry, empty and bounded typed details
   assert.ok(labelled(stage, 'Reading network details…'));
   assert.ok(labelled(stage, 'network inspect unavailable'));
   invoke(stage, 'Retry inspect'); await settled(); await settled();
-  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.ok(labelled(stage, '$.id'), 'network inspection uses the native bounded object projection');
   assert.equal(details.answer({ source: 204, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length, 4);
 
   const empty = host();
@@ -260,7 +271,7 @@ test('volume inspection exposes loading, retry, empty and bounded typed details'
   assert.ok(labelled(stage, 'Reading volume details…'));
   assert.ok(labelled(stage, 'volume inspect unavailable'));
   invoke(stage, 'Retry inspect'); await settled(); await settled();
-  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.ok(labelled(stage, '$.name'), 'volume inspection uses the native bounded object projection');
   assert.equal(details.answer({ source: 205, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length, 2);
 
   const empty = host();
@@ -451,7 +462,7 @@ test('container details load through the bounded source and a failed read is ret
   invoke(stage, 'Retry details');
   await settled(); await settled();
   assert.equal(attempts, 2);
-  assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'KeyValueTable'));
+  assert.ok(labelled(stage, '$.id'), 'container inspection uses the native bounded object projection');
   assert.deepEqual(mutations, [{ Length: { source: 202, version: 1, rows: 5 } }]);
   assert.equal(details.answer({ source: 202, version: 1, id: 2, range: { start: 0, count: 999 } }).rows.length, 4);
 });

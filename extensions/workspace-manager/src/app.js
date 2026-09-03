@@ -1,13 +1,18 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, Progress, Row, Scroll, Separator, Spinner, Text,
+  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
+import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useRef, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
+const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
+
+function StructuredDetail({ value }) {
+  return h(ObjectInspector, { value, ...INSPECTOR_BOUNDS, height: { minimum: { step: 10 }, maximum: { step: 32 } } });
+}
 
 export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
@@ -115,7 +120,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
-  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const [draft, setDraft] = useState({ image: '', name: '' });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -126,13 +131,13 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   };
   const inspect = async (item) => {
     setSelected(item.id);
-    setInspection({ id: item.id, state: 'loading', count: 0, error: null });
+    setInspection({ id: item.id, state: 'loading', count: 0, detail: null, error: null });
     try {
       const detail = await api.containers.inspect(item.id);
       const count = await detailsSource.replace(detail);
-      setInspection({ id: item.id, state: 'ready', count, error: null });
+      setInspection({ id: item.id, state: 'ready', count, detail, error: null });
     } catch (cause) {
-      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+      setInspection({ id: item.id, state: 'error', count: 0, detail: null, error: cause });
     }
   };
   const toggleDetails = (item) => {
@@ -294,7 +299,7 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
         : inspection.state === 'ready' && inspection.count === 0
           ? h(EmptyState, { label: 'No container details', detail: 'The host returned no inspectable fields.' })
           : inspection.state === 'ready'
-            ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
+            ? h(StructuredDetail, { value: inspection.detail })
             : null,
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
@@ -514,7 +519,7 @@ export function Images({ api, resource, imageDetails }) {
             : inspection.id === item.id && inspection.state === 'ready' && inspection.count === 0
               ? h(EmptyState, { label: 'No image details', detail: 'The host returned no inspectable fields.' })
               : detail?.id === item.id
-                ? h(KeyValueTable, { source: IMAGE_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 12 }, maximum: { step: 40 } } })
+                ? h(StructuredDetail, { value: detail })
                 : null),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === item.id && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
         ? h(React.Fragment, {}, h(Text, { label: `Remove immutable image ${item.id}?`, color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
@@ -526,22 +531,23 @@ export function Volumes({ api, resource, volumeDetails }) {
   const localDetails = useMemo(() => new VolumeDetailsSource(), []);
   const detailsSource = volumeDetails ?? localDetails;
   const [name, setName] = useState('');
-  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, error: null });
+  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, detail: null, error: null });
   const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
   const currentVolumes = useRef(new Map());
   currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
   const remove = async (volume) => {
     if (currentVolumes.current.get(volume.name) !== volume.generation) return;
     await api.volumes.remove(volume.name, volume.generation);
-    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, error: null });
+    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
     await resource.reload();
   };
   const inspect = async (volume) => {
-    setInspection({ name: volume.name, state: 'loading', count: 0, error: null });
+    setInspection({ name: volume.name, state: 'loading', count: 0, detail: null, error: null });
     try {
-      const count = await detailsSource.replace(await api.volumes.inspect(volume.name));
-      setInspection({ name: volume.name, state: 'ready', count, error: null });
-    } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, error }); }
+      const detail = await api.volumes.inspect(volume.name);
+      const count = await detailsSource.replace(detail);
+      setInspection({ name: volume.name, state: 'ready', count, detail, error: null });
+    } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, detail: null, error }); }
   };
   const view = bounded(resource.data);
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
@@ -561,7 +567,7 @@ export function Volumes({ api, resource, volumeDetails }) {
             ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
             : inspection.count === 0
               ? h(EmptyState, { label: 'No volume details', detail: 'The host returned no inspectable fields.' })
-              : h(KeyValueTable, { source: VOLUME_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 6 }, maximum: { step: 10 } } })) : null)),
+              : h(StructuredDetail, { value: inspection.detail })) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
@@ -571,7 +577,7 @@ export function Networks({ api, resource, networkDetails }) {
   const [name, setName] = useState('');
   const [container, setContainer] = useState('');
   const [aliases, setAliases] = useState('');
-  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const [error, setError] = useState(null);
   const [operation, setOperation] = useState({ state: 'idle', request: null, error: null });
   const [disconnectRequest, setDisconnectRequest] = useState(null);
@@ -581,14 +587,15 @@ export function Networks({ api, resource, networkDetails }) {
   currentNetworks.current = new Set((resource.data ?? []).map(resourceReference));
   const current = (id) => { if (currentNetworks.current.has(id)) return true; setError(new Error(`Network ${id} changed or disappeared; inspect and confirm again.`)); return false; };
   const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null }); await resource.reload(); };
   const inspect = async (network) => {
     const id = resourceReference(network);
-    setInspection({ id, state: 'loading', count: 0, error: null });
+    setInspection({ id, state: 'loading', count: 0, detail: null, error: null });
     try {
-      const count = await detailsSource.replace(await api.networks.inspect(id));
-      setInspection({ id, state: 'ready', count, error: null });
-    } catch (error) { setInspection({ id, state: 'error', count: 0, error }); }
+      const detail = await api.networks.inspect(id);
+      const count = await detailsSource.replace(detail);
+      setInspection({ id, state: 'ready', count, detail, error: null });
+    } catch (error) { setInspection({ id, state: 'error', count: 0, detail: null, error }); }
   };
   const request = (network, verb) => {
     const containerId = container.trim();
@@ -649,7 +656,7 @@ export function Networks({ api, resource, networkDetails }) {
             ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
             : inspection.count === 0
               ? h(EmptyState, { label: 'No network details', detail: 'The host returned no inspectable fields.' })
-              : h(KeyValueTable, { source: NETWORK_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 8 }, maximum: { step: 16 } } })) : null)),
+              : h(StructuredDetail, { value: inspection.detail })) : null)),
     h(Omitted, { count: view.omitted }));
 }
 
