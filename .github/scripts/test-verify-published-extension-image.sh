@@ -45,6 +45,14 @@ if "$root/.github/scripts/verify-published-extension-image.sh" registry.example/
   echo "single-architecture manifest was accepted" >&2
   exit 1
 fi
-grep -Fq 'expected exactly linux/amd64,linux/arm64' "$temporary/error"
+grep -Fq 'expected exactly one linux/amd64 and one linux/arm64 runtime descriptor' "$temporary/error"
+
+export TEST_MANIFEST='{"schemaVersion":2,"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'
+if "$root/.github/scripts/verify-published-extension-image.sh" registry.example/duplicate:1.2.3 1.2.3 base \
+  >"$temporary/out" 2>"$temporary/error"; then
+  echo "duplicate architecture descriptor was accepted" >&2
+  exit 1
+fi
+grep -Fq 'expected exactly one linux/amd64 and one linux/arm64 runtime descriptor' "$temporary/error"
 
 echo "published extension image verifier contracts pass"

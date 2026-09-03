@@ -11,12 +11,12 @@ manifest="$(docker buildx imagetools inspect --raw "$image")"
 MANIFEST="$manifest" IMAGE="$image" node <<'NODE'
 const document = JSON.parse(process.env.MANIFEST);
 const manifests = Array.isArray(document.manifests) ? document.manifests : [];
-const actual = new Set(manifests
+const actual = manifests
   .map(({ platform = {} }) => `${platform.os || ''}/${platform.architecture || ''}`)
-  .filter((platform) => platform !== '/' && !platform.endsWith('/unknown')));
-const expected = new Set(['linux/amd64', 'linux/arm64']);
-if (actual.size !== expected.size || [...expected].some((platform) => !actual.has(platform))) {
-  throw new Error(`${process.env.IMAGE} publishes [${[...actual].sort()}], expected exactly linux/amd64,linux/arm64`);
+  .filter((platform) => platform !== '/' && !platform.endsWith('/unknown'));
+const expected = ['linux/amd64', 'linux/arm64'];
+if (actual.length !== expected.length || expected.some((platform) => actual.filter((item) => item === platform).length !== 1)) {
+  throw new Error(`${process.env.IMAGE} publishes [${actual.sort()}], expected exactly one linux/amd64 and one linux/arm64 runtime descriptor`);
 }
 NODE
 
