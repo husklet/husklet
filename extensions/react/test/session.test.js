@@ -580,6 +580,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
   const resizing = terminal.resizeGridObserved('s1', 4, 7, 120, 40);
   const ratio = terminal.ratioObserved('s1', 4, 7, 0.6);
+  const focusing = terminal.focusObserved('s1', 4, 7);
   const retitling = terminal.retitle('s1', ' Build 🧪 ');
   const closing = terminal.closeObserved('s1', 4, 7);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
@@ -598,6 +599,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.deepEqual((await next()).payload, {
     call: 'terminal_ratio_observed', with: { slot: 's1', generation: 4, revision: 7, ratio: 0.6 },
   });
+  assert.deepEqual((await next()).payload, { call: 'terminal_focus_pane_observed', with: { slot: 's1', generation: 4, revision: 7 } });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_retitle_pane', with: { slot: 's1', title: ' Build 🧪 ' },
   });
@@ -613,9 +615,10 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
   assert.equal(await splitting, 's2');
-  await Promise.all([spawning, writing, resizing, ratio, retitling, closing]);
+  await Promise.all([spawning, writing, resizing, ratio, focusing, retitling, closing]);
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);

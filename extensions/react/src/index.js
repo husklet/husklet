@@ -332,6 +332,10 @@ export function workspace(session) {
         return done('terminal_close_pane_observed', { slot, generation, revision });
       },
       focus: (slot) => done('terminal_focus_pane', { slot }),
+      focusObserved: (slot, generation, revision) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('terminal focus requires nonnegative safe integer generation and revision');
+        return done('terminal_focus_pane_observed', { slot, generation, revision });
+      },
       retitle: (slot, title) => done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
       ratioObserved: (slot, generation, revision, ratio) => {
@@ -585,7 +589,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

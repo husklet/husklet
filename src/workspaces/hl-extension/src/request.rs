@@ -280,6 +280,7 @@ pub enum Request {
     TerminalFocusPane {
         slot: String,
     },
+    TerminalFocusPaneObserved { slot: String, generation: u64, revision: u64 },
     TerminalRetitlePane {
         slot: String,
         title: String,
@@ -433,6 +434,7 @@ impl Request {
             | Self::TerminalClosePane { .. }
             | Self::TerminalClosePaneObserved { .. }
             | Self::TerminalFocusPane { .. }
+            | Self::TerminalFocusPaneObserved { .. }
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRatio { .. }
             | Self::TerminalRatioObserved { .. }

@@ -208,6 +208,7 @@ impl Session {
             | Request::TerminalClosePane { .. }
             | Request::TerminalClosePaneObserved { .. }
             | Request::TerminalFocusPane { .. }
+            | Request::TerminalFocusPaneObserved { .. }
             | Request::TerminalRetitlePane { .. }
             | Request::TerminalRatio { .. }
             | Request::TerminalRatioObserved { .. }
@@ -629,7 +630,7 @@ impl Session {
             Request::TerminalClosePaneObserved { slot, .. } => {
                 port.close(slot).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::TerminalFocusPane { slot } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),
+            Request::TerminalFocusPane { slot } | Request::TerminalFocusPaneObserved { slot, .. } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),
             Request::TerminalRetitlePane { slot, title } => {
                 validate_pane_title(title)?;
                 port.retitle(slot, title).map(|()| Reply::Done).map_err(Failure::from)

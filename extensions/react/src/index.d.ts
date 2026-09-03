@@ -5728,6 +5728,7 @@ export interface WorkspaceApi {
     close(slot: string): Promise<void>;
     closeObserved(slot: string, generation: number, revision: number): Promise<void>;
     focus(slot: string): Promise<void>;
+    focusObserved(slot: string, generation: number, revision: number): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
