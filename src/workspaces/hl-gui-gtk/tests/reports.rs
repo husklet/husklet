@@ -47,6 +47,17 @@ impl Session {
             self.producer
                 .set(node, Prop::Source, PropValue::Source(hl_gui::SourceId::new(1)));
         }
+        if tag == Tag::DataTable {
+            self.producer.set(
+                node,
+                Prop::Schema,
+                PropValue::Schema(vec![
+                    hl_gui::Column::new("name", "Name").sortable(),
+                    hl_gui::Column::new("id", "ID").sortable(),
+                    hl_gui::Column::new("state", "State"),
+                ]),
+            );
+        }
         let frame = self.producer.frame();
         self.tree
             .apply(&frame, &mut self.canvas)
@@ -117,6 +128,7 @@ fn identified(event: &Event) -> bool {
         | Event::Submit { id, .. }
         | Event::Select { id, .. }
         | Event::Edit { id, .. }
+        | Event::Sort { id, .. }
         | Event::Scroll { id, .. }
         | Event::Close { id, .. }
         | Event::Context { id, .. }
@@ -139,6 +151,62 @@ fn every_declared_trigger_reports_when_the_component_is_worked() {
         silent.is_empty(),
         "components declare interactions the adapter never connected:\n{}",
         silent.join("\n")
+    );
+}
+
+#[test]
+fn sortable_header_reports_current_source_version_without_reordering_rows() {
+    if gtk::init().is_err() {
+        eprintln!("skipped: no display connection");
+        return;
+    }
+    let mut session = Session::new();
+    let widget = session.bound(Tag::DataTable, Trigger::Sort);
+    worked(&widget, Trigger::Sort);
+    let events = session.canvas.reports().drain();
+    assert_eq!(events.len(), 1, "one header gesture emits one proposal");
+    let Event::Sort { sort, .. } = &events[0] else {
+        panic!("header did not report a sort proposal")
+    };
+    assert_eq!(sort.source, hl_gui::SourceId::new(1));
+    assert_eq!(sort.version, hl_gui::Version::new(1));
+    assert_eq!(sort.column, "name");
+    assert!(sort.descending);
+    let view = widget
+        .downcast_ref::<gtk::ScrolledWindow>()
+        .and_then(gtk::ScrolledWindow::child)
+        .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
+        .expect("table view");
+    let rows = view
+        .model()
+        .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+        .expect("selection");
+    assert_eq!(
+        rows.n_items(),
+        1,
+        "sort proposal does not install a local sorting model"
+    );
+    let second = view
+        .columns()
+        .item(1)
+        .and_downcast::<gtk::ColumnViewColumn>()
+        .expect("second sortable column");
+    view.sort_by_column(Some(&second), gtk::SortType::Descending);
+    let changed = session.canvas.reports().drain();
+    assert_eq!(changed.len(), 1, "changing the sorted column emits once");
+    let Event::Sort { sort, .. } = &changed[0] else {
+        panic!("changing column at the same direction was lost")
+    };
+    assert_eq!(sort.column, "id");
+    assert!(sort.descending);
+    let inert = view
+        .columns()
+        .item(2)
+        .and_downcast::<gtk::ColumnViewColumn>()
+        .expect("plain column");
+    assert!(
+        inert.sorter().is_none(),
+        "an unsortable schema column must have an inert header"
     );
 }
 
@@ -195,6 +263,20 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
                 return;
             }
         }
+    }
+    if trigger == Trigger::Sort {
+        let view = widget
+            .downcast_ref::<gtk::ScrolledWindow>()
+            .and_then(gtk::ScrolledWindow::child)
+            .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
+            .expect("sortable table has a column view");
+        let column = view
+            .columns()
+            .item(0)
+            .and_downcast::<gtk::ColumnViewColumn>()
+            .expect("sortable column");
+        view.sort_by_column(Some(&column), gtk::SortType::Descending);
+        return;
     }
     if trigger == Trigger::Submit {
         widget.emit_by_name::<()>("activate", &[]);

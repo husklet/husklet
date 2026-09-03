@@ -234,6 +234,7 @@ try {
         }
         case 'select': return received.rows.join(',');
         case 'edit': return received.row.id + ':' + received.column + '=' + received.value;
+        case 'sort': return received.column + ':' + String(received.descending);
         case 'scroll': return received.dx + ',' + received.dy;
         case 'context': return received.x + ',' + received.y;
         case 'focus': return String(received.focused);

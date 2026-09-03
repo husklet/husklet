@@ -82,6 +82,11 @@ pub enum Event {
         id: EventId,
         edit: crate::data::CollectionEdit,
     },
+    Sort {
+        node: NodeId,
+        id: EventId,
+        sort: crate::data::CollectionSort,
+    },
     Scroll {
         node: NodeId,
         id: EventId,

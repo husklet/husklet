@@ -42,6 +42,17 @@ export class LargeRecordSource {
     await this.publish();
   }
 
+  async sort(event) {
+    if (event.source !== SOURCE || event.version !== this.version) return { accepted: false, reason: 'stale version' };
+    if (!SCHEMA.some((column) => column.key === event.column && column.sortable)) {
+      return { accepted: false, reason: 'unsortable column' };
+    }
+    this.descending = Boolean(event.descending);
+    this.version += 1;
+    await this.publish();
+    return { accepted: true };
+  }
+
   answer(request) {
     if (request.source !== SOURCE || request.version !== this.version || this.state === 'loading') return null;
     const count = Math.min(request.range.count, WINDOW_LIMIT, Math.max(0, this.length() - request.range.start));
@@ -144,6 +155,11 @@ export function LargeDataTableStory({ source }) {
       onEdit: async (event) => {
         const result = await source.edit(event);
         record(result.accepted ? `renamed immutable record ${event.row.id}` : `edit refused: ${result.reason}`);
+      },
+      onSort: async (event) => {
+        const result = await source.sort(event);
+        if (result.accepted) setDescending(Boolean(event.descending));
+        record(result.accepted ? `sorted ${event.column} ${event.descending ? 'descending' : 'ascending'}` : `sort refused: ${result.reason}`);
       },
     }),
     h(Text, { label: selected, color: 'text-dim' }),

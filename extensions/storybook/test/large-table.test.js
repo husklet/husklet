@@ -39,7 +39,7 @@ test('sort, filter, resize and all states remain bounded source operations', asy
   assert(first.rows.length <= 128, 'the wire window has a fixed production bound');
   assert.equal(source.generated, WINDOW_LIMIT);
 
-  await source.configure({ descending: true });
+  assert.deepEqual(await source.sort({ source: SOURCE, version: 1, column: 'id', descending: true }), { accepted: true });
   const sorted = source.answer({ ...request, id: 5, version: 2, range: { start: 0, count: 8 } });
   assert.equal(sorted.rows[0].key, LOGICAL_ROWS - 1);
   assert.equal(source.answer(request), null, 'a stale pre-sort request cannot repopulate the table');
@@ -129,6 +129,19 @@ test('edits bind immutable row and source version, validate, and advance the ver
   assert.deepEqual(await source.edit({ source: SOURCE, version: 1, row: { index: 42, id: '42' }, column: 'name', value: 'stale' }), { accepted: false, reason: 'stale version' });
   assert.equal(source.row(42).cells[1].Text, 'renamed');
   assert.deepEqual(await source.edit({ source: SOURCE, version: 2, row: { index: 42, id: '42' }, column: 'name', value: ' '.repeat(2) }), { accepted: false, reason: 'invalid value' });
+});
+
+test('native sort proposals bind source version and refuse stale or unsortable authority', async () => {
+  const mutations = [];
+  const source = new LargeRecordSource(async (call, argument) => mutations.push([call, argument]));
+  assert.deepEqual(await source.sort({ source: SOURCE, version: 1, column: 'name', descending: true }), { accepted: true });
+  assert.equal(source.version, 2);
+  assert.equal(source.descending, true);
+  assert.equal(mutations.at(-1)[1].mutation.Length.version, 2);
+  assert.deepEqual(await source.sort({ source: SOURCE, version: 1, column: 'name', descending: false }), { accepted: false, reason: 'stale version' });
+  assert.deepEqual(await source.sort({ source: SOURCE, version: 2, column: 'state', descending: false }), { accepted: false, reason: 'unsortable column' });
+  assert.equal(source.version, 2);
+  assert.equal(source.descending, true);
 });
 
 test('the rendered 100k-row table exposes only the declared editable column', () => {

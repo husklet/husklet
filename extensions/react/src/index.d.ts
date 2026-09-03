@@ -126,6 +126,7 @@ export interface SelectedCollectionRow { index: number; id: string; }
 export interface CollectionSelection { source: number; version: number; rows: SelectedCollectionRow[]; }
 export interface SelectionReport extends Report { rows: number[]; collection?: CollectionSelection | null; }
 export interface EditReport extends Report { source: number; version: number; row: SelectedCollectionRow; column: string; value: string; }
+export interface SortReport extends Report { source: number; version: number; column: string; descending: boolean; }
 
 /** What every component takes, whatever it is. */
 export interface NodeProps {
@@ -3243,6 +3244,7 @@ export interface DataTableProps extends NodeProps {
   source?: number;
   onSelect?: (report: SelectionReport) => void;
   onEdit?: (report: EditReport) => void;
+  onSort?: (report: SortReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;

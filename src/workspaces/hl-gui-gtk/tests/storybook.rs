@@ -9,9 +9,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
+        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Tree};
+    use hl_gui::{Renderer as _, SourceMutation, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -288,6 +288,35 @@ mod unix {
                 find::<gtk::Entry>(&root, |entry| entry.text() == "needle").text(),
                 "needle",
                 "only an accepted newer window replaces the controlled cell"
+            );
+            let view = find::<gtk::ColumnView>(&root, |_| true);
+            let column = view
+                .columns()
+                .item(0)
+                .and_downcast::<gtk::ColumnViewColumn>()
+                .expect("sortable ID column");
+            view.sort_by_column(Some(&column), gtk::SortType::Descending);
+            settle_toolkit();
+            let event = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Sort { .. }))
+                .expect("native header publishes a sort proposal");
+            let hl_gui::Event::Sort { sort, .. } = &event else {
+                unreachable!()
+            };
+            assert_eq!(sort.source, hl_gui::SourceId::new(100));
+            assert_eq!(sort.version, hl_gui::Version::new(2));
+            assert_eq!(sort.column, "id");
+            assert!(sort.descending);
+            let payload = codec::interaction(&event, Some("storybook-main")).expect("sort has a wire representation");
+            wire.send(&Frame::new(ChannelId::new(99), Kind::Event, payload))
+                .expect("native sort returns to Node");
+            let sorted = receive_rerender(&mut wire, story);
+            assert!(
+                !sorted.patches.is_empty(),
+                "accepted native sort is observable in the story"
             );
         }
         root.measure(gtk::Orientation::Horizontal, -1);

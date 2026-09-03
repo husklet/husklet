@@ -5116,6 +5116,12 @@
           }
         },
         {
+          "name": "Sort",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "Activate",
           "payload": {
             "kind": "unit"
@@ -9965,6 +9971,85 @@
           }
         },
         {
+          "name": "sort",
+          "payload": {
+            "fields": [
+              {
+                "name": "trigger",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "node",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "source",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "version",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "column",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "descending",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "scroll",
           "payload": {
             "fields": [
@@ -10465,7 +10550,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:f9432330aee83b48",
+  "source_fingerprint": "fnv1a64:5ee42f69016b4a73",
   "specification_version": 1,
   "topics": [
     {

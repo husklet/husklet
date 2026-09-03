@@ -227,6 +227,23 @@ test('a version-bound virtual row edit reaches only its DataTable handler', asyn
   stage.close();
 });
 
+test('a version-bound native sort reaches only its DataTable handler', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let seen = null;
+  render(h(DataTable, { source: 7, schema: [{ key: 'name', sortable: true }], onSort: (event) => { seen = event; } }), session);
+  await until(() => stage.calls.length >= 2);
+  const patches = stage.calls.find(({ call }) => call === 'interface_render_at').with.frame.patches;
+  const sort = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Sort').SetHandler;
+  await stage.push({ interaction: 'sort', trigger: 'Sort', node: sort.id, id: sort.handler.id, source: 7, version: 4, column: 'name', descending: true });
+  await until(() => seen !== null);
+  assert.deepEqual({ source: seen.source, version: seen.version, column: seen.column, descending: seen.descending }, {
+    source: 7, version: 4, column: 'name', descending: true,
+  });
+  session.close();
+  stage.close();
+});
+
 test('bounded internal drag and drop metadata reaches the exact React handlers', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });

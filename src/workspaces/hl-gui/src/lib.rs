@@ -39,8 +39,9 @@ pub use component::{
     QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
 };
 pub use data::{
-    validate_columns, Cell, CollectionEdit, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow,
-    Sort, SourceId, SourceMutation, Version, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT,
+    validate_columns, Cell, CollectionEdit, CollectionSort, Column, Lookup, RequestId, Row, RowCache, RowRange,
+    RowRequest, RowWindow, Sort, SourceId, SourceMutation, Version, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT,
+    TABLE_COLUMN_LIMIT,
 };
 pub use dialog::{Action, Dialog, Role};
 pub use element::{Element, Reconciliation};

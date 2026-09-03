@@ -203,6 +203,15 @@ pub struct CollectionEdit {
     pub value: String,
 }
 
+/// One version-bound request to reorder a virtual collection at its producer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionSort {
+    pub source: SourceId,
+    pub version: Version,
+    pub column: String,
+    pub descending: bool,
+}
+
 /// One rendered cell. Typed so alignment and formatting are the adapter's job,
 /// not string formatting at the producer.
 #[derive(Clone, Debug, PartialEq)]

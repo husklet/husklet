@@ -5390,6 +5390,12 @@ const definitions = {
         }
       },
       {
+        "name": "Sort",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "Activate",
         "payload": {
           "kind": "unit"
@@ -9344,6 +9350,85 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "sort",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "source",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "version",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "column",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "descending",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
               }
             }
           ],

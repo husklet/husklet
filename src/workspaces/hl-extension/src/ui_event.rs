@@ -46,6 +46,17 @@ pub enum UiEvent {
         column: String,
         value: String,
     },
+    #[serde(rename = "sort")]
+    Sort {
+        trigger: String,
+        node: u64,
+        id: String,
+        slot: Option<String>,
+        source: u64,
+        version: u64,
+        column: String,
+        descending: bool,
+    },
     #[serde(rename = "scroll")]
     Scroll {
         trigger: String,
@@ -233,6 +244,16 @@ impl UiEvent {
                 column: edit.column.clone(),
                 value: edit.value.clone(),
             },
+            Event::Sort { node, id, sort } => Self::Sort {
+                trigger: "Sort".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                source: sort.source.raw(),
+                version: sort.version.raw(),
+                column: sort.column.clone(),
+                descending: sort.descending,
+            },
             Event::Scroll { node, id, dx, dy } => Self::Scroll {
                 trigger: "Scroll".into(),
                 node: node.raw(),
@@ -359,29 +380,25 @@ mod tests {
 
     #[test]
     fn variant_payload_is_required_and_unknown_fields_fail_closed() {
-        assert!(
-            serde_json::from_value::<UiEvent>(json!({
-                "interaction": "drop",
-                "trigger": "Drop",
-                "node": 7,
-                "id": "event",
-                "slot": null,
-                "x": 2.5,
-                "y": 8.0
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<UiEvent>(json!({
-                "interaction": "invoke",
-                "trigger": "Activate",
-                "node": 7,
-                "id": "event",
-                "slot": null,
-                "invented": true
-            }))
-            .is_err()
-        );
+        assert!(serde_json::from_value::<UiEvent>(json!({
+            "interaction": "drop",
+            "trigger": "Drop",
+            "node": 7,
+            "id": "event",
+            "slot": null,
+            "x": 2.5,
+            "y": 8.0
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<UiEvent>(json!({
+            "interaction": "invoke",
+            "trigger": "Activate",
+            "node": 7,
+            "id": "event",
+            "slot": null,
+            "invented": true
+        }))
+        .is_err());
     }
 
     #[test]
@@ -405,6 +422,27 @@ mod tests {
             json!({
                 "interaction":"edit", "trigger":"Edit", "node":3, "id":"3:Edit", "slot":"pane",
                 "source":7, "version":11, "row":{"index":9,"id":"immutable-9"}, "column":"name", "value":"renamed"
+            })
+        );
+    }
+
+    #[test]
+    fn sort_wire_shape_carries_versioned_source_authority() {
+        let event = UiEvent::Sort {
+            trigger: "Sort".into(),
+            node: 3,
+            id: "3:Sort".into(),
+            slot: Some("pane".into()),
+            source: 7,
+            version: 11,
+            column: "name".into(),
+            descending: true,
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "interaction":"sort", "trigger":"Sort", "node":3, "id":"3:Sort", "slot":"pane",
+                "source":7, "version":11, "column":"name", "descending":true
             })
         );
     }

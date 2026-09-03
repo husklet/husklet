@@ -126,6 +126,12 @@ impl Rows {
         self.cache().borrow().source()
     }
 
+    /// Current producer generation against which an interaction must be checked.
+    #[must_use]
+    pub fn version(&self) -> hl_gui::Version {
+        self.cache().borrow().version()
+    }
+
     /// Requests the model has accumulated, taken for sending.
     #[must_use]
     pub fn drain(&self) -> Vec<RowRequest> {

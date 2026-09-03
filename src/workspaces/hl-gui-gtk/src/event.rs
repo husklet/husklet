@@ -89,6 +89,7 @@ fn event_authority(event: &Event) -> Option<(NodeId, Trigger)> {
         Event::Submit { node, .. } => (*node, Trigger::Submit),
         Event::Select { node, .. } => (*node, Trigger::Select),
         Event::Edit { node, .. } => (*node, Trigger::Edit),
+        Event::Sort { node, .. } => (*node, Trigger::Sort),
         Event::Scroll { node, .. } => (*node, Trigger::Scroll),
         Event::Close { node, .. } => (*node, Trigger::Close),
         Event::Context { node, .. } => (*node, Trigger::Context),
@@ -216,6 +217,7 @@ fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, re
         // Editable collection cells consult the current authority at commit
         // time; their virtualized factories are installed with the schema.
         Trigger::Edit => {}
+        Trigger::Sort => sort(&target, node, slot, reports),
         Trigger::Scroll => scroll(widget, node, slot, reports),
         Trigger::Close => close(widget, node, slot, reports),
         Trigger::Context => context(&target, node, slot, reports),
@@ -225,6 +227,45 @@ fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, re
         Trigger::Drag => drag(widget, node, slot, reports),
         Trigger::Drop => drop_target(widget, node, slot, reports),
     }
+}
+
+fn sort(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let Some(view) = crate::component::table::columns(widget) else {
+        return;
+    };
+    let Some(sorter) = view
+        .sorter()
+        .and_then(|sorter| sorter.downcast::<gtk::ColumnViewSorter>().ok())
+    else {
+        return;
+    };
+    let view = view.downgrade();
+    let reports = reports.clone();
+    let slot = slot.clone();
+    sorter.connect_changed(move |sorter, _| {
+        let (Some(view), Some(id), Some(column)) = (view.upgrade(), slot.id(), sorter.primary_sort_column()) else {
+            return;
+        };
+        let Some(key) = column.id() else { return };
+        let Some(model) = view
+            .model()
+            .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+            .and_then(|selection| selection.model())
+            .and_then(|model| model.downcast::<crate::rows::Rows>().ok())
+        else {
+            return;
+        };
+        reports.push(Event::Sort {
+            node,
+            id,
+            sort: hl_gui::CollectionSort {
+                source: model.source(),
+                version: model.version(),
+                column: key.to_string(),
+                descending: sorter.primary_sort_order() == gtk::SortType::Descending,
+            },
+        });
+    });
 }
 
 fn drag(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {

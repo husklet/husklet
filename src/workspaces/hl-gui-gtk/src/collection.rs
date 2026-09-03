@@ -66,6 +66,10 @@ fn declare(
     let title = column.title.clone();
     factory.connect_bind(move |_, item| bind(item, index, &title));
     let declared = gtk::ColumnViewColumn::new(Some(&column.title), Some(factory));
+    declared.set_id(Some(&column.key));
+    if column.sortable {
+        declared.set_sorter(Some(&gtk::CustomSorter::new(|_, _| gtk::Ordering::Equal)));
+    }
     declared.set_resizable(true);
     declared.set_expand(matches!(column.width, Length::Fill));
     if let Length::Chars(count) = column.width {

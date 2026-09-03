@@ -231,7 +231,7 @@ exported by name from the package root.
 - **Text children are the label.** `<Text>hello</Text>` and
   `<Text label="hello" />` are the same thing; bare text has no widget.
 - **A handler is `on` plus the trigger**: `onInvoke`, `onChange`, `onSubmit`,
-  `onSelect`, `onEdit`, `onActivate`, `onToggle`, `onExpand`, `onScroll`, `onClose`,
+  `onSelect`, `onEdit`, `onSort`, `onActivate`, `onToggle`, `onExpand`, `onScroll`, `onClose`,
   `onContext`. The event identity is derived from the node and the trigger, so
   re-rendering with a fresh closure rebinds locally and sends no patch. The
   callback receives `{trigger, node, id, value}`.
@@ -245,6 +245,12 @@ bound value immediately. After validation and persistence succeed, advance the
 source version and publish a new bounded row window to display the accepted
 value. Show rejection feedback separately rather than leaving an uncommitted
 draft in the table.
+
+Sortable virtual tables use the same authority rule. Mark only intended columns
+with `{sortable: true}` and handle `onSort` as a proposal carrying
+`{source, version, column, descending}`. Refuse a stale version or an undeclared
+column, then publish a newer source version after accepting the order. The native
+header shows direction but never locally reorders partial virtual windows.
 
 `vocabulary` exports both lists, and `tags` exports every component name.
 
