@@ -13,8 +13,8 @@ use hl_rpc::{ChannelId, Flags, Frame, Hello, Kind};
 
 pub use hl_rpc::Coding;
 
-use crate::request::{Failure, Reply, Request};
 use crate::Welcome;
+use crate::request::{Failure, Reply, Request};
 
 /// The channel calls and their answers ride on.
 ///
@@ -29,7 +29,7 @@ pub const CALLS: ChannelId = ChannelId::new(2);
 /// Returns `Coding::Oversize` when the encoded message exceeds the payload
 /// limit, and `Coding::Malformed` when it cannot be serialized.
 pub fn welcome(welcome: &Welcome) -> Result<Frame, Coding> {
-    Ok(Frame::new(ChannelId::CONTROL, Kind::Request, payload(welcome)?))
+    Ok(Frame::new(ChannelId::CONTROL, Kind::Open, payload(welcome)?))
 }
 
 /// Decodes the host's opening frame.
@@ -38,7 +38,7 @@ pub fn welcome(welcome: &Welcome) -> Result<Frame, Coding> {
 /// Returns `Coding::Malformed` when the frame is not a control request or its
 /// payload is not a `Welcome`.
 pub fn read_welcome(frame: &Frame) -> Result<Welcome, Coding> {
-    expect(frame, Kind::Request, ChannelId::CONTROL)?;
+    expect(frame, Kind::Open, ChannelId::CONTROL)?;
     parse(frame)
 }
 
@@ -79,7 +79,9 @@ pub fn request(request: &Request) -> Result<Frame, Coding> {
 pub fn read_request(frame: &Frame) -> Result<Request, Coding> {
     expect(frame, Kind::Request, CALLS)?;
     if !frame.flags.has(Flags::END) || frame.flags.has(Flags::ERROR) || frame.flags.has(Flags::COALESCED) {
-        return Err(Coding::Malformed("a call must be one complete, unflagged request".into()));
+        return Err(Coding::Malformed(
+            "a call must be one complete, unflagged request".into(),
+        ));
     }
     parse(frame)
 }
@@ -204,21 +206,28 @@ fn parse<T: serde::de::DeserializeOwned>(frame: &Frame) -> Result<T, Coding> {
 fn safe_numbers(value: &serde_json::Value) -> Result<(), Coding> {
     match value {
         serde_json::Value::Number(number) => {
-            let unsafe_integer = number.as_u64().is_some_and(|value| value > crate::JSON_SAFE_INTEGER_MAX)
+            let unsafe_integer = number
+                .as_u64()
+                .is_some_and(|value| value > crate::JSON_SAFE_INTEGER_MAX)
                 || number.as_i64().is_some_and(|value| {
                     value < -(crate::JSON_SAFE_INTEGER_MAX as i64) || value > crate::JSON_SAFE_INTEGER_MAX as i64
                 });
             if unsafe_integer {
                 return Err(Coding::Malformed(format!(
-                    "integer {number} exceeds the lossless JSON boundary {}", crate::JSON_SAFE_INTEGER_MAX
+                    "integer {number} exceeds the lossless JSON boundary {}",
+                    crate::JSON_SAFE_INTEGER_MAX
                 )));
             }
         }
         serde_json::Value::Array(values) => {
-            for value in values { safe_numbers(value)?; }
+            for value in values {
+                safe_numbers(value)?;
+            }
         }
         serde_json::Value::Object(values) => {
-            for value in values.values() { safe_numbers(value)?; }
+            for value in values.values() {
+                safe_numbers(value)?;
+            }
         }
         _ => {}
     }
@@ -244,9 +253,27 @@ fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
 
 #[cfg(test)]
 mod tests {
-    use super::{interaction, read_request, request, safe_numbers};
-    use crate::{ChannelId, Frame, Kind, PaneChange, PaneChangeKind, Request, Snapshot, JSON_SAFE_INTEGER_MAX};
+    use super::{interaction, read_request, request, safe_numbers, welcome};
+    use crate::{
+        Capability, ChannelId, ExtensionName, Frame, Grant, JSON_SAFE_INTEGER_MAX, Kind, Limits, PaneChange,
+        PaneChangeKind, Request, Snapshot, Welcome,
+    };
     use hl_gui::{CollectionSelection, Event, EventId, NodeId, SelectedRow, SourceId, Version};
+
+    #[test]
+    fn host_greeting_uses_the_distinct_open_control_frame() {
+        let frame = welcome(&Welcome {
+            protocol: crate::PROTOCOL,
+            host: "husklet".into(),
+            workspace: "dev".into(),
+            peer: ExtensionName::new("fixture").unwrap(),
+            granted: Grant::new([Capability::WorkspaceRead]),
+            limits: Limits::default(),
+        })
+        .expect("welcome encodes");
+        assert_eq!(frame.channel, ChannelId::CONTROL);
+        assert_eq!(frame.kind, Kind::Open);
+    }
 
     #[test]
     fn collection_selection_encodes_generation_and_producer_identity() {
@@ -280,20 +307,37 @@ mod tests {
             job: "job-1".into(),
             revision: JSON_SAFE_INTEGER_MAX,
         };
-        assert_eq!(read_request(&request(&boundary).expect("safe boundary")).unwrap(), boundary);
+        assert_eq!(
+            read_request(&request(&boundary).expect("safe boundary")).unwrap(),
+            boundary
+        );
 
         let unsafe_outbound = Request::ExtensionAcquisitionCancel {
             job: "job-1".into(),
             revision: JSON_SAFE_INTEGER_MAX + 1,
         };
-        assert!(request(&unsafe_outbound).unwrap_err().to_string().contains("lossless JSON boundary"));
+        assert!(
+            request(&unsafe_outbound)
+                .unwrap_err()
+                .to_string()
+                .contains("lossless JSON boundary")
+        );
 
         let unsafe_inbound = Frame::new(
             ChannelId::new(2),
             Kind::Request,
-            format!(r#"{{"call":"extension_acquisition_cancel","with":{{"job":"job-1","revision":{}}}}}"#, JSON_SAFE_INTEGER_MAX + 1).into_bytes(),
+            format!(
+                r#"{{"call":"extension_acquisition_cancel","with":{{"job":"job-1","revision":{}}}}}"#,
+                JSON_SAFE_INTEGER_MAX + 1
+            )
+            .into_bytes(),
         );
-        assert!(read_request(&unsafe_inbound).unwrap_err().to_string().contains("lossless JSON boundary"));
+        assert!(
+            read_request(&unsafe_inbound)
+                .unwrap_err()
+                .to_string()
+                .contains("lossless JSON boundary")
+        );
         assert!(safe_numbers(&serde_json::json!(-(JSON_SAFE_INTEGER_MAX as i64) - 1)).is_err());
         assert!(
             Snapshot::PaneChanges(PaneChange {
