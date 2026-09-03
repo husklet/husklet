@@ -240,6 +240,39 @@ async function runPackedIllegalHeader(starter, installedClient) {
   }
 }
 
+async function runPackedGreetingTimeout(starter) {
+  const socket = path.join(starter, 'host-greeting-timeout.sock');
+  let spoke = false;
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    stream.on('data', () => { spoke = true; });
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket, HUSKLET_EXTENSION_CONNECT_TIMEOUT_MS: '40' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not enforce its greeting deadline')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.equal(spoke, false, 'silent host must receive no request before the greeting deadline');
+    assert.equal(stdout, '');
+    assert.equal(stderr, 'client-starter: startup failed: extension host handshake timed out after 40ms\n');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 try {
   const packed = JSON.parse(execFileSync('npm', [
     'pack', '--json', '--ignore-scripts', '--pack-destination', scratch,
@@ -313,6 +346,7 @@ try {
   await runPackedTruncatedGreeting(starter, starterClient);
   await runPackedOversizedGreeting(starter, starterClient);
   await runPackedIllegalHeader(starter, starterClient);
+  await runPackedGreetingTimeout(starter);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';

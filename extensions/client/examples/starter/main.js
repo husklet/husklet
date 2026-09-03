@@ -4,6 +4,9 @@ let session;
 let stopping = false;
 let connected = false;
 const report = (kind, error) => process.stderr.write(`client-starter: ${kind}: ${error instanceof Error ? error.message : String(error)}\n`);
+const connectTimeout = process.env.HUSKLET_EXTENSION_CONNECT_TIMEOUT_MS === undefined
+  ? undefined
+  : Number(process.env.HUSKLET_EXTENSION_CONNECT_TIMEOUT_MS);
 const stop = () => {
   if (stopping) return;
   stopping = true;
@@ -12,6 +15,7 @@ const stop = () => {
 
 try {
   session = await connect({
+    ...(connectTimeout === undefined ? {} : { connectTimeout }),
     onClose: (error) => {
       if (!connected || stopping) return;
       stopping = true;

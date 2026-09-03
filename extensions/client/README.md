@@ -94,6 +94,10 @@ a digest-pinned Node image and runs the extension as the non-root `node` user.
 The image label points at the included manifest; the host validates that
 manifest when installing the image.
 
+The client normally allows 30 seconds for the host's opening handshake. Set
+`HUSKLET_EXTENSION_CONNECT_TIMEOUT_MS` to a positive millisecond value when a
+development or test environment needs a shorter, explicit startup deadline.
+
 The transport is a persistent, full-duplex, length-prefixed Unix stream. Calls are correlated while bounded host events can arrive independently with explicit subscription credit. This is WebSocket-like interaction, but it is **not a WebSocket**. The handshake returns workspace identity and negotiated capability grants. All methods remain constrained to that authority.
 
 After `connect()` resolves, `session.grantedCapabilities` is an immutable array
