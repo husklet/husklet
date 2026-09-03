@@ -296,6 +296,14 @@ export function workspace(session) {
       focus: (slot) => done('terminal_focus_pane', { slot }),
       retitle: (slot, title) => done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
+      switchOccupant: (slot, generation, target) => {
+        if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('pane generation must be a nonnegative safe integer');
+        const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
+        const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
+        const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
+        if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
+        return done('terminal_switch_occupant', { slot, generation, target: { ...target } });
+      },
     },
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
@@ -525,7 +533,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'retitle', 'ratio'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'retitle', 'ratio', 'switchOccupant'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
@@ -536,7 +544,7 @@ export const protocolCoverage = Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: [],
     images: [],
-    terminal: ['switchOccupant'],
+    terminal: [],
     events: ['drag', 'drop'],
     extensions: [],
   }),

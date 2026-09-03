@@ -205,7 +205,8 @@ impl Session {
             | Request::TerminalClosePane { .. }
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRetitlePane { .. }
-            | Request::TerminalRatio { .. } => self.terminal(request, services),
+            | Request::TerminalRatio { .. }
+            | Request::TerminalSwitchOccupant { .. } => self.terminal(request, services),
             Request::PaneList => {
                 let port = self.peer.authority().port(Capability::PaneObserve, services.terminal)?;
                 Ok(Reply::Panes(port.pane_inventory()?))
@@ -412,7 +413,11 @@ impl Session {
                 immutable_identity(reference, &[32], "network")?;
                 port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::NetworkConnect { reference, container, aliases } => {
+            Request::NetworkConnect {
+                reference,
+                container,
+                aliases,
+            } => {
                 validate_endpoint_aliases(aliases)?;
                 port.connect_with_aliases(
                     immutable_reference(reference, &[32], "network")?,
@@ -450,9 +455,7 @@ impl Session {
             Request::WorkspaceCreate { configuration } => {
                 Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
             }
-            Request::WorkspaceAdopt { configuration } => {
-                Ok(Reply::WorkspaceConfiguration(port.adopt(configuration)?))
-            }
+            Request::WorkspaceAdopt { configuration } => Ok(Reply::WorkspaceConfiguration(port.adopt(configuration)?)),
             Request::WorkspaceUpdate {
                 name,
                 generation,
@@ -487,15 +490,21 @@ impl Session {
             Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
             Request::ExtensionEnable { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;
-                port.enable(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+                port.enable(name, image_digest)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             Request::ExtensionDisable { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;
-                port.disable(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+                port.disable(name, image_digest)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             Request::ExtensionRemove { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;
-                port.remove(name, image_digest).map(|()| Reply::Done).map_err(Failure::from)
+                port.remove(name, image_digest)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             Request::ExtensionAcquisitionStart { reference } => {
                 acquisition_reference(reference)?;
@@ -587,6 +596,23 @@ impl Session {
             }
             Request::TerminalRatio { slot, ratio } => {
                 port.ratio(slot, *ratio).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalSwitchOccupant {
+                slot,
+                generation,
+                target,
+            } => {
+                if let crate::port::PaneOccupantTarget::Surface { extension, provider } = target {
+                    crate::ExtensionName::new(extension.clone()).map_err(|_| Failure::Conflict {
+                        detail: "invalid extension name".into(),
+                    })?;
+                    crate::ExtensionName::new(provider.clone()).map_err(|_| Failure::Conflict {
+                        detail: "invalid pane provider name".into(),
+                    })?;
+                }
+                port.switch_occupant(slot, *generation, target)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "terminal command".into(),
@@ -777,9 +803,22 @@ fn bounded_signal(signal: &str) -> Result<(), Failure> {
 
 fn validate_endpoint_aliases(aliases: &[String]) -> Result<(), Failure> {
     let valid = aliases.len() <= 64
-        && aliases.iter().all(|value| !value.is_empty() && value.len() <= 253 && value.bytes().enumerate().all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte))))
+        && aliases.iter().all(|value| {
+            !value.is_empty()
+                && value.len() <= 253
+                && value
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
+        })
         && aliases.iter().collect::<std::collections::BTreeSet<_>>().len() == aliases.len();
-    if valid { Ok(()) } else { Err(Failure::Conflict { detail: "network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names".into() }) }
+    if valid {
+        Ok(())
+    } else {
+        Err(Failure::Conflict {
+            detail: "network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names".into(),
+        })
+    }
 }
 
 fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Failure> {
@@ -845,9 +884,10 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
     let container_name = |value: &str| {
         !value.is_empty()
             && value.len() <= 128
-            && value.bytes().enumerate().all(|(index, byte)| {
-                byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte))
-            })
+            && value
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
     };
     let argv = |values: &[String], empty: bool| {
         (empty || !values.is_empty())
@@ -866,8 +906,7 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
     };
     let unique =
         |values: &[(String, String)]| values.iter().map(|(key, _)| key).collect::<BTreeSet<_>>().len() == values.len();
-    let environment_name =
-        |value: &str| !value.is_empty() && value.len() <= 256 && !value.contains(['=', '\0']);
+    let environment_name = |value: &str| !value.is_empty() && value.len() <= 256 && !value.contains(['=', '\0']);
     let resource_name = |value: &str| {
         !value.is_empty()
             && value.len() <= 255
@@ -880,9 +919,10 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
         && spec.hostname.as_ref().is_none_or(|value| {
             !value.is_empty()
                 && value.len() <= 253
-                && value.bytes().enumerate().all(|(index, byte)| {
-                    byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte))
-                })
+                && value
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
         })
         && !spec.image.is_empty()
         && spec.image.len() <= 512

@@ -259,6 +259,11 @@ pub enum Request {
         slot: String,
         ratio: f64,
     },
+    TerminalSwitchOccupant {
+        slot: String,
+        generation: u64,
+        target: crate::port::PaneOccupantTarget,
+    },
     FilesystemList {
         path: RelativePath,
     },
@@ -382,7 +387,8 @@ impl Request {
             | Self::TerminalClosePane { .. }
             | Self::TerminalFocusPane { .. }
             | Self::TerminalRetitlePane { .. }
-            | Self::TerminalRatio { .. } => Capability::TerminalControl,
+            | Self::TerminalRatio { .. }
+            | Self::TerminalSwitchOccupant { .. } => Capability::TerminalControl,
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
@@ -685,7 +691,10 @@ mod tests {
         for request in [
             Request::TerminalClosePane { slot: "1".into() },
             Request::TerminalFocusPane { slot: "1".into() },
-            Request::TerminalRetitlePane { slot: "1".into(), title: "Build logs".into() },
+            Request::TerminalRetitlePane {
+                slot: "1".into(),
+                title: "Build logs".into(),
+            },
             Request::TerminalRatio {
                 slot: "1".into(),
                 ratio: 0.5,
@@ -767,7 +776,10 @@ mod tests {
             serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\"}}").expect("valid");
         assert_eq!(accepted, Request::ContainerStop { id: "c1".into() });
 
-        let rename = Request::ContainerRename { id: "a".repeat(64), name: "worker_2.prod".into() };
+        let rename = Request::ContainerRename {
+            id: "a".repeat(64),
+            name: "worker_2.prod".into(),
+        };
         assert_eq!(
             serde_json::to_value(&rename).expect("rename wire request"),
             serde_json::json!({

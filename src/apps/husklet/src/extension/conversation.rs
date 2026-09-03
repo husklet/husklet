@@ -646,9 +646,25 @@ impl Conversation {
     /// is refused rather than ending the conversation, because a peer waiting
     /// on a reply learns more from the refusal than from a closed socket.
     fn call(&mut self, frame: &Frame, services: &Services<'_>) -> Result<Reply, Failure> {
-        let request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
+        let mut request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
             call: coding.to_string(),
         })?;
+        if let hl_extension::Request::TerminalSwitchOccupant { slot, generation, .. } = &mut request {
+            let topology = services.terminal.topology().ok().map(|topology| {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+                hash.finish()
+            });
+            let inventory = services.terminal.pane_inventory()?;
+            let pane = inventory.panes.iter().find(|pane| pane.slot == *slot).ok_or_else(|| Failure::Absent {
+                detail: format!("pane {slot} is absent"),
+            })?;
+            let (_, _, observed, _) = self.pane_state(services, pane, topology);
+            if *generation != observed {
+                return Err(Failure::Conflict { detail: format!("pane {slot} changed since generation {generation}") });
+            }
+            *generation = pane.generation;
+        }
         let mut answer = self.session.dispatch(&request, services);
         if let Ok(reply) = &mut answer {
             self.attach_pane_cursors(reply, services);

@@ -15,7 +15,7 @@ function fake() {
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), retitle: record('terminal.retitle'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), retitle: record('terminal.retitle'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close'), switchOccupant: record('terminal.switchOccupant') },
     files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
@@ -451,6 +451,20 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
     ['terminal.ratio', 'pane-1', 0.6],
     ['terminal.retitle', 'pane-1', ' Build 🧪 '],
     ['terminal.close', 'pane-1'],
+  ]);
+});
+
+test('terminal occupant switching exposes a strict generation-safe target', async () => {
+  const { api, calls } = fake();
+  const tool = tools(api).find(({ name }) => name === 'husklet_terminal_switch_occupant');
+  assert.equal(tool.inputSchema.safeParse({ slot: 'pane-1', generation: -1, target: { kind: 'terminal' } }).success, false);
+  assert.equal(tool.inputSchema.safeParse({ slot: 'pane-1', generation: 0, target: { kind: 'terminal', extra: true } }).success, false);
+  assert.equal(tool.inputSchema.safeParse({ slot: 'pane-1', generation: 0, target: { kind: 'surface', extension: 'demo' } }).success, false);
+  await tool.run({ slot: 'pane-1', generation: 3, target: { kind: 'surface', extension: 'demo', provider: 'main' } });
+  await tool.run({ slot: 'pane-1', generation: 4, target: { kind: 'terminal' } });
+  assert.deepEqual(calls, [
+    ['terminal.switchOccupant', 'pane-1', 3, { kind: 'surface', extension: 'demo', provider: 'main' }],
+    ['terminal.switchOccupant', 'pane-1', 4, { kind: 'terminal' }],
   ]);
 });
 

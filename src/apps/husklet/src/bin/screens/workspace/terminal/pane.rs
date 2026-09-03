@@ -240,7 +240,7 @@ impl PaneChooser {
         Self::provider_in(window, None, extension, provider);
     }
 
-    fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) {
+    pub(crate) fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) {
         let Some(gallery) = Window::gallery(window) else { return };
         if !gallery.offers(extension, provider) {
             return;
@@ -290,7 +290,7 @@ impl PaneChooser {
         Self::terminal_in(window, None);
     }
 
-    fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) {
+    pub(crate) fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) {
         let Some(current) = slot
             .and_then(|slot| Panes::at(window, slot))
             .or_else(|| Self::selected(window))

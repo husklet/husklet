@@ -177,7 +177,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   ]);
   assert.deepEqual(protocolCoverage.unavailable.images, []);
   assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
-  assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
+  assert.ok(protocolCoverage.available.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
   assert.deepEqual(protocolCoverage.unavailable.extensions, []);
@@ -190,7 +190,24 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.deepEqual(Object.keys(api.images), protocolCoverage.available.images,
     'coverage must enumerate every callable typed image authority in API order');
   assert.equal(typeof api.terminal.writeInput, 'function');
-  assert.equal(api.terminal.switchOccupant, undefined);
+  assert.equal(typeof api.terminal.switchOccupant, 'function');
+});
+
+test('terminal occupant switching validates and preserves the exact CAS wire shape', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  for (const [generation, target] of [
+    [-1, { kind: 'terminal' }], [Number.MAX_SAFE_INTEGER + 1, { kind: 'terminal' }],
+    [0, { kind: 'terminal', extra: true }], [0, { kind: 'surface', extension: '', provider: 'main' }],
+    [0, { kind: 'surface', extension: 'demo', provider: '' }], [0, { kind: 'unknown' }],
+  ]) assert.throws(() => api.terminal.switchOccupant('pane-1', generation, target));
+  const surface = { kind: 'surface', extension: 'demo', provider: 'main' };
+  const first = api.terminal.switchOccupant('pane-1', 7, surface);
+  assert.deepEqual((await next()).payload, { call: 'terminal_switch_occupant', with: { slot: 'pane-1', generation: 7, target: surface } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await first;
+  const second = api.terminal.switchOccupant('pane-1', 8, { kind: 'terminal' });
+  assert.deepEqual((await next()).payload, { call: 'terminal_switch_occupant', with: { slot: 'pane-1', generation: 8, target: { kind: 'terminal' } } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await second;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('extension inventory and acquisition watchers use separate exact topics', async () => {

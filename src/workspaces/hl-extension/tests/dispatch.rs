@@ -474,6 +474,16 @@ impl TerminalSurface for Host {
         Ok(())
     }
 
+    fn switch_occupant(
+        &self,
+        _slot: &str,
+        _generation: u64,
+        _target: &hl_extension::port::PaneOccupantTarget,
+    ) -> Result<(), HostError> {
+        self.ledger.note("terminal.switch_occupant");
+        Ok(())
+    }
+
     fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
         Ok("s3".into())
     }
@@ -602,7 +612,12 @@ impl hl_extension::port::WorkspaceControl for Host {
         adopted.generation = "0123456789abcdef0123456789abcdef".into();
         Ok(adopted)
     }
-    fn update(&self, _name: &str, _generation: &str, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
+    fn update(
+        &self,
+        _name: &str,
+        _generation: &str,
+        configuration: &WorkspaceConfiguration,
+    ) -> Result<WorkspaceConfiguration, HostError> {
         self.ledger.note("workspace.update");
         Ok(configuration.clone())
     }
@@ -871,7 +886,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionInstall,
         ),
         (
-            Request::ExtensionAcquisitionCancel { job: "job-1".into(), revision: 7 },
+            Request::ExtensionAcquisitionCancel {
+                job: "job-1".into(),
+                revision: 7,
+            },
             Capability::ExtensionInstall,
         ),
         (
@@ -947,7 +965,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::ContainerStart { id: "c1".into() },
             Capability::ContainerControl,
         ),
-        (Request::ContainerStop { id: "c".repeat(64) }, Capability::ContainerControl),
+        (
+            Request::ContainerStop { id: "c".repeat(64) },
+            Capability::ContainerControl,
+        ),
         (
             Request::ContainerRemove { id: "c".repeat(64) },
             Capability::ContainerControl,
@@ -965,7 +986,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerRename { id: "c".repeat(64), name: "worker-2".into() },
+            Request::ContainerRename {
+                id: "c".repeat(64),
+                name: "worker-2".into(),
+            },
             Capability::ContainerControl,
         ),
         (
@@ -1052,7 +1076,21 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalControl,
         ),
         (
-            Request::TerminalRetitlePane { slot: "s1".into(), title: "Build 🧪".into() },
+            Request::TerminalRetitlePane {
+                slot: "s1".into(),
+                title: "Build 🧪".into(),
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalSwitchOccupant {
+                slot: "s1".into(),
+                generation: 7,
+                target: hl_extension::port::PaneOccupantTarget::Surface {
+                    extension: "demo".into(),
+                    provider: "main".into(),
+                },
+            },
             Capability::TerminalControl,
         ),
         (
@@ -1209,9 +1247,18 @@ fn extension_controls_refuse_partial_digests_before_host_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionControl], &[]);
     for request in [
-        Request::ExtensionEnable { name: "sample".into(), image_digest: "sha256:abc".into() },
-        Request::ExtensionDisable { name: "sample".into(), image_digest: String::new() },
-        Request::ExtensionRemove { name: "sample".into(), image_digest: "sha256:abc".into() },
+        Request::ExtensionEnable {
+            name: "sample".into(),
+            image_digest: "sha256:abc".into(),
+        },
+        Request::ExtensionDisable {
+            name: "sample".into(),
+            image_digest: String::new(),
+        },
+        Request::ExtensionRemove {
+            name: "sample".into(),
+            image_digest: "sha256:abc".into(),
+        },
     ] {
         assert!(session.dispatch(&request, &services(&host)).is_err());
     }
@@ -1248,21 +1295,67 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
 fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::TerminalControl], &[]);
-    for title in [String::new(), "   ".into(), "line\nbreak".into(), "nul\0byte".into(), "🧪".repeat(65)] {
+    for title in [
+        String::new(),
+        "   ".into(),
+        "line\nbreak".into(),
+        "nul\0byte".into(),
+        "🧪".repeat(65),
+    ] {
         assert!(matches!(
-            session.dispatch(&Request::TerminalRetitlePane { slot: "s1".into(), title }, &services(&host)),
+            session.dispatch(
+                &Request::TerminalRetitlePane {
+                    slot: "s1".into(),
+                    title
+                },
+                &services(&host)
+            ),
             Err(Failure::Conflict { .. })
         ));
     }
     assert!(host.ledger.reached().is_empty());
     assert_eq!(
         session.dispatch(
-            &Request::TerminalRetitlePane { slot: "s1".into(), title: " Build 🧪 ".into() },
+            &Request::TerminalRetitlePane {
+                slot: "s1".into(),
+                title: " Build 🧪 ".into()
+            },
             &services(&host),
         ),
         Ok(Reply::Done)
     );
     assert_eq!(host.ledger.reached(), ["terminal.retitle"]);
+}
+
+#[test]
+fn occupant_targets_are_native_names_and_reach_terminal_authority_exactly_once() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalControl], &[]);
+    for extension in ["", "Upper", "x/escape", &"x".repeat(65)] {
+        let request = Request::TerminalSwitchOccupant {
+            slot: "s1".into(),
+            generation: 7,
+            target: hl_extension::port::PaneOccupantTarget::Surface {
+                extension: extension.into(),
+                provider: "main".into(),
+            },
+        };
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+    let request = Request::TerminalSwitchOccupant {
+        slot: "s1".into(),
+        generation: 7,
+        target: hl_extension::port::PaneOccupantTarget::Surface {
+            extension: "demo".into(),
+            provider: "main".into(),
+        },
+    };
+    assert_eq!(session.dispatch(&request, &services(&host)), Ok(Reply::Done));
+    assert_eq!(host.ledger.reached(), ["terminal.switch_occupant"]);
 }
 
 #[test]
@@ -1348,27 +1441,62 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     let mut invalid_container_name = spec.clone();
     invalid_container_name.name = "-worker".into();
     assert!(matches!(
-        authorized.dispatch(&Request::ContainerCreate { spec: invalid_container_name }, &services(&host)),
+        authorized.dispatch(
+            &Request::ContainerCreate {
+                spec: invalid_container_name
+            },
+            &services(&host)
+        ),
         Err(Failure::Conflict { .. })
     ));
     let mut invalid_network = spec.clone();
     invalid_network.network = Some("-private".into());
-    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: invalid_network }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: invalid_network }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
     let mut oversized_network = spec.clone();
     oversized_network.network = Some("n".repeat(256));
-    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: oversized_network }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        authorized.dispatch(
+            &Request::ContainerCreate {
+                spec: oversized_network
+            },
+            &services(&host)
+        ),
+        Err(Failure::Conflict { .. })
+    ));
     assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
 
     let mut oversized_hostname = spec.clone();
     oversized_hostname.hostname = Some("h".repeat(254));
-    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: oversized_hostname }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        authorized.dispatch(
+            &Request::ContainerCreate {
+                spec: oversized_hostname
+            },
+            &services(&host)
+        ),
+        Err(Failure::Conflict { .. })
+    ));
     let mut injected_hostname = spec.clone();
     injected_hostname.hostname = Some("bad\nname".into());
-    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: injected_hostname }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        authorized.dispatch(
+            &Request::ContainerCreate {
+                spec: injected_hostname
+            },
+            &services(&host)
+        ),
+        Err(Failure::Conflict { .. })
+    ));
     assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
 
     let mut boundary = spec.clone();
-    boundary.environment = vec![("é".repeat(128), "value".into()), ("release-name".into(), "value".into())];
+    boundary.environment = vec![
+        ("é".repeat(128), "value".into()),
+        ("release-name".into(), "value".into()),
+    ];
     boundary.mounts[0].volume = "v".repeat(255);
     assert_eq!(
         authorized.dispatch(&Request::ContainerCreate { spec: boundary.clone() }, &services(&host)),
@@ -1378,7 +1506,12 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     let mut oversized_environment_name = boundary;
     oversized_environment_name.environment[0].0.push('é');
     assert!(matches!(
-        authorized.dispatch(&Request::ContainerCreate { spec: oversized_environment_name }, &services(&host)),
+        authorized.dispatch(
+            &Request::ContainerCreate {
+                spec: oversized_environment_name
+            },
+            &services(&host)
+        ),
         Err(Failure::Conflict { .. })
     ));
     let mut invalid_name = spec.clone();
@@ -1437,13 +1570,30 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
-        Request::ContainerStop { id: "friendly-name".into() },
+        Request::ContainerStop {
+            id: "friendly-name".into(),
+        },
         Request::ContainerRemove { id: "a".repeat(12) },
-        Request::ContainerKill { id: "1".into(), signal: "SIGTERM".into() },
-        Request::ContainerKill { id: "friendly-name".into(), signal: "SIGTERM".into() },
-        Request::ContainerKill { id: "a".repeat(12), signal: "SIGTERM".into() },
-        Request::ExecutionKill { id: "7".into(), signal: "SIGTERM".into() },
-        Request::ExecutionKill { id: "b".repeat(12), signal: "SIGTERM".into() },
+        Request::ContainerKill {
+            id: "1".into(),
+            signal: "SIGTERM".into(),
+        },
+        Request::ContainerKill {
+            id: "friendly-name".into(),
+            signal: "SIGTERM".into(),
+        },
+        Request::ContainerKill {
+            id: "a".repeat(12),
+            signal: "SIGTERM".into(),
+        },
+        Request::ExecutionKill {
+            id: "7".into(),
+            signal: "SIGTERM".into(),
+        },
+        Request::ExecutionKill {
+            id: "b".repeat(12),
+            signal: "SIGTERM".into(),
+        },
     ] {
         assert!(matches!(
             session.dispatch(&request, &services(&host)),
@@ -1452,11 +1602,39 @@ fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     }
     assert!(host.ledger.reached().is_empty());
 
-    session.dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host)).unwrap();
-    session.dispatch(&Request::ContainerRemove { id: "a".repeat(64) }, &services(&host)).unwrap();
-    session.dispatch(&Request::ContainerKill { id: "a".repeat(64), signal: "SIGTERM".into() }, &services(&host)).unwrap();
-    session.dispatch(&Request::ExecutionKill { id: "b".repeat(32), signal: "SIGTERM".into() }, &services(&host)).unwrap();
-    assert_eq!(host.ledger.reached(), ["containers.stop", "containers.remove", "containers.kill", "executions.kill"]);
+    session
+        .dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host))
+        .unwrap();
+    session
+        .dispatch(&Request::ContainerRemove { id: "a".repeat(64) }, &services(&host))
+        .unwrap();
+    session
+        .dispatch(
+            &Request::ContainerKill {
+                id: "a".repeat(64),
+                signal: "SIGTERM".into(),
+            },
+            &services(&host),
+        )
+        .unwrap();
+    session
+        .dispatch(
+            &Request::ExecutionKill {
+                id: "b".repeat(32),
+                signal: "SIGTERM".into(),
+            },
+            &services(&host),
+        )
+        .unwrap();
+    assert_eq!(
+        host.ledger.reached(),
+        [
+            "containers.stop",
+            "containers.remove",
+            "containers.kill",
+            "executions.kill"
+        ]
+    );
 }
 
 #[test]
@@ -1493,7 +1671,9 @@ fn image_removal_refuses_mutable_tags_and_partial_digests_before_control_authori
     assert!(host.ledger.reached().is_empty());
     session
         .dispatch(
-            &Request::ImageRemove { reference: format!("sha256:{}", "a".repeat(64)) },
+            &Request::ImageRemove {
+                reference: format!("sha256:{}", "a".repeat(64)),
+            },
             &services(&host),
         )
         .unwrap();
@@ -1505,26 +1685,78 @@ fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_
     let host = Host::new();
     let mut session = session(&[Capability::NetworkWrite], &[]);
     for request in [
-        Request::NetworkRemove { reference: "private".into() },
-        Request::NetworkConnect { reference: "a".repeat(12), container: "b".repeat(64), aliases: Vec::new() },
-        Request::NetworkDisconnect { reference: "a".repeat(32), container: "friendly".into() },
+        Request::NetworkRemove {
+            reference: "private".into(),
+        },
+        Request::NetworkConnect {
+            reference: "a".repeat(12),
+            container: "b".repeat(64),
+            aliases: Vec::new(),
+        },
+        Request::NetworkDisconnect {
+            reference: "a".repeat(32),
+            container: "friendly".into(),
+        },
     ] {
-        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
     }
     assert!(host.ledger.reached().is_empty());
-    session.dispatch(&Request::NetworkRemove { reference: "a".repeat(32) }, &services(&host)).unwrap();
-    session.dispatch(&Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64), aliases: Vec::new() }, &services(&host)).unwrap();
-    session.dispatch(&Request::NetworkDisconnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
-    assert_eq!(host.ledger.reached(), ["networks.remove", "networks.connect", "networks.disconnect"]);
+    session
+        .dispatch(
+            &Request::NetworkRemove {
+                reference: "a".repeat(32),
+            },
+            &services(&host),
+        )
+        .unwrap();
+    session
+        .dispatch(
+            &Request::NetworkConnect {
+                reference: "a".repeat(32),
+                container: "b".repeat(64),
+                aliases: Vec::new(),
+            },
+            &services(&host),
+        )
+        .unwrap();
+    session
+        .dispatch(
+            &Request::NetworkDisconnect {
+                reference: "a".repeat(32),
+                container: "b".repeat(64),
+            },
+            &services(&host),
+        )
+        .unwrap();
+    assert_eq!(
+        host.ledger.reached(),
+        ["networks.remove", "networks.connect", "networks.disconnect"]
+    );
 }
 
 #[test]
 fn network_endpoint_alias_boundaries_are_enforced_before_control_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::NetworkWrite], &[]);
-    let request = |aliases| Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64), aliases };
-    for aliases in [vec!["same".into(), "same".into()], vec!["-leading".into()], vec!["é".into()], vec!["x".repeat(254)], (0..65).map(|index| format!("alias-{index}")).collect()] {
-        assert!(matches!(session.dispatch(&request(aliases), &services(&host)), Err(Failure::Conflict { .. })));
+    let request = |aliases| Request::NetworkConnect {
+        reference: "a".repeat(32),
+        container: "b".repeat(64),
+        aliases,
+    };
+    for aliases in [
+        vec!["same".into(), "same".into()],
+        vec!["-leading".into()],
+        vec!["é".into()],
+        vec!["x".repeat(254)],
+        (0..65).map(|index| format!("alias-{index}")).collect(),
+    ] {
+        assert!(matches!(
+            session.dispatch(&request(aliases), &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
     }
     assert!(host.ledger.reached().is_empty());
     let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>();

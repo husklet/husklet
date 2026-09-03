@@ -115,9 +115,10 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Granted capabilities"))
         .expect("the consented authority is visible to agents");
-    assert!(grants.value.as_deref().is_some_and(|value| {
-        value.contains("interface") && value.contains("container-read")
-    }));
+    assert!(grants
+        .value
+        .as_deref()
+        .is_some_and(|value| { value.contains("interface") && value.contains("container-read") }));
     let enable = snapshot
         .root
         .children
@@ -574,7 +575,10 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .find(|node| node.label.as_deref() == Some("Confirm removal"))
         .unwrap();
     assert!(confirm.disabled, "hidden confirmation is not focusable");
-    assert!(confirm.actions.is_empty(), "disabled native controls advertise no actions");
+    assert!(
+        confirm.actions.is_empty(),
+        "disabled native controls advertise no actions"
+    );
     assert!(matches!(
         fixture.view.semantic_action(&Action {
             revision: removal.revision,
@@ -614,7 +618,10 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Remove"))
         .unwrap();
-    assert!(remove.disabled, "the hidden first-step action cannot bypass confirmation state");
+    assert!(
+        remove.disabled,
+        "the hidden first-step action cannot bypass confirmation state"
+    );
     fixture
         .view
         .semantic_action(&Action {
@@ -1070,7 +1077,10 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     assert!(page.notice().contains("newer image reference for sample"));
     assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
         node.label.as_deref() == Some("Extension status")
-            && node.value.as_deref().is_some_and(|value| value.contains("review the digest"))
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.contains("review the digest"))
     }));
     typed(&page, "sample:2");
     page.inspect();
@@ -1101,12 +1111,10 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     );
     let semantic = fixture.view.semantic_snapshot();
     assert!(semantic.root.children.iter().any(|node| {
-        node.label.as_deref() == Some("Added capabilities")
-            && node.value.as_deref() == Some("container-control")
+        node.label.as_deref() == Some("Added capabilities") && node.value.as_deref() == Some("container-control")
     }));
     assert!(semantic.root.children.iter().any(|node| {
-        node.label.as_deref() == Some("Removed capabilities")
-            && node.value.as_deref() == Some("container-read")
+        node.label.as_deref() == Some("Removed capabilities") && node.value.as_deref() == Some("container-read")
     }));
     assert_eq!(
         fixture.view.page("sample").as_ref(),
@@ -2375,13 +2383,7 @@ mod panes {
         );
         let observed = gallery.semantics("sample", "pane-7").unwrap();
         assert_eq!(observed.generation, generation);
-        let replacement = gallery.enrol(
-            "sample",
-            &interface,
-            &home,
-            &[],
-            Rc::new(|_| {}),
-        );
+        let replacement = gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
         assert_ne!(replacement, observed.generation);
         readable(&gallery, "sample");
         let stale = gallery.semantic_action(
@@ -2395,7 +2397,9 @@ mod panes {
                 value: None,
             },
         );
-        assert!(matches!(stale, Err(hl_extension::HostError::Conflict(detail)) if detail.contains("stale pane generation")));
+        assert!(
+            matches!(stale, Err(hl_extension::HostError::Conflict(detail)) if detail.contains("stale pane generation"))
+        );
     }
 
     /// Runs the main loop until a condition holds, which is how text fed to a
@@ -2498,7 +2502,17 @@ mod panes {
         let reference = reference.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.append(&widget);
-        gallery.enrol("containers", &widget, &holder, &[], Rc::new(|_| {}));
+        let provider_generation = gallery.enrol(
+            "containers",
+            &widget,
+            &holder,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("main").unwrap(),
+                title: "Containers".into(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
         let weak = Rc::downgrade(&reference);
         gallery.enrol_panes(
             "containers",
@@ -2519,6 +2533,7 @@ mod panes {
             }),
             Rc::new(|_, _| Err(HostError::Conflict("the reference proof is read-only".into()))),
         );
+        gallery.ready("containers", provider_generation);
         Window::exhibit(&bench.window, gallery.clone());
         let surface_slot = Console::surface(&bench.window, Some("containers"), &terminal_slot, Division::Beside)
             .expect("mount reference extension surface beside the terminal");
@@ -2735,7 +2750,12 @@ mod panes {
                     grid: None,
                     focused: *focused,
                 },
-                LayoutNode::Split { division, ratio_per_mille, first, second } => LayoutNode::Split {
+                LayoutNode::Split {
+                    division,
+                    ratio_per_mille,
+                    first,
+                    second,
+                } => LayoutNode::Split {
                     division: *division,
                     ratio_per_mille: *ratio_per_mille,
                     first: Box::new(stable_layout(first)),
@@ -2763,7 +2783,11 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         }
         let inventory = Console::pane_inventory(&bench.window).expect("inventory after retitle");
-        let renamed = inventory.panes.iter().find(|pane| pane.slot == slot).expect("same pane remains");
+        let renamed = inventory
+            .panes
+            .iter()
+            .find(|pane| pane.slot == slot)
+            .expect("same pane remains");
         assert_eq!(renamed.title.as_deref(), Some("Build 🧪"));
         let after = Console::topology(&bench.window).expect("topology after retitle");
         assert_eq!(before.active_tab, after.active_tab);
@@ -3013,9 +3037,19 @@ mod panes {
         gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery.clone());
         let chrome = Panes::at(&bench.window, &slot).expect("pane chrome").widget;
+        let original_topology = Console::topology(&bench.window).expect("original topology");
 
         assert_eq!(gallery.providers()[0].title, "Postgres");
-        PaneChooser::provider(&bench.window, "postgres", "database");
+        Console::switch_occupant(
+            &bench.window,
+            &slot,
+            0,
+            &hl_extension::port::PaneOccupantTarget::Surface {
+                extension: "postgres".into(),
+                provider: "database".into(),
+            },
+        )
+        .expect("generation-safe provider switch");
         assert_eq!(
             Panes::at(&bench.window, &slot).expect("switched pane").occupant,
             Occupant::Surface
@@ -3044,6 +3078,16 @@ mod panes {
         let identity = pane.provider.as_ref().expect("surface provider identity");
         assert_eq!(identity.extension, "postgres");
         assert_eq!(identity.provider, "database");
+        assert!(
+            Console::switch_occupant(
+                &bench.window,
+                &slot,
+                0,
+                &hl_extension::port::PaneOccupantTarget::Terminal,
+            )
+            .is_err(),
+            "the displaced terminal cannot be restored with a stale generation"
+        );
 
         let chooser = super::descendants(&chrome)
             .into_iter()
@@ -3075,7 +3119,13 @@ mod panes {
             "the popover has a compact minimum rather than forcing a wide pane"
         );
 
-        PaneChooser::terminal(&bench.window);
+        Console::switch_occupant(
+            &bench.window,
+            &slot,
+            generation,
+            &hl_extension::port::PaneOccupantTarget::Terminal,
+        )
+        .expect("restore retained terminal");
         let restored = Panes::at(&bench.window, &slot).expect("restored pane");
         assert_eq!(restored.occupant, Occupant::Terminal);
         assert_eq!(
@@ -3083,6 +3133,10 @@ mod panes {
             "the pane keeps one stable chrome across occupants"
         );
         assert_eq!(restored.content, terminal.upcast::<gtk::Widget>());
+        assert_eq!(
+            Console::topology(&bench.window).expect("restored topology"),
+            original_topology
+        );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
     }
 
