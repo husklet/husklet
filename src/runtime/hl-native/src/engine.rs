@@ -1274,6 +1274,21 @@ mod tests {
         let mut expected = vec![
             "version",
             "available",
+            "translation_codegen_available",
+            "lifecycle_settled",
+            "missing_claims",
+            "duplicate_finalize",
+            "reserved",
+            "live",
+            "claimed",
+            "first_finalize_caller",
+            "first_finalize_actor",
+            "first_finalize_slot_pid",
+            "duplicate_finalize_caller",
+            "duplicate_finalize_actor",
+            "duplicate_finalize_slot_pid",
+            "duplicate_slot_first_caller",
+            "duplicate_slot_first_actor",
             "crossings",
             "translated_entries",
             "interpreted_entries",
@@ -1290,6 +1305,10 @@ mod tests {
             "jcc_ibtc_fills",
             "jcc_ibtc_suppressed",
             "jcc_ibtc_invalid_refusals",
+            "jcc_ibtc_fill_empty",
+            "jcc_ibtc_fill_collision",
+            "jcc_ibtc_fill_irq_cause",
+            "jcc_ibtc_fill_same_key",
             "jcc_taken_ibtc_misses",
             "indirect_ibtc_misses",
             "jcc_late_candidate",
@@ -1299,6 +1318,16 @@ mod tests {
             "jcc_late_page_generation",
             "jcc_late_displacement",
             "jcc_late_other",
+            "jcc_late_site_first",
+            "jcc_late_site_repeated",
+            "jcc_late_site_stable",
+            "jcc_late_site_changed",
+            "jcc_late_site_current",
+            "jcc_late_site_retired",
+            "jcc_late_site_unique",
+            "jcc_late_site_overflow",
+            "jcc_late_site_abandoned",
+            "jcc_late_site_max",
             "jcc_invalid_null",
             "jcc_invalid_magic",
             "jcc_invalid_gpc",
@@ -1360,6 +1389,26 @@ mod tests {
             assert!(fields.contains_key(*name), "missing {name}: {stderr}");
         }
         assert_eq!(fields.len(), expected.len());
+        assert_eq!(fields["version"], 13);
+        assert_eq!(fields["translation_codegen_available"], 1);
+        assert_eq!(fields["lifecycle_settled"], 1);
+        for field in [
+            "missing_claims",
+            "duplicate_finalize",
+            "reserved",
+            "live",
+            "claimed",
+            "duplicate_finalize_caller",
+            "duplicate_finalize_actor",
+            "duplicate_finalize_slot_pid",
+            "duplicate_slot_first_caller",
+            "duplicate_slot_first_actor",
+        ] {
+            assert_eq!(fields[field], 0, "{field}: {stderr}");
+        }
+        assert_ne!(fields["first_finalize_caller"], 0);
+        assert_ne!(fields["first_finalize_actor"], 0);
+        assert_ne!(fields["first_finalize_slot_pid"], 0);
         fields
     }
 
@@ -1368,7 +1417,7 @@ mod tests {
     fn production_nohooks_jcc_ibtc_diagnostics_proves_on_and_off() {
         let _serial = engine_test_lock();
         let on = run_product_diagnostic(product_jcc_ibtc_image(), false, true);
-        assert_eq!(on["version"], 9);
+        assert_eq!(on["version"], 13);
         assert_eq!(on["available"], 1);
         assert_eq!(on["jcc_ibtc_enabled"], 1);
         assert_eq!(on["jcc_ibtc_emitted"], 1);
@@ -1411,7 +1460,7 @@ mod tests {
         assert!(on["executed_form_total"] >= on["executed_form_unique"]);
 
         let off = run_product_diagnostic(product_jcc_ibtc_image(), true, true);
-        assert_eq!(off["version"], 9);
+        assert_eq!(off["version"], 13);
         assert_eq!(off["available"], 1);
         assert_eq!(off["jcc_ibtc_enabled"], 0, "{off:?}");
         assert_eq!(off["jcc_ibtc_emitted"], 1);
