@@ -110,6 +110,16 @@ const closed = await host.terminal.closeAndWait(
 if (!closed.changed) console.log('close was accepted but absence was not observed');
 ```
 
+Retitling can likewise verify the exact requested title rather than treating the
+mutation acknowledgement as proof that an observer has caught up:
+
+```js
+const retitled = await host.terminal.retitleAndWait(
+  pane.slot, pane.generation, pane.revision, 'Build logs', { timeoutMs: 10_000 },
+);
+if (retitled.changed) console.log(retitled.pane.title);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

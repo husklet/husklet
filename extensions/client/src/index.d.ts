@@ -360,6 +360,12 @@ export interface WorkspaceApi {
     focusObserved(slot: string, generation: number, revision: number): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;
     retitleObserved(slot: string, generation: number, revision: number, title: string): Promise<void>;
+    /** Arm pane changes before CAS retitle and verify the exact title and advanced revision. */
+    retitleAndWait(slot: string, generation: number, revision: number, title: string,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; title: string; after: { generation: number; revision: number } }
+      >;
     ratio(slot: string, ratio: number): Promise<void>;
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
     switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;

@@ -28,6 +28,7 @@ groups.get('Terminal and panes').push(
   '- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `pane-observe` and `terminal-control`.',
   '- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `pane-observe` and `terminal-control`.',
   '- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `pane-observe` and `terminal-control`.',
+  '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `pane-observe` and `terminal-control`.',
 );
 groups.get('Extensions').push(
   '- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extension-install`.',
