@@ -20,6 +20,9 @@ const configuration = (image) => ({
 
 test('day-one agent drives exact framed host requests and confirmed cleanup through spawned MCP', async (context) => {
   const containerId = 'a'.repeat(64);
+  const removedExecutionId = 'b'.repeat(32);
+  const stateExecutionId = 'c'.repeat(32);
+  const dayOneExecutionId = 'd'.repeat(32);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-day-one-'));
   const socketPath = path.join(scratch, 'host.sock');
   const original = { ...configuration('alpine:3.20'), generation: '0123456789abcdef0123456789abcdef' };
@@ -90,12 +93,12 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
           if (call === 'event_subscribe' && argument.topic === 'executions') setImmediate(() => {
             executionSubscriptions += 1;
             if (executionSubscriptions === 1) {
-              const removed = { id: 'execution-remove', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
-              const transitioning = { id: 'execution-state', container_id: containerId, running: true, exit_code: 0, pid: 19, command: ['/bin/state'], user: 'app' };
+              const removed = { id: removedExecutionId, container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
+              const transitioning = { id: stateExecutionId, container_id: containerId, running: true, exit_code: 0, pid: 19, command: ['/bin/state'], user: 'app' };
               socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [removed, transitioning], truncated: false } } }));
               setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...transitioning, running: false, pid: 0 }], truncated: false } } })));
             } else {
-              const summary = { id: 'execution-day-one', container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' };
+              const summary = { id: dayOneExecutionId, container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' };
               socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [summary], truncated: false } } }));
               setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...summary, running: false, exit_code: 0, pid: 0 }], truncated: false } } })));
             }
@@ -115,7 +118,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
             changed('terminal-1', 'terminal', paneGeneration, paneRevision);
           }
           if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8, 0);
-        } else if (call === 'container_exec') answer(frame, 'identity', 'execution-day-one');
+        } else if (call === 'container_exec') answer(frame, 'identity', dayOneExecutionId);
         else if (call === 'execution_inspect') answer(frame, 'execution', { id: argument.id, container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' });
         else if (call === 'container_processes') answer(frame, 'processes', [{ pid: 7, command: 'worker', user: 'app' }]);
         else if (call === 'pane_list') answer(frame, 'panes', { panes: [
@@ -170,8 +173,8 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     'retitle advances the observable pane cursor');
   const extensionChanged = await waitForInstalledExtensionChange(client, 'manager', 1_000);
   assert.equal(extensionChanged.extension.status, 'duty');
-  const removedExecution = { id: 'execution-remove', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
-  const stateExecution = { id: 'execution-state', container_id: containerId, running: true, exit_code: 0, pid: 19, command: ['/bin/state'], user: 'app' };
+  const removedExecution = { id: removedExecutionId, container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
+  const stateExecution = { id: stateExecutionId, container_id: containerId, running: true, exit_code: 0, pid: 19, command: ['/bin/state'], user: 'app' };
   const [removed, transitioned] = await Promise.all([
     waitForExecutionRemoval(client, removedExecution, 1_000),
     client.callTool({ name: 'husklet_execution_change_wait', arguments: { id: stateExecution.id, after: {
@@ -193,7 +196,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(result.container.imagePull.job, '7');
   assert.equal(result.container.imagePull.state, 'complete');
   assert.deepEqual(result.container.created, { id: containerId });
-  assert.equal(result.container.execution.id, 'execution-day-one');
+  assert.equal(result.container.execution.id, dayOneExecutionId);
   assert.equal(result.container.executionChanged.execution.running, false);
   assert.equal(result.terminal.changed.changed, true);
   assert.equal(result.terminal.changed.change.generation, 3);
