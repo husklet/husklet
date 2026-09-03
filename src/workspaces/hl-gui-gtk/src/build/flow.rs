@@ -99,10 +99,11 @@ impl LayoutManagerImpl for Weave {
     fn allocate(&self, widget: &gtk::Widget, width: i32, height: i32, _baseline: i32) {
         let spacing = self.spacing.get();
         let vertical = self.direction.get() == gtk::Orientation::Vertical;
+        let reverse = !vertical && widget.direction() == gtk::TextDirection::Rtl;
         let room = if vertical { height } else { width };
         let mut cross = 0;
         for line in self.lines(widget, room) {
-            self.line(&line, cross, vertical, room);
+            self.line(&line, cross, vertical, room, reverse);
             cross += line.cross + spacing;
         }
     }
@@ -132,7 +133,7 @@ impl Weave {
 
     /// Places one line's children, sharing spare room among children that ask
     /// to grow just as a non-wrapping box does.
-    fn line(&self, line: &Line, cross: i32, vertical: bool, room: i32) {
+    fn line(&self, line: &Line, cross: i32, vertical: bool, room: i32, reverse: bool) {
         let spacing = self.spacing.get();
         let expanding = line
             .children
@@ -143,7 +144,7 @@ impl Weave {
         let spare = room.saturating_sub(line.main);
         let share = if expanding == 0 { 0 } else { spare / expanding };
         let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
-        let mut main = 0;
+        let mut main = if reverse { room } else { 0 };
         for (child, extent, _) in &line.children {
             let expands = if vertical { child.vexpands() } else { child.hexpands() };
             let bonus = if expands {
@@ -154,6 +155,9 @@ impl Weave {
                 0
             };
             let extent = extent + bonus;
+            if reverse {
+                main -= extent;
+            }
             let (x, y) = if vertical { (cross, main) } else { (main, cross) };
             let (width, height) = if vertical {
                 (line.cross, extent)
@@ -162,7 +166,11 @@ impl Weave {
             };
             let shift = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x as f32, y as f32));
             child.allocate(width, height, -1, Some(shift));
-            main += extent + spacing;
+            if reverse {
+                main -= spacing;
+            } else {
+                main += extent + spacing;
+            }
         }
     }
 }

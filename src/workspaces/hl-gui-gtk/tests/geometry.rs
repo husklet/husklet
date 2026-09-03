@@ -107,6 +107,9 @@ fn geometry_is_what_the_description_asked_for() {
     a_removed_child_closes_the_hole_it_left();
     a_wrapping_row_moves_a_child_onto_a_second_line();
     a_wrapping_row_shares_spare_width_between_growing_children();
+    every_wrapped_line_distributes_its_own_spare_width();
+    a_wrapping_column_shares_spare_height_between_growing_children();
+    a_wrapping_row_follows_right_to_left_order();
     padding_lands_on_the_side_it_names();
     alignment_follows_the_axis_of_its_container();
     a_size_range_becomes_a_floor_the_toolkit_honours();
@@ -290,6 +293,63 @@ fn a_wrapping_row_shares_spare_width_between_growing_children() {
     assert_eq!(panes.len(), 2);
     assert_eq!(panes[0].width(), 300);
     assert_eq!(panes[1].width(), 300);
+}
+
+fn every_wrapped_line_distributes_its_own_spare_width() {
+    let mut stage = Stage::new();
+    let row = stage.producer.create(Tag::Row);
+    stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, row);
+    for _ in 0..3 {
+        let child = stage.producer.create(Tag::Scroll);
+        stage.producer.append(row, child);
+    }
+    stage.draw();
+    for child in offspring(&stage.tagged(Tag::Row)) {
+        child.set_size_request(CHILD, CHILD);
+    }
+    stage.allocate(100, 200);
+
+    let children = offspring(&stage.tagged(Tag::Row));
+    assert_eq!((children[0].width(), children[1].width()), (50, 50));
+    assert_eq!(children[2].width(), 100, "the single child on line two owns its line");
+}
+
+fn a_wrapping_column_shares_spare_height_between_growing_children() {
+    let mut stage = Stage::new();
+    let column = stage.producer.create(Tag::Column);
+    stage.producer.set(column, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, column);
+    for _ in 0..2 {
+        let pane = stage.producer.create(Tag::Scroll);
+        stage.producer.set(pane, Prop::Height, PropValue::Length(Length::Fill));
+        stage.producer.append(column, pane);
+    }
+    stage.draw();
+    stage.allocate(200, 600);
+
+    let panes = offspring(&stage.tagged(Tag::Column));
+    assert_eq!(panes[0].height(), 300);
+    assert_eq!(panes[1].height(), 300);
+}
+
+fn a_wrapping_row_follows_right_to_left_order() {
+    let mut stage = Stage::new();
+    let row = stage.producer.create(Tag::Row);
+    stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, row);
+    for index in 0..2 {
+        let child = stage.block(&format!("cell {index}"));
+        stage.producer.append(row, child);
+    }
+    stage.draw();
+    let widget = stage.tagged(Tag::Row);
+    widget.set_direction(gtk::TextDirection::Rtl);
+    stage.allocate(100, 100);
+
+    let children = offspring(&widget);
+    assert_eq!(children[0].allocation().x(), 52, "the first child starts at the right edge");
+    assert_eq!(children[1].allocation().x(), 4, "the second child follows toward the left");
 }
 
 /// One property, four sides, each landing where it was named.
