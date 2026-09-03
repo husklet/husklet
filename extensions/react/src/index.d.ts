@@ -6,6 +6,32 @@
 
 import type { ComponentType, ReactNode } from 'react';
 
+export interface CommandPaletteItem {
+  id: string;
+  title: string;
+  group?: string;
+  detail?: string;
+  shortcut?: string;
+  keywords?: readonly string[];
+  disabled?: boolean;
+  destructive?: boolean;
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+  onInvoke?: (command: CommandPaletteItem) => void;
+}
+export interface CommandPaletteViewProps extends NodeProps {
+  commands?: readonly CommandPaletteItem[];
+  initialQuery?: string;
+  placeholder?: string;
+  emptyLabel?: string;
+  onQueryChange?: (query: string) => void;
+  onSelect?: (command: CommandPaletteItem) => void;
+}
+export const CommandPaletteView: ComponentType<CommandPaletteViewProps>;
+export function filterCommands(commands: readonly CommandPaletteItem[], query: string): CommandPaletteItem[];
+export const COMMAND_PALETTE_ITEM_LIMIT: 256;
+export const COMMAND_PALETTE_QUERY_BYTE_LIMIT: 128;
+export const COMMAND_PALETTE_TEXT_BYTE_LIMIT: 256;
+
 export interface TerminalTranscriptLine {
   id?: string | number;
   number?: number;

@@ -196,6 +196,16 @@ lines, no more than 2,048 UTF-8 bytes per line or 65,536 bytes overall, and
 shows when content was truncated. `onSelect` receives the retained line rather
 than asking consumers to recover identity from rendered text.
 
+### Command palette
+
+`CommandPaletteView` composes the native command input, grouped result list,
+empty state, and semantic buttons into a keyboard-first picker. It fuzzy
+matches titles, groups, and keywords; preserves stable command IDs; skips
+disabled commands during keyboard traversal; and forwards destructive metadata
+to automation. It accepts at most 256 commands, 128 UTF-8 query bytes, and 256
+UTF-8 bytes for displayed command fields. The lower-level `CommandPalette`
+input remains exported for custom compositions.
+
 ## Tests
 
 `npm test` — plain `node --test`, no framework.

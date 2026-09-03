@@ -8,6 +8,7 @@ export { ExtensionError, Session, SOCKET, PROTOCOL };
 export * from './components.js';
 export * from './hooks.js';
 export * from './terminal-transcript.js';
+export * from './command-palette.js';
 
 /** Surface handles awaiting a slot or registered by their owned slot. */
 const attached = new WeakMap();
