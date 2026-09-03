@@ -380,6 +380,26 @@ test('container rename validates locally, retries failure, and preserves immutab
   assert.ok(labelled(stage, 'api'), 'success notice does not forge an inventory update');
 });
 
+test('container creation groups its compact form and explains raw JSON before an error', () => {
+  const stage = host();
+  const frame = stage.render(h(Containers, { api, resource: { data: [], loading: false, error: null, reload: async () => {} } }));
+  for (const label of [
+    'Identity and image', 'Process', 'Resources and connectivity',
+    'Labels use JSON [name, value] pairs, for example [["role","worker"]].',
+    'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.',
+    'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.',
+  ]) assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
+  const placeholders = frame.patches.filter((patch) => patch.SetProp?.prop === 'Placeholder').map((patch) => patch.SetProp.value.Text);
+  assert.deepEqual(placeholders.slice(0, 15), [
+    'Image reference', 'Container name', 'Hostname (optional)', 'Run as user (optional)', 'Labels JSON (optional)',
+    'Entrypoint argv JSON (optional)', 'Command argv JSON (optional)', 'Environment pairs JSON (optional)', 'Working directory (optional)',
+    'Memory limit MiB (optional)', 'CPU limit (optional)', 'PID limit (optional)', 'Initial network (optional)',
+    'Named volume mounts JSON (optional)', 'Published ports JSON (optional)',
+  ], 'visual grouping preserves a predictable keyboard traversal order');
+  const wrappingRows = frame.patches.filter((patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true);
+  assert.equal(wrappingRows.length >= 3, true, 'every field group can wrap at compact width');
+});
+
 test('container creation retains exact identity and retries only start after a partial failure', async () => {
   const calls = [];
   let starts = 0;
