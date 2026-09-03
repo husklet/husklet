@@ -12,6 +12,7 @@ import { components } from '@husklet/react';
 import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from '../src/form.js';
 import { EVENT_LIMIT, KEYBOARD_STORY, KeyboardAccessibilityStory } from '../src/keyboard-accessibility.js';
+import { QUERY_PLAN_MODES, QueryPlanStory, filterQueryPlan, queryPlan } from '../src/query-plan.js';
 
 import { host } from './host.js';
 
@@ -73,6 +74,61 @@ test('the playground renders one frame holding the three panes', () => {
   );
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
+});
+
+function labels(patches, tag) {
+  const ids = new Set(created(patches).filter((entry) => entry.tag === tag).map((entry) => entry.id));
+  return patches
+    .filter((patch) => patch.SetProp?.prop === 'Label' && ids.has(patch.SetProp.id))
+    .map((patch) => patch.SetProp.value.Text);
+}
+
+function setsText(patches, prop, text) {
+  return patches.some((patch) => patch.SetProp?.prop === prop && patch.SetProp.value.Text === text);
+}
+
+test('query plan filters retain matching operators and every ancestor, but no unrelated sibling', () => {
+  const hot = filterQueryPlan(queryPlan, 'hotspot');
+  assert.equal(hot.id, 'root');
+  assert.deepEqual(hot.children.map((child) => child.id), ['join']);
+  assert.deepEqual(hot.children[0].children.map((child) => child.id), ['orders-hash']);
+  assert.deepEqual(hot.children[0].children[0].children.map((child) => child.id), ['orders']);
+  const mismatch = filterQueryPlan(queryPlan, 'mismatch');
+  assert.equal(mismatch.id, 'root');
+  assert.deepEqual(mismatch.children.map((child) => child.id), ['preferences']);
+  assert.equal(filterQueryPlan(queryPlan, 'full').children.length, 2);
+});
+
+test('query plan callbacks switch among full, hotspot, and mismatch projections', () => {
+  const stage = host();
+  const first = stage.render(h(QueryPlanStory));
+  assert.equal(labels(first.patches, 'QueryPlanNode').length, 6);
+  const all = stage.frames.flatMap((frame) => frame.patches);
+  const hotspot = node(all, 'Button', QUERY_PLAN_MODES.hotspot);
+  const mismatch = node(all, 'Button', QUERY_PLAN_MODES.mismatch);
+  const full = node(all, 'Button', QUERY_PLAN_MODES.full);
+  assert.ok(hotspot && mismatch && full, 'the three projections are not independently selectable');
+
+  let before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: hotspot, id: `${hotspot}:Invoke`, value: null }));
+  let patches = stage.since(before);
+  assert.ok(setsText(patches, 'Label', 'Showing hotspots with their ancestor paths.'));
+  assert.ok(setsText(patches, 'Label', '4 plan operators'));
+  assert.ok(patches.some((patch) => 'Remove' in patch), 'hotspot filtering retained unrelated siblings');
+
+  before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: mismatch, id: `${mismatch}:Invoke`, value: null }));
+  patches = stage.since(before);
+  assert.ok(setsText(patches, 'Label', 'Showing estimate mismatches with their ancestor paths.'));
+  assert.ok(setsText(patches, 'Label', '2 plan operators'));
+  assert.deepEqual(labels(patches, 'QueryPlanNode'), ['subquery_scan · Preference summary']);
+
+  before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: full, id: `${full}:Invoke`, value: null }));
+  patches = stage.since(before);
+  assert.ok(setsText(patches, 'Label', 'Showing the complete captured plan.'));
+  assert.ok(setsText(patches, 'Label', '6 plan operators'));
+  assert.equal(labels(patches, 'QueryPlanNode').length, 4, 'the four filtered operators were not restored');
 });
 
 test('keyboard accessibility story validates, confirms separately, and bounds focus history', () => {

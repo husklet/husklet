@@ -1134,11 +1134,11 @@ impl Element {
     #[must_use]
     pub fn query_plan(source: QueryPlanSource<'_>) -> Option<Self> {
         fn count(nodes: &[QueryPlanNode], depth: usize, ids: &mut std::collections::BTreeSet<String>) -> Option<usize> {
-            if depth > crate::QUERY_PLAN_DEPTH_LIMIT {
-                return None;
-            }
             let mut n = 0;
             for node in nodes {
+                if depth > crate::QUERY_PLAN_DEPTH_LIMIT {
+                    return None;
+                }
                 if !ids.insert(node.id.clone()) {
                     return None;
                 }
@@ -1590,28 +1590,61 @@ mod tests {
         );
         assert!(f.patches.iter().any(|p|matches!(p,crate::Patch::SetProp{prop:crate::Prop::Detail,value,..} if value.as_text()==Some("bounded source: nodes 32/90, edges 32/500, cycles 0/0"))));
     }
+    fn query_metrics() -> Vec<QueryMetric> {
+        [QueryMetricKind::EstimatedRows, QueryMetricKind::ActualRows, QueryMetricKind::Cost,
+         QueryMetricKind::DurationUs, QueryMetricKind::Loops]
+            .into_iter().enumerate()
+            .map(|(index, kind)| QueryMetric::new(kind, index as f64 + 1.0).unwrap()).collect()
+    }
+    fn query_node(id: impl Into<String>, children: impl IntoIterator<Item = QueryPlanNode>) -> QueryPlanNode {
+        QueryPlanNode::new(id, QueryOperator::TableScan, "users", "users", QueryNodeState::Hot,
+            "slow", query_metrics(), children).unwrap()
+    }
     #[test]
-    fn query_plan_bounds_depth_metrics_and_provenance() {
-        let metrics = [QueryMetric::new(QueryMetricKind::DurationUs, 42.0).unwrap()];
-        let leaf = QueryPlanNode::new(
-            "scan",
-            QueryOperator::TableScan,
-            "users\n",
-            "users",
-            QueryNodeState::Hot,
-            "slow",
-            metrics,
-            [],
-        )
-        .unwrap();
-        let plan = Element::query_plan(QueryPlanSource::Bounded {
-            prefix: &[leaf],
-            total_nodes: 90,
-        })
-        .unwrap();
-        let mut r = crate::Reconciliation::new();
-        let f = r.reconcile(&plan);
-        assert!(f.patches.iter().any(|p|matches!(p,crate::Patch::SetProp{prop:crate::Prop::Detail,value,..}if value.as_text()==Some("bounded source: showing 1 of 90 operators"))));
+    fn query_plan_maximum_is_exactly_217_semantic_nodes_without_truncation() {
+        let nodes = (0..crate::QUERY_PLAN_NODE_LIMIT).map(|i| query_node(format!("n{i}"), [])).collect::<Vec<_>>();
+        let plan = Element::query_plan(QueryPlanSource::Exact(&nodes)).unwrap();
+        let frame = crate::Reconciliation::new().reconcile(&plan);
+        assert_eq!(frame.patches.iter().filter(|p| matches!(p, crate::Patch::Create { .. })).count(),
+            1 + crate::QUERY_PLAN_NODE_LIMIT * (1 + crate::QUERY_PLAN_METRIC_LIMIT));
+        assert!(frame.patches.iter().any(|p| matches!(p, crate::Patch::SetProp { prop: crate::Prop::Detail, value, .. }
+            if value.as_text() == Some("complete query plan"))));
+    }
+    #[test]
+    fn query_plan_rejects_the_37th_operator() {
+        let nodes = (0..=crate::QUERY_PLAN_NODE_LIMIT).map(|i| query_node(format!("n{i}"), [])).collect::<Vec<_>>();
+        assert!(Element::query_plan(QueryPlanSource::Exact(&nodes)).is_none());
+    }
+    #[test]
+    fn query_plan_accepts_twelve_levels_and_rejects_thirteen() {
+        fn chain(depth: usize) -> QueryPlanNode {
+            let mut node = query_node(format!("n{}", depth - 1), []);
+            for level in (0..depth - 1).rev() { node = query_node(format!("n{level}"), [node]); }
+            node
+        }
+        assert!(Element::query_plan(QueryPlanSource::Exact(&[chain(crate::QUERY_PLAN_DEPTH_LIMIT)])).is_some());
+        assert!(Element::query_plan(QueryPlanSource::Exact(&[chain(crate::QUERY_PLAN_DEPTH_LIMIT + 1)])).is_none());
+    }
+    #[test]
+    fn query_plan_rejects_duplicate_metric_kinds() {
+        let duration = QueryMetric::new(QueryMetricKind::DurationUs, 42.0).unwrap();
+        assert!(QueryPlanNode::new("scan", QueryOperator::TableScan, "users", "users", QueryNodeState::Normal,
+            "", [duration.clone(), duration], []).is_none());
+    }
+    #[test]
+    fn query_plan_detail_is_control_safe_and_bounded() {
+        let node = QueryPlanNode::new("scan", QueryOperator::TableScan, "users", "users", QueryNodeState::Normal,
+            format!("{}\nignored", "x".repeat(200)), [], []).unwrap();
+        assert_eq!(node.detail.chars().count(), 160);
+        assert!(!node.detail.chars().any(char::is_control));
+    }
+    #[test]
+    fn query_plan_bounded_source_reports_authoritative_provenance() {
+        let leaf = query_node("scan", []);
+        let plan = Element::query_plan(QueryPlanSource::Bounded { prefix: &[leaf], total_nodes: 90 }).unwrap();
+        let frame = crate::Reconciliation::new().reconcile(&plan);
+        assert!(frame.patches.iter().any(|p| matches!(p, crate::Patch::SetProp { prop: crate::Prop::Detail, value, .. }
+            if value.as_text() == Some("bounded source: showing 1 of 90 operators"))));
         assert!(QueryMetric::new(QueryMetricKind::Loops, f64::NAN).is_none());
     }
 }

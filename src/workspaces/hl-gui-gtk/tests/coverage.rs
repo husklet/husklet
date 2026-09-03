@@ -130,7 +130,12 @@ fn query_plan_is_nested_selectable_and_hot() {
             .filter_map(|w| w.downcast::<gtk::Label>().ok())
             .all(|l| l.is_selectable())
     );
-    assert!(s.tagged(Tag::QueryPlanMetric).is_some())
+    assert!(s.tagged(Tag::QueryPlanMetric).is_some());
+    s.producer.set(n, Prop::Value, PropValue::text("id=j state=normal"));
+    s.flush().unwrap();
+    let node = s.tagged(Tag::QueryPlanNode).unwrap();
+    assert!(node.has_css_class("query-plan-normal"));
+    assert!(!node.has_css_class("query-plan-hot"), "a changed query state retained stale hotspot styling");
 }
 fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     let mut s = Session::new();

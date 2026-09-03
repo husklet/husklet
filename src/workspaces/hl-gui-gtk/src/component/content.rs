@@ -85,6 +85,9 @@ pub(crate) fn dependency_value(widget: &gtk::Widget, value: &str) -> bool {
 }
 pub(crate) fn query_value(widget: &gtk::Widget, value: &str) -> bool {
     let ok = dependency_value(widget, value);
+    for class in ["query-plan-normal", "query-plan-hot", "query-plan-estimate_mismatch", "query-plan-spill"] {
+        widget.remove_css_class(class)
+    }
     if let Some(state) = value.split_whitespace().find_map(|p| p.strip_prefix("state=")) {
         widget.add_css_class(&format!("query-plan-{state}"))
     }
