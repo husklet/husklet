@@ -487,6 +487,8 @@ export function Images({ api, resource, imageDetails }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const currentImages = useRef(new Set());
   currentImages.current = new Set((resource.data ?? []).map((item) => item.id));
   const [pull, setPull] = useState(null);
@@ -516,20 +518,31 @@ export function Images({ api, resource, imageDetails }) {
   }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
   const cancelPull = () => run('pull-cancel', async () => { await api.images.cancelPull(pull.job); setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' })); });
   const inspect = async (item) => {
+    const revision = ++inspectionRevision.current;
     setBusy(`inspect:${item.id}`);
     setDetail(null);
     setInspection({ id: item.id, state: 'loading', count: 0, error: null });
     try {
       const value = await api.images.inspect(item.reference || item.id);
+      if (revision !== inspectionRevision.current) return;
       const count = await detailsSource.replace(value);
+      if (revision !== inspectionRevision.current) return;
       setDetail(value);
       setInspection({ id: item.id, state: 'ready', count, error: null });
     } catch (cause) {
-      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+      if (revision === inspectionRevision.current) setInspection({ id: item.id, state: 'error', count: 0, error: cause });
     } finally {
       setBusy('');
     }
   };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setDetail(null);
+    setInspection({ id: '', state: 'idle', count: 0, error: null });
+    setConfirm('');
+  }, [resource.data]);
   const remove = (item) => run(`remove:${item.id}`, async () => {
     if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
     await api.images.remove(item.id); setConfirm('');
