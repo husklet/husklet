@@ -35,6 +35,18 @@ the handshake.
 
 `@husklet/react` consumes and re-exports this client for compatibility.
 
+Low-level calls accept an optional `AbortSignal` as the third argument:
+
+```js
+await session.call('workspace_info', undefined, { signal });
+```
+
+An already-aborted signal rejects without writing. Because protocol v1 orders
+replies on one channel and has no request identifiers, aborting after a request
+was written closes the session and rejects every pending call; this prevents a
+late reply from being delivered to the wrong caller. Create a new session after
+such a cancellation.
+
 `protocolSurface` is the machine-readable public-surface inventory derived from
 the authoritative Rust schema. `protocolSurface.requests` names the typed
 `workspace(session)` method for every ordinary host request; renderer-owned

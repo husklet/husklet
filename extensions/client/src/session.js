@@ -27,6 +27,12 @@ function requiredObject(value, label) {
   return value;
 }
 
+function abortError(reason) {
+  const error = new Error('extension call aborted', { cause: reason });
+  error.name = 'AbortError';
+  return error;
+}
+
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
 export function validateUiEvent(value) {
   const event = requiredObject(value, 'UI event');
@@ -187,9 +193,14 @@ export class Session {
   }
 
   /** Sends one call and resolves with the tagged host reply. */
-  call(name, argument) {
+  call(name, argument, { signal } = {}) {
     if (this.#closed) return Promise.reject(new Error('extension session is closed'));
     if (!this.#welcomed) return Promise.reject(new Error('extension host handshake is not complete'));
+    if (signal !== undefined && (typeof signal !== 'object' || typeof signal.addEventListener !== 'function'
+      || typeof signal.removeEventListener !== 'function' || typeof signal.aborted !== 'boolean')) {
+      return Promise.reject(new TypeError('call signal must be an AbortSignal'));
+    }
+    if (signal?.aborted) return Promise.reject(abortError(signal.reason));
     const capability = name === 'event_subscribe' || name === 'event_unsubscribe'
       ? TOPIC_CAPABILITIES.get(argument?.topic)
       : PROTOCOL_REQUEST_CAPABILITIES[name];
@@ -206,6 +217,14 @@ export class Session {
     if (this.#backpressured) return Promise.reject(new Error('extension socket is applying write backpressure'));
     const payload = encodeRequest(name, argument);
     return new Promise((resolve, reject) => {
+      const abort = signal ? () => {
+        const error = abortError(signal.reason);
+        // Calls share one ordered channel without request identifiers. Once a
+        // frame is written, retaining the session could bind its late reply to
+        // the next caller, so cancellation is deliberately fail-closed.
+        this.#finish(error);
+        this.#socket.destroy();
+      } : undefined;
       const timer = setTimeout(() => {
         const error = new Error(`extension call ${name} timed out after ${this.#timeout}ms`);
         // Without request identifiers, continuing after one missing ordered
@@ -213,12 +232,14 @@ export class Session {
         this.#finish(error);
         this.#socket.destroy();
       }, this.#timeout);
-      this.#pending.push({ resolve, reject, timer, name, argument });
+      this.#pending.push({ resolve, reject, timer, name, argument, signal, abort });
+      signal?.addEventListener('abort', abort, { once: true });
       try {
         this.#write({ channel: CALLS, kind: KIND.request, payload });
       } catch (error) {
         clearTimeout(timer);
         this.#pending.pop();
+        signal?.removeEventListener('abort', abort);
         reject(error);
       }
     });
@@ -330,6 +351,7 @@ export class Session {
         : validateReplyFor(pending.name, frame.payload);
       this.#pending.shift();
       clearTimeout(pending.timer);
+      pending.signal?.removeEventListener('abort', pending.abort);
       if ((frame.flags & ERROR) !== 0) pending.reject(new ExtensionError(payload));
       else {
         if (pending.name === 'event_subscribe') this.#topics.add(pending.argument.topic);
@@ -390,6 +412,7 @@ export class Session {
     this.#rejectReady(error);
     for (const pending of this.#pending.splice(0)) {
       clearTimeout(pending.timer);
+      pending.signal?.removeEventListener('abort', pending.abort);
       pending.reject(error);
     }
     for (const pending of this.#pings.values()) {

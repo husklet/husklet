@@ -159,12 +159,20 @@ export interface ConnectOptions {
   onClose?: (error: Error) => void;
 }
 
+export interface CallOptions {
+  /**
+   * Cancels without writing when already aborted. Aborting after the request
+   * was written closes the ordered session and rejects every pending call.
+   */
+  signal?: AbortSignal;
+}
+
 export class Session {
   static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
   readonly ready: Promise<void>;
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
-  call(method: string, params?: unknown): Promise<unknown>;
+  call(method: string, params?: unknown, options?: CallOptions): Promise<unknown>;
   /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
   ping(): Promise<void>;
   answer(channel: number, window: unknown): void;

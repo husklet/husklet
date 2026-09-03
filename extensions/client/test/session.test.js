@@ -95,6 +95,64 @@ test('negotiated grants are immutable and deny calls and topics before any socke
   }
 });
 
+test('AbortSignal writes nothing before a call and closes ordered Unix calls after write', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-abort-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const delivered = [];
+  let peerClosed;
+  let peer;
+  let observedTwo;
+  const closed = new Promise((resolve) => { peerClosed = resolve; });
+  const twoCalls = new Promise((resolve) => { observedTwo = resolve; });
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.on('error', () => {});
+    socket.on('close', peerClosed);
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel === 2) {
+          calls.push(frame.payload);
+          if (calls.length === 2) observedTwo();
+        }
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'abort', granted: ['workspace-read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath, onReply: (reply) => delivered.push(reply) });
+    const before = new AbortController(); before.abort('not sent');
+    await assert.rejects(session.call('workspace_info', undefined, { signal: before.signal }), { name: 'AbortError' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, [], 'an already-aborted call emits no protocol frame');
+
+    const firstAbort = new AbortController();
+    const first = session.call('workspace_info', undefined, { signal: firstAbort.signal });
+    const second = session.call('workspace_list');
+    await twoCalls;
+    firstAbort.abort('stop');
+    // A host racing cancellation may still try to answer the written calls;
+    // the destroyed stream must not deliver either answer to another caller.
+    for (const payload of [
+      { reply: 'workspace', with: { name: 'demo', image: 'alpine', architecture: 'amd64' } },
+      { reply: 'workspaces', with: [] },
+    ]) peer.write(encode({ channel: 2, kind: KIND.response, payload }));
+    await assert.rejects(first, { name: 'AbortError' });
+    await assert.rejects(second, { name: 'AbortError' });
+    await closed;
+    assert.deepEqual(calls.map(({ call }) => call), ['workspace_info', 'workspace_list']);
+    assert.deepEqual(delivered, [], 'no reply can be rebound after cancellation closes the stream');
+    await assert.rejects(session.call('workspace_info'), /closed/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix control frames ping both directions and close every pending operation', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-control-'));
   const socketPath = path.join(directory, 'host.sock');
